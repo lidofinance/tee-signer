@@ -209,18 +209,5 @@ func cmdSetup(args []string, out io.Writer) error {
 		fprintf(out, "%s setup_sha256 %s %s\n", s.SignerName, fullHex(h), p)
 		fprintf(out, "%s policy_root %s\n", s.SignerName, fullHex(pr))
 	}
-	// Nitro signers: the hosts their key generation reaches, and what the
-	// other signers of the file need there.
-	peers := make([]peerHosts, len(setups))
-	for i, s := range setups {
-		peers[i] = setupPeer(s)
-	}
-	for i, s := range setups {
-		if !limitedEgress(s) {
-			continue
-		}
-		fprintf(out, "%s keygen_peer_attestation_hosts %s\n", s.SignerName, cmpOr(strings.Join(s.Platform.KeygenPeerAttestationHosts, " "), "none"))
-		warnPeerEndpoints(out, s, missingPeerEndpoints(s, peers, i), "its key generation refuses orders with these peers")
-	}
 	return nil
 }

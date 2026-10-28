@@ -405,13 +405,12 @@ func TestHealthClockRoundTrip(t *testing.T) {
 
 // CONFIG_UPDATE carries the signed update as it is, within setupwire's cap,
 // and answers with an outcome and the setup state.
-// Every message type has a name, the admin, key generation and handover
-// ones too.
+// Every message type has a name, the admin and handover ones too.
 func TestTypeNames(t *testing.T) {
 	if MsgType(0x08).String() != "CONFIG_UPDATE" || (MsgType(0x08)|ResponseFlag).String() != "CONFIG_UPDATE_RESPONSE" {
 		t.Fatalf("names %v %v", MsgType(0x08), MsgType(0x08)|ResponseFlag)
 	}
-	for _, typ := range []MsgType{0x05, 0x07, 0x09, 0x20, 0x28, 0x31, 0x33} {
+	for _, typ := range []MsgType{0x05, 0x07, 0x09, 0x31, 0x33} {
 		if strings.HasPrefix(typ.String(), "TYPE_") {
 			t.Errorf("type 0x%02x has no name", uint8(typ))
 		}

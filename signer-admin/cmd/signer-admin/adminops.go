@@ -23,8 +23,8 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
-	"github.com/lidofinance/tee-signer/governance/dkgorder"
 	"github.com/lidofinance/tee-signer/governance/exitapproval"
+	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/governance/importorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	adminapprover "github.com/lidofinance/tee-signer/signer-admin/approver"
@@ -32,7 +32,6 @@ import (
 	remoteadmin "github.com/lidofinance/tee-signer/signer-admin/remote/admin"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	cloud "github.com/lidofinance/tee-signer/signer-protocol"
-	"github.com/lidofinance/tee-signer/tee-signer/handoverorder"
 )
 
 // maxExitsPerPush is the runner's maxPendingExits (runner/server/exits.go):
@@ -973,14 +972,6 @@ func signingInput(raw []byte) (setupwire.Context, []byte, bool) {
 		if _, body, _, err := readImport(raw); err == nil {
 			return setupwire.CtxImportOrder, body, true
 		}
-	case dkgorder.IsOrder(raw):
-		if o, err := dkgorder.Decode(raw); err == nil {
-			if body, err := o.Body.Encode(); err == nil {
-				return setupwire.CtxDKGOrder, body, true
-			}
-		}
-	case dkgorder.IsBody(raw):
-		return setupwire.CtxDKGOrder, raw, true
 	case handoverorder.IsOrder(raw):
 		if o, err := handoverorder.Decode(raw); err == nil {
 			if body, err := o.Body.Encode(); err == nil {

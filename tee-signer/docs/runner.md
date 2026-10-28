@@ -28,7 +28,6 @@ the platforms of the tags it was built with:
 | `nts` | | the NTS clock (`trusted-time`), which the cloud runners use |
 | `debugimport` | | plaintext `IMPORT_SHARE`, `-allow-import`, and the fake-hardware options of the Azure and Nitro tests. Never in an image. |
 | `testnet` | | the testnet flavour (below) |
-| `peer_<cloud>` | | the attestation verifier of a key generation peer (`tee-signer/docs/dkg.md`) |
 
 Every binary also holds the embedded root certificates
 (`golang.org/x/crypto/x509roots/fallback`), because the images have no CA
@@ -46,7 +45,6 @@ bundle.
 | `runner-azure-debugimport` | `platform_azure,debugimport,nts` | tests: the Azure runner with a fake SNP report and metadata service |
 | `runner-aws-debugimport` | `platform_aws,platform_dev,debugimport,nts` | tests: the Nitro runner with a fake NSM; it has the dev platform too, for the vsock tests |
 | `runner-gcp-debugimport` | `platform_gcp,debugimport,nts` | tests: the GCP runner with STS, IAM credentials and Cloud KMS at a test URL |
-| `runner-<cloud>-dkg-<peers>` | the cloud's tags and `peer_<peer>` for each peer | images that take part in key generation (`PEERS`, default `azure aws gcp`) |
 
 A binary refuses a platform it does not hold and names the tag that builds
 it. A binary built with no platform tag refuses to start. Without
@@ -161,13 +159,12 @@ The setup format is in `attestation-verify/docs/attestation-statement.md`.
 - With `-setup` the runner refuses the flags the setup replaces (`-config`,
   `-tls-client-ca`, `-max-validators`, `-mark-store`, `-mark-signer`,
   `-state-store`, `-floor-margin`), the recovery flags (`-mark-create`,
-  `-state-create`, `-record-create`), the DynamoDB guard and
-  `-dkg-policy`, and a `-platform-opt` the setup sets.
-- A build with key generation hands its shares over under an
-  approver-signed handover order (HANDOVER_ORDER, HANDOVER) and takes them
-  as a handover target (IMPORT_HANDOVER; `signer-protocol/docs/protocol.md`,
-  "Handover"). A runner without a setup, or a build without key generation,
-  answers the three UNSUPPORTED.
+  `-state-create`, `-record-create`), the DynamoDB guard, and a
+  `-platform-opt` the setup sets.
+- A release build hands its shares over under an approver-signed handover
+  order (HANDOVER_ORDER, HANDOVER) and takes them as a handover target
+  (IMPORT_HANDOVER; `signer-protocol/docs/protocol.md`, "Handover"). A
+  runner without a setup, or a debug build, answers the three UNSUPPORTED.
 - `signer-admin` makes setups from the human form and checks them;
   `signer-admin/cmd/setup-tool` checks a setup against a platform and a
   chain and prints a chain config's lines.
@@ -474,9 +471,8 @@ in its own platform build.
 
 `slashing-log/statestore` (`slashing-log/docs/durable-state.md`). On Azure
 and GCP the runner's local state is gone after a restart without its disk,
-and with key generation in the runner there is no other copy of a share.
-The runner keeps the sealed shares, the wrapped sealing key, key generation
-state and the operator key in the object store as well (encrypted under
+and a sealed share has no other copy. The runner keeps the sealed shares
+and the wrapped sealing key in the object store as well (encrypted under
 the platform's key release, under `state/` in the mark log's locked
 bucket) and restores them before it claims the log. HANDOVER under an
 approvers' order moves the shares and the mark from the runner of one image
@@ -566,7 +562,7 @@ approves an update that allows the image.
 - A cloud start needs an explicit `-record` choice; the images run
   `-record none` with the mark log.
 - Release images have no plaintext import: shares go in sealed, by
-  handover or through key generation.
+  handover.
 - Keep the mark log bucket's retention lock; the runner refuses to start
   when it cannot read its newest valid record.
 - Clients must name a verifier and its expected values; there is no

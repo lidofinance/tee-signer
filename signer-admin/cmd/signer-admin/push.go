@@ -57,16 +57,6 @@ func cmdPush(args []string, out io.Writer) error {
 		}
 		return pushHandover(out, c, raw, *cf.timeout)
 	}
-	if isOrderFile(fs.Arg(0)) {
-		if *raise {
-			return errors.New("-raise-min is for config updates, not DKG orders")
-		}
-		c, err := cf.load()
-		if err != nil {
-			return err
-		}
-		return pushOrder(out, c, raw, *cf.timeout)
-	}
 	u, err := setupwire.DecodeUpdate(raw)
 	if err != nil {
 		return fmt.Errorf("%s: %w", fs.Arg(0), err)

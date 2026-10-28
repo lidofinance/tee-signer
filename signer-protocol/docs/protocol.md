@@ -6,7 +6,7 @@ vsock. On GCP and Azure the TCP stream, and on AWS the vsock stream, runs
 inside mutual TLS 1.3 (see "Channel binding" below). The reference code is
 `signer-protocol/wire/wire.go`;
 its tests encode and decode every message and compare the bytes. The fuzz targets in `signer-protocol/wire`
-and `signer-protocol/dkgmsg` (`fuzz_test.go`, `go test -fuzz=FuzzX`) check that
+and `governance/handoverorder` (`fuzz_test.go`, `go test -fuzz=FuzzX`) check that
 no decoder panics and that what decodes encodes back to the same bytes.
 
 IDENTITY and ATTEST carry a version byte, 1: the request ends with it, and
@@ -84,7 +84,7 @@ that; a client that needs to tell causes apart reads `detail`.
 | 5 | `SC_ERR_DUPLICATE` | the validator is loaded already | no |
 | 6 | `SC_ERR_UNKNOWN_VALIDATOR` | no share of this validator is loaded | no |
 | 7 | `SC_ERR_STORAGE` | overloaded: the runner handed over and signs nothing (for good); an import whose maxima did not reach the core (until a restart); the mark log has no `log_id` yet; the body of a config update in force is unreadable (until that update is sent again); a mark log or share write failed | maybe |
-| 8 | `SC_ERR_CLOCK` | no trusted time (the NTS clock lacks a quorum, or the clock is not trusted for a config update, a DKG order or a handover) | later |
+| 8 | `SC_ERR_CLOCK` | no trusted time (the NTS clock lacks a quorum, or the clock is not trusted for a config update or a handover) | later |
 | 9 to 12 | `SC_ERR_SLASH_BLOCK`, `_SOURCE`, `_TARGET`, `_SOURCE_GT_TARGET` | slashing protection refused | no |
 | 13 | `SC_ERR_POLICY_FUTURE` | the message's epoch is past the clock horizon | no (only once the clock catches up) |
 | 14 to 20 | `SC_ERR_POLICY_EXIT`, `_FEE_RECIPIENT`, `_GAS_LIMIT`, `_TIMESTAMP`, `_PUBKEY`, `_INDEX`, `_DOMAIN` | policy refused; `_DOMAIN` also for root types 2 to 6 without `allow_unverified_nonslashable` | no (until a config update) |
@@ -95,8 +95,8 @@ that; a client that needs to tell causes apart reads `detail`.
 | 25 | `SC_ERR_SELECTION_PROOF` | kinds 9 and 10: the selection proof does not verify under the validator key | no |
 | 26 | `SC_ERR_SCHEDULE` | a fork schedule update changes an epoch the signer may sign before it applies (`sc_signer_set_schedule`); CONFIG_UPDATE returns it, no SIGN does | no |
 | 27 | `SC_ERR_POLICY_BUILDER_AUTH` | kind 14: the root of the BuilderRequestAuth data is not on `builder_request_auth_roots` (an empty list refuses all) | no (until a locked config update) |
-| 1000 | `BAD_REQUEST` | the payload does not parse, or the kind of a typed SIGN is unknown; also a well-formed CONFIG_UPDATE, HANDOVER or DKG message the runner refuses (reason in `detail`) | no |
-| 1001 | `UNSUPPORTED` | a message type this runner does not serve (unknown, another build, a flag that turns it off, a runner without a setup, a key generation message sent outside an order); an ATTEST or IDENTITY request of another version; an unknown root message type | no |
+| 1000 | `BAD_REQUEST` | the payload does not parse, or the kind of a typed SIGN is unknown; also a well-formed CONFIG_UPDATE or HANDOVER message the runner refuses (reason in `detail`) | no |
+| 1001 | `UNSUPPORTED` | a message type this runner does not serve (unknown, another build, a flag that turns it off, a runner without a setup); an ATTEST or IDENTITY request of another version; an unknown root message type | no |
 | 1002 | `INTERNAL` | anything else | maybe |
 | 1003 | `DOMAIN_MISMATCH` | the request's domain (a typed kind's, or a root message's) differs from the one the runner computes | no |
 | 1004 | `NOT_READY` | the runner is not serving yet (CONFIG_UPDATE before its core exists), a handover import is in progress, the operator key is not loaded, or the image check refuses (`detail` starts with `image check:`, see "Image check") | later |
@@ -123,46 +123,18 @@ A refusal caused by the restart floor carries
 | 0x07 | IMPORT_SHARE_SEALED | see below | key |
 | 0x09 | APPROVE_EXIT | a signed exit approval (governance/exitapproval) | empty |
 | 0x08 | CONFIG_UPDATE | the signed update, see below (a runner with a setup) | `version:u8 outcome:u8 setup_state` |
-| 0x20 | DKG_HELLO | `nonce_len:u8 nonce count:u16` (nonce 16 to 64 bytes, count 1 to 64) | hello, see [dkg.md](../../tee-signer/docs/dkg.md) |
-| 0x21 | DKG_DEAL | list of hellos (1 to 10) | deal |
-| 0x22 | DKG_FINISH | list of deals (1 to 10) | list of two: result and confirmation |
-| 0x23 | DKG_COMMIT | `session[32]` list of confirmations (1 to 10) | `count:u32` then `count` x key |
-| 0x24 | DKG_ABORT | empty | empty |
-| 0x25 | DKG_OPERATOR | `nonce_len:u8 nonce` (16 to 64 bytes) | `nonce_len:u8 nonce key[32] identity`, attested |
-| 0x26 | DKG_SETUP_SIGN | `kind:u8` then by kind: 1 deposit `pubkey[48] withdrawal_credentials[32] amount:u64`, 2 the 84-byte SSZ of a builder registration, 3 a Charon lock JSON | signature, or `lock_hash[32] count:u16 (pubkey[48] signature[96])*` |
-| 0x27 | DKG_ORDER | the signed DKG order, `governance/dkgorder`'s `'O'` layout | `outcome:u8 status:u8 hash[32] position:u8 arrived:u64 act_at:u64 not_after:u64 why_len:u16 why` |
-| 0x28 | DKG_IN_ORDER | `order_hash[32] type:u8 payload`: one of 0x20 to 0x24 or 0x26 and its payload | the inner message's answer |
-| 0x31 | HANDOVER_ORDER | the signed handover order (`tee-signer/handoverorder`) | `outcome:u8 status:u8 hash[32] arrived:u64 act_at:u64 not_after:u64 why_len:u16 why` |
+| 0x31 | HANDOVER_ORDER | the signed handover order (`governance/handoverorder`) | `outcome:u8 status:u8 hash[32] arrived:u64 act_at:u64 not_after:u64 why_len:u16 why` |
 | 0x32 | HANDOVER | `version:u8(1) nonce_len:u16 nonce identity_len:u32 identity policy_len:u32 policy order_len:u32 order start:u32` | `version:u8(1) mark[26] total:u32 origin_proof count:u16 (len:u16 share)* carry_len:u32 carry`, at most 256 shares; see `tee-signer/handover` message.go and carry.go |
 | 0x33 | IMPORT_HANDOVER | `version:u8(1) flags:u8 order_len:u32 order page_len:u32 page` | `version:u8(1) count:u16 (outcome:u8)* held:u32 total:u32 done:u8 generated:u32 imported:u32` |
 
-A list in the key generation messages is `count:u16 (len:u32 blob)*`. A
-`mark` is `has_block:u8 block_slot:u64 has_attestation:u8 source_epoch:u64
+A `mark` is `has_block:u8 block_slot:u64 has_attestation:u8 source_epoch:u64
 target_epoch:u64`. PUBLIC_KEYS has no paging: one frame holds at most
 10,082 keys (see "Open items").
 
-Messages 0x20 to 0x28 (key generation among runners and its orders)
-exist only in runners built with peer tags
-(`runner-<cloud>-dkg-<peers>`); the other builds answer `UNSUPPORTED`. In
-a key generation build:
-
-- DKG_OPERATOR is always served (`NOT_READY` while the operator key is not
-  loaded).
-- A runner without a setup takes 0x20 to 0x24 and 0x26 directly when
-  started with `-dkg-policy`, and answers them `UNSUPPORTED` without it.
-  It answers 0x27 and 0x28 `UNSUPPORTED`.
-- A runner with a setup takes key generation only under DKG orders: 0x27
-  pushes an order, and each message of it travels in 0x28. It answers
-  0x20 to 0x24 and 0x26 sent on their own `UNSUPPORTED`. DKG_ABORT inside
-  0x28 always answers OK. See [dkg.md](../../tee-signer/docs/dkg.md).
-
-Their constants live in `signer-protocol/dkgmsg`, not in `signer-protocol/wire`, so the
-runner builds without key generation keep the same bytes when key
-generation changes.
 The handover messages live in `tee-signer/handover`. HANDOVER_ORDER and
 HANDOVER are the source side, IMPORT_HANDOVER the target side of a
-handover between two runners with setups (see "Handover" below). A key
-generation build with a setup and the mark log serves all three. Other
+handover between two runners with setups (see "Handover" below). A release
+build with a setup and the mark log serves all three. Other
 runners answer `UNSUPPORTED`.
 
 Type numbers: 0x01 to 0x09 are taken, the next free one is 0x0a. Key
@@ -329,7 +301,7 @@ key_origin: generated_keys:u32 imported_keys:u32 keygen_orders_hash[32]
 - `approver_set_hash`: over approvals_needed and the approver keys in order (context
   `signer-approver-set-v1`), of the locked group in force. Zero when the
   runner cannot read the body of that update.
-- The pending order (kind 1 handover, 2 DKG), its hash and act time, or
+- The pending order (kind 1 handover), its hash and act time, or
   zeros. Kind 1 is a source's handover order (from its arrival on, also
   after the tombstone) or a target's handover import in progress (act
   time: the import's start). Otherwise the DKG order that waits out its
@@ -631,7 +603,7 @@ UNSUPPORTED.
 
 ### Approver signatures: direct and hashed
 
-Each approver signature (config update, DKG order, handover order,
+Each approver signature (config update, handover order,
 import order, exit approval) has two forms, and the runner takes either
 per signature in the same `position:u8 signature[64]` slot:
 
@@ -645,7 +617,6 @@ per signature in the same `position:u8 signature[64]` slot:
 | Kind | Direct context | Hashed context |
 | --- | --- | --- |
 | config update (over the header) | `signer-config-update-v1` | `signer-config-update-hash-v1` |
-| DKG order | `signer-dkg-order-v1` | `signer-dkg-order-hash-v1` |
 | handover order | `signer-handover-order-v1` | `signer-handover-order-hash-v1` |
 | import order | `signer-import-order-v1` | `signer-import-order-hash-v1` |
 | exit approval | `signer-ta-exit-approval-v1` | `signer-ta-exit-approval-hash-v1` |
@@ -900,7 +871,7 @@ HANDOVER. Before anything changes, the source checks:
 
 - the order is its pending order, past its act time, before `not_after`,
   still signed by k approvers in force, its target image still allowed;
-- no config update and no DKG order is pending on the source;
+- no config update is pending on the source;
 - the target's published setup rebuilds `policy_root` from its leaves and
   salts, and `setup_hash` = H(`policy_root`, `platform_commitment`) is the
   order's target and the one the target's identity carries;
@@ -956,7 +927,7 @@ of the source do not chain onto the target's version 0 (`prev_hash`).
 IMPORT_HANDOVER. The target checks the order (its own `setup_hash`, cluster
 and chain, k approvers in force), finds itself empty at version 0 on the
 first request and writes the order into the slot: it signs nothing and
-takes no other share, update or DKG order until every share is in, also
+takes no other share or update until every share is in, also
 after a restart. Every request of one process carries the same mark. It
 checks the origin proof and signatures (or counts every share as imported
 on request), opens each share, stores it after raising its log, and clears
@@ -974,18 +945,17 @@ hash the slot holds, before any check under the config in force: an order
 that a rotation or an image removal voided since comes back too, as void.
 It never takes an import for its own order.
 
-Release gate. `tests/e2e` `TestE2EHandoverGate` runs a dev key generation
+Release gate. `tests/e2e` `TestE2EHandoverGate` runs a dev release
 runner N that hands over to N+1 of the same tree, which hands over to N+2,
 with signing above the mark after each step and the source refusing
 everything after its tombstone. It runs in the default e2e set
 (`scripts/test.sh` fails unless it passed), and `scripts/handover-gate.sh`
-runs it on the dev key generation build of each flavour, default and
-testnet (`go test -tags testnet`, a test chain), and writes
+runs it on the dev release build of each flavour, default and testnet
+(`go test -tags testnet`, a test chain), and writes
 `build/handover-gate.stamp` with the source id of the tree once both
 passed. The Azure, GCP and Nitro image builds refuse to start unless the
-image's runner is a key generation build (the only one with the source
-side) and the stamp matches the sources (`require_handover_gate` in
-`scripts/common.sh`). There is no override.
+stamp matches the sources (`require_handover_gate` in `scripts/common.sh`).
+There is no override.
 
 ### Client roles
 
@@ -1073,7 +1043,6 @@ has mutual TLS.
 | 0x07 | IMPORT_SHARE_SEALED | no | no | yes |
 | 0x08 | CONFIG_UPDATE | no | no | yes |
 | 0x09 | APPROVE_EXIT | no | no | yes |
-| 0x20 to 0x28 | DKG_* | no | no | yes |
 | 0x31 to 0x33 | HANDOVER_ORDER, HANDOVER, IMPORT_HANDOVER | no | no | yes |
 | any other | | no | no | no |
 
@@ -1219,7 +1188,7 @@ document describes the code as it is.
 3. PUBLIC_KEYS has no paging. Past 10,082 keys the answer is larger than a
    frame: `WriteFrame` fails, the runner logs it and closes the connection
    without an answer.
-4. `detail` (1024 bytes) and the `why` of DKG and handover order states
+4. `detail` (1024 bytes) and the `why` of handover order states
    (512 bytes) are cut at a byte count, which can split a UTF-8 sequence.
 5. A request type with bit 0x80 set is not refused as such.
 6. IMPORT_SHARE and IMPORT_SHARE_SEALED take flags 0 with maxima that are

@@ -61,7 +61,7 @@ bin_env() {
   echo "RUNNER_BIN=$d/runner-dev" "RUNNER_DEBUG_BIN=$d/runner-dev-debugimport" \
     "RUNNER_AWS_BIN=$d/runner-aws" "RUNNER_AWS_DEBUG_BIN=$d/runner-aws-debugimport" \
     "RUNNER_AZURE_BIN=$d/runner-azure" "RUNNER_AZURE_DEBUG_BIN=$d/runner-azure-debugimport" \
-    "RUNNER_GCP_BIN=$d/runner-gcp" "RUNNER_GCP_DEBUG_BIN=$d/runner-gcp-debugimport" "RUNNER_DKG_BIN=$d/runner-dev-dkg-dev"
+    "RUNNER_GCP_BIN=$d/runner-gcp" "RUNNER_GCP_DEBUG_BIN=$d/runner-gcp-debugimport"
 }
 
 log "e2e: static $HOST_ARCH runners"

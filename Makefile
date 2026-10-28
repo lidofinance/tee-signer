@@ -65,7 +65,7 @@ fuzz-core: ## the C fuzz targets (ASan, UBSan): regression inputs, then FUZZ_SEC
 
 model: core ## the slashing model test (tee-signer/server) with MODEL_RUNS seeds
 	cd $(ROOT)/tee-signer && SLASHMODEL_RUNS=$(MODEL_RUNS) go test $(RACE) -count=1 -v -timeout 60m \
-		-tags "$$(bash -c '. $(ROOT)/scripts/common.sh; runner_tags runner-dev-dkg-dev')" -run '^TestSlashingModel$$' ./server
+		-tags "$$(bash -c '. $(ROOT)/scripts/common.sh; runner_tags runner-dev')" -run '^TestSlashingModel$$' ./server
 
 release-gate: ## the release gate: its self-test, the tree check, and every runner build checked by build-runner.sh
 	bash $(ROOT)/scripts/release-gate-test.sh

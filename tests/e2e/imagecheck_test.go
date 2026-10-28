@@ -14,7 +14,7 @@ import (
 // the cloud release builds when make names them (RUNNER_AWS_BIN,
 // RUNNER_AZURE_BIN, RUNNER_GCP_BIN).
 func TestE2EImageCheckNoOverrideInReleaseBuilds(t *testing.T) {
-	keys := []string{"dev", "dev-dkg"}
+	keys := []string{"dev"}
 	for _, k := range []string{"aws", "azure", "gcp"} {
 		if os.Getenv(runnerBuilds[k].env) != "" {
 			keys = append(keys, k)

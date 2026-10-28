@@ -13,8 +13,8 @@ import (
 	"github.com/lidofinance/tee-signer/signer-admin/approver/fakeagent"
 )
 
-// approverContexts are the five kinds an approver signs.
-var approverContexts = []setupwire.Context{setupwire.CtxConfigUpdate, setupwire.CtxDKGOrder, setupwire.CtxHandoverOrder,
+// approverContexts are the four kinds an approver signs.
+var approverContexts = []setupwire.Context{setupwire.CtxConfigUpdate, setupwire.CtxHandoverOrder,
 	setupwire.CtxImportOrder, setupwire.CtxTAExitApproval}
 
 func useAgent(t *testing.T, path string) {

@@ -29,9 +29,7 @@ The platform store (`-state-dir`) holds, by prefix:
 | Prefix | What | In the copy |
 | --- | --- | --- |
 | `sealing/` | the sealing data key, wrapped by key release (Azure: RSA-OAEP to the released Key Vault key; GCP: Cloud KMS) | yes |
-| `shares/` | the sealed shares, imported or made by key generation | yes |
-| `dkg/` | key generation: key records, and one record per session ("Key generation records") | yes |
-| `operator/` | the sealed operator key (the key generation policy names it) | yes |
+| `shares/` | the sealed shares | yes |
 | `mark-hint/` | the mark log's hint, written with every record | no |
 | `rr/` | repeat roots, written with every vote | no |
 | `wm/` | persisted marks (not used with the mark log) | no |
@@ -137,25 +135,6 @@ The local store follows the copy: `Apply` writes the local files after the
 commit. If they fail, the process refuses further changes until a restart,
 which writes them from the copy.
 
-Key generation uses this (`keygen.Manager.Commit`). A session's shares and
-their key records are one change, and the runner loads the shares into the
-signer core only once the change landed, so a restart from the copy never
-sees a share without its key record or the reverse. The key records a
-Charon lock closes are one change too. A store without the copy (Nitro's
-host agent) takes the writes one by one: the key records go first, so a
-crash leaves at most records without shares, which setup signing refuses
-and the next COMMIT writes again. `TestApplyAllOrNothing` fails each write
-of a three-object commit in turn, refused and with the reply lost;
-`TestDKGCommitAllOrNothingWithStateCopy` and `TestDKGCommitOrderWithoutBatch`
-do the same for a key generation commit.
-
-A runner with a setup makes keys under DKG orders (`tee-signer/docs/dkg.md`), one
-manager per order, and each manager commits the same way: the key records,
-with the order's hash and path, go in the change with the shares.
-`TestDKGOrderCommitStateCopyRestart` fails each write of COMMIT under a
-Dirk order and under a Charon order, refused and with the reply lost,
-starts a new runner from the copy alone, and sends the COMMIT again.
-
 ### Segments and compaction
 
 A commit carries its changes when they take at most 128 KiB, the changes
@@ -175,20 +154,6 @@ the segments' chunks.
 The writer keeps the state in memory, about the size of the durable state,
 so it writes merged segments without reading them
 back.
-
-### Key generation records
-
-Each session's record (`dkg/pending/<session>`) holds the session's result,
-the participants' session keys and this runner's shares until COMMIT. At
-COMMIT it shrinks to the session's state and its validator keys (6.8 KB
-sealed for 64 keys here, from about 17 KB), so a repeated COMMIT still
-answers. The first COMMIT more than 24 hours later (`keygen.FinishedKeep`)
-deletes it, whichever order's manager runs that COMMIT. An aborted session keeps its state only. A record that never got its
-COMMIT stays: it holds this runner's shares of a session the other runners
-may have committed, and the coordinator can send that COMMIT again
-(`dkg-result.json` keeps the confirmations). Deletes need a store that can
-delete: the file store can, Nitro's host agent cannot, so there the records
-shrink but stay.
 
 ### Write and restore
 

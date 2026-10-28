@@ -22,12 +22,11 @@ match="${FUZZ_MATCH:-.}"
 minimize="${FUZZ_MINIMIZE_TIME:-1s}"
 : >"$LOGS/fuzz.log"
 n=0
-# The runner's targets build with the key generation build's tags, so the
-# ones in files for the peer builds (FuzzSlashingModel in tee-signer/server)
-# exist; the files without a constraint build as well.
+# The runner's targets build with the dev release build's tags (the files
+# behind !debugimport, FuzzSlashingModel in tee-signer/server, exist).
 tags_of() {
   case "$1" in
-    tee-signer) runner_tags runner-dev-dkg-dev ;;
+    tee-signer) runner_tags runner-dev ;;
     platform-aws) echo platform_aws ;;
     platform-azure) echo platform_azure ;;
     platform-gcp) echo platform_gcp ;;

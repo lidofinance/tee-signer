@@ -1,14 +1,14 @@
-//go:build (peer_azure || peer_aws || peer_gcp || peer_dev) && !debugimport
+//go:build !debugimport
 
 package server
 
 import (
 	"testing"
 
+	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
 	"github.com/lidofinance/tee-signer/tee-signer/handover"
-	"github.com/lidofinance/tee-signer/tee-signer/handoverorder"
 )
 
 // SHR-01: the source checked the target's IDENTITY answer for the

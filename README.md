@@ -28,8 +28,8 @@ every module builds and tests on its own.
 |---|---|
 | [signer-core](signer-core) | The C signing core: SSZ, BLS (blst, vendored), EIP-3076 slashing protection, signing policy; its Go binding, fuzz targets and simulator |
 | [signer-protocol](signer-protocol) | The runner's wire protocol: request types, frames, transports, client connection |
-| [governance](governance) | The setup format, approver sets and signed updates, approved orders, chain configs |
-| [tee-signer](tee-signer) | The runner that runs in the TEE: server, state, clone guard, attested TLS, key generation, handover |
+| [governance](governance) | The setup format, approver sets and signed updates, approved orders (handover, import, exit), chain configs |
+| [tee-signer](tee-signer) | The runner that runs in the TEE: server, state, clone guard, attested TLS, handover |
 | [slashing-log](slashing-log) | The mark log and the encrypted state copy on host storage |
 | [platform](platform) | The platform interface of the runner, setup loading, the dev platform |
 | [platform-aws](platform-aws) | Nitro Enclaves: attestation, KMS key release, S3 mark log, the parent instance tools, deploy files |
@@ -37,7 +37,7 @@ every module builds and tests on its own.
 | [platform-gcp](platform-gcp) | GCP Confidential Space: token, Cloud KMS, Cloud Storage mark log, deploy files |
 | [attestation-verify](attestation-verify) | Verifiers of the runner's attestation (Nitro, MAA, Confidential Space) and the attested client |
 | [trusted-time](trusted-time) | The runner clock and the NTS client (Rust, vendored crates, Go binding) |
-| [signer-admin](signer-admin) | Operator tools: setup updates and orders, key generation, share import, handover |
+| [signer-admin](signer-admin) | Operator tools: setup updates and orders, share import, handover |
 | [web3signer-api](web3signer-api) | Parsing and checks of Web3Signer signing requests |
 | [devkit](devkit) | Test helpers: fuzz oracles, goroutine leak check, lock order check |
 | [tests](tests) | End-to-end tests across modules, against the built runners |

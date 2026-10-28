@@ -140,18 +140,11 @@ const (
 	limited
 )
 
-// dkgTypes are the key generation message types of backend/dkgmsg (HELLO
-// to IN_ORDER), written as numbers: a build without key generation must
-// not link dkgmsg (scripts/check-deps.sh), and the table denies these
-// types to every role but admin in every build. TestDKGTypesMatchDKGMsg
-// checks them against dkgmsg.
-var dkgTypes = []wire.MsgType{0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28}
-
 // adminTypes are the message types only the admin role may send.
-var adminTypes = append([]wire.MsgType{
+var adminTypes = []wire.MsgType{
 	wireadmin.TypeImportShare, wireadmin.TypeImportSealed, wireadmin.TypeConfigUpdate, wireadmin.TypeApproveExit,
 	handover.TypeOrder, handover.Type, handover.TypeImport,
-}, dkgTypes...)
+}
 
 // allows is the role table. A role or a type missing here is denied.
 var allows = func() map[attls.Role]map[wire.MsgType]grant {
