@@ -67,9 +67,9 @@ func ntsClockCheck() int {
 		p := st.Peers[s.Operator]
 		line := fmt.Sprintf("%-10s %-20s ke=%d queries=%d samples=%d", s.Operator, s.Host, p.Stats.KEOK, p.Stats.Queries, p.Stats.Samples)
 		if p.Sample != nil {
-			line += fmt.Sprintf(" delay=%v bound=%v offset_from_host=%v stratum=%d cookies=%d",
+			line += fmt.Sprintf(" delay=%v bound=%v offset_from_host=%v stratum=%d",
 				p.Sample.Delay.Round(time.Microsecond), p.Sample.Bound.Round(time.Microsecond),
-				p.Stats.LastOffsetFromHost.Round(time.Microsecond), p.Sample.Stratum, p.Sample.CookiesHeld)
+				p.Stats.LastOffsetFromHost.Round(time.Microsecond), p.Sample.Stratum)
 		}
 		if p.LastErr != "" {
 			line += " error=" + p.LastErr

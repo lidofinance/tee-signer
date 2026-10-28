@@ -31,26 +31,6 @@ NITRO_CLI_COMMIT="1c496ed730d2dc41ec5bff6df89b4f3185e18840"
 # Fetched at its pin by scripts/fetch.sh --nitro, into build/ (not vendored).
 NITRO_CLI_DIR="$BUILD/third_party/aws-nitro-enclaves-cli"
 
-# NTS time client (nts/): a Rust static library, linked into the runner by the
-# build tag nts. The Rust toolchain is a Docker image (trusted-time/toolchain/toolchain.Dockerfile:
-# rust:1.94.1-bookworm pinned by digest, plus the aarch64 standard library).
-# The crates are those of trusted-time/rust/Cargo.lock, vendored into third_party/ by
-# scripts/fetch-nts.sh. The output goes to build/nts/, not to
-# build/<arch>/, so that no file an image build uses is overwritten.
-NTS_DIR="$ROOT/trusted-time/rust"
-NTS_VENDOR_DIR="$ROOT/trusted-time/third_party/nts-vendor"
-NTS_IMAGE="signer-nts-toolchain:1.94.1"
-NTS_RUSTC_COMMIT="e408947bfd200af42db322daf0fadfe7e26d3bd1"
-NTS_OUT="$BUILD/nts"
-
-# nts_toolchain_image: builds the toolchain image if this Docker has none.
-nts_toolchain_image() {
-  if ! docker image inspect "$NTS_IMAGE" >/dev/null 2>&1; then
-    log "building $NTS_IMAGE (rustup downloads rust-std for aarch64 from static.rust-lang.org)"
-    docker build --pull=false -q -f "$ROOT/trusted-time/toolchain/toolchain.Dockerfile" -t "$NTS_IMAGE" "$ROOT/trusted-time/toolchain" >/dev/null
-  fi
-}
-
 # tool_for <arch> <tool>: the binutils tool that reads files of <arch> on this host.
 tool_for() {
   if [ "$1" = "$HOST_ARCH" ]; then echo "$2"; else echo "$1-linux-gnu-$2"; fi
@@ -117,9 +97,9 @@ image_suffix() { echo "$FLAVOR_SUFFIX"; }
 # verifierselect: a runner links the attestation verifier of its own
 # platform only (attestation-verify, the handover checks the other image
 # with it), where the tools and the tests link every verifier. The cloud
-# runners (azure, aws, gcp and their debug builds) link the Rust NTS
-# library (trusted-time, build/nts/<arch>/lib) and their images run the NTS
-# clock (-nts-clock). The dev builds stay without it.
+# runners (azure, aws, gcp and their debug builds) carry the NTS clock
+# (trusted-time/nts, tag nts) and their images run it (-nts-clock). The dev
+# builds stay without it.
 runner_tags() { echo "$(runner_base_tags "$1"),verifierselect"; }
 runner_base_tags() {
   case "$1" in
