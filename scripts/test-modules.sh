@@ -60,8 +60,11 @@ checks() {
       go test $RACE -count=1 -v -tags "$ALL_TAGS" ./... || return 1 ;;
     attestation-verify)
       # The clients against the debug runners, when they are built.
-      env RUNNER_AZURE_DEBUG_BIN="$BUILD/$HOST_ARCH/bin/runner-azure-debugimport" \
-        RUNNER_AWS_DEBUG_BIN="$BUILD/$HOST_ARCH/bin/runner-aws-debugimport" go test $RACE -count=1 -v ./... || return 1
+      # Pass a debug runner only when it was built, so the tests skip instead of failing.
+      local dbg=() b
+      b="$BUILD/$HOST_ARCH/bin/runner-azure-debugimport"; [ -x "$b" ] && dbg+=(RUNNER_AZURE_DEBUG_BIN="$b")
+      b="$BUILD/$HOST_ARCH/bin/runner-aws-debugimport"; [ -x "$b" ] && dbg+=(RUNNER_AWS_DEBUG_BIN="$b")
+      env "${dbg[@]}" go test $RACE -count=1 -v ./... || return 1
       local p
       for p in azure aws gcp dev; do go test $RACE -count=1 -tags "peerselect,peer_$p" ./runnerclient || return 1; done ;;
     tests)
