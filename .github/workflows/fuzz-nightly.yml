@@ -1,5 +1,6 @@
 # Every fuzz target of main, each for longer than on a pull request: the
-# Go targets for 30 s, the C targets (signer-core, markformat) for 30 s.
+# Go targets for 30 s, the C targets (signer-core, markformat, the NTS core
+# trusted-time/ntscore/c: every target its Makefile lists) for 30 s.
 # Runs nightly and by hand (workflow_dispatch). On a failure the logs and
 # any new input under testdata/fuzz are uploaded as an artifact.
 name: fuzz-nightly
@@ -34,6 +35,13 @@ jobs:
         with:
           go-version: "1.26.x"
           cache: false
+      # The inputs the Go engine found so far (GOCACHE/fuzz) carry over
+      # from night to night; without them each run starts from the seeds.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/go-build/fuzz
+          key: fuzz-corpus-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ runner.os }}-
       - run: bash scripts/deps.sh
       # The vectors come from their pinned releases (sha256 checked).
       - run: bash signer-core/scripts/fetch.sh
@@ -59,3 +67,5 @@ jobs:
             logs/
             signer-core/build/*/fuzz/logs/
             signer-core/build/*/fuzz/artifacts-ci/
+            trusted-time/ntscore/c/build/*/fuzz/logs/
+            trusted-time/ntscore/c/build/*/fuzz/artifacts-ci/

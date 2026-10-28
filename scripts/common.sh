@@ -44,41 +44,6 @@ NITRO_CLI_COMMIT="1c496ed730d2dc41ec5bff6df89b4f3185e18840"
 # Fetched at its pin by scripts/fetch.sh --nitro, into build/ (not vendored).
 NITRO_CLI_DIR="$BUILD/third_party/aws-nitro-enclaves-cli"
 
-# NTS time client (nts/): a Rust static library, linked into the runner by the
-# build tag nts. The Rust toolchain is a Docker image (trusted-time/toolchain/toolchain.Dockerfile:
-# rust:1.94.1-slim-bookworm pinned by digest, plus the aarch64 standard library,
-# pinned by NTS_STD_SHA256_aarch64).
-# The crates are those of trusted-time/rust/Cargo.lock, fetched from crates.io
-# into NTS_CARGO_HOME by scripts/fetch-nts.sh. The output goes to build/nts/, not to
-# build/<arch>/, so that no file an image build uses is overwritten.
-NTS_DIR="$ROOT/trusted-time/rust"
-NTS_CARGO_HOME="$BUILD/nts/cargo-home"
-NTS_IMAGE="signer-nts-toolchain:1.94.1-slim"
-# The toolchain always runs as linux/amd64, also on an arm64 host (under
-# emulation there). A native arm64 rustc gives a different aarch64 library,
-# so the Nitro PCRs would depend on the build host.
-NTS_PLATFORM="linux/amd64"
-NTS_RUSTC_COMMIT="e408947bfd200af42db322daf0fadfe7e26d3bd1"
-# The standard library of each target in the image: sha256 of the sorted
-# "sha256  path" list of every file under lib/rustlib/<target> of the
-# sysroot (nts_std_sum in nts-container.sh). The x86_64 one comes with the
-# base image; the aarch64 one is what rustup downloaded at image build, and
-# this pin is the only check of its bytes beyond rustup's own manifest.
-NTS_STD_SHA256_x86_64="bf5ce11b2dc442f3261fb3197d8412a26ed4114b196299d4284f4fbf8c919320"
-NTS_STD_SHA256_aarch64="9ebddcc2f45dafdc7e150626f7ed9bd981c7d4da85c33df46b46e7e2d7db8b88"
-NTS_OUT="$BUILD/nts"
-
-# nts_toolchain_image: builds the toolchain image if this Docker has none for
-# $NTS_PLATFORM. An image of another platform under the same tag is rebuilt.
-nts_toolchain_image() {
-  local plat
-  plat="$(docker image inspect -f '{{.Os}}/{{.Architecture}}' "$NTS_IMAGE" 2>/dev/null || true)"
-  if [ "$plat" != "$NTS_PLATFORM" ]; then
-    log "building $NTS_IMAGE for $NTS_PLATFORM (rustup downloads rust-std for aarch64 from static.rust-lang.org)"
-    docker build --pull=false -q --platform "$NTS_PLATFORM" -f "$ROOT/trusted-time/toolchain/toolchain.Dockerfile" -t "$NTS_IMAGE" "$ROOT/trusted-time/toolchain" >/dev/null
-  fi
-}
-
 # tool_for <arch> <tool>: the binutils tool that reads files of <arch> on this host.
 tool_for() {
   if [ "$1" = "$HOST_ARCH" ]; then echo "$2"; else echo "$1-linux-gnu-$2"; fi
@@ -100,6 +65,19 @@ goarch_of() { case "$1" in x86_64) echo amd64 ;; aarch64) echo arm64 ;; esac; }
 # cc_for <arch>: the C compiler that targets <arch> from this host.
 cc_for() {
   if [ "$1" = "$HOST_ARCH" ]; then echo gcc; else echo "$1-linux-gnu-gcc"; fi
+}
+
+# cross_run <arch>: succeeds if this host can run <arch> binaries, and
+# prints the program to run them through: nothing for the host's own arch,
+# qemu-<arch> (qemu-user) for the other one. CROSS_RUN names another
+# program; CROSS_RUN=direct says the kernel runs them itself (binfmt_misc:
+# Rosetta in a Linux VM on Apple silicon, qemu-user-static).
+cross_run() {
+  [ "$1" != "$HOST_ARCH" ] || return 0
+  local q="${CROSS_RUN:-qemu-$1}"
+  [ "$q" != direct ] || return 0
+  command -v "$q" >/dev/null 2>&1 || return 1
+  echo "$q"
 }
 
 # The runner is built once per cloud (tee-signer/platforms.go): a binary holds
@@ -186,9 +164,9 @@ image_suffix() { if chain_is_prod "$CHAIN"; then echo ""; else echo "-$CHAIN"; f
 # runner_tags <binary name>: its platform tags, then debugimport for a debug
 # build, then nts for a cloud build, then the chain tags of a non-prod
 # build. No runner links an attestation verifier (scripts/check-deps.sh).
-# The cloud runners (azure, aws, gcp and their debug builds) link the Rust
-# NTS library (trusted-time, build/nts/<arch>/lib) and their images run the
-# NTS clock (-nts-clock). The dev builds stay without it.
+# The cloud runners (azure, aws, gcp and their debug builds) carry the NTS
+# clock (trusted-time/nts and its C core trusted-time/ntscore, tag nts) and
+# their images run it (-nts-clock). The dev builds stay without it.
 runner_tags() { runner_base_tags "$1"; }
 runner_base_tags() {
   local c
@@ -324,7 +302,7 @@ git_checkout_pinned() {
   log "$(basename "$dir") at $tag ($commit)"
 }
 
-# has_nts <binary name>: the build links the NTS library (tag nts).
+# has_nts <binary name>: the build carries the NTS client (tag nts).
 has_nts() { case ",$(runner_tags "$1")," in *,nts,*) return 0 ;; *) return 1 ;; esac; }
 
 # The build overlay. SIGNER_BUILD_OVERLAY_DIR names a folder outside this

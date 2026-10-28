@@ -8,6 +8,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
 
 	"github.com/lidofinance/tee-signer/trusted-time/ntscatalog"
@@ -68,8 +69,8 @@ var rootSHA256 = map[string]string{
 	"harica-root-2015.pem":             "a040929a02ce53b4acf4f2ffc6981ce4496f755e6d45fe0b2a692bcd52523f36",
 }
 
-// Server is a public NTS server and who runs it.
-type Server struct {
+// PublicServer is a public NTS server and who runs it.
+type PublicServer struct {
 	Host     string
 	Operator string
 	Roots    []string // files under roots/
@@ -80,12 +81,31 @@ type Server struct {
 // a deployment names in -nts-terms-confirmed.
 var PublicServers = publicServers(ntscatalog.Builtin.Dialed())
 
-func publicServers(in []ntscatalog.NTSServer) []Server {
-	out := make([]Server, 0, len(in))
+func publicServers(in []ntscatalog.NTSServer) []PublicServer {
+	out := make([]PublicServer, 0, len(in))
 	for _, e := range in {
-		out = append(out, Server{Host: e.Host, Operator: e.Operator, Roots: append([]string(nil), e.Roots...)})
+		out = append(out, PublicServer{Host: e.Host, Operator: e.Operator, Roots: append([]string(nil), e.Roots...)})
 	}
 	return out
+}
+
+// RootsPEM is the named root files as one PEM, each checked against its
+// pinned hash: what a Server carries into the core, which hands it to the
+// key exchange. No file named is an error: a server without roots could
+// only fail later, at its key exchange.
+func RootsPEM(files []string) ([]byte, error) {
+	if len(files) == 0 {
+		return nil, errors.New("nts: no pinned root named")
+	}
+	var out []byte
+	for _, name := range files {
+		block, _, err := pinnedRoot(name)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, pem.EncodeToMemory(block)...)
+	}
+	return out, nil
 }
 
 // RootPool builds the pool of the named root files, each checked against
@@ -99,29 +119,39 @@ func RootPool(files []string) (*x509.CertPool, error) {
 }
 
 // AddRoots adds the named root files to pool, each checked against its
-// pinned hash.
+// pinned hash: the coarse check's HTTP client trusts the operators' roots
+// too.
 func AddRoots(pool *x509.CertPool, files []string) error {
 	for _, name := range files {
-		want, ok := rootSHA256[name]
-		if !ok {
-			return fmt.Errorf("nts: no pinned root %q", name)
-		}
-		data, err := rootFiles.ReadFile("roots/" + name)
+		_, cert, err := pinnedRoot(name)
 		if err != nil {
 			return err
-		}
-		block, _ := pem.Decode(data)
-		if block == nil || block.Type != "CERTIFICATE" {
-			return fmt.Errorf("nts: roots/%s is not a PEM certificate", name)
-		}
-		if sum := sha256.Sum256(block.Bytes); hex.EncodeToString(sum[:]) != want {
-			return fmt.Errorf("nts: roots/%s has sha256 %x, pinned %s", name, sum, want)
-		}
-		cert, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			return fmt.Errorf("nts: roots/%s: %w", name, err)
 		}
 		pool.AddCert(cert)
 	}
 	return nil
+}
+
+// pinnedRoot reads one embedded root and checks it against its pinned hash.
+func pinnedRoot(name string) (*pem.Block, *x509.Certificate, error) {
+	want, ok := rootSHA256[name]
+	if !ok {
+		return nil, nil, fmt.Errorf("nts: no pinned root %q", name)
+	}
+	data, err := rootFiles.ReadFile("roots/" + name)
+	if err != nil {
+		return nil, nil, err
+	}
+	block, _ := pem.Decode(data)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, nil, fmt.Errorf("nts: roots/%s is not a PEM certificate", name)
+	}
+	if sum := sha256.Sum256(block.Bytes); hex.EncodeToString(sum[:]) != want {
+		return nil, nil, fmt.Errorf("nts: roots/%s has sha256 %x, pinned %s", name, sum, want)
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("nts: roots/%s: %w", name, err)
+	}
+	return block, cert, nil
 }

@@ -1,0 +1,8 @@
+wycheproof_aes_siv_cmac_256.json
+  The keySize 256 group (AEAD_AES_SIV_CMAC_256, a 32-octet key) of
+  testvectors_v1/aes_siv_cmac_test.json from Project Wycheproof, copied
+  unchanged (the "source" field names the commit):
+  https://github.com/C2SP/wycheproof/blob/e0df04e0c033/testvectors_v1/aes_siv_cmac_test.json
+  Copyright Google LLC and the Wycheproof contributors. Apache License 2.0:
+  https://github.com/C2SP/wycheproof/blob/e0df04e0c033/LICENSE
+  Test data only; no binary carries it.

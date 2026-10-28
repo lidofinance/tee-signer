@@ -3,11 +3,15 @@
 package clock
 
 import (
-	"crypto/x509"
+	"context"
+	"errors"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	ntscore "github.com/lidofinance/tee-signer/trusted-time/ntscore/go"
 )
 
 // A quorum that fails the coarse check stops the clock: Now refuses until a
@@ -47,39 +51,42 @@ func TestNTSClockCoarseRefusalStopsServing(t *testing.T) {
 	}
 }
 
-// closedAddr is a loopback address nothing listens on.
-func closedAddr(t *testing.T) string {
-	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := l.Addr().String()
-	l.Close()
-	return addr
-}
-
 // Until the first quorum, a failed NTS-KE is tried again after 3/4 to 5/4
 // Interval, not after a doubling wait: a relay that comes up late must not
 // push the next try past the runner's start wait. From the first quorum on
-// the wait doubles up to maxPoll.
+// the wait doubles up to maxPoll (the core's rule; TestKeyExchangeBackoff
+// and TestKeyExchangeRetryIsRandomBeforeFirstQuorum in ntscore pin the
+// waits one by one). Here the key exchange fails through the dialer, the
+// real client's path.
 func TestNTSClockKeyExchangeWaitsIntervalUntilFirstQuorum(t *testing.T) {
 	fs := newServers(t, nil, "a", "b", "c")
-	down := closedAddr(t)
-	n := &NTS{Coarse: &coarseClock{}, Interval: 50 * time.Millisecond, minPoll: 10 * time.Millisecond, maxPoll: 400 * time.Millisecond,
-		StartDelay: -1}
-	for _, f := range fs {
-		s := f.srv
-		s.KEAddr, s.Roots = down, x509.NewCertPool()
-		n.Servers = append(n.Servers, s)
-	}
-	keWaits := func() []time.Duration {
-		var out []time.Duration
-		for _, p := range n.peers {
-			out = append(out, p.keWait)
+	var mu sync.Mutex
+	down := map[string]bool{} // KE addresses the dialer refuses
+	n := newNTS(fs, &coarseClock{})
+	n.Interval, n.minPoll, n.maxPoll = 50*time.Millisecond, 10*time.Millisecond, 400*time.Millisecond
+	n.Dial = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		mu.Lock()
+		refused := network == "tcp" && down[addr]
+		mu.Unlock()
+		if refused {
+			return nil, errors.New("connect: connection refused")
 		}
-		return out
+		var d net.Dialer
+		return d.DialContext(ctx, network, addr)
 	}
+	setDown := func(addrs ...string) {
+		mu.Lock()
+		clear(down)
+		for _, a := range addrs {
+			down[a] = true
+		}
+		mu.Unlock()
+	}
+	keFails := func(op string) int { return n.Status().Peers[op].Stats.KEFail }
+	// Nobody reachable: three tries 70 ms apart (over the 5/4 Interval the
+	// random wait can reach) are three failures each, not one, two with a
+	// doubling wait (50, then 100 ms).
+	setDown(fs[0].srv.KEAddr, fs[1].srv.KEAddr, fs[2].srv.KEAddr)
 	for try := 1; try <= 3; try++ {
 		if try > 1 {
 			time.Sleep(70 * time.Millisecond)
@@ -87,35 +94,74 @@ func TestNTSClockKeyExchangeWaitsIntervalUntilFirstQuorum(t *testing.T) {
 		if err := refresh(t, n); err == nil {
 			t.Fatalf("try %d: a quorum without a key exchange", try)
 		}
-		for i, w := range keWaits() {
-			if w < n.Interval*3/4 || w >= n.Interval*5/4 {
-				t.Fatalf("try %d, peer %d: key exchange wait %v before the first quorum, want %v to %v (waits %v)",
-					try, i, w, n.Interval*3/4, n.Interval*5/4, keWaits())
+		for _, op := range []string{"a", "b", "c"} {
+			if got := keFails(op); got != try {
+				t.Fatalf("try %d, %s: %d key exchange failures before the first quorum, want one per try", try, op, got)
 			}
 		}
 	}
-	if fails := n.Status().Peers["a"].Stats.KEFail; fails != 3 {
-		t.Fatalf("key exchange failures with a: %d, want 3", fails)
-	}
 	// The servers come up: the first quorum.
-	for i, f := range fs {
-		n.peers[i].srv.KEAddr, n.peers[i].srv.Roots = f.ke.Addr, f.srv.Roots
-	}
+	setDown()
 	time.Sleep(70 * time.Millisecond)
 	if err := refresh(t, n); err != nil {
 		t.Fatal(err)
 	}
-	// Then a's key exchange fails again: the wait doubles from Interval.
-	n.peers[0].srv.KEAddr = down
+	if _, err := n.Now(); err != nil {
+		t.Fatal(err)
+	}
+	// a loses its server's keys (NTSN on every answer, never authenticated:
+	// the core keeps polling with the cookies it holds and runs NTS-KE
+	// when they run out) and its key exchange fails from then on: the
+	// failures now come at a doubling wait, fewer than one per try.
 	fs[0].store.Forget()
-	time.Sleep(60 * time.Millisecond)
-	_ = refresh(t, n) // NTSN: a drops its keys
-	want := []time.Duration{50 * time.Millisecond, 100 * time.Millisecond, 200 * time.Millisecond}
-	for i, w := range want {
-		time.Sleep(w + 10*time.Millisecond)
+	setDown(fs[0].srv.KEAddr)
+	before := keFails("a")
+	for try := 0; try < 12 && keFails("a") == before; try++ {
+		time.Sleep(60 * time.Millisecond)
 		_ = refresh(t, n)
-		if got := n.peers[0].keWait; got != w {
-			t.Fatalf("failure %d after the first quorum: key exchange wait %v, want %v", i+1, got, w)
+	}
+	if keFails("a") == before {
+		t.Fatal("no key exchange failure of a after its cookies ran out")
+	}
+	first := keFails("a")
+	for try := 0; try < 6; try++ {
+		time.Sleep(60 * time.Millisecond)
+		_ = refresh(t, n)
+	}
+	if got := keFails("a") - first; got < 1 || got >= 6 {
+		t.Fatalf("%d key exchange failures of a in six tries 60 ms apart after the first quorum: want a doubling wait (50, 100, 200 ms), not one per try", got)
+	}
+}
+
+// A configuration call the core refuses because a poll is under way is
+// tried again until the poll is over: a signed update is not lost to it.
+// Any other refusal is the caller's at once.
+func TestNTSConfigureWaitsOutAPoll(t *testing.T) {
+	n := &NTS{}
+	calls := 0
+	err := n.configure(func() error {
+		if calls++; calls < 4 {
+			return &ntscore.Error{Code: busyCode(t)}
+		}
+		return nil
+	})
+	if err != nil || calls != 4 {
+		t.Fatalf("after %d calls: %v", calls, err)
+	}
+	calls = 0
+	if err := n.configure(func() error { calls++; return ntscore.ErrBadConfig }); !errors.Is(err, ntscore.ErrBadConfig) || calls != 1 {
+		t.Fatalf("a refused configuration: %v after %d calls", err, calls)
+	}
+}
+
+// busyCode is the core's code of ErrBusy.
+func busyCode(t *testing.T) int {
+	t.Helper()
+	for code := 1; code < 256; code++ {
+		if errors.Is(ntscore.CodeError(code, 0), ntscore.ErrBusy) {
+			return code
 		}
 	}
+	t.Fatal("no code for ErrBusy")
+	return 0
 }

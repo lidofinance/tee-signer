@@ -9,6 +9,8 @@
 #                    and its dependencies against the forbid lists
 #   dependencies     scripts/check-deps.sh (through build-runner.sh): no runner
 #                    binary links the code of a cloud it does not run on
+#   NTS self-test    -nts-selftest of every runner built with the tag nts,
+#                    on each architecture built that this host can run
 #   chains           scripts/chain-test.sh
 #   modules          scripts/test-modules.sh: gofmt, vet and unit tests of every
 #                    Go module, under the race detector; the signer-admin
@@ -60,6 +62,26 @@ if [ "$e2e" = 1 ]; then
     export SIGNER_ADMIN_RUNNER="${SIGNER_ADMIN_RUNNER:-$BUILD/$HOST_ARCH/bin/runner-dev}"
   fi
 
+  # Every runner built with the tag nts runs its -nts-selftest: the NTS
+  # client and its C core are in the binary and run on its architecture
+  # (the other one's under qemu-user, where this host can run them).
+  for arch in x86_64 aarch64; do
+    [ -d "$BUILD/$arch/bin" ] || continue
+    if ! xrun="$(cross_run "$arch")"; then
+      log "nts: no qemu-$arch here, the -nts-selftest of the $arch runners did not run"
+      continue
+    fi
+    for name in "${RUNNER_BINS[@]}"; do
+      has_nts "$name" && [ -x "$BUILD/$arch/bin/$name" ] || continue
+      out="$($xrun "$BUILD/$arch/bin/$name" -nts-selftest 2>&1)" || { echo "$arch $name -nts-selftest failed: $out" >&2; exit 1; }
+      case "$out" in
+        *"AES-SIV self-test ok") ;;
+        *) echo "$arch $name -nts-selftest printed: $out" >&2; exit 1 ;;
+      esac
+      log "nts: $arch $name -nts-selftest: $out"
+    done
+  done
+
   log "release gate: self-test, and this tree's history holds no forbidden commit"
   bash "$ROOT/scripts/release-gate-test.sh"
   bash "$ROOT/scripts/release-gate.sh" tree "$ROOT"
@@ -84,9 +106,6 @@ summary() {
 }
 
 bash "$ROOT/scripts/test-modules.sh"
-# The tests behind the nts build tag (trusted-time/clock, trusted-time/nts,
-# tee-signer, the e2e relay test): test-modules.sh runs none of them.
-bash "$ROOT/scripts/test-nts.sh" "$HOST_ARCH"
 
 # bin_env <arch>: the variables that name the runner binaries for tests/e2e.
 bin_env() {
@@ -133,8 +152,9 @@ fi
 
 if fuzz_everything; then
   make -C "$ROOT/markformat" fuzz FUZZ_SECONDS="${FUZZ_SECONDS:-3}" >"$LOGS/fuzz-markformat.log" 2>&1 || { tail -40 "$LOGS/fuzz-markformat.log"; exit 1; }
+  FUZZ_SECONDS="${FUZZ_SECONDS:-3}" bash "$ROOT/trusted-time/ntscore/c/fuzz/fuzz.sh" ci >"$LOGS/fuzz-nts.log" 2>&1 || { tail -40 "$LOGS/fuzz-nts.log"; exit 1; }
 else
-  log "C fuzz: skipped, FUZZ_MODULES=$FUZZ_MODULES leaves out signer-core and markformat"
+  log "C fuzz: skipped, FUZZ_MODULES=$FUZZ_MODULES leaves out signer-core, markformat and the NTS core"
   export FUZZ=0
 fi
 

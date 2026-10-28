@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
-# Builds the C signer core and blst as static libraries for cgo.
+# Builds the C signer core and blst, and the C core of the NTS clock, as
+# static libraries for cgo.
 #
 #   build/core-src/              include/ and src/ of signer-core, and
 #                                SOURCE.txt (where they came from, sha256)
 #   build/<arch>/lib/libsigner_core.a
 #   build/<arch>/lib/libblst.a
+#   trusted-time/ntscore/c/build/<arch>/libnts_core.a
+#                                by that folder's Makefile, with its symbol
+#                                check (make check): an archive that names
+#                                an outside symbol the core may not have, or
+#                                lacks the stack protector, fails the build,
+#                                for every arch built
 #
 # signer-core is the signer-core folder of this repo (common.sh).
 #
@@ -94,4 +101,13 @@ for arch in "${archs[@]}"; do
   "$nm" -u "$out/lib/libsigner_core.a" | grep -w __stack_chk_fail >/dev/null ||
     { echo "libsigner_core.a for $arch has no stack protector (__stack_chk_fail)" >&2; exit 1; }
   log "libsigner_core.a built for $arch"
+
+  # The NTS core: its Makefile derives ar and nm from the compiler's name.
+  # It is freestanding too, and names the stack protector itself. check is
+  # the archive and then the symbol gate on it: this is the archive the
+  # runners of this arch link, so the gate runs on what is shipped.
+  make -s -C "$ROOT/trusted-time/ntscore/c" check ARCH="$arch" CC="$cc"
+  "$nm" -u "$ROOT/trusted-time/ntscore/c/build/$arch/libnts_core.a" | grep -w __stack_chk_fail >/dev/null ||
+    { echo "libnts_core.a for $arch has no stack protector (__stack_chk_fail)" >&2; exit 1; }
+  log "libnts_core.a built for $arch"
 done

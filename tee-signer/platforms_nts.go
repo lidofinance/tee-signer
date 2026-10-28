@@ -648,11 +648,11 @@ func publicNTSServersFor(confirmed []string, from string) ([]clock.NTSServer, er
 	}
 	var out []clock.NTSServer
 	for _, e := range eps {
-		pool, err := nts.RootPool(e.Roots)
+		pem, err := nts.RootsPEM(e.Roots)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, clock.NTSServer{Host: e.Host, Operator: e.Operator, Roots: pool, NTPAddr: net.JoinHostPort(e.PlainNTPName(), "123")})
+		out = append(out, clock.NTSServer{Host: e.Host, Operator: e.Operator, Roots: pem, NTPAddr: net.JoinHostPort(e.PlainNTPName(), "123")})
 	}
 	return out, nil
 }
