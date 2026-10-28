@@ -1,0 +1,10 @@
+# /etc/nitro_enclaves/allocator.yaml on the parent.
+# Same keys as bootstrap/allocator.yaml in aws-nitro-enclaves-cli v1.5.2
+# (defaults there: 512 MiB, 2 CPUs). The EIF built here is about 16 MB
+# (x86_64) or 21 MB (arm64); run-enclave reports if the enclave needs more
+# memory than requested. parent-run.sh replaces the two values below with
+# its CPU_COUNT and MEMORY_MIB (1 CPU on a 2-vCPU instance such as
+# c6g.large, which must keep one for the parent).
+---
+memory_mib: 512
+cpu_count: 2

@@ -1,0 +1,19 @@
+Key sets and OpenID configurations as served on 2026-10-13. Both issuers
+rotate keys, so these files are for tests only; a verifier in use fetches
+the current set (attest.DiscoverJWKS) or pins a set it refreshes.
+
+gcp-openid-configuration-20261013.json
+  https://confidentialcomputing.googleapis.com/.well-known/openid-configuration
+gcp-confidentialspace-20261013.json  (2 RSA keys, RS256)
+  https://www.googleapis.com/service_accounts/v1/metadata/jwk/signer@confidentialspace-sign.iam.gserviceaccount.com
+maa-sharedweu-openid-configuration-20261013.json
+  https://sharedweu.weu.attest.azure.net/.well-known/openid-configuration
+maa-sharedweu-20261013.json  (4 RSA keys with x5c: 2 self-signed by the
+  provider, 2 chained to Microsoft Root Certificate Authority 2011)
+  https://sharedweu.weu.attest.azure.net/certs
+
+sha256:
+772da29a05e13adbab05aeb7f6c358354d3a882b4655e0840e0c466bc511ee25  gcp-confidentialspace-20261013.json
+49ceee94f885aa24ca8cb30ec2c71bc080e8935f7f2e4007543e2b8750d62dd2  gcp-openid-configuration-20261013.json
+3dd070d97b1936edafb71528b719ab90593e82598c9b241837adc879aa7f7ca8  maa-sharedweu-20261013.json
+3c11914b557e77dc63b639c34519cdb01d5170ba413f90a2adf5f5644e7309c8  maa-sharedweu-openid-configuration-20261013.json

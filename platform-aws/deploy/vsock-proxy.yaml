@@ -1,0 +1,19 @@
+# An example of /etc/nitro_enclaves/vsock-proxy.yaml on the parent, for a
+# setup with key release region eu-west-1 and mark bucket signer-marks.
+# parent-run.sh writes the real file from the signer's setup (hostagent
+# -setup SETUP -proxy-routes), one entry per route of the fixed port map of
+# platform-aws/deploy/enclave/Dockerfile. Format from vsock_proxy/configs/vsock-proxy.yaml
+# in aws-nitro-enclaves-cli v1.5.2. Only these destinations can be proxied.
+# The four on port 4460 are the NTS-KE servers of the enclave's NTS clock
+# (runner/nts.PublicServers); their NTP goes through udprelay, not through
+# vsock-proxy, which is TCP only. No DynamoDB: the setup's mark log is the
+# clone protection.
+allowlist:
+- {address: kms.eu-west-1.amazonaws.com, port: 443}
+- {address: sts.eu-west-1.amazonaws.com, port: 443}
+- {address: www.cloudflare.com, port: 443}
+- {address: signer-marks.s3.eu-west-1.amazonaws.com, port: 443}
+- {address: time.cloudflare.com, port: 4460}
+- {address: nts.netnod.se, port: 4460}
+- {address: ptbtime1.ptb.de, port: 4460}
+- {address: ntppool1.time.nl, port: 4460}

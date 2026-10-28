@@ -1,0 +1,21 @@
+Real AWS Nitro attestation documents, copied unchanged.
+
+Repository: https://github.com/evervault/attestation-doc-validation
+Commit:     a296a77c2b23fef8214131287423fe47c755eb3c
+Files:      test-data/valid-attestation-doc-base64
+            test-data/beta/valid-attestation-doc-bytes
+            test-data/beta/debug-mode-attestation-doc-bytes
+License:    Apache License 2.0, see LICENSE in this directory (copied from
+            the repository). No changes were made to these files.
+Fetched:    2026-10-13
+
+Document times, as found in the documents:
+  valid-attestation-doc-bytes      2022-10-13T08:58:02.136Z  (PCR0-4 and PCR8 set)
+  valid-attestation-doc-base64     2023-09-18T15:03:30.860Z  (debug mode, PCRs zero)
+  debug-mode-attestation-doc-bytes 2022-10-12T13:50:06.081Z  (debug mode, PCRs zero)
+
+sha256:
+11530bdf00175736288bd47530c9b51a247d80b4f67ffd41353cb06d33342d58  valid-attestation-doc-base64
+a72552688ab6de06b9039ebda2bd5ae9285860ec886f841da94351681dfb3eb6  valid-attestation-doc-bytes
+46591b92f9abefaace22a6d7ea4ca9c7007dfdbe788fbe8634b230ec2043a789  debug-mode-attestation-doc-bytes
+c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4  LICENSE

@@ -1,0 +1,24 @@
+Real AWS Nitro attestation document from this PoC's own runner.
+
+Taken on 2026-10-16 from the runner in a Nitro enclave on a Graviton parent
+(c6g.large, eu-central-1, enclave 1 vCPU, 512 MiB), through the forwarder, the
+network entry and the runner's mutual TLS, as the answer to IDENTITY (the
+attestation document of that response). Nothing in it is secret: it holds the
+PCRs, the instance and enclave ids, the certificate chain, the user data (a
+hash of the identity), the nonce of the request and no public key.
+
+File:       attestation-doc-bytes, the COSE_Sign1 bytes as the runner sent them
+sha256:     435e4fd1207f93ff588bc1fc391eadb0b9cd30ad88532d84f05d07dfd41da0fb
+Time:       2026-10-16T16:43:27.353Z (the document's timestamp)
+Module id:  i-048d4ea8214906fb3-enc01a1459504d38712
+Image:      the arm64 EIF of cloud/aws/README.md, "Result on AWS"
+PCR0:       34da454a0ed6db9276ffdb53eebe73c4f4cacd08f88f12fe3ccb0e88f6d3b37168cca5a4a0029bc1c5546d41c84e29b6
+PCR1:       745004eab9a0fb4a67973b261c6e7fa5418dc870292927591574385649338e54686cdeb659f3c6c2e72ba11aba2158a8
+PCR2:       614e21b3378d13214bafd07296d7d1278962832d70a90a6261a361e85abd14fc331f0054cf4f6fef5c1c9b578a85fc78
+PCR3:       da47f8977ae52f67364b9e1833d9b794ac6492cd9ac4cd90724e7d031b05946dd343f319b409b00f36aa8ff8c46df620
+PCR4:       ee749aefaa9535a2eda0b500fce515291611e00a8bc9d5711d2e52d518bdfa7b989d27c1bda98c7f7b5e97037a86a8c3
+
+The payload's top-level map has an indefinite length (0xbf ... 0xff). The
+verifier refused it until nitroPayloadDec allowed that form.
+The leaf certificate lives a few hours, so the document verifies only at its
+own time.

@@ -1,0 +1,18 @@
+{
+  "genesis_validators_root": "0x535276eb9690335cc5e4cb926858a79ece25caaf930a7dfad44757c8b7bef420",
+  "genesis_fork_version": "0x00000001",
+  "forks": [
+    { "epoch": 10, "version": "0x01000001" }
+  ],
+  "voluntary_exit_fork_version": "0x03000001",
+  "genesis_time": 1767225600,
+  "seconds_per_slot": 12,
+  "slots_per_epoch": 32,
+  "max_epochs_ahead": 1,
+  "exit_allowlist": [7],
+  "fee_recipients": ["0x1111111111111111111111111111111111111111"],
+  "gas_limit_min": 30000000,
+  "gas_limit_max": 60000000,
+  "registration_max_future_seconds": 3600,
+  "commit_ahead": { "block_slots": 32, "source_epochs": 1, "target_epochs": 1 }
+}

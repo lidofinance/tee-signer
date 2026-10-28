@@ -1,0 +1,11 @@
+# Offline builds from the vendored crates. scripts/fetch-nts.sh fills the
+# directory (git-ignored, like blst) from nts/Cargo.lock and checks it.
+# The path is relative to nts/, the folder that holds this .cargo folder.
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "../third_party/nts-vendor"
+
+[net]
+offline = true

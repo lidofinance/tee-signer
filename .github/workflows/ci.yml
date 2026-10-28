@@ -1,0 +1,95 @@
+# Checks that need no secrets and no cloud account. Each job runs on a
+# fresh Ubuntu runner. Pin the actions to commit SHAs before this is
+# enabled on a protected branch.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOWORK: "off"
+  GOTOOLCHAIN: local
+  NO_NETWORK: "1"
+
+jobs:
+  guards:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: false
+      - run: sudo apt-get install -y -qq cloc jq
+      - run: make check
+
+  modules:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: false
+      - run: bash scripts/deps.sh
+      - run: make core
+      - run: make nts
+      - run: make test-modules
+      # Show every failing test with its output, not only the log's tail.
+      - if: failure()
+        run: |
+          grep -h -B2 -A40 -E -- '--- FAIL|^panic:|WARNING: DATA RACE' logs/*.log || true
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: logs-modules
+          path: logs/
+
+  signer-core:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: sudo apt-get install -y -qq clang
+      # The vectors come from their pinned releases (sha256 checked).
+      - run: bash signer-core/scripts/fetch.sh
+      - run: make test-core
+      - run: make fuzz-core
+
+  full:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: false
+      - run: bash scripts/deps.sh
+      - run: bash signer-core/scripts/fetch.sh
+      - run: make test
+      - run: make model
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: logs
+          path: logs/

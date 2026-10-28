@@ -1,0 +1,500 @@
+{
+  "description": "Golden vectors of the attestation statement, setup format 1 (docs/attestation-statement.md). Hex is 0x-prefixed; every hash is SHA-256. Made by backend/setupwire TestStatementVectors -update; the test recomputes them.",
+  "contexts": {
+    "approver_set": "signer-approver-set-v1",
+    "attest_user_data": "signer-runner-attest-v1",
+    "chain_hash": "signer-chain-v1",
+    "config_update": "signer-config-update-v1",
+    "identity_user_data": "signer-runner-identity-v1",
+    "key_release": "signer-key-release-v1",
+    "keygen_orders": "signer-keygen-orders-v1",
+    "platform_commitment": "signer-platform-commitment-v1",
+    "policy_leaf": "signer-policy-leaf-v1",
+    "policy_node": "signer-policy-node-v1",
+    "policy_root": "signer-policy-root-v1",
+    "setup_hash": "signer-setup-v1"
+  },
+  "setup": {
+    "human": "# Signer setup, format 1 (attestation-prover.md, \"Signer changes\"). setup_hash is over policy_root\n# (the salted leaves of the public part and the two groups) and platform_commitment (the private part).\nsetup_format_version = 1\nsigner_name = gcp-1\ncluster_id = 0x44ee19d6635a0704059ff25729aab22f8828d2722ea6896299131ca68a949ca5\nhandover_generation = 1\n\n# chain: public, fixed for the life of the signer\ngenesis_validators_root = 0x212f13fc4df078b6cb7db228f1c8307566dcecf900867401a92023d7ba99cb5f\ngenesis_fork_version = 0x10000910\ngenesis_time = 1742213400\nseconds_per_slot = 12\nslots_per_epoch = 32\npreset = mainnet\nvoluntary_exit_fork_version = 0x40000910\n\n# safety: public, fixed; the floor margin is max_sign_epochs_ahead_of_clock + 1\nmax_sign_epochs_ahead_of_clock = 2\nslashing_mark_prewrite.block_slots = 32\nslashing_mark_prewrite.source_epochs = 2\nslashing_mark_prewrite.target_epochs = 2\nmax_keys = 1024\nslashing_log_min_lock_days = 3650\n\n# platform: private, fixed\nplatform = gcp\n# CN=signer test client CA, sha256 e5da5b90966cc0da9f21d6f306e71f311c42120c313f5b6640afa7b8d6c38724\nallowed_client_ca = MIIBMTCB5KADAgECAgIAyjAFBgMrZXAwIDEeMBwGA1UEAxMVc2lnbmVyIHRlc3QgY2xpZW50IENBMB4XDTIzMTExNDIyMTMyMFoXDTMzMDUxODAzMzMyMFowIDEeMBwGA1UEAxMVc2lnbmVyIHRlc3QgY2xpZW50IENBMCowBQYDK2VwAyEARmYn1SdzydXNpsj9KOox7HuU5oqo1C4q0xp13I0k7QejQjBAMA4GA1UdDwEB/wQEAwIChDAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBS0t+S1q75v2XMqMJJKFYTgvo7vsTAFBgMrZXADQQCK9YxKzb9LEt5mA8TadoXemhwdsAs4z9Q2MY4BHM91karN0BFQZ+mYYiZMkCZzRMkX/exDsslwKIZwjiZjXKQO\nslashing_log_store.bucket = lido-signer-marks-gcp-1\nencrypted_state_store.bucket = lido-signer-state-gcp-1\nsealing_key_release.wif_provider = //iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/signer/providers/attest\nsealing_key_release.kms_key = projects/signer/locations/global/keyRings/signer/cryptoKeys/seal-gcp-1\nsealing_key_release.attest_audience = signer-runner-identity\n\n# locked: public; a change waits out the change delay\napprovers = 0x8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c\napprovers = 0x8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394\napprovers = 0xed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1\napprovals_needed = 2\nchange_delay_seconds = 172800\nallowed_image_measurements = gcp 0xfcb0510e4bb3a34f86a365f43d9a8b6a1212e2859b31438349f231f421da40cb\nallowed_fee_recipients = 0x000000000000000000000000000000000000dead\nbuilder_gas_limit_min = 30000000\nbuilder_gas_limit_max = 200000000\nbuilder_registration_max_future_seconds = 3600\nexit_allowed_validators = 1234\nexit_allowed_validators = 5678\nexit_stake_cap_per_day = 1024 ETH\nexit_approvals_needed = 2\nmin_activation_balance = 32 ETH\nmax_effective_balance = 2048 ETH\nwithdrawal_credentials = 0x0100000000000000000000004242424242424242424242424242424242424242\nallowed_deposit_amounts = 32 ETH\nallow_unverified_nonslashable_signing = false\nbare_root_domains = randao\n# slot_time_changes: EPOCH SECONDS_PER_SLOT, the slot time from the first slot of EPOCH on\nslot_time_changes = 200000 6\n# allowed_builder_request_auth_data_roots absent: no BuilderRequestAuth is signed\n\n# open: public; a change applies without a change delay\nfork_schedule = 0 0x50000910\nfork_schedule = 2048 0x60000910\nfork_schedule = 50688 0x70000910\nfork_schedule = 132352 0x80000910\ngloas_fork_epoch = 132352\n\n# salts: one per policy leaf (the same for every signer of the cluster), and the platform salt\nsalt.setup_format_version = 0x70ffb8ac179ae75461d92540abcd114825c24b67c6b752fbab170e18df763169\nsalt.cluster_id = 0x5239948456dc2c18d52e75ebf0436d8d98370f30f55f20e9bd2d7daae8161da2\nsalt.handover_generation = 0x17290e10cc196077fae0db25abde8bb6e2fffaf2fcd57411098693d61ce175f5\nsalt.genesis_validators_root = 0x47b27b4a2469fe83253879de62e56d9dc380eb28755b13344f63e58e74b131ca\nsalt.genesis_fork_version = 0x9533aee7beea3e7fd345f79fe1f675cd167a471cc10a7a4077b938bc60fbda54\nsalt.genesis_time = 0x95e3ae98b9fc4f6da7b8348cec03cb03d42bb9bbea98c2c46e7b189d5c5d287f\nsalt.seconds_per_slot = 0x07254f3ee8c06227fe1280f732f1fad6b34a48c8e527c6439a386410bc76be55\nsalt.slots_per_epoch = 0xe753914ea51c9cdfacacf88708d0ae774a7fc1de804acb0b60f8a444ed97c9f8\nsalt.preset = 0xc5b1e54e1d469a10def103aff3decff6f34fa9b4ebd0c97a7fe48c39648c1116\nsalt.voluntary_exit_fork_version = 0x2dd2475fe6c7373fa77a1886396499031723d56f606f1ecbe89e9964ba9f4fe8\nsalt.max_sign_epochs_ahead_of_clock = 0xd435b32241071421f0d5677ee081cf30f6639ed31cd636beb3ee6a5ceefb2925\nsalt.slashing_mark_prewrite.block_slots = 0xfef45176ec4a9919618a1fa055b11f21ea098b4c218011c8e72f1c63e73009c8\nsalt.slashing_mark_prewrite.source_epochs = 0x8099369c89e989577a6b034e85a6f20099109ce1a8643638ba6787cccf7fbdee\nsalt.slashing_mark_prewrite.target_epochs = 0x48a6fc88c384e3a4eb9e0b81bac0ea6c548740b3cb00020c8a62739e24bebf69\nsalt.max_keys = 0xc8f07930286b92e16991735645592393edb8e62155df50441f87bab48640ceda\nsalt.slashing_log_min_lock_days = 0xdd4dbc2c724526ace007268af69ffa66226521987495fa09a089bf75abd340da\nsalt.approvers = 0x33beae35876ab2b1302ecf4e85add62b95f82611a64eb9dfae082f59aa47d0ae\nsalt.approvals_needed = 0x687be32a4b694da8f58aca71bc240ff5ac56949f05da3778ad66e9bfeb4b9a0f\nsalt.change_delay_seconds = 0x1e0dbe578c9b1f7e5de8a0a7f5c13921b295504aea96acb58b3d25dd9e246813\nsalt.allowed_image_measurements = 0xb77d8c670bc1d028bb44a38d98c1b5e7a1eb8a8ea07e82aaebf649fb7f7cf98c\nsalt.allowed_fee_recipients = 0x4775dd929bf8a2d0e46d6f8ad88dd3b38cff09ed7c6dd881b69fab1907ee01f6\nsalt.builder_gas_limit_min = 0x797d9ed2c7d69ba8770049a50f8de36e2b3d587581ad16284cdde70d0c90ab34\nsalt.builder_gas_limit_max = 0xf2c57020afae66b9083b5b0032aa020b5df8c9174a00e601b4879ad438ecbf15\nsalt.builder_registration_max_future_seconds = 0x5dea415bd753c322ca5f27caa4c72dbf1e7020173edc137f5dfa3c790315ca13\nsalt.exit_allowed_validators = 0xee60eacef0b360dfc790dc08ae1b56d95a3fa34ee59b6219f37a4a7c9624a421\nsalt.exit_stake_cap_per_day = 0x1d84d5a0aeb8dda90e9da990c7348cbc9836ffd80b22d0188650408fcb25798d\nsalt.exit_approvals_needed = 0x696dc5329eb07801916b4cf982e8c8c13a52208b1cdac18d570c1ebf48f64875\nsalt.min_activation_balance = 0xe941d154450aed23268accc92aedfaeb594976460818b96ce3cdfe561b060857\nsalt.max_effective_balance = 0x76d51fa98dfef254ed90e79db173f93add58aa6fbd4fb76297df939f0e49e8f6\nsalt.withdrawal_credentials = 0x80689df874fbd980f2555c9d7b07960c4a0865a843ef0c9b3002077f6040e909\nsalt.allowed_deposit_amounts = 0x1f445d6b4870f6a00fb7f4dc93fd603c1c3fa0d8203675c2c4745063cf23cc1c\nsalt.allow_unverified_nonslashable_signing = 0xc0d6a7c033c72a449a86d0519647b4f8d416dbf20a1f6c9fb043444e90425aa5\nsalt.bare_root_domains = 0x60f2835b1e1222e29ec255e3e1e0470f55a34b4ca9c559126375788f27397aba\nsalt.slot_time_changes = 0xc87560219f9eca748ff9f86e80649997e908cc2d4f67e4728c5a9a9f1baff0fa\nsalt.allowed_builder_request_auth_data_roots = 0xf7a4171c79e0c54ebe2e8205d42894e2a16123aef41395571ae9fc8212b20dfd\nsalt.fork_schedule = 0xbde6c15ee697d2541711d8f587dc89783ef33b6a7fe0c054ec9d64b4db8c8bed\nsalt.gloas_fork_epoch = 0xca0dc3c888a651a8169a39bef0739b6f7dc047deced6be263bbc081d1278acfa\nplatform_salt = 0x20d9cf5d263c1909f461f0ba4a18809bb4c3b451371a1e5b390a9526f39f299f\n",
+    "bytes": "0x530144ee19d6635a0704059ff25729aab22f8828d2722ea6896299131ca68a949ca50000000000000001212f13fc4df078b6cb7db228f1c8307566dcecf900867401a92023d7ba99cb5f100009100000000067d81118000000000000000c0000000000000020014000091000000000000000020000000000000020000000000000000200000000000000020000040000000e4270ffb8ac179ae75461d92540abcd114825c24b67c6b752fbab170e18df7631695239948456dc2c18d52e75ebf0436d8d98370f30f55f20e9bd2d7daae8161da217290e10cc196077fae0db25abde8bb6e2fffaf2fcd57411098693d61ce175f547b27b4a2469fe83253879de62e56d9dc380eb28755b13344f63e58e74b131ca9533aee7beea3e7fd345f79fe1f675cd167a471cc10a7a4077b938bc60fbda5495e3ae98b9fc4f6da7b8348cec03cb03d42bb9bbea98c2c46e7b189d5c5d287f07254f3ee8c06227fe1280f732f1fad6b34a48c8e527c6439a386410bc76be55e753914ea51c9cdfacacf88708d0ae774a7fc1de804acb0b60f8a444ed97c9f8c5b1e54e1d469a10def103aff3decff6f34fa9b4ebd0c97a7fe48c39648c11162dd2475fe6c7373fa77a1886396499031723d56f606f1ecbe89e9964ba9f4fe8d435b32241071421f0d5677ee081cf30f6639ed31cd636beb3ee6a5ceefb2925fef45176ec4a9919618a1fa055b11f21ea098b4c218011c8e72f1c63e73009c88099369c89e989577a6b034e85a6f20099109ce1a8643638ba6787cccf7fbdee48a6fc88c384e3a4eb9e0b81bac0ea6c548740b3cb00020c8a62739e24bebf69c8f07930286b92e16991735645592393edb8e62155df50441f87bab48640cedadd4dbc2c724526ace007268af69ffa66226521987495fa09a089bf75abd340da038a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d10201000000000002a3000103fcb0510e4bb3a34f86a365f43d9a8b6a1212e2859b31438349f231f421da40cb01000000000000000000000000000000000000dead0000000001c9c380000000000bebc2000000000000000e10000200000000000004d2000000000000162e000000ee6b280000020000000773594000000001dcd65000000100000000000000000000004242424242424242424242424242424242424242010000000773594000000004010000000000030d4000000000000000060033beae35876ab2b1302ecf4e85add62b95f82611a64eb9dfae082f59aa47d0ae687be32a4b694da8f58aca71bc240ff5ac56949f05da3778ad66e9bfeb4b9a0f1e0dbe578c9b1f7e5de8a0a7f5c13921b295504aea96acb58b3d25dd9e246813b77d8c670bc1d028bb44a38d98c1b5e7a1eb8a8ea07e82aaebf649fb7f7cf98c4775dd929bf8a2d0e46d6f8ad88dd3b38cff09ed7c6dd881b69fab1907ee01f6797d9ed2c7d69ba8770049a50f8de36e2b3d587581ad16284cdde70d0c90ab34f2c57020afae66b9083b5b0032aa020b5df8c9174a00e601b4879ad438ecbf155dea415bd753c322ca5f27caa4c72dbf1e7020173edc137f5dfa3c790315ca13ee60eacef0b360dfc790dc08ae1b56d95a3fa34ee59b6219f37a4a7c9624a4211d84d5a0aeb8dda90e9da990c7348cbc9836ffd80b22d0188650408fcb25798d696dc5329eb07801916b4cf982e8c8c13a52208b1cdac18d570c1ebf48f64875e941d154450aed23268accc92aedfaeb594976460818b96ce3cdfe561b06085776d51fa98dfef254ed90e79db173f93add58aa6fbd4fb76297df939f0e49e8f680689df874fbd980f2555c9d7b07960c4a0865a843ef0c9b3002077f6040e9091f445d6b4870f6a00fb7f4dc93fd603c1c3fa0d8203675c2c4745063cf23cc1cc0d6a7c033c72a449a86d0519647b4f8d416dbf20a1f6c9fb043444e90425aa560f2835b1e1222e29ec255e3e1e0470f55a34b4ca9c559126375788f27397abac87560219f9eca748ff9f86e80649997e908cc2d4f67e4728c5a9a9f1baff0faf7a4171c79e0c54ebe2e8205d42894e2a16123aef41395571ae9fc8212b20dfd04000000000000000050000910000000000000080060000910000000000000c60070000910000000000002050080000910010000000000020500bde6c15ee697d2541711d8f587dc89783ef33b6a7fe0c054ec9d64b4db8c8bedca0dc3c888a651a8169a39bef0739b6f7dc047deced6be263bbc081d1278acfa20d9cf5d263c1909f461f0ba4a18809bb4c3b451371a1e5b390a9526f39f299f056763702d3103010135308201313081e4a003020102020200ca300506032b65703020311e301c060355040313157369676e6572207465737420636c69656e74204341301e170d3233313131343232313332305a170d3333303531383033333332305a3020311e301c060355040313157369676e6572207465737420636c69656e74204341302a300506032b6570032100466627d52773c9d5cda6c8fd28ea31ec7b94e68aa8d42e2ad31a75dc8d24ed07a3423040300e0603551d0f0101ff040403020284300f0603551d130101ff040530030101ff301d0603551d0e04160414b4b7e4b5abbe6fd9732a30924a1584e0be8eefb1300506032b65700341008af58c4acdbf4b12de6603c4da7685de9a1c1db00b38cfd436318e011ccf7591aacdd0115067e99862264c90267344c917fdec43b2c9702886708e26635ca40e176c69646f2d7369676e65722d6d61726b732d6763702d3101176c69646f2d7369676e65722d73746174652d6763702d31662f2f69616d2e676f6f676c65617069732e636f6d2f70726f6a656374732f3132333435363738392f6c6f636174696f6e732f676c6f62616c2f776f726b6c6f61644964656e74697479506f6f6c732f7369676e65722f70726f7669646572732f6174746573744670726f6a656374732f7369676e65722f6c6f636174696f6e732f676c6f62616c2f6b657952696e67732f7369676e65722f63727970746f4b6579732f7365616c2d6763702d31167369676e65722d72756e6e65722d6964656e746974790000",
+    "leaves": {
+      "public": [
+        {
+          "index": 0,
+          "name": "setup_format_version",
+          "value": "0x01",
+          "salt": "0x70ffb8ac179ae75461d92540abcd114825c24b67c6b752fbab170e18df763169",
+          "hash": "0xe9eaf558b1d9a56e3106d1939637221dfe6f82e93e4db85c0a8aeb7f0f788220"
+        },
+        {
+          "index": 1,
+          "name": "cluster_id",
+          "value": "0x44ee19d6635a0704059ff25729aab22f8828d2722ea6896299131ca68a949ca5",
+          "salt": "0x5239948456dc2c18d52e75ebf0436d8d98370f30f55f20e9bd2d7daae8161da2",
+          "hash": "0x354cf3886bedf0f89bab4f054118d71e2f13d24b719076852a19a5cbc2b39ff6"
+        },
+        {
+          "index": 2,
+          "name": "handover_generation",
+          "value": "0x0000000000000001",
+          "salt": "0x17290e10cc196077fae0db25abde8bb6e2fffaf2fcd57411098693d61ce175f5",
+          "hash": "0x94c752e694d0bd88fe86019e5c38ea1c90b688201e390d51079a5429d00596a2"
+        },
+        {
+          "index": 3,
+          "name": "genesis_validators_root",
+          "value": "0x212f13fc4df078b6cb7db228f1c8307566dcecf900867401a92023d7ba99cb5f",
+          "salt": "0x47b27b4a2469fe83253879de62e56d9dc380eb28755b13344f63e58e74b131ca",
+          "hash": "0xa66fd2c86222585e373ececde4c1575b51d3ea3335b7e7ad9a24729bf73faa7e"
+        },
+        {
+          "index": 4,
+          "name": "genesis_fork_version",
+          "value": "0x10000910",
+          "salt": "0x9533aee7beea3e7fd345f79fe1f675cd167a471cc10a7a4077b938bc60fbda54",
+          "hash": "0x94ad489e11f43f25e94e84f7d03361d09852b0434550a3e08ad38736b33cc6f8"
+        },
+        {
+          "index": 5,
+          "name": "genesis_time",
+          "value": "0x0000000067d81118",
+          "salt": "0x95e3ae98b9fc4f6da7b8348cec03cb03d42bb9bbea98c2c46e7b189d5c5d287f",
+          "hash": "0xeccedeb37110076b56faec1b87eb02055eae48d8f289a9bdf28eea8e6a2922c9"
+        },
+        {
+          "index": 6,
+          "name": "seconds_per_slot",
+          "value": "0x000000000000000c",
+          "salt": "0x07254f3ee8c06227fe1280f732f1fad6b34a48c8e527c6439a386410bc76be55",
+          "hash": "0x66caac5e22ba0b97f7c3ce12f536e751a90dff62a6becc7813d34f9922d5709c"
+        },
+        {
+          "index": 7,
+          "name": "slots_per_epoch",
+          "value": "0x0000000000000020",
+          "salt": "0xe753914ea51c9cdfacacf88708d0ae774a7fc1de804acb0b60f8a444ed97c9f8",
+          "hash": "0x9157bf1235d718ac10efff23d6486c6d17d708edb312836aaf43e3f51b8251f5"
+        },
+        {
+          "index": 8,
+          "name": "preset",
+          "value": "0x01",
+          "salt": "0xc5b1e54e1d469a10def103aff3decff6f34fa9b4ebd0c97a7fe48c39648c1116",
+          "hash": "0x484aff430e24034990d6dc5824eea636a5e97f9319a7e7d2eaedc4afbf390a1b"
+        },
+        {
+          "index": 9,
+          "name": "voluntary_exit_fork_version",
+          "value": "0x40000910",
+          "salt": "0x2dd2475fe6c7373fa77a1886396499031723d56f606f1ecbe89e9964ba9f4fe8",
+          "hash": "0x64303bc7e63026bf7b4ec5a601395c08b0db84cfc3443d2051b034e86fa114f8"
+        },
+        {
+          "index": 10,
+          "name": "max_sign_epochs_ahead_of_clock",
+          "value": "0x0000000000000002",
+          "salt": "0xd435b32241071421f0d5677ee081cf30f6639ed31cd636beb3ee6a5ceefb2925",
+          "hash": "0x49896719acae49144cd62653ebc3405e9d2f9363bdfb13b794092d032fd19977"
+        },
+        {
+          "index": 11,
+          "name": "slashing_mark_prewrite.block_slots",
+          "value": "0x0000000000000020",
+          "salt": "0xfef45176ec4a9919618a1fa055b11f21ea098b4c218011c8e72f1c63e73009c8",
+          "hash": "0x76de7b53c3a59440cb2261142c1e7b0439f600733e34a6a7a459074b6f255d8b"
+        },
+        {
+          "index": 12,
+          "name": "slashing_mark_prewrite.source_epochs",
+          "value": "0x0000000000000002",
+          "salt": "0x8099369c89e989577a6b034e85a6f20099109ce1a8643638ba6787cccf7fbdee",
+          "hash": "0x9a56a1d120f98ae6cc77f3c8fede35e280e2a0057350a2399cadc7dacb1c4f3b"
+        },
+        {
+          "index": 13,
+          "name": "slashing_mark_prewrite.target_epochs",
+          "value": "0x0000000000000002",
+          "salt": "0x48a6fc88c384e3a4eb9e0b81bac0ea6c548740b3cb00020c8a62739e24bebf69",
+          "hash": "0x9aa4c427841181157da5c7e831cc31e7b88e69c3d236c2c406d3f97e08b5ae08"
+        },
+        {
+          "index": 14,
+          "name": "max_keys",
+          "value": "0x00000400",
+          "salt": "0xc8f07930286b92e16991735645592393edb8e62155df50441f87bab48640ceda",
+          "hash": "0x5ad1c877d08a801cef02c296fdddf5a79be61cd34c1936cbb951c8092b062e7f"
+        },
+        {
+          "index": 15,
+          "name": "slashing_log_min_lock_days",
+          "value": "0x00000e42",
+          "salt": "0xdd4dbc2c724526ace007268af69ffa66226521987495fa09a089bf75abd340da",
+          "hash": "0x86a475da7db27efa1dc5df23ddc7bb4f7d479c1b88dbcc307acb89b818669f7d"
+        }
+      ],
+      "locked": [
+        {
+          "index": 0,
+          "name": "approvers",
+          "value": "0x038a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1",
+          "salt": "0x33beae35876ab2b1302ecf4e85add62b95f82611a64eb9dfae082f59aa47d0ae",
+          "hash": "0xb6d750333ae7238b9c6447901afdf0e16eb3cda8b248c494f890805949b9b6ba"
+        },
+        {
+          "index": 1,
+          "name": "approvals_needed",
+          "value": "0x02",
+          "salt": "0x687be32a4b694da8f58aca71bc240ff5ac56949f05da3778ad66e9bfeb4b9a0f",
+          "hash": "0x003bdd00bab0b76208e33b67172cef333c209bc9ab0911abf260de9f66a69b93"
+        },
+        {
+          "index": 2,
+          "name": "change_delay_seconds",
+          "value": "0x01000000000002a300",
+          "salt": "0x1e0dbe578c9b1f7e5de8a0a7f5c13921b295504aea96acb58b3d25dd9e246813",
+          "hash": "0x2d18b67cae192899688a8fea2ab8aa2cd1a9b409e4f469f341b52f4dd591b298"
+        },
+        {
+          "index": 3,
+          "name": "allowed_image_measurements",
+          "value": "0x0103fcb0510e4bb3a34f86a365f43d9a8b6a1212e2859b31438349f231f421da40cb",
+          "salt": "0xb77d8c670bc1d028bb44a38d98c1b5e7a1eb8a8ea07e82aaebf649fb7f7cf98c",
+          "hash": "0xeebd811cf54e6da91c99a3487bad71959340c455ab29fb550c0f41b639961938"
+        },
+        {
+          "index": 4,
+          "name": "allowed_fee_recipients",
+          "value": "0x01000000000000000000000000000000000000dead",
+          "salt": "0x4775dd929bf8a2d0e46d6f8ad88dd3b38cff09ed7c6dd881b69fab1907ee01f6",
+          "hash": "0x90626e3c38892fdb4ab08f6dcb6a33534b34440dd5897118fd053324efeac8e9"
+        },
+        {
+          "index": 5,
+          "name": "builder_gas_limit_min",
+          "value": "0x0000000001c9c380",
+          "salt": "0x797d9ed2c7d69ba8770049a50f8de36e2b3d587581ad16284cdde70d0c90ab34",
+          "hash": "0xa96bd85a2a1509dd0b59dd0b62a203cd610555f2936abdcbd8660b768bd55487"
+        },
+        {
+          "index": 6,
+          "name": "builder_gas_limit_max",
+          "value": "0x000000000bebc200",
+          "salt": "0xf2c57020afae66b9083b5b0032aa020b5df8c9174a00e601b4879ad438ecbf15",
+          "hash": "0x244b671ddafbd15331f6843e4cbc708784f8de948bb18aa388b699b906e975dc"
+        },
+        {
+          "index": 7,
+          "name": "builder_registration_max_future_seconds",
+          "value": "0x0000000000000e10",
+          "salt": "0x5dea415bd753c322ca5f27caa4c72dbf1e7020173edc137f5dfa3c790315ca13",
+          "hash": "0x38e6035ef29d60b9efca3eb637ed84f30dd40a83a650a993c4cba0d7c69fc4f5"
+        },
+        {
+          "index": 8,
+          "name": "exit_allowed_validators",
+          "value": "0x000200000000000004d2000000000000162e",
+          "salt": "0xee60eacef0b360dfc790dc08ae1b56d95a3fa34ee59b6219f37a4a7c9624a421",
+          "hash": "0x7c306bb4bc12fc7679b2ce1cdc43515264db71cc52d95d7eb41fa509be122730"
+        },
+        {
+          "index": 9,
+          "name": "exit_stake_cap_per_day",
+          "value": "0x000000ee6b280000",
+          "salt": "0x1d84d5a0aeb8dda90e9da990c7348cbc9836ffd80b22d0188650408fcb25798d",
+          "hash": "0x2218156baf66d36b4d0de1ae1fe32bf2f7164c19750b0bb925bc2f1bb2104d96"
+        },
+        {
+          "index": 10,
+          "name": "exit_approvals_needed",
+          "value": "0x02",
+          "salt": "0x696dc5329eb07801916b4cf982e8c8c13a52208b1cdac18d570c1ebf48f64875",
+          "hash": "0x500039b844702e0dd207e398a2b401e046e4adb14c156e0e674386eb06e6d8bd"
+        },
+        {
+          "index": 11,
+          "name": "min_activation_balance",
+          "value": "0x0000000773594000",
+          "salt": "0xe941d154450aed23268accc92aedfaeb594976460818b96ce3cdfe561b060857",
+          "hash": "0x84bd22128095396372b143d23ae9a745aaf1a8cdff3e8e3a6e759b6ee771004c"
+        },
+        {
+          "index": 12,
+          "name": "max_effective_balance",
+          "value": "0x000001dcd6500000",
+          "salt": "0x76d51fa98dfef254ed90e79db173f93add58aa6fbd4fb76297df939f0e49e8f6",
+          "hash": "0xfc0940439990be83921622bfcc6f373fb58db122f2799db39cf468b3568218fb"
+        },
+        {
+          "index": 13,
+          "name": "withdrawal_credentials",
+          "value": "0x0100000000000000000000004242424242424242424242424242424242424242",
+          "salt": "0x80689df874fbd980f2555c9d7b07960c4a0865a843ef0c9b3002077f6040e909",
+          "hash": "0x1d813c76c46ba66adce1062e000e574608866e0922c9f4b027f5d4b5485fe485"
+        },
+        {
+          "index": 14,
+          "name": "allowed_deposit_amounts",
+          "value": "0x010000000773594000",
+          "salt": "0x1f445d6b4870f6a00fb7f4dc93fd603c1c3fa0d8203675c2c4745063cf23cc1c",
+          "hash": "0x253e9eddec34f697194ac8398fc416a42265a4b7bc3a48284c0706f25abbc8f6"
+        },
+        {
+          "index": 15,
+          "name": "allow_unverified_nonslashable_signing",
+          "value": "0x00",
+          "salt": "0xc0d6a7c033c72a449a86d0519647b4f8d416dbf20a1f6c9fb043444e90425aa5",
+          "hash": "0x1614c738be666a1ebc0ed8ebf9b2fe7be781271c730e2f3d28c4d67b4d5e00b3"
+        },
+        {
+          "index": 16,
+          "name": "bare_root_domains",
+          "value": "0x0004",
+          "salt": "0x60f2835b1e1222e29ec255e3e1e0470f55a34b4ca9c559126375788f27397aba",
+          "hash": "0x0c6dc6a2b82936074b82ce949dbb9b91b5c9a7ace41bb2e8e852fbb474daf52c"
+        },
+        {
+          "index": 17,
+          "name": "slot_time_changes",
+          "value": "0x010000000000030d400000000000000006",
+          "salt": "0xc87560219f9eca748ff9f86e80649997e908cc2d4f67e4728c5a9a9f1baff0fa",
+          "hash": "0x1793463b0a0b90a404ef257e80511cc6d8eb5c2cfb5e777b1d80e35cb2b92fd9"
+        },
+        {
+          "index": 18,
+          "name": "allowed_builder_request_auth_data_roots",
+          "value": "0x00",
+          "salt": "0xf7a4171c79e0c54ebe2e8205d42894e2a16123aef41395571ae9fc8212b20dfd",
+          "hash": "0x0578407d870ec92bfed75d5cb41e3689ba52805e58b4e782426d4d2f3fd1b723"
+        }
+      ],
+      "open": [
+        {
+          "index": 0,
+          "name": "fork_schedule",
+          "value": "0x04000000000000000050000910000000000000080060000910000000000000c60070000910000000000002050080000910",
+          "salt": "0xbde6c15ee697d2541711d8f587dc89783ef33b6a7fe0c054ec9d64b4db8c8bed",
+          "hash": "0x06c2053199853457c4aa99445228b761c596ae879abcee1754b31ed3a4bd08b1"
+        },
+        {
+          "index": 1,
+          "name": "gloas_fork_epoch",
+          "value": "0x010000000000020500",
+          "salt": "0xca0dc3c888a651a8169a39bef0739b6f7dc047deced6be263bbc081d1278acfa",
+          "hash": "0xe258e514a6b0f128435f5dab369862e7f714fc8717fd670f9377632b4d602413"
+        }
+      ]
+    },
+    "group_roots": {
+      "public": "0x8c2080853c403efd4aa4da369b9f56e5d6d20a41dd0847e8a02b19d3c4b1fee7",
+      "locked": "0xb8a158fc1d6301ca4495f950566c937d47d9c96767499e74b108b29b1cef9be6",
+      "open": "0xf62a7e72ac6b0fdb67f189d63d2208bd375d0a024d5a3b26107b30b746861dc1"
+    },
+    "policy_root": "0xa83d23474da7d231085ee2800d49c7b318d356592551b061ad0c346ae04f5203",
+    "platform_salt": "0x20d9cf5d263c1909f461f0ba4a18809bb4c3b451371a1e5b390a9526f39f299f",
+    "private_part": "0x056763702d3103010135308201313081e4a003020102020200ca300506032b65703020311e301c060355040313157369676e6572207465737420636c69656e74204341301e170d3233313131343232313332305a170d3333303531383033333332305a3020311e301c060355040313157369676e6572207465737420636c69656e74204341302a300506032b6570032100466627d52773c9d5cda6c8fd28ea31ec7b94e68aa8d42e2ad31a75dc8d24ed07a3423040300e0603551d0f0101ff040403020284300f0603551d130101ff040530030101ff301d0603551d0e04160414b4b7e4b5abbe6fd9732a30924a1584e0be8eefb1300506032b65700341008af58c4acdbf4b12de6603c4da7685de9a1c1db00b38cfd436318e011ccf7591aacdd0115067e99862264c90267344c917fdec43b2c9702886708e26635ca40e176c69646f2d7369676e65722d6d61726b732d6763702d3101176c69646f2d7369676e65722d73746174652d6763702d31662f2f69616d2e676f6f676c65617069732e636f6d2f70726f6a656374732f3132333435363738392f6c6f636174696f6e732f676c6f62616c2f776f726b6c6f61644964656e74697479506f6f6c732f7369676e65722f70726f7669646572732f6174746573744670726f6a656374732f7369676e65722f6c6f636174696f6e732f676c6f62616c2f6b657952696e67732f7369676e65722f63727970746f4b6579732f7365616c2d6763702d31167369676e65722d72756e6e65722d6964656e746974790000",
+    "platform_commitment": "0xe126892c55c3ec65e78a4b576f7d0507cfaefe5d3c8001ab35779681f56997ee",
+    "setup_hash": "0x454612d71d91a9b881e25967a6482c51e258129299d3712421aa27d3be9da15d"
+  },
+  "update": {
+    "human": "# Config update (setup-phase.md, section 6). Approvers sign the header: these fields and the root of the group's salted leaves.\ncluster_id = 0x44ee19d6635a0704059ff25729aab22f8828d2722ea6896299131ca68a949ca5\nchain_hash = 0xf7d1ccf112e09865c3145912c17562455e61400f88bed7cae00bf0c8ca0b83ce\ngroup = locked\nversion = 1\nprev_hash = 0xb8a158fc1d6301ca4495f950566c937d47d9c96767499e74b108b29b1cef9be6\n# activate_at 2027-01-15T08:00:00Z\nactivate_at = 1800000000\n\n# locked: public; a change waits out the change delay\napprovers = 0x8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c\napprovers = 0x8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394\napprovers = 0xed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1\napprovals_needed = 2\nchange_delay_seconds = 172800\nallowed_image_measurements = gcp 0xfcb0510e4bb3a34f86a365f43d9a8b6a1212e2859b31438349f231f421da40cb\nallowed_fee_recipients = 0x000000000000000000000000000000000000dead\nbuilder_gas_limit_min = 30000000\nbuilder_gas_limit_max = 300000000\nbuilder_registration_max_future_seconds = 3600\nexit_allowed_validators = 1234\nexit_allowed_validators = 5678\nexit_stake_cap_per_day = 1024 ETH\nexit_approvals_needed = 2\nmin_activation_balance = 32 ETH\nmax_effective_balance = 2048 ETH\nwithdrawal_credentials = 0x0100000000000000000000004242424242424242424242424242424242424242\nallowed_deposit_amounts = 32 ETH\nallow_unverified_nonslashable_signing = false\nbare_root_domains = randao\n# slot_time_changes: EPOCH SECONDS_PER_SLOT, the slot time from the first slot of EPOCH on\nslot_time_changes = 200000 6\n# allowed_builder_request_auth_data_roots absent: no BuilderRequestAuth is signed\n\n# salts: one per leaf of the group\nsalt.approvers = 0x7c3cf6120f5d6817d8b971928a6a16db25fb2d3a66a6a35f3ccffd534c9ecec2\nsalt.approvals_needed = 0x8800f32a3b3bfbbdacf94ee9519cca57d9fb49c370169a69b96283083230e347\nsalt.change_delay_seconds = 0xed3c5c894822fef3a8a35c8d36a7999e73129b33eee7cc6c3f32e528a2ae321f\nsalt.allowed_image_measurements = 0xc3f5ba269093c8f64d95358376e013a0df9c1711a99ded9fb43e082c91b221a9\nsalt.allowed_fee_recipients = 0x04727b881e77449afc2587a0c86771c518df725aad0bc8f1af8003d241a49215\nsalt.builder_gas_limit_min = 0xbc96801e8f4b1122b28e74a3d3a3cc91c55e3253250a90b3bb265de812a9ef8d\nsalt.builder_gas_limit_max = 0x469196f7b4a282decc41e3561f40d3b1bed7b2528454a49ab72e2e76975e7b74\nsalt.builder_registration_max_future_seconds = 0x3d7ab9043038346cd12f717de84b1ae4cbd70ce39e1128c1bf71cb15e22b8309\nsalt.exit_allowed_validators = 0x3c95ea9c5c9617b3d39a5b7485ccc1075f7ddc3a57bd35985ce1a675bf3d6c46\nsalt.exit_stake_cap_per_day = 0x3dae9715c73acb1787136c6d255afddc83e15ff9a5021010efa9798197e0d245\nsalt.exit_approvals_needed = 0xe8bbbd3afc63eaeec4f16a84768c9b8e74934283f0a61d48901e2f1610b30ee5\nsalt.min_activation_balance = 0x095d1e37b77f030ed0456f6aa2211b25ca8084645f1ba7e2a046504e5ea2abbf\nsalt.max_effective_balance = 0xac5d8633eb7b385c4f929314d7383df24c30963acef8bb6a808467ed92af0ad9\nsalt.withdrawal_credentials = 0xb84f60417649229e97b69d3ef34e34d77d056a3d6f6e843eb0cd578aa14280c5\nsalt.allowed_deposit_amounts = 0x990474a1e7d3b9d53bd11a621ad68aae651caa8f39f33d3acf8196ba401cc5af\nsalt.allow_unverified_nonslashable_signing = 0x630ea990fde74e477e2dee78250ef0025f888282f210fbe224164fb4ec7b9a3b\nsalt.bare_root_domains = 0x23d904454bb55df306c5f931c334a409111b6f21e5961ef86e91a77f77a39d18\nsalt.slot_time_changes = 0xad8851200354234ca012d7f8a02078455450e4ef162afad9eb30dc61818d96ae\nsalt.allowed_builder_request_auth_data_roots = 0x899311f99a605b61ec1da81b932469c7413e4419a35993cb75a970eb4965de3b\n\n# signatures over signer-config-update-v1 and the header, by position\napprover_signature = 0 0x22e94d3a5f76d6ab6a9aa4a22ae784484b381aa523fd7d0b352ce622cb2e4fdbc0151e4871184e8fe9ee5bc2b4677895115e502b5a04f32df1fe268bda6f390d\napprover_signature = 1 0x1f4b9d4ec4c4bd7d78a7e21851d6e7f549d9b82efc6813a2264eb0c049b89f6c83afe14fc1bb3f92f796194d39d682d18c1e1da7d20899681d611df8d08c0e03\n",
+    "body": "0x420144ee19d6635a0704059ff25729aab22f8828d2722ea6896299131ca68a949ca5f7d1ccf112e09865c3145912c17562455e61400f88bed7cae00bf0c8ca0b83ce010000000000000001b8a158fc1d6301ca4495f950566c937d47d9c96767499e74b108b29b1cef9be6000000006b49d200038a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d10201000000000002a3000103fcb0510e4bb3a34f86a365f43d9a8b6a1212e2859b31438349f231f421da40cb01000000000000000000000000000000000000dead0000000001c9c3800000000011e1a3000000000000000e10000200000000000004d2000000000000162e000000ee6b280000020000000773594000000001dcd65000000100000000000000000000004242424242424242424242424242424242424242010000000773594000000004010000000000030d400000000000000006007c3cf6120f5d6817d8b971928a6a16db25fb2d3a66a6a35f3ccffd534c9ecec28800f32a3b3bfbbdacf94ee9519cca57d9fb49c370169a69b96283083230e347ed3c5c894822fef3a8a35c8d36a7999e73129b33eee7cc6c3f32e528a2ae321fc3f5ba269093c8f64d95358376e013a0df9c1711a99ded9fb43e082c91b221a904727b881e77449afc2587a0c86771c518df725aad0bc8f1af8003d241a49215bc96801e8f4b1122b28e74a3d3a3cc91c55e3253250a90b3bb265de812a9ef8d469196f7b4a282decc41e3561f40d3b1bed7b2528454a49ab72e2e76975e7b743d7ab9043038346cd12f717de84b1ae4cbd70ce39e1128c1bf71cb15e22b83093c95ea9c5c9617b3d39a5b7485ccc1075f7ddc3a57bd35985ce1a675bf3d6c463dae9715c73acb1787136c6d255afddc83e15ff9a5021010efa9798197e0d245e8bbbd3afc63eaeec4f16a84768c9b8e74934283f0a61d48901e2f1610b30ee5095d1e37b77f030ed0456f6aa2211b25ca8084645f1ba7e2a046504e5ea2abbfac5d8633eb7b385c4f929314d7383df24c30963acef8bb6a808467ed92af0ad9b84f60417649229e97b69d3ef34e34d77d056a3d6f6e843eb0cd578aa14280c5990474a1e7d3b9d53bd11a621ad68aae651caa8f39f33d3acf8196ba401cc5af630ea990fde74e477e2dee78250ef0025f888282f210fbe224164fb4ec7b9a3b23d904454bb55df306c5f931c334a409111b6f21e5961ef86e91a77f77a39d18ad8851200354234ca012d7f8a02078455450e4ef162afad9eb30dc61818d96ae899311f99a605b61ec1da81b932469c7413e4419a35993cb75a970eb4965de3b",
+    "group_root": "0x003204772e2683752ad51fc00f2d23fe70a13cdefd3d02e98704db7aa39bc010",
+    "header": "0x44ee19d6635a0704059ff25729aab22f8828d2722ea6896299131ca68a949ca5f7d1ccf112e09865c3145912c17562455e61400f88bed7cae00bf0c8ca0b83ce010000000000000001b8a158fc1d6301ca4495f950566c937d47d9c96767499e74b108b29b1cef9be6000000006b49d200003204772e2683752ad51fc00f2d23fe70a13cdefd3d02e98704db7aa39bc010",
+    "update_hash": "0xe46bd999375630631dcd3b33eae3c5af0f922bfb66426b2c4b611457b85a1429",
+    "signed": "0x5501000003f6420144ee19d6635a0704059ff25729aab22f8828d2722ea6896299131ca68a949ca5f7d1ccf112e09865c3145912c17562455e61400f88bed7cae00bf0c8ca0b83ce010000000000000001b8a158fc1d6301ca4495f950566c937d47d9c96767499e74b108b29b1cef9be6000000006b49d200038a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d10201000000000002a3000103fcb0510e4bb3a34f86a365f43d9a8b6a1212e2859b31438349f231f421da40cb01000000000000000000000000000000000000dead0000000001c9c3800000000011e1a3000000000000000e10000200000000000004d2000000000000162e000000ee6b280000020000000773594000000001dcd65000000100000000000000000000004242424242424242424242424242424242424242010000000773594000000004010000000000030d400000000000000006007c3cf6120f5d6817d8b971928a6a16db25fb2d3a66a6a35f3ccffd534c9ecec28800f32a3b3bfbbdacf94ee9519cca57d9fb49c370169a69b96283083230e347ed3c5c894822fef3a8a35c8d36a7999e73129b33eee7cc6c3f32e528a2ae321fc3f5ba269093c8f64d95358376e013a0df9c1711a99ded9fb43e082c91b221a904727b881e77449afc2587a0c86771c518df725aad0bc8f1af8003d241a49215bc96801e8f4b1122b28e74a3d3a3cc91c55e3253250a90b3bb265de812a9ef8d469196f7b4a282decc41e3561f40d3b1bed7b2528454a49ab72e2e76975e7b743d7ab9043038346cd12f717de84b1ae4cbd70ce39e1128c1bf71cb15e22b83093c95ea9c5c9617b3d39a5b7485ccc1075f7ddc3a57bd35985ce1a675bf3d6c463dae9715c73acb1787136c6d255afddc83e15ff9a5021010efa9798197e0d245e8bbbd3afc63eaeec4f16a84768c9b8e74934283f0a61d48901e2f1610b30ee5095d1e37b77f030ed0456f6aa2211b25ca8084645f1ba7e2a046504e5ea2abbfac5d8633eb7b385c4f929314d7383df24c30963acef8bb6a808467ed92af0ad9b84f60417649229e97b69d3ef34e34d77d056a3d6f6e843eb0cd578aa14280c5990474a1e7d3b9d53bd11a621ad68aae651caa8f39f33d3acf8196ba401cc5af630ea990fde74e477e2dee78250ef0025f888282f210fbe224164fb4ec7b9a3b23d904454bb55df306c5f931c334a409111b6f21e5961ef86e91a77f77a39d18ad8851200354234ca012d7f8a02078455450e4ef162afad9eb30dc61818d96ae899311f99a605b61ec1da81b932469c7413e4419a35993cb75a970eb4965de3b020022e94d3a5f76d6ab6a9aa4a22ae784484b381aa523fd7d0b352ce622cb2e4fdbc0151e4871184e8fe9ee5bc2b4677895115e502b5a04f32df1fe268bda6f390d011f4b9d4ec4c4bd7d78a7e21851d6e7f549d9b82efc6813a2264eb0c049b89f6c83afe14fc1bb3f92f796194d39d682d18c1e1da7d20899681d611df8d08c0e0300"
+  },
+  "setup_state": {
+    "fields": {
+      "setup_hash": "0x454612d71d91a9b881e25967a6482c51e258129299d3712421aa27d3be9da15d",
+      "locked": {
+        "version": 1,
+        "hash": "0xe46bd999375630631dcd3b33eae3c5af0f922bfb66426b2c4b611457b85a1429",
+        "pending": {
+          "version": 0,
+          "hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "effective_at": 0
+        }
+      },
+      "open": {
+        "version": 0,
+        "hash": "0xf62a7e72ac6b0fdb67f189d63d2208bd375d0a024d5a3b26107b30b746861dc1",
+        "pending": {
+          "version": 1,
+          "hash": "0xa296def1b3badf70e688f792f3a3264cb362175a7ba0c726b2fb7b0f2823693d",
+          "effective_at": 1800000600
+        }
+      },
+      "approver_set_hash": "0x31726202d9e367c1457326d554ff5aa2c14b3e1bd3834ca248b40a64b5a7b8b5",
+      "order": {
+        "kind": 2,
+        "hash": "0x9d204cecf872f829e68b65c8d75527e37f303ad8c88a9f1ae354a5cb8f186dff",
+        "act_at": 1800003600
+      },
+      "key_release_hash": "0x261669a6444b1416335d7a49d9f28b25dac0a79e027a8fa0618985db379c2160",
+      "key_origin": {
+        "generated": 3,
+        "imported": 0,
+        "orders_hash": "0xb81857152089ec219cf3e06b43929be5c23a61a49cc326bf1bb0c8c7baaf6549"
+      }
+    },
+    "bytes": "0x454612d71d91a9b881e25967a6482c51e258129299d3712421aa27d3be9da15d0000000000000001e46bd999375630631dcd3b33eae3c5af0f922bfb66426b2c4b611457b85a14290000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000f62a7e72ac6b0fdb67f189d63d2208bd375d0a024d5a3b26107b30b746861dc10000000000000001a296def1b3badf70e688f792f3a3264cb362175a7ba0c726b2fb7b0f2823693d000000006b49d45831726202d9e367c1457326d554ff5aa2c14b3e1bd3834ca248b40a64b5a7b8b5029d204cecf872f829e68b65c8d75527e37f303ad8c88a9f1ae354a5cb8f186dff000000006b49e010261669a6444b1416335d7a49d9f28b25dac0a79e027a8fa0618985db379c21600000000300000000b81857152089ec219cf3e06b43929be5c23a61a49cc326bf1bb0c8c7baaf6549"
+  },
+  "attest": {
+    "nonce": "0xb62aeea2fa498126b5d7f26eb0f9fb4b52f0e4bc17426cfc0ca46ef3620ad244",
+    "keys": [
+      {
+        "pubkey": "0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+        "share_pubkey": "0xc2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2"
+      },
+      {
+        "pubkey": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+        "share_pubkey": "0xc1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1"
+      }
+    ],
+    "keys_hash": "0x03d285c4586ebe8a37e2b433c185722365e0cc1d4e65d6b611983d3f1b6ee6fb",
+    "user_data_input": "0x00177369676e65722d72756e6e65722d6174746573742d76310020b62aeea2fa498126b5d7f26eb0f9fb4b52f0e4bc17426cfc0ca46ef3620ad244454612d71d91a9b881e25967a6482c51e258129299d3712421aa27d3be9da15d0000000000000001e46bd999375630631dcd3b33eae3c5af0f922bfb66426b2c4b611457b85a14290000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000f62a7e72ac6b0fdb67f189d63d2208bd375d0a024d5a3b26107b30b746861dc10000000000000001a296def1b3badf70e688f792f3a3264cb362175a7ba0c726b2fb7b0f2823693d000000006b49d45831726202d9e367c1457326d554ff5aa2c14b3e1bd3834ca248b40a64b5a7b8b5029d204cecf872f829e68b65c8d75527e37f303ad8c88a9f1ae354a5cb8f186dff000000006b49e010261669a6444b1416335d7a49d9f28b25dac0a79e027a8fa0618985db379c21600000000300000000b81857152089ec219cf3e06b43929be5c23a61a49cc326bf1bb0c8c7baaf654903d285c4586ebe8a37e2b433c185722365e0cc1d4e65d6b611983d3f1b6ee6fb",
+    "user_data": "0x75200a7c98200910c29ac827b67d979871fe18850ebc4c01d73332c2d05cf522",
+    "gcp_eat_nonce": "75200a7c98200910c29ac827b67d979871fe18850ebc4c01d73332c2d05cf522",
+    "azure_runtime_data": "{\"signer-runner-identity\":\"75200a7c98200910c29ac827b67d979871fe18850ebc4c01d73332c2d05cf522\"}",
+    "azure_report_data": "0x06ff62d019ea891da645d23df0c1a164baa7a22ad5a3a8d71cd945a534dd84470000000000000000000000000000000000000000000000000000000000000000",
+    "nitro_nonce": "0xb62aeea2fa498126b5d7f26eb0f9fb4b52f0e4bc17426cfc0ca46ef3620ad244",
+    "nitro_user_data": "0x75200a7c98200910c29ac827b67d979871fe18850ebc4c01d73332c2d05cf522"
+  },
+  "public_outputs": {
+    "challenge_root": "0xb62aeea2fa498126b5d7f26eb0f9fb4b52f0e4bc17426cfc0ca46ef3620ad244",
+    "policy_root": "0xa83d23474da7d231085ee2800d49c7b318d356592551b061ad0c346ae04f5203",
+    "platform_commitment": "0xe126892c55c3ec65e78a4b576f7d0507cfaefe5d3c8001ab35779681f56997ee",
+    "config_state": "0x0000000000000001e46bd999375630631dcd3b33eae3c5af0f922bfb66426b2c4b611457b85a14290000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000f62a7e72ac6b0fdb67f189d63d2208bd375d0a024d5a3b26107b30b746861dc10000000000000001a296def1b3badf70e688f792f3a3264cb362175a7ba0c726b2fb7b0f2823693d000000006b49d45831726202d9e367c1457326d554ff5aa2c14b3e1bd3834ca248b40a64b5a7b8b5029d204cecf872f829e68b65c8d75527e37f303ad8c88a9f1ae354a5cb8f186dff000000006b49e010261669a6444b1416335d7a49d9f28b25dac0a79e027a8fa0618985db379c2160",
+    "key_origin": "0x0000000300000000b81857152089ec219cf3e06b43929be5c23a61a49cc326bf1bb0c8c7baaf6549"
+  },
+  "private_inputs": {
+    "keys_hash": "0x03d285c4586ebe8a37e2b433c185722365e0cc1d4e65d6b611983d3f1b6ee6fb"
+  },
+  "azure_setup": {
+    "human": "# Signer setup, format 1 (attestation-prover.md, \"Signer changes\"). setup_hash is over policy_root\n# (the salted leaves of the public part and the two groups) and platform_commitment (the private part).\nsetup_format_version = 1\nsigner_name = azure-1\ncluster_id = 0x44ee19d6635a0704059ff25729aab22f8828d2722ea6896299131ca68a949ca5\nhandover_generation = 1\n\n# chain: public, fixed for the life of the signer\ngenesis_validators_root = 0x212f13fc4df078b6cb7db228f1c8307566dcecf900867401a92023d7ba99cb5f\ngenesis_fork_version = 0x10000910\ngenesis_time = 1742213400\nseconds_per_slot = 12\nslots_per_epoch = 32\npreset = mainnet\nvoluntary_exit_fork_version = 0x40000910\n\n# safety: public, fixed; the floor margin is max_sign_epochs_ahead_of_clock + 1\nmax_sign_epochs_ahead_of_clock = 2\nslashing_mark_prewrite.block_slots = 32\nslashing_mark_prewrite.source_epochs = 2\nslashing_mark_prewrite.target_epochs = 2\nmax_keys = 1024\nslashing_log_min_lock_days = 3650\n\n# platform: private, fixed\nplatform = azure\n# CN=signer test client CA, sha256 e5da5b90966cc0da9f21d6f306e71f311c42120c313f5b6640afa7b8d6c38724\nallowed_client_ca = MIIBMTCB5KADAgECAgIAyjAFBgMrZXAwIDEeMBwGA1UEAxMVc2lnbmVyIHRlc3QgY2xpZW50IENBMB4XDTIzMTExNDIyMTMyMFoXDTMzMDUxODAzMzMyMFowIDEeMBwGA1UEAxMVc2lnbmVyIHRlc3QgY2xpZW50IENBMCowBQYDK2VwAyEARmYn1SdzydXNpsj9KOox7HuU5oqo1C4q0xp13I0k7QejQjBAMA4GA1UdDwEB/wQEAwIChDAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBS0t+S1q75v2XMqMJJKFYTgvo7vsTAFBgMrZXADQQCK9YxKzb9LEt5mA8TadoXemhwdsAs4z9Q2MY4BHM91karN0BFQZ+mYYiZMkCZzRMkX/exDsslwKIZwjiZjXKQO\nslashing_log_store.account = lidosignermarks\nslashing_log_store.container = marks-azure-1\nslashing_log_store.subscription = 0b6f4c7e-58a1-4c39-9d2e-5f0a8e3b7c41\nslashing_log_store.resource_group = signer-azure-1\nencrypted_state_store.account = lidosignerstate\nencrypted_state_store.container = state-azure-1\nencrypted_state_store.subscription = 0b6f4c7e-58a1-4c39-9d2e-5f0a8e3b7c41\nencrypted_state_store.resource_group = signer-azure-1\nsealing_key_release.maa_endpoint = sharedneu.neu.attest.azure.net\nsealing_key_release.akv_endpoint = signer-poc-kv.vault.azure.net\nsealing_key_release.kid = signer-kek-1/0123456789abcdef0123456789abcdef\n\n# locked: public; a change waits out the change delay\napprovers = 0x8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c\napprovers = 0x8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394\napprovers = 0xed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1\napprovals_needed = 2\nchange_delay_seconds = 172800\nallowed_image_measurements = gcp 0xfcb0510e4bb3a34f86a365f43d9a8b6a1212e2859b31438349f231f421da40cb\nallowed_fee_recipients = 0x000000000000000000000000000000000000dead\nbuilder_gas_limit_min = 30000000\nbuilder_gas_limit_max = 200000000\nbuilder_registration_max_future_seconds = 3600\nexit_allowed_validators = 1234\nexit_allowed_validators = 5678\nexit_stake_cap_per_day = 1024 ETH\nexit_approvals_needed = 2\nmin_activation_balance = 32 ETH\nmax_effective_balance = 2048 ETH\nwithdrawal_credentials = 0x0100000000000000000000004242424242424242424242424242424242424242\nallowed_deposit_amounts = 32 ETH\nallow_unverified_nonslashable_signing = false\nbare_root_domains = randao\n# slot_time_changes: EPOCH SECONDS_PER_SLOT, the slot time from the first slot of EPOCH on\nslot_time_changes = 200000 6\n# allowed_builder_request_auth_data_roots absent: no BuilderRequestAuth is signed\n\n# open: public; a change applies without a change delay\nfork_schedule = 0 0x50000910\nfork_schedule = 2048 0x60000910\nfork_schedule = 50688 0x70000910\nfork_schedule = 132352 0x80000910\ngloas_fork_epoch = 132352\n\n# salts: one per policy leaf (the same for every signer of the cluster), and the platform salt\nsalt.setup_format_version = 0x70ffb8ac179ae75461d92540abcd114825c24b67c6b752fbab170e18df763169\nsalt.cluster_id = 0x5239948456dc2c18d52e75ebf0436d8d98370f30f55f20e9bd2d7daae8161da2\nsalt.handover_generation = 0x17290e10cc196077fae0db25abde8bb6e2fffaf2fcd57411098693d61ce175f5\nsalt.genesis_validators_root = 0x47b27b4a2469fe83253879de62e56d9dc380eb28755b13344f63e58e74b131ca\nsalt.genesis_fork_version = 0x9533aee7beea3e7fd345f79fe1f675cd167a471cc10a7a4077b938bc60fbda54\nsalt.genesis_time = 0x95e3ae98b9fc4f6da7b8348cec03cb03d42bb9bbea98c2c46e7b189d5c5d287f\nsalt.seconds_per_slot = 0x07254f3ee8c06227fe1280f732f1fad6b34a48c8e527c6439a386410bc76be55\nsalt.slots_per_epoch = 0xe753914ea51c9cdfacacf88708d0ae774a7fc1de804acb0b60f8a444ed97c9f8\nsalt.preset = 0xc5b1e54e1d469a10def103aff3decff6f34fa9b4ebd0c97a7fe48c39648c1116\nsalt.voluntary_exit_fork_version = 0x2dd2475fe6c7373fa77a1886396499031723d56f606f1ecbe89e9964ba9f4fe8\nsalt.max_sign_epochs_ahead_of_clock = 0xd435b32241071421f0d5677ee081cf30f6639ed31cd636beb3ee6a5ceefb2925\nsalt.slashing_mark_prewrite.block_slots = 0xfef45176ec4a9919618a1fa055b11f21ea098b4c218011c8e72f1c63e73009c8\nsalt.slashing_mark_prewrite.source_epochs = 0x8099369c89e989577a6b034e85a6f20099109ce1a8643638ba6787cccf7fbdee\nsalt.slashing_mark_prewrite.target_epochs = 0x48a6fc88c384e3a4eb9e0b81bac0ea6c548740b3cb00020c8a62739e24bebf69\nsalt.max_keys = 0xc8f07930286b92e16991735645592393edb8e62155df50441f87bab48640ceda\nsalt.slashing_log_min_lock_days = 0xdd4dbc2c724526ace007268af69ffa66226521987495fa09a089bf75abd340da\nsalt.approvers = 0x33beae35876ab2b1302ecf4e85add62b95f82611a64eb9dfae082f59aa47d0ae\nsalt.approvals_needed = 0x687be32a4b694da8f58aca71bc240ff5ac56949f05da3778ad66e9bfeb4b9a0f\nsalt.change_delay_seconds = 0x1e0dbe578c9b1f7e5de8a0a7f5c13921b295504aea96acb58b3d25dd9e246813\nsalt.allowed_image_measurements = 0xb77d8c670bc1d028bb44a38d98c1b5e7a1eb8a8ea07e82aaebf649fb7f7cf98c\nsalt.allowed_fee_recipients = 0x4775dd929bf8a2d0e46d6f8ad88dd3b38cff09ed7c6dd881b69fab1907ee01f6\nsalt.builder_gas_limit_min = 0x797d9ed2c7d69ba8770049a50f8de36e2b3d587581ad16284cdde70d0c90ab34\nsalt.builder_gas_limit_max = 0xf2c57020afae66b9083b5b0032aa020b5df8c9174a00e601b4879ad438ecbf15\nsalt.builder_registration_max_future_seconds = 0x5dea415bd753c322ca5f27caa4c72dbf1e7020173edc137f5dfa3c790315ca13\nsalt.exit_allowed_validators = 0xee60eacef0b360dfc790dc08ae1b56d95a3fa34ee59b6219f37a4a7c9624a421\nsalt.exit_stake_cap_per_day = 0x1d84d5a0aeb8dda90e9da990c7348cbc9836ffd80b22d0188650408fcb25798d\nsalt.exit_approvals_needed = 0x696dc5329eb07801916b4cf982e8c8c13a52208b1cdac18d570c1ebf48f64875\nsalt.min_activation_balance = 0xe941d154450aed23268accc92aedfaeb594976460818b96ce3cdfe561b060857\nsalt.max_effective_balance = 0x76d51fa98dfef254ed90e79db173f93add58aa6fbd4fb76297df939f0e49e8f6\nsalt.withdrawal_credentials = 0x80689df874fbd980f2555c9d7b07960c4a0865a843ef0c9b3002077f6040e909\nsalt.allowed_deposit_amounts = 0x1f445d6b4870f6a00fb7f4dc93fd603c1c3fa0d8203675c2c4745063cf23cc1c\nsalt.allow_unverified_nonslashable_signing = 0xc0d6a7c033c72a449a86d0519647b4f8d416dbf20a1f6c9fb043444e90425aa5\nsalt.bare_root_domains = 0x60f2835b1e1222e29ec255e3e1e0470f55a34b4ca9c559126375788f27397aba\nsalt.slot_time_changes = 0xc87560219f9eca748ff9f86e80649997e908cc2d4f67e4728c5a9a9f1baff0fa\nsalt.allowed_builder_request_auth_data_roots = 0xf7a4171c79e0c54ebe2e8205d42894e2a16123aef41395571ae9fc8212b20dfd\nsalt.fork_schedule = 0xbde6c15ee697d2541711d8f587dc89783ef33b6a7fe0c054ec9d64b4db8c8bed\nsalt.gloas_fork_epoch = 0xca0dc3c888a651a8169a39bef0739b6f7dc047deced6be263bbc081d1278acfa\nplatform_salt = 0x91a3d148c4ef162e361f0cecf2501c2acc3a622ef06c2affb40176ed9e46d533\n",
+    "bytes": "0x530144ee19d6635a0704059ff25729aab22f8828d2722ea6896299131ca68a949ca50000000000000001212f13fc4df078b6cb7db228f1c8307566dcecf900867401a92023d7ba99cb5f100009100000000067d81118000000000000000c0000000000000020014000091000000000000000020000000000000020000000000000000200000000000000020000040000000e4270ffb8ac179ae75461d92540abcd114825c24b67c6b752fbab170e18df7631695239948456dc2c18d52e75ebf0436d8d98370f30f55f20e9bd2d7daae8161da217290e10cc196077fae0db25abde8bb6e2fffaf2fcd57411098693d61ce175f547b27b4a2469fe83253879de62e56d9dc380eb28755b13344f63e58e74b131ca9533aee7beea3e7fd345f79fe1f675cd167a471cc10a7a4077b938bc60fbda5495e3ae98b9fc4f6da7b8348cec03cb03d42bb9bbea98c2c46e7b189d5c5d287f07254f3ee8c06227fe1280f732f1fad6b34a48c8e527c6439a386410bc76be55e753914ea51c9cdfacacf88708d0ae774a7fc1de804acb0b60f8a444ed97c9f8c5b1e54e1d469a10def103aff3decff6f34fa9b4ebd0c97a7fe48c39648c11162dd2475fe6c7373fa77a1886396499031723d56f606f1ecbe89e9964ba9f4fe8d435b32241071421f0d5677ee081cf30f6639ed31cd636beb3ee6a5ceefb2925fef45176ec4a9919618a1fa055b11f21ea098b4c218011c8e72f1c63e73009c88099369c89e989577a6b034e85a6f20099109ce1a8643638ba6787cccf7fbdee48a6fc88c384e3a4eb9e0b81bac0ea6c548740b3cb00020c8a62739e24bebf69c8f07930286b92e16991735645592393edb8e62155df50441f87bab48640cedadd4dbc2c724526ace007268af69ffa66226521987495fa09a089bf75abd340da038a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d10201000000000002a3000103fcb0510e4bb3a34f86a365f43d9a8b6a1212e2859b31438349f231f421da40cb01000000000000000000000000000000000000dead0000000001c9c380000000000bebc2000000000000000e10000200000000000004d2000000000000162e000000ee6b280000020000000773594000000001dcd65000000100000000000000000000004242424242424242424242424242424242424242010000000773594000000004010000000000030d4000000000000000060033beae35876ab2b1302ecf4e85add62b95f82611a64eb9dfae082f59aa47d0ae687be32a4b694da8f58aca71bc240ff5ac56949f05da3778ad66e9bfeb4b9a0f1e0dbe578c9b1f7e5de8a0a7f5c13921b295504aea96acb58b3d25dd9e246813b77d8c670bc1d028bb44a38d98c1b5e7a1eb8a8ea07e82aaebf649fb7f7cf98c4775dd929bf8a2d0e46d6f8ad88dd3b38cff09ed7c6dd881b69fab1907ee01f6797d9ed2c7d69ba8770049a50f8de36e2b3d587581ad16284cdde70d0c90ab34f2c57020afae66b9083b5b0032aa020b5df8c9174a00e601b4879ad438ecbf155dea415bd753c322ca5f27caa4c72dbf1e7020173edc137f5dfa3c790315ca13ee60eacef0b360dfc790dc08ae1b56d95a3fa34ee59b6219f37a4a7c9624a4211d84d5a0aeb8dda90e9da990c7348cbc9836ffd80b22d0188650408fcb25798d696dc5329eb07801916b4cf982e8c8c13a52208b1cdac18d570c1ebf48f64875e941d154450aed23268accc92aedfaeb594976460818b96ce3cdfe561b06085776d51fa98dfef254ed90e79db173f93add58aa6fbd4fb76297df939f0e49e8f680689df874fbd980f2555c9d7b07960c4a0865a843ef0c9b3002077f6040e9091f445d6b4870f6a00fb7f4dc93fd603c1c3fa0d8203675c2c4745063cf23cc1cc0d6a7c033c72a449a86d0519647b4f8d416dbf20a1f6c9fb043444e90425aa560f2835b1e1222e29ec255e3e1e0470f55a34b4ca9c559126375788f27397abac87560219f9eca748ff9f86e80649997e908cc2d4f67e4728c5a9a9f1baff0faf7a4171c79e0c54ebe2e8205d42894e2a16123aef41395571ae9fc8212b20dfd04000000000000000050000910000000000000080060000910000000000000c60070000910000000000002050080000910010000000000020500bde6c15ee697d2541711d8f587dc89783ef33b6a7fe0c054ec9d64b4db8c8bedca0dc3c888a651a8169a39bef0739b6f7dc047deced6be263bbc081d1278acfa91a3d148c4ef162e361f0cecf2501c2acc3a622ef06c2affb40176ed9e46d53307617a7572652d3102010135308201313081e4a003020102020200ca300506032b65703020311e301c060355040313157369676e6572207465737420636c69656e74204341301e170d3233313131343232313332305a170d3333303531383033333332305a3020311e301c060355040313157369676e6572207465737420636c69656e74204341302a300506032b6570032100466627d52773c9d5cda6c8fd28ea31ec7b94e68aa8d42e2ad31a75dc8d24ed07a3423040300e0603551d0f0101ff040403020284300f0603551d130101ff040530030101ff301d0603551d0e04160414b4b7e4b5abbe6fd9732a30924a1584e0be8eefb1300506032b65700341008af58c4acdbf4b12de6603c4da7685de9a1c1db00b38cfd436318e011ccf7591aacdd0115067e99862264c90267344c917fdec43b2c9702886708e26635ca40e0f6c69646f7369676e65726d61726b730d6d61726b732d617a7572652d312430623666346337652d353861312d346333392d396432652d3566306138653362376334310e7369676e65722d617a7572652d31010f6c69646f7369676e657273746174650d73746174652d617a7572652d312430623666346337652d353861312d346333392d396432652d3566306138653362376334310e7369676e65722d617a7572652d311e7368617265646e65752e6e65752e6174746573742e617a7572652e6e65741d7369676e65722d706f632d6b762e7661756c742e617a7572652e6e65742d7369676e65722d6b656b2d312f303132333435363738396162636465663031323334353637383961626364656600",
+    "policy_root": "0xa83d23474da7d231085ee2800d49c7b318d356592551b061ad0c346ae04f5203",
+    "platform_salt": "0x91a3d148c4ef162e361f0cecf2501c2acc3a622ef06c2affb40176ed9e46d533",
+    "private_part": "0x07617a7572652d3102010135308201313081e4a003020102020200ca300506032b65703020311e301c060355040313157369676e6572207465737420636c69656e74204341301e170d3233313131343232313332305a170d3333303531383033333332305a3020311e301c060355040313157369676e6572207465737420636c69656e74204341302a300506032b6570032100466627d52773c9d5cda6c8fd28ea31ec7b94e68aa8d42e2ad31a75dc8d24ed07a3423040300e0603551d0f0101ff040403020284300f0603551d130101ff040530030101ff301d0603551d0e04160414b4b7e4b5abbe6fd9732a30924a1584e0be8eefb1300506032b65700341008af58c4acdbf4b12de6603c4da7685de9a1c1db00b38cfd436318e011ccf7591aacdd0115067e99862264c90267344c917fdec43b2c9702886708e26635ca40e0f6c69646f7369676e65726d61726b730d6d61726b732d617a7572652d312430623666346337652d353861312d346333392d396432652d3566306138653362376334310e7369676e65722d617a7572652d31010f6c69646f7369676e657273746174650d73746174652d617a7572652d312430623666346337652d353861312d346333392d396432652d3566306138653362376334310e7369676e65722d617a7572652d311e7368617265646e65752e6e65752e6174746573742e617a7572652e6e65741d7369676e65722d706f632d6b762e7661756c742e617a7572652e6e65742d7369676e65722d6b656b2d312f303132333435363738396162636465663031323334353637383961626364656600",
+    "platform_commitment": "0x0f60d53f19dbb0926afdf43d271d3d8f01a3e113b8495c7ae8e02a66d67b29f4",
+    "setup_hash": "0x6fbb8c064a508cf7a6a392d80be81a1bb13b205b066bdd3424bef4f1d8cd0c2e"
+  },
+  "azure_attest": {
+    "user_data_input": "0x00177369676e65722d72756e6e65722d6174746573742d76310020b62aeea2fa498126b5d7f26eb0f9fb4b52f0e4bc17426cfc0ca46ef3620ad2446fbb8c064a508cf7a6a392d80be81a1bb13b205b066bdd3424bef4f1d8cd0c2e0000000000000001e46bd999375630631dcd3b33eae3c5af0f922bfb66426b2c4b611457b85a14290000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000f62a7e72ac6b0fdb67f189d63d2208bd375d0a024d5a3b26107b30b746861dc10000000000000001a296def1b3badf70e688f792f3a3264cb362175a7ba0c726b2fb7b0f2823693d000000006b49d45831726202d9e367c1457326d554ff5aa2c14b3e1bd3834ca248b40a64b5a7b8b5029d204cecf872f829e68b65c8d75527e37f303ad8c88a9f1ae354a5cb8f186dff000000006b49e010261669a6444b1416335d7a49d9f28b25dac0a79e027a8fa0618985db379c21600000000300000000b81857152089ec219cf3e06b43929be5c23a61a49cc326bf1bb0c8c7baaf654903d285c4586ebe8a37e2b433c185722365e0cc1d4e65d6b611983d3f1b6ee6fb",
+    "user_data": "0x47240af5acf03b8a0ca78c315d2056abdb772e0415f0014cc383b265d8d74f2e",
+    "runtime_data": "{\"signer-runner-identity\":\"47240af5acf03b8a0ca78c315d2056abdb772e0415f0014cc383b265d8d74f2e\"}",
+    "report_data": "0x0c026fe62ab359b98426e1e5e8b4885321305bea0f0745190296f682604d7e3c0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "azure_public_outputs": {
+    "challenge_root": "0xb62aeea2fa498126b5d7f26eb0f9fb4b52f0e4bc17426cfc0ca46ef3620ad244",
+    "policy_root": "0xa83d23474da7d231085ee2800d49c7b318d356592551b061ad0c346ae04f5203",
+    "platform_commitment": "0x0f60d53f19dbb0926afdf43d271d3d8f01a3e113b8495c7ae8e02a66d67b29f4",
+    "config_state": "0x0000000000000001e46bd999375630631dcd3b33eae3c5af0f922bfb66426b2c4b611457b85a14290000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000f62a7e72ac6b0fdb67f189d63d2208bd375d0a024d5a3b26107b30b746861dc10000000000000001a296def1b3badf70e688f792f3a3264cb362175a7ba0c726b2fb7b0f2823693d000000006b49d45831726202d9e367c1457326d554ff5aa2c14b3e1bd3834ca248b40a64b5a7b8b5029d204cecf872f829e68b65c8d75527e37f303ad8c88a9f1ae354a5cb8f186dff000000006b49e010261669a6444b1416335d7a49d9f28b25dac0a79e027a8fa0618985db379c2160",
+    "key_origin": "0x0000000300000000b81857152089ec219cf3e06b43929be5c23a61a49cc326bf1bb0c8c7baaf6549"
+  },
+  "nitro_setup": {
+    "human": "# Signer setup, format 1 (attestation-prover.md, \"Signer changes\"). setup_hash is over policy_root\n# (the salted leaves of the public part and the two groups) and platform_commitment (the private part).\nsetup_format_version = 1\nsigner_name = nitro-1\ncluster_id = 0x44ee19d6635a0704059ff25729aab22f8828d2722ea6896299131ca68a949ca5\nhandover_generation = 1\n\n# chain: public, fixed for the life of the signer\ngenesis_validators_root = 0x212f13fc4df078b6cb7db228f1c8307566dcecf900867401a92023d7ba99cb5f\ngenesis_fork_version = 0x10000910\ngenesis_time = 1742213400\nseconds_per_slot = 12\nslots_per_epoch = 32\npreset = mainnet\nvoluntary_exit_fork_version = 0x40000910\n\n# safety: public, fixed; the floor margin is max_sign_epochs_ahead_of_clock + 1\nmax_sign_epochs_ahead_of_clock = 2\nslashing_mark_prewrite.block_slots = 32\nslashing_mark_prewrite.source_epochs = 2\nslashing_mark_prewrite.target_epochs = 2\nmax_keys = 1024\nslashing_log_min_lock_days = 3650\n\n# platform: private, fixed\nplatform = nitro\n# CN=signer test client CA, sha256 e5da5b90966cc0da9f21d6f306e71f311c42120c313f5b6640afa7b8d6c38724\nallowed_client_ca = MIIBMTCB5KADAgECAgIAyjAFBgMrZXAwIDEeMBwGA1UEAxMVc2lnbmVyIHRlc3QgY2xpZW50IENBMB4XDTIzMTExNDIyMTMyMFoXDTMzMDUxODAzMzMyMFowIDEeMBwGA1UEAxMVc2lnbmVyIHRlc3QgY2xpZW50IENBMCowBQYDK2VwAyEARmYn1SdzydXNpsj9KOox7HuU5oqo1C4q0xp13I0k7QejQjBAMA4GA1UdDwEB/wQEAwIChDAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBS0t+S1q75v2XMqMJJKFYTgvo7vsTAFBgMrZXADQQCK9YxKzb9LEt5mA8TadoXemhwdsAs4z9Q2MY4BHM91karN0BFQZ+mYYiZMkCZzRMkX/exDsslwKIZwjiZjXKQO\nslashing_log_store.bucket = lido-signer-marks-nitro-1\nslashing_log_store.region = eu-central-1\nsealing_key_release.region = eu-central-1\nsealing_key_release.kms_key_id = arn:aws:kms:eu-central-1:111122223333:key/0b6f4c7e-58a1-4c39-9d2e-5f0a8e3b7c41\n# hosts the DKG peer verifiers fetch key sets from; a nitro enclave reaches no other host besides its fixed routes\nkeygen_peer_attestation_hosts = signer-2.example.internal:9443\n\n# locked: public; a change waits out the change delay\napprovers = 0x8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c\napprovers = 0x8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394\napprovers = 0xed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1\napprovals_needed = 2\nchange_delay_seconds = 172800\nallowed_image_measurements = gcp 0xfcb0510e4bb3a34f86a365f43d9a8b6a1212e2859b31438349f231f421da40cb\nallowed_fee_recipients = 0x000000000000000000000000000000000000dead\nbuilder_gas_limit_min = 30000000\nbuilder_gas_limit_max = 200000000\nbuilder_registration_max_future_seconds = 3600\nexit_allowed_validators = 1234\nexit_allowed_validators = 5678\nexit_stake_cap_per_day = 1024 ETH\nexit_approvals_needed = 2\nmin_activation_balance = 32 ETH\nmax_effective_balance = 2048 ETH\nwithdrawal_credentials = 0x0100000000000000000000004242424242424242424242424242424242424242\nallowed_deposit_amounts = 32 ETH\nallow_unverified_nonslashable_signing = false\nbare_root_domains = randao\n# slot_time_changes: EPOCH SECONDS_PER_SLOT, the slot time from the first slot of EPOCH on\nslot_time_changes = 200000 6\n# allowed_builder_request_auth_data_roots absent: no BuilderRequestAuth is signed\n\n# open: public; a change applies without a change delay\nfork_schedule = 0 0x50000910\nfork_schedule = 2048 0x60000910\nfork_schedule = 50688 0x70000910\nfork_schedule = 132352 0x80000910\ngloas_fork_epoch = 132352\n\n# salts: one per policy leaf (the same for every signer of the cluster), and the platform salt\nsalt.setup_format_version = 0x70ffb8ac179ae75461d92540abcd114825c24b67c6b752fbab170e18df763169\nsalt.cluster_id = 0x5239948456dc2c18d52e75ebf0436d8d98370f30f55f20e9bd2d7daae8161da2\nsalt.handover_generation = 0x17290e10cc196077fae0db25abde8bb6e2fffaf2fcd57411098693d61ce175f5\nsalt.genesis_validators_root = 0x47b27b4a2469fe83253879de62e56d9dc380eb28755b13344f63e58e74b131ca\nsalt.genesis_fork_version = 0x9533aee7beea3e7fd345f79fe1f675cd167a471cc10a7a4077b938bc60fbda54\nsalt.genesis_time = 0x95e3ae98b9fc4f6da7b8348cec03cb03d42bb9bbea98c2c46e7b189d5c5d287f\nsalt.seconds_per_slot = 0x07254f3ee8c06227fe1280f732f1fad6b34a48c8e527c6439a386410bc76be55\nsalt.slots_per_epoch = 0xe753914ea51c9cdfacacf88708d0ae774a7fc1de804acb0b60f8a444ed97c9f8\nsalt.preset = 0xc5b1e54e1d469a10def103aff3decff6f34fa9b4ebd0c97a7fe48c39648c1116\nsalt.voluntary_exit_fork_version = 0x2dd2475fe6c7373fa77a1886396499031723d56f606f1ecbe89e9964ba9f4fe8\nsalt.max_sign_epochs_ahead_of_clock = 0xd435b32241071421f0d5677ee081cf30f6639ed31cd636beb3ee6a5ceefb2925\nsalt.slashing_mark_prewrite.block_slots = 0xfef45176ec4a9919618a1fa055b11f21ea098b4c218011c8e72f1c63e73009c8\nsalt.slashing_mark_prewrite.source_epochs = 0x8099369c89e989577a6b034e85a6f20099109ce1a8643638ba6787cccf7fbdee\nsalt.slashing_mark_prewrite.target_epochs = 0x48a6fc88c384e3a4eb9e0b81bac0ea6c548740b3cb00020c8a62739e24bebf69\nsalt.max_keys = 0xc8f07930286b92e16991735645592393edb8e62155df50441f87bab48640ceda\nsalt.slashing_log_min_lock_days = 0xdd4dbc2c724526ace007268af69ffa66226521987495fa09a089bf75abd340da\nsalt.approvers = 0x33beae35876ab2b1302ecf4e85add62b95f82611a64eb9dfae082f59aa47d0ae\nsalt.approvals_needed = 0x687be32a4b694da8f58aca71bc240ff5ac56949f05da3778ad66e9bfeb4b9a0f\nsalt.change_delay_seconds = 0x1e0dbe578c9b1f7e5de8a0a7f5c13921b295504aea96acb58b3d25dd9e246813\nsalt.allowed_image_measurements = 0xb77d8c670bc1d028bb44a38d98c1b5e7a1eb8a8ea07e82aaebf649fb7f7cf98c\nsalt.allowed_fee_recipients = 0x4775dd929bf8a2d0e46d6f8ad88dd3b38cff09ed7c6dd881b69fab1907ee01f6\nsalt.builder_gas_limit_min = 0x797d9ed2c7d69ba8770049a50f8de36e2b3d587581ad16284cdde70d0c90ab34\nsalt.builder_gas_limit_max = 0xf2c57020afae66b9083b5b0032aa020b5df8c9174a00e601b4879ad438ecbf15\nsalt.builder_registration_max_future_seconds = 0x5dea415bd753c322ca5f27caa4c72dbf1e7020173edc137f5dfa3c790315ca13\nsalt.exit_allowed_validators = 0xee60eacef0b360dfc790dc08ae1b56d95a3fa34ee59b6219f37a4a7c9624a421\nsalt.exit_stake_cap_per_day = 0x1d84d5a0aeb8dda90e9da990c7348cbc9836ffd80b22d0188650408fcb25798d\nsalt.exit_approvals_needed = 0x696dc5329eb07801916b4cf982e8c8c13a52208b1cdac18d570c1ebf48f64875\nsalt.min_activation_balance = 0xe941d154450aed23268accc92aedfaeb594976460818b96ce3cdfe561b060857\nsalt.max_effective_balance = 0x76d51fa98dfef254ed90e79db173f93add58aa6fbd4fb76297df939f0e49e8f6\nsalt.withdrawal_credentials = 0x80689df874fbd980f2555c9d7b07960c4a0865a843ef0c9b3002077f6040e909\nsalt.allowed_deposit_amounts = 0x1f445d6b4870f6a00fb7f4dc93fd603c1c3fa0d8203675c2c4745063cf23cc1c\nsalt.allow_unverified_nonslashable_signing = 0xc0d6a7c033c72a449a86d0519647b4f8d416dbf20a1f6c9fb043444e90425aa5\nsalt.bare_root_domains = 0x60f2835b1e1222e29ec255e3e1e0470f55a34b4ca9c559126375788f27397aba\nsalt.slot_time_changes = 0xc87560219f9eca748ff9f86e80649997e908cc2d4f67e4728c5a9a9f1baff0fa\nsalt.allowed_builder_request_auth_data_roots = 0xf7a4171c79e0c54ebe2e8205d42894e2a16123aef41395571ae9fc8212b20dfd\nsalt.fork_schedule = 0xbde6c15ee697d2541711d8f587dc89783ef33b6a7fe0c054ec9d64b4db8c8bed\nsalt.gloas_fork_epoch = 0xca0dc3c888a651a8169a39bef0739b6f7dc047deced6be263bbc081d1278acfa\nplatform_salt = 0x2dee592c331a1bb1cd6cbf4ef43f3fe15ee438719672208432f8573637aa64d8\n",
+    "bytes": "0x530144ee19d6635a0704059ff25729aab22f8828d2722ea6896299131ca68a949ca50000000000000001212f13fc4df078b6cb7db228f1c8307566dcecf900867401a92023d7ba99cb5f100009100000000067d81118000000000000000c0000000000000020014000091000000000000000020000000000000020000000000000000200000000000000020000040000000e4270ffb8ac179ae75461d92540abcd114825c24b67c6b752fbab170e18df7631695239948456dc2c18d52e75ebf0436d8d98370f30f55f20e9bd2d7daae8161da217290e10cc196077fae0db25abde8bb6e2fffaf2fcd57411098693d61ce175f547b27b4a2469fe83253879de62e56d9dc380eb28755b13344f63e58e74b131ca9533aee7beea3e7fd345f79fe1f675cd167a471cc10a7a4077b938bc60fbda5495e3ae98b9fc4f6da7b8348cec03cb03d42bb9bbea98c2c46e7b189d5c5d287f07254f3ee8c06227fe1280f732f1fad6b34a48c8e527c6439a386410bc76be55e753914ea51c9cdfacacf88708d0ae774a7fc1de804acb0b60f8a444ed97c9f8c5b1e54e1d469a10def103aff3decff6f34fa9b4ebd0c97a7fe48c39648c11162dd2475fe6c7373fa77a1886396499031723d56f606f1ecbe89e9964ba9f4fe8d435b32241071421f0d5677ee081cf30f6639ed31cd636beb3ee6a5ceefb2925fef45176ec4a9919618a1fa055b11f21ea098b4c218011c8e72f1c63e73009c88099369c89e989577a6b034e85a6f20099109ce1a8643638ba6787cccf7fbdee48a6fc88c384e3a4eb9e0b81bac0ea6c548740b3cb00020c8a62739e24bebf69c8f07930286b92e16991735645592393edb8e62155df50441f87bab48640cedadd4dbc2c724526ace007268af69ffa66226521987495fa09a089bf75abd340da038a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d10201000000000002a3000103fcb0510e4bb3a34f86a365f43d9a8b6a1212e2859b31438349f231f421da40cb01000000000000000000000000000000000000dead0000000001c9c380000000000bebc2000000000000000e10000200000000000004d2000000000000162e000000ee6b280000020000000773594000000001dcd65000000100000000000000000000004242424242424242424242424242424242424242010000000773594000000004010000000000030d4000000000000000060033beae35876ab2b1302ecf4e85add62b95f82611a64eb9dfae082f59aa47d0ae687be32a4b694da8f58aca71bc240ff5ac56949f05da3778ad66e9bfeb4b9a0f1e0dbe578c9b1f7e5de8a0a7f5c13921b295504aea96acb58b3d25dd9e246813b77d8c670bc1d028bb44a38d98c1b5e7a1eb8a8ea07e82aaebf649fb7f7cf98c4775dd929bf8a2d0e46d6f8ad88dd3b38cff09ed7c6dd881b69fab1907ee01f6797d9ed2c7d69ba8770049a50f8de36e2b3d587581ad16284cdde70d0c90ab34f2c57020afae66b9083b5b0032aa020b5df8c9174a00e601b4879ad438ecbf155dea415bd753c322ca5f27caa4c72dbf1e7020173edc137f5dfa3c790315ca13ee60eacef0b360dfc790dc08ae1b56d95a3fa34ee59b6219f37a4a7c9624a4211d84d5a0aeb8dda90e9da990c7348cbc9836ffd80b22d0188650408fcb25798d696dc5329eb07801916b4cf982e8c8c13a52208b1cdac18d570c1ebf48f64875e941d154450aed23268accc92aedfaeb594976460818b96ce3cdfe561b06085776d51fa98dfef254ed90e79db173f93add58aa6fbd4fb76297df939f0e49e8f680689df874fbd980f2555c9d7b07960c4a0865a843ef0c9b3002077f6040e9091f445d6b4870f6a00fb7f4dc93fd603c1c3fa0d8203675c2c4745063cf23cc1cc0d6a7c033c72a449a86d0519647b4f8d416dbf20a1f6c9fb043444e90425aa560f2835b1e1222e29ec255e3e1e0470f55a34b4ca9c559126375788f27397abac87560219f9eca748ff9f86e80649997e908cc2d4f67e4728c5a9a9f1baff0faf7a4171c79e0c54ebe2e8205d42894e2a16123aef41395571ae9fc8212b20dfd04000000000000000050000910000000000000080060000910000000000000c60070000910000000000002050080000910010000000000020500bde6c15ee697d2541711d8f587dc89783ef33b6a7fe0c054ec9d64b4db8c8bedca0dc3c888a651a8169a39bef0739b6f7dc047deced6be263bbc081d1278acfa2dee592c331a1bb1cd6cbf4ef43f3fe15ee438719672208432f8573637aa64d8076e6974726f2d3101010135308201313081e4a003020102020200ca300506032b65703020311e301c060355040313157369676e6572207465737420636c69656e74204341301e170d3233313131343232313332305a170d3333303531383033333332305a3020311e301c060355040313157369676e6572207465737420636c69656e74204341302a300506032b6570032100466627d52773c9d5cda6c8fd28ea31ec7b94e68aa8d42e2ad31a75dc8d24ed07a3423040300e0603551d0f0101ff040403020284300f0603551d130101ff040530030101ff301d0603551d0e04160414b4b7e4b5abbe6fd9732a30924a1584e0be8eefb1300506032b65700341008af58c4acdbf4b12de6603c4da7685de9a1c1db00b38cfd436318e011ccf7591aacdd0115067e99862264c90267344c917fdec43b2c9702886708e26635ca40e196c69646f2d7369676e65722d6d61726b732d6e6974726f2d310c65752d63656e7472616c2d31000c65752d63656e7472616c2d314e61726e3a6177733a6b6d733a65752d63656e7472616c2d313a3131313132323232333333333a6b65792f30623666346337652d353861312d346333392d396432652d356630613865336237633431011e7369676e65722d322e6578616d706c652e696e7465726e616c3a39343433",
+    "policy_root": "0xa83d23474da7d231085ee2800d49c7b318d356592551b061ad0c346ae04f5203",
+    "platform_salt": "0x2dee592c331a1bb1cd6cbf4ef43f3fe15ee438719672208432f8573637aa64d8",
+    "private_part": "0x076e6974726f2d3101010135308201313081e4a003020102020200ca300506032b65703020311e301c060355040313157369676e6572207465737420636c69656e74204341301e170d3233313131343232313332305a170d3333303531383033333332305a3020311e301c060355040313157369676e6572207465737420636c69656e74204341302a300506032b6570032100466627d52773c9d5cda6c8fd28ea31ec7b94e68aa8d42e2ad31a75dc8d24ed07a3423040300e0603551d0f0101ff040403020284300f0603551d130101ff040530030101ff301d0603551d0e04160414b4b7e4b5abbe6fd9732a30924a1584e0be8eefb1300506032b65700341008af58c4acdbf4b12de6603c4da7685de9a1c1db00b38cfd436318e011ccf7591aacdd0115067e99862264c90267344c917fdec43b2c9702886708e26635ca40e196c69646f2d7369676e65722d6d61726b732d6e6974726f2d310c65752d63656e7472616c2d31000c65752d63656e7472616c2d314e61726e3a6177733a6b6d733a65752d63656e7472616c2d313a3131313132323232333333333a6b65792f30623666346337652d353861312d346333392d396432652d356630613865336237633431011e7369676e65722d322e6578616d706c652e696e7465726e616c3a39343433",
+    "platform_commitment": "0x3a76a4baa0458c96d47ce8f8688255929f8fa6cc71bd019ad3bc8f9f2e7e660a",
+    "setup_hash": "0x163ef4688d2e8af81078925a612a6932680efd8aeb40dd838baff70bcd9e9738"
+  },
+  "nitro_attest": {
+    "user_data_input": "0x00177369676e65722d72756e6e65722d6174746573742d76310020b62aeea2fa498126b5d7f26eb0f9fb4b52f0e4bc17426cfc0ca46ef3620ad244163ef4688d2e8af81078925a612a6932680efd8aeb40dd838baff70bcd9e97380000000000000001e46bd999375630631dcd3b33eae3c5af0f922bfb66426b2c4b611457b85a14290000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000f62a7e72ac6b0fdb67f189d63d2208bd375d0a024d5a3b26107b30b746861dc10000000000000001a296def1b3badf70e688f792f3a3264cb362175a7ba0c726b2fb7b0f2823693d000000006b49d45831726202d9e367c1457326d554ff5aa2c14b3e1bd3834ca248b40a64b5a7b8b5029d204cecf872f829e68b65c8d75527e37f303ad8c88a9f1ae354a5cb8f186dff000000006b49e010261669a6444b1416335d7a49d9f28b25dac0a79e027a8fa0618985db379c21600000000300000000b81857152089ec219cf3e06b43929be5c23a61a49cc326bf1bb0c8c7baaf654903d285c4586ebe8a37e2b433c185722365e0cc1d4e65d6b611983d3f1b6ee6fb",
+    "user_data": "0xc60794ed0a480d1c79d75835094b9a11d83a3d715da57949c8082b1897467122"
+  },
+  "nitro_public_outputs": {
+    "challenge_root": "0xb62aeea2fa498126b5d7f26eb0f9fb4b52f0e4bc17426cfc0ca46ef3620ad244",
+    "policy_root": "0xa83d23474da7d231085ee2800d49c7b318d356592551b061ad0c346ae04f5203",
+    "platform_commitment": "0x3a76a4baa0458c96d47ce8f8688255929f8fa6cc71bd019ad3bc8f9f2e7e660a",
+    "config_state": "0x0000000000000001e46bd999375630631dcd3b33eae3c5af0f922bfb66426b2c4b611457b85a14290000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000f62a7e72ac6b0fdb67f189d63d2208bd375d0a024d5a3b26107b30b746861dc10000000000000001a296def1b3badf70e688f792f3a3264cb362175a7ba0c726b2fb7b0f2823693d000000006b49d45831726202d9e367c1457326d554ff5aa2c14b3e1bd3834ca248b40a64b5a7b8b5029d204cecf872f829e68b65c8d75527e37f303ad8c88a9f1ae354a5cb8f186dff000000006b49e010261669a6444b1416335d7a49d9f28b25dac0a79e027a8fa0618985db379c2160",
+    "key_origin": "0x0000000300000000b81857152089ec219cf3e06b43929be5c23a61a49cc326bf1bb0c8c7baaf6549"
+  },
+  "measurement": {
+    "nitro": {
+      "platform": 1,
+      "value": "0xd229084ea0cf677d2382e7c1c2f1610831093820be6dba5d3eaecb08f78695ebbae4c2ebc8b6acf0201f360376523706aff7958597cda0d4325a73031a460625080e3b1cef54a0961a38d207babca66e5e2aa9c0df7a4f9d360f6b7d3a60a499b8f9bcabde8985c3ab43e3bec785139033c4bf7386ed48bd7b899d57275659124a59e932d5547d8812cc8f05cbb6d459",
+      "input": "0x00157369676e65722d6d6561737572656d656e742d763101d229084ea0cf677d2382e7c1c2f1610831093820be6dba5d3eaecb08f78695ebbae4c2ebc8b6acf0201f360376523706aff7958597cda0d4325a73031a460625080e3b1cef54a0961a38d207babca66e5e2aa9c0df7a4f9d360f6b7d3a60a499b8f9bcabde8985c3ab43e3bec785139033c4bf7386ed48bd7b899d57275659124a59e932d5547d8812cc8f05cbb6d459",
+      "measurement": "0xe6256b97d029e63dcd07140d8a5ca42c32a8cda19b8f21a7dc011934c6ee0f96"
+    },
+    "azure": {
+      "platform": 2,
+      "value": "0x9702d5f073c85661627cb9456c8f220dec7d23cf5969b7808c012cd9cde3822d",
+      "input": "0x00157369676e65722d6d6561737572656d656e742d7631029702d5f073c85661627cb9456c8f220dec7d23cf5969b7808c012cd9cde3822d",
+      "measurement": "0xdaf8d94919452340007a1bff4c6d4905a04b28559fb229e95fbf50ef1ef2d869"
+    },
+    "gcp": {
+      "platform": 3,
+      "value": "0xfcb0510e4bb3a34f86a365f43d9a8b6a1212e2859b31438349f231f421da40cb",
+      "input": "0x00157369676e65722d6d6561737572656d656e742d763103fcb0510e4bb3a34f86a365f43d9a8b6a1212e2859b31438349f231f421da40cb",
+      "measurement": "0x49f38925647dca7ef68ec4c0671968926c50907bef9baf9acd05095838359be5"
+    }
+  },
+  "keygen_orders": {
+    "key_orders": [
+      "0x7dd5b1a3887bca7880be0e706fa5dc1c02057b33ed5e1398ea552495e7947aa6",
+      "0x9859e1b4ab775e42912ff8abdeb55250002218d0dec83899080cdbae6a6429ed",
+      "0x7dd5b1a3887bca7880be0e706fa5dc1c02057b33ed5e1398ea552495e7947aa6"
+    ],
+    "input": "0x00177369676e65722d6b657967656e2d6f72646572732d7631000000027dd5b1a3887bca7880be0e706fa5dc1c02057b33ed5e1398ea552495e7947aa69859e1b4ab775e42912ff8abdeb55250002218d0dec83899080cdbae6a6429ed",
+    "keygen_orders_hash": "0x183eca2f8de5455864912f67b4b16ad417844c78d2b38665d66e6d53ba4075dc"
+  },
+  "key_release": {
+    "nitro": {
+      "platform": 1,
+      "fields": [
+        {
+          "name": "arn",
+          "value": "0x61726e3a6177733a6b6d733a65752d776573742d313a3131313132323232333333333a6b65792f31323334616263642d313261622d333463642d353665662d313233343536373839306162"
+        },
+        {
+          "name": "origin",
+          "value": "0x4157535f4b4d53"
+        },
+        {
+          "name": "key_manager",
+          "value": "0x435553544f4d4552"
+        },
+        {
+          "name": "multi_region",
+          "value": "0x00"
+        },
+        {
+          "name": "policy",
+          "value": "0x7b2256657273696f6e223a22323031322d31302d3137222c224964223a227369676e65722d72756e6e65722d656e636c617665222c2253746174656d656e74223a5b7b22536964223a22456e636c6176654f6e6c79446174614b657973222c22456666656374223a22416c6c6f77222c225072696e636970616c223a7b22415753223a2261726e3a6177733a69616d3a3a3131313132323232333333333a726f6c652f7369676e65722d706172656e74227d2c22416374696f6e223a5b226b6d733a44656372797074222c226b6d733a47656e6572617465446174614b6579225d2c225265736f75726365223a222a222c22436f6e646974696f6e223a7b22537472696e67457175616c7349676e6f726543617365223a7b226b6d733a526563697069656e744174746573746174696f6e3a50435230223a22616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162227d7d7d5d7d"
+        }
+      ],
+      "input": "0x00157369676e65722d6b65792d72656c656173652d7631010000004b61726e3a6177733a6b6d733a65752d776573742d313a3131313132323232333333333a6b65792f31323334616263642d313261622d333463642d353665662d313233343536373839306162000000074157535f4b4d5300000008435553544f4d455200000001000000019f7b2256657273696f6e223a22323031322d31302d3137222c224964223a227369676e65722d72756e6e65722d656e636c617665222c2253746174656d656e74223a5b7b22536964223a22456e636c6176654f6e6c79446174614b657973222c22456666656374223a22416c6c6f77222c225072696e636970616c223a7b22415753223a2261726e3a6177733a69616d3a3a3131313132323232333333333a726f6c652f7369676e65722d706172656e74227d2c22416374696f6e223a5b226b6d733a44656372797074222c226b6d733a47656e6572617465446174614b6579225d2c225265736f75726365223a222a222c22436f6e646974696f6e223a7b22537472696e67457175616c7349676e6f726543617365223a7b226b6d733a526563697069656e744174746573746174696f6e3a50435230223a22616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162227d7d7d5d7d",
+      "key_release_hash": "0x6ceea0d8c8c1c1a7c68ff80ba65d97b175e146984839868dca1104cc9c154835"
+    },
+    "azure": {
+      "platform": 2,
+      "fields": [
+        {
+          "name": "kid",
+          "value": "0x68747470733a2f2f7369676e65722d706f632d6b762e7661756c742e617a7572652e6e65742f6b6579732f7369676e65722d312f3031323334353637383961626364656630313233343536373839616263646566"
+        },
+        {
+          "name": "exportable",
+          "value": "0x01"
+        },
+        {
+          "name": "immutable",
+          "value": "0x01"
+        },
+        {
+          "name": "content_type",
+          "value": "0x6170706c69636174696f6e2f6a736f6e3b20636861727365743d7574662d38"
+        },
+        {
+          "name": "policy",
+          "value": "0x7b2276657273696f6e223a22312e302e30222c22616e794f66223a5b7b22617574686f72697479223a2268747470733a2f2f7368617265647765752e7765752e6174746573742e617a7572652e6e6574222c22616c6c4f66223a5b7b22636c61696d223a22782d6d732d736576736e70766d2d686f737464617461222c22657175616c73223a2263646364636463646364636463646364636463646364636463646364636463646364636463646364636463646364636463646364636463646364636463646364227d5d7d5d7d"
+        }
+      ],
+      "input": "0x00157369676e65722d6b65792d72656c656173652d7631020000005468747470733a2f2f7369676e65722d706f632d6b762e7661756c742e617a7572652e6e65742f6b6579732f7369676e65722d312f3031323334353637383961626364656630313233343536373839616263646566000000010100000001010000001f6170706c69636174696f6e2f6a736f6e3b20636861727365743d7574662d38000000cd7b2276657273696f6e223a22312e302e30222c22616e794f66223a5b7b22617574686f72697479223a2268747470733a2f2f7368617265647765752e7765752e6174746573742e617a7572652e6e6574222c22616c6c4f66223a5b7b22636c61696d223a22782d6d732d736576736e70766d2d686f737464617461222c22657175616c73223a2263646364636463646364636463646364636463646364636463646364636463646364636463646364636463646364636463646364636463646364636463646364227d5d7d5d7d",
+      "key_release_hash": "0xb0a82f8bd4be8589200ff1f78df5963713e94d91f15553223d86468b4345018b"
+    }
+  }
+}

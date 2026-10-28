@@ -1,0 +1,42 @@
+signer-setup-v1
+signer-config-update-v1
+signer-handover-order-v1
+signer-dkg-order-v1
+signer-pause-v1
+signer-runner-identity-v1
+signer-mark-v1
+signer-mark-key-v1
+signer-mark-hint-v1
+signer-share-v1
+signer-runner azure sealing v1
+signer-runner azure key wrap v1
+signer-ta-policy-v1
+signer-ta-exit-approval-v1
+signer-ta-pause-v1
+signer-ta-resume-v1
+signer-chain-v1
+signer-approver-set-v1
+signer-state-v1
+signer-state-key-v1
+signer-runner-attest-v1
+signer-runner gcp sealing v1
+signer-runner gcp key wrap v1
+signer-policy-leaf-v1
+signer-policy-node-v1
+signer-policy-root-v1
+signer-platform-commitment-v1
+signer-keygen-orders-v1
+signer-key-release-v1
+signer-handover-share-v1
+signer-handover-origin-v1
+signer-handover-origin-key-v1
+signer-import-order-v1
+signer-import-commitments-v1
+signer-config-update-hash-v1
+signer-dkg-order-hash-v1
+signer-handover-order-hash-v1
+signer-import-order-hash-v1
+signer-ta-exit-approval-hash-v1
+signer-handover-carry-v1
+signer-dkg-hello-v1
+signer-dkg-operator-v1
