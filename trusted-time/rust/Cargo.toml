@@ -16,6 +16,7 @@ rust-version = "1.94"
 publish = false
 
 [package]
+license = "GPL-3.0-only"
 name = "signer-nts"
 version.workspace = true
 edition.workspace = true
