@@ -70,3 +70,7 @@ The signer-core vector suites need the pinned test vectors:
 `signer-core/scripts/fetch.sh` downloads them, or `VECTORS_DIR` names a copy.
 Without network, set `NO_NETWORK=1` and `GOPROXY=off` and use a filled Go module
 cache. `make loc` prints code line counts per module and per runner build.
+
+## License
+
+Apache License 2.0 (`Apache-2.0`), see [LICENSE](LICENSE). Vendored third-party code keeps its own license in its folder.
