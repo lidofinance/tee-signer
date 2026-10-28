@@ -4,7 +4,6 @@ package clock
 
 import (
 	"context"
-	"crypto/x509"
 	"errors"
 	"math"
 	"net"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/lidofinance/tee-signer/trusted-time/nts"
 	"github.com/lidofinance/tee-signer/trusted-time/nts/ntstest"
+	ntscore "github.com/lidofinance/tee-signer/trusted-time/ntscore/go"
 )
 
 // coarseClock plays the HTTPS-date quorum: the host clock plus Skew, or Err.
@@ -43,7 +43,7 @@ func newServers(t *testing.T, opts map[string]ntstest.NTPOptions, order ...strin
 	t.Helper()
 	var out []*fakeServer
 	for _, op := range order {
-		cert, pool, err := ntstest.Certificate("nts.test", time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+		cert, pool, err := ntstest.CertificatePEM("nts.test", time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -225,8 +225,8 @@ func TestNTSClockCoarseCheck(t *testing.T) {
 			}
 		}
 	}
-	if !coarseRefused(31*time.Second, NTSMaxCoarseDiff, NTSCoarseResolution) || coarseRefused(30999*time.Millisecond, NTSMaxCoarseDiff, NTSCoarseResolution) ||
-		!coarseRefused(-30001*time.Millisecond, NTSMaxCoarseDiff, NTSCoarseResolution) || coarseRefused(-30*time.Second, NTSMaxCoarseDiff, NTSCoarseResolution) {
+	if !ntscore.CoarseRefused(31*time.Second, NTSMaxCoarseDiff, NTSCoarseResolution) || ntscore.CoarseRefused(30999*time.Millisecond, NTSMaxCoarseDiff, NTSCoarseResolution) ||
+		!ntscore.CoarseRefused(-30001*time.Millisecond, NTSMaxCoarseDiff, NTSCoarseResolution) || ntscore.CoarseRefused(-30*time.Second, NTSMaxCoarseDiff, NTSCoarseResolution) {
 		t.Fatal("limits of the coarse check")
 	}
 	// No coarse time at all: no NTS-KE, no time.
@@ -400,10 +400,19 @@ func TestNTSClockNTSNRunsKeyExchangeAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 	fs[0].store.Forget()
-	time.Sleep(60 * time.Millisecond)
-	_ = refresh(t, n) // a gets NTSN, the quorum uses its earlier sample
-	if k := n.Status().Peers["a"].Stats.Kisses["NTSN"]; k != 1 {
-		t.Fatalf("NTSN count %d", k)
+	// RFC 8915 section 5.7: an NTSN is not authenticated, so a keeps
+	// polling with the cookies it holds, one per poll, and runs NTS-KE
+	// again only when they run out; the quorum uses its earlier sample
+	// meanwhile.
+	for i := 1; i <= 8; i++ {
+		time.Sleep(60 * time.Millisecond)
+		_ = refresh(t, n)
+		if k := n.Status().Peers["a"].Stats.Kisses["NTSN"]; k != i {
+			t.Fatalf("poll %d: NTSN count %d", i, k)
+		}
+		if s := fs[0].ke.Sessions.Load(); s != 1 {
+			t.Fatalf("poll %d: NTS-KE ran again with cookies left", i)
+		}
 	}
 	time.Sleep(60 * time.Millisecond)
 	if err := refresh(t, n); err != nil {
@@ -411,6 +420,32 @@ func TestNTSClockNTSNRunsKeyExchangeAgain(t *testing.T) {
 	}
 	if s := fs[0].ke.Sessions.Load(); s != 2 {
 		t.Fatalf("NTS-KE sessions with a: %d, want 2", s)
+	}
+	if n.Status().Peers["a"].Sample == nil {
+		t.Fatal("no sample from a after the new key exchange")
+	}
+}
+
+// A forged Kiss-o'-Death, one without an authenticator, is counted and
+// changes nothing else: the server is not disabled, its poll is not
+// doubled, and its next poll takes a sample again.
+func TestNTSClockIgnoresForgedKiss(t *testing.T) {
+	fs := newServers(t, map[string]ntstest.NTPOptions{"d": {Kiss: "DENY", KissPlain: true}}, "a", "b", "c", "d")
+	n := newNTS(fs, &coarseClock{})
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	st := n.Status()
+	if p := st.Peers["d"]; p.Disabled != "" || p.Poll != 50*time.Millisecond || p.Stats.Kisses["DENY"] != 1 || p.Sample != nil {
+		t.Fatalf("after a forged DENY: %+v", p)
+	}
+	fs[3].ntp.Set(opt(ntstest.NTPOptions{}))
+	time.Sleep(60 * time.Millisecond)
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	if p := n.Status().Peers["d"]; p.Sample == nil || fs[3].ke.Sessions.Load() != 1 {
+		t.Fatalf("after the forged DENY the server was not asked again: %+v, sessions %d", p, fs[3].ke.Sessions.Load())
 	}
 }
 
@@ -566,39 +601,95 @@ func opt(o ntstest.NTPOptions) ntstest.NTPOptions {
 	return o
 }
 
-// Without a coarse time the certificate clock gives the zero time, and
-// KeyExchange refuses it before it dials: the cause shows in the error,
-// and no certificate is checked at the system clock.
+// A coarse reading that is no time (not after nts.FloorTime: a host clock
+// reset to 2000, say) dates no certificate: the core refuses the key
+// exchange before the host dials, the cause shows in the error, and no
+// certificate is checked at the host's clock. With a good reading the same
+// servers give a time.
 func TestNTSCertificateClockWithoutCoarseTime(t *testing.T) {
-	n := &NTS{Coarse: &coarseClock{Err: errors.New("no coarse reading")}}
-	if got := n.certTime(); !got.IsZero() {
-		t.Fatalf("certificate time without a coarse reading: %v", got)
+	for _, at := range []time.Time{time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), nts.FloorTime.Add(-time.Minute)} {
+		fs := newServers(t, nil, "a", "b", "c")
+		n := newNTS(fs, &coarseClock{Skew: at.Sub(testClock())})
+		var dials atomic.Int64
+		n.Dial = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if network == "tcp" {
+				dials.Add(1)
+			}
+			var d net.Dialer
+			return d.DialContext(ctx, network, addr)
+		}
+		err := refresh(t, n)
+		if err == nil || !strings.Contains(err.Error(), "no trusted time") {
+			t.Fatalf("coarse time %v: %v", at, err)
+		}
+		if dials.Load() != 0 || fs[0].ke.Sessions.Load() != 0 {
+			t.Fatalf("coarse time %v: %d dials, %d sessions", at, dials.Load(), fs[0].ke.Sessions.Load())
+		}
+		if p := n.Status().Peers["a"]; p.Stats.KEFail != 1 || !strings.Contains(p.LastErr, "no trusted time") {
+			t.Fatalf("coarse time %v: peer %+v", at, p)
+		}
 	}
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
+	fs := newServers(t, nil, "a", "b", "c")
+	if err := refresh(t, newNTS(fs, &coarseClock{})); err != nil {
 		t.Fatal(err)
 	}
-	defer l.Close()
-	dialed := make(chan struct{}, 1)
-	go func() {
-		if c, err := l.Accept(); err == nil {
-			dialed <- struct{}{}
-			c.Close()
-		}
-	}()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	_, err = nts.KeyExchange(ctx, nts.KEConfig{Host: "nts.test", Addr: l.Addr().String(), Roots: x509.NewCertPool(), Time: n.certTime})
-	if err == nil || !strings.Contains(err.Error(), "no trusted time") {
-		t.Fatalf("key exchange without a coarse time: %v", err)
+}
+
+// An authenticated DENY costs the server maxPoll of silence and a new key
+// exchange, not the rest of the process: before maxPoll it is not asked,
+// after maxPoll it is asked again through NTS-KE, and a good answer clears
+// Disabled, halves the poll back and puts the server into the quorum.
+func TestNTSClockDenyServerComesBackAfterMaxPoll(t *testing.T) {
+	fs := newServers(t, map[string]ntstest.NTPOptions{"deny": {Kiss: "DENY"}}, "a", "b", "c", "deny")
+	n := newNTS(fs, &coarseClock{})
+	n.maxPoll = 100 * time.Millisecond
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
 	}
-	select {
-	case <-dialed:
-		t.Fatal("key exchange dialed without a certificate time")
-	case <-time.After(100 * time.Millisecond):
+	p := n.Status().Peers["deny"]
+	if p.Disabled != "DENY" || p.Poll != 100*time.Millisecond || p.Sample != nil || p.Stats.Kisses["DENY"] != 1 || fs[3].ke.Sessions.Load() != 1 {
+		t.Fatalf("after DENY: %+v, sessions %d", p, fs[3].ke.Sessions.Load())
 	}
-	n.Coarse = &coarseClock{}
-	if got := n.certTime(); got.Year() < 2026 {
-		t.Fatalf("certificate time with a coarse reading: %v", got)
+	// The server answers again, but it is not asked before maxPoll.
+	fs[3].ntp.Set(opt(ntstest.NTPOptions{}))
+	time.Sleep(60 * time.Millisecond)
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
 	}
+	if r := fs[3].ntp.Requests.Load(); r != 1 || n.Status().Peers["deny"].Disabled != "DENY" || len(n.Status().Members) != 3 {
+		t.Fatalf("before maxPoll: %d requests, %+v", r, n.Status().Peers["deny"])
+	}
+	time.Sleep(60 * time.Millisecond)
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	st := n.Status()
+	p = st.Peers["deny"]
+	if p.Disabled != "" || p.Sample == nil || p.Poll != 50*time.Millisecond || fs[3].ke.Sessions.Load() != 2 || fs[3].ntp.Requests.Load() != 2 || len(st.Members) != 4 {
+		t.Fatalf("after maxPoll: %+v, sessions %d, requests %d, members %v", p, fs[3].ke.Sessions.Load(), fs[3].ntp.Requests.Load(), st.Members)
+	}
+}
+
+// A query gets half the Interval when that is shorter than the exchange
+// timeout: a server that never answers costs a refresh about Interval/2
+// (here 100 ms, not the 5 s exchange timeout), the query is counted as an
+// error, and the other servers form the quorum meanwhile.
+func TestNTSClockQueryTimeoutIsHalfTheInterval(t *testing.T) {
+	fs := newServers(t, map[string]ntstest.NTPOptions{"mute": {Drop: true}}, "a", "b", "c", "mute")
+	n := newNTS(fs, &coarseClock{})
+	n.Interval = 200 * time.Millisecond
+	start := time.Now()
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	took := time.Since(start)
+	st := n.Status()
+	p := st.Peers["mute"]
+	if p.Sample != nil || p.LastErr == "" || p.Stats.Queries != 1 || p.Stats.Errors != 1 || len(st.Members) != 3 {
+		t.Fatalf("mute server: %+v, members %v", p, st.Members)
+	}
+	if took < 100*time.Millisecond || took >= ntsExchangeTimeout/2 {
+		t.Fatalf("refresh with a mute server took %v, want about %v", took, n.interval()/2)
+	}
+	t.Logf("refresh took %v, mute: %s", took, p.LastErr)
 }

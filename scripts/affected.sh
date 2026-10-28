@@ -12,8 +12,9 @@
 #              modules of this repo that its go.mod names in a require or
 #              replace line, and on theirs in turn.
 #   ALL        a shared input changed: Makefile, scripts/, devkit/,
-#              .github/, go.work*, signer-core/, markformat/, the Rust code
-#              of trusted-time, any C or Rust file, or a file in no module.
+#              .github/, go.work*, signer-core/, markformat/, any C file
+#              (the NTS core of trusted-time among them), or a file in no
+#              module.
 #              Also when the diff cannot be made, and when CI_ALL=1 or
 #              FUZZ_ALL=1.
 # The reason goes to stderr. The C fuzz targets run only on ALL.
@@ -47,8 +48,8 @@ while IFS= read -r f; do
   case "$f" in
     *.md | docs/* | LICENSE | CODEOWNERS | .github/CODEOWNERS) continue ;;
     Makefile | scripts/* | devkit/* | .github/* | go.work*) all "$f is a shared input" ;;
-    signer-core/* | markformat/* | trusted-time/rust/* | trusted-time/toolchain/*) all "$f is a shared input" ;;
-    *.c | *.h | *.S | *.rs | Cargo.* | */Cargo.*) all "$f is C or Rust code" ;;
+    signer-core/* | markformat/*) all "$f is a shared input" ;;
+    *.c | *.h | *.S) all "$f is C code" ;;
   esac
   mod="${f%%/*}"
   # A tool under tooling/ is a module of its own: tooling/<name>.

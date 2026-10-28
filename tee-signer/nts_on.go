@@ -13,12 +13,12 @@ import (
 	"github.com/lidofinance/tee-signer/trusted-time/nts"
 )
 
-// A runner built with -tags nts links the Rust NTS library (nts/) and has
+// A runner built with -tags nts has the NTS client (trusted-time/nts) and
 // the NTS clock (platforms_nts.go, RUNNER_NTS_CLOCK=1). Two flags of its own,
 // each alone on the command line, run a check and exit:
 //
-//	runner -nts-selftest     prints the library version and runs its AES-SIV
-//	                         self-test: the library is in the binary and runs
+//	runner -nts-selftest     prints the client version and runs its AES-SIV
+//	                         self-test: the client is in the binary and runs
 //	                         on this architecture. No network.
 //	runner -nts-clock-check  one round of the NTS clock as the runner would run
 //	                         it: the HTTPS-date coarse reading
