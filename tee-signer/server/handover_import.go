@@ -1,13 +1,13 @@
-//go:build (peer_azure || peer_aws || peer_gcp || peer_dev) && !debugimport
+//go:build !debugimport
 
 // IMPORT_HANDOVER, the target side of HANDOVER. The source
 // (handover_source.go) checked this runner's attested identity and published setup against an
 // approver-signed handover order, wrote the tombstone that names this
 // runner's setup_hash and sealed its shares to this boot's import key. The
-// operator's tool (runner/cmd/handover-target) passes the sealed pages on
-// with the order. Only a build with key generation serves it: the
-// verifiers of the source's origin proof are the ones of DKG peers
-// (attest/runnerclient, peer_* tags).
+// operator's tool (signer-admin/cmd/handover-target) passes the sealed pages
+// on with the order. Every release build with a setup serves it: the
+// verifier of the source's origin proof is the one of this runner's own
+// platform (attestation-verify/runnerclient, tag verifierselect).
 //
 // Each request is checked in full, and refused with nothing stored when a
 // check fails:
@@ -21,15 +21,16 @@
 //     groups at version 0, nothing pending, handover_generation 2 or more,
 //     max_keys at least the source's total. It writes the order into the
 //     order slot of the mark log's state (importslot.go): from then on the
-//     runner signs nothing, takes no other share, no config update and no
-//     DKG order until the import ends, also after a restart. Later requests
+//     runner signs nothing, takes no other share and no config update
+//     until the import ends, also after a restart. Later requests
 //     must name the same order, and need no approvals in force again;
 //   - every request of this process carries the same mark;
 //   - the source's origin proof verifies with the verifier and image the
 //     order names for the source, over the order hash and the origin key,
-//     and every share's header verifies under that key. Then a share made
-//     in key generation counts as generated, with its DKG order hash; any
-//     other as imported. A build without the source's verifier, or the dev
+//     and every share's header verifies under that key. Then a share the
+//     source holds as generated (made inside a runner of an earlier build)
+//     keeps that origin and its order hash; any other counts as imported. A
+//     build without the source's verifier, or the dev
 //     verifier off the dev platform, refuses, unless the request asks to
 //     count every share as imported (ImportAsImported);
 //   - every share opens with this boot's import key under its header and,
@@ -61,11 +62,11 @@ import (
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
 	"github.com/lidofinance/tee-signer/devkit/lockorder"
+	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/slashing-log"
 	"github.com/lidofinance/tee-signer/tee-signer/handover"
-	"github.com/lidofinance/tee-signer/tee-signer/handoverorder"
 )
 
 // HandoverImportOptions configure EnableHandoverImport.
@@ -75,8 +76,7 @@ type HandoverImportOptions struct {
 	VerifierOptions []runnerclient.Option
 	// LimitedEgress and PeerEndpoints: on a runner that reaches only its
 	// setup's peer hosts (setup.PeerEgress), every host the source's
-	// verifier fetches a key set from must be one of them, as for DKG
-	// peers.
+	// verifier fetches a key set from must be one of them.
 	LimitedEgress bool
 	PeerEndpoints []string
 }
@@ -167,7 +167,7 @@ func (im *importer) sourceVerifier(b *handoverorder.Body, hash [32]byte) (runner
 		return v, nil
 	}
 	p := b.Source
-	a := runnerclient.OrderAttestation(&p)
+	a := runnerclient.RunnerAttestation(&p)
 	switch {
 	case !runnerclient.Available(a.Verifier):
 		return nil, fmt.Errorf("the source's verifier %q is not built into this runner", a.Verifier)
@@ -254,7 +254,7 @@ func (im *importer) checkStart(total uint32) error {
 // signs nothing until the import ends. The caller holds slotMu. It holds
 // the share lock while it writes, so a share that another path (a sealed
 // import, key generation) stores either comes first and stops the start,
-// or finds the slot set and is refused (addShareOf, AddGeneratedShares):
+// or finds the slot set and is refused (addShareOf):
 // the end of the import counts the runner's keys, which must all be the
 // order's.
 func (im *importer) start(ctx context.Context, hash [32]byte, total uint32) error {

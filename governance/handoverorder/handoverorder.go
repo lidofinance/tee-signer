@@ -5,9 +5,8 @@
 // shares to.
 //
 // It follows the rules of package setupwire (fixed binary form, strict
-// decoder, a human form for people), as governance/dkgorder does, and names
-// each runner the way a DKG order names a participant (dkgorder
-// AppendSettings).
+// decoder, a human form for people). A runner's settings (runner.go) are
+// the verifier, the image and what that verifier needs.
 //
 //	body   = 'H' version:u8(1) cluster_id[32] chain_hash[32] not_after:u64
 //	         source target
@@ -46,7 +45,6 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/lidofinance/tee-signer/governance/dkgorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 )
 
@@ -59,10 +57,6 @@ const (
 	kindBody  = 'H'
 	kindOrder = 'T'
 )
-
-// Runner is the source or the target of an order: a DKG order participant
-// without an operator key (dkgorder.Participant with OperatorKey zero).
-type Runner = dkgorder.Participant
 
 // Body is what the approvers sign.
 type Body struct {
@@ -88,9 +82,6 @@ func checkRunner(what string, r *Runner) error {
 	}
 	if r.SetupHash == ([32]byte{}) {
 		return fmt.Errorf("handover order: %s: setup_sha256 is zero", what)
-	}
-	if r.OperatorKey != ([32]byte{}) {
-		return fmt.Errorf("handover order: %s: an operator key does not apply", what)
 	}
 	return nil
 }
@@ -119,7 +110,7 @@ func appendRunner(p []byte, r *Runner) []byte {
 	p = append(p, uint8(len(r.Name)))
 	p = append(p, r.Name...)
 	p = append(p, r.SetupHash[:]...)
-	return dkgorder.AppendSettings(p, r)
+	return appendSettings(p, r)
 }
 
 // Encode checks the body and returns the bytes the approvers sign.
@@ -175,7 +166,7 @@ func readRunner(p []byte, r *Runner) ([]byte, error) {
 		return nil, err
 	}
 	copy(r.SetupHash[:], h)
-	return dkgorder.ReadSettings(p, r)
+	return readSettings(p, r)
 }
 
 // DecodeBody reads a body strictly: it refuses input above MaxSize, a kind

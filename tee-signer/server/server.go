@@ -426,7 +426,7 @@ func (s *Server) dispatch(ctx context.Context, f wire.Frame) ([]byte, error) {
 	case handover.Type, handover.TypeOrder:
 		if s.handoverSrc == nil {
 			return nil, backend.Refused(backend.StatusUnsupported,
-				"this runner hands over to no one: HANDOVER needs a runner with a setup and the mark log, built with key generation (peer_* tags), whose verifiers check the target's attestation")
+				"this runner hands over to no one: HANDOVER needs a release build with a setup and the mark log, whose verifier checks the target's attestation")
 		}
 		if f.Type == handover.TypeOrder {
 			return s.handoverSrc.order(ctx, f.Payload)

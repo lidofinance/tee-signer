@@ -8,9 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lidofinance/tee-signer/governance/dkgorder"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
-	"github.com/lidofinance/tee-signer/tee-signer/handover"
 )
 
 // TypeOrder is HANDOVER_ORDER: the signed order in, its State out. Any
@@ -18,7 +16,7 @@ import (
 // carry the authority. Pushing it again does no harm and reads the state.
 // The number lives in backend/handover, which a runner without key
 // generation links.
-const TypeOrder wire.MsgType = handover.TypeOrder
+const TypeOrder wire.MsgType = 0x31
 
 // Outcomes of HANDOVER_ORDER.
 const (
@@ -142,7 +140,7 @@ func formatBody(w *strings.Builder, b *Body) {
 		note("%s", r.note)
 		kv(r.pre+"name", r.r.Name)
 		kv(r.pre+"setup_sha256", hexOf(r.r.SetupHash[:]))
-		w.WriteString(dkgorder.FormatSettings(r.pre, r.r))
+		w.WriteString(FormatSettings(r.pre, r.r))
 	}
 }
 

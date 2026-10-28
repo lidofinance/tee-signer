@@ -4,13 +4,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
 	"github.com/lidofinance/tee-signer/tee-signer/handover"
-	"github.com/lidofinance/tee-signer/tee-signer/handoverorder"
 )
 
-// A runner without the source side on (no setup, or a build without key
-// generation) hands over to no one: HANDOVER_ORDER
+// A runner without the source side on (no setup, or a debug build) hands
+// over to no one: HANDOVER_ORDER
 // and HANDOVER are UNSUPPORTED (handover.go).
 func TestHandoverNotBuiltIn(t *testing.T) {
 	s := shareServer(t, &shareStore{m: map[string][]byte{}}, [32]byte{1}, [32]byte{2})

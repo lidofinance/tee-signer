@@ -1,4 +1,4 @@
-//go:build !debugimport && !(peer_azure || peer_aws || peer_gcp || peer_dev)
+//go:build !debugimport
 
 // Release build: no plaintext share import. IMPORT_SHARE gets the same
 // answer as any message type the runner does not know. Shares arrive only

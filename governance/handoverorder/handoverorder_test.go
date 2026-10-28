@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lidofinance/tee-signer/governance/dkgorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 )
 
@@ -44,10 +43,10 @@ var sourceHash = [32]byte{0x51}
 // on the sample list.
 func sampleBody(s *setupwire.Setup) Body {
 	return Body{ClusterID: s.ClusterID, ChainHash: s.Chain.Hash(), NotAfter: 1_800_000_000,
-		Source: Runner{Name: "signer-2", SetupHash: sourceHash, Verifier: dkgorder.VerifierNitro,
+		Source: Runner{Name: "signer-2", SetupHash: sourceHash, Verifier: VerifierNitro,
 			Image: bytes.Repeat([]byte{0x12}, 144), NitroPCR3: [48]byte{0x33}},
-		Target: Runner{Name: "signer-2b", SetupHash: [32]byte{0x52}, Verifier: dkgorder.VerifierAzure,
-			Image: bytes.Repeat([]byte{0xaa}, 32), MAAHost: "sharedneu.neu.attest.azure.net", Compliance: dkgorder.ComplianceUVM}}
+		Target: Runner{Name: "signer-2b", SetupHash: [32]byte{0x52}, Verifier: VerifierAzure,
+			Image: bytes.Repeat([]byte{0xaa}, 32), MAAHost: "sharedneu.neu.attest.azure.net", Compliance: ComplianceUVM}}
 }
 
 // signed signs body with the approvers at these positions of the sample
@@ -65,12 +64,12 @@ func signed(t testing.TB, body Body, positions ...byte) *Order {
 func TestRoundTrip(t *testing.T) {
 	s := sampleSetup(t)
 	gcp := sampleBody(s)
-	gcp.Target = Runner{Name: "signer-3b", SetupHash: [32]byte{0x53}, Verifier: dkgorder.VerifierGCP,
+	gcp.Target = Runner{Name: "signer-3b", SetupHash: [32]byte{0x53}, Verifier: VerifierGCP,
 		Image: bytes.Repeat([]byte{0x77}, 32), GCPAudience: "signer-runner-identity", GCPHWModels: []string{"GCP_AMD_SEV"},
 		GCPIssuer: "https://confidentialcomputing.googleapis.com", GCPServiceAccount: "signer@p.iam.gserviceaccount.com", GCPProjectID: "p"}
 	dev := sampleBody(s)
-	dev.Source = Runner{Name: "dev-1", SetupHash: sourceHash, Verifier: dkgorder.VerifierDev}
-	dev.Target = Runner{Name: "dev-1b", SetupHash: [32]byte{0x54}, Verifier: dkgorder.VerifierDev}
+	dev.Source = Runner{Name: "dev-1", SetupHash: sourceHash, Verifier: VerifierDev}
+	dev.Target = Runner{Name: "dev-1b", SetupHash: [32]byte{0x54}, Verifier: VerifierDev}
 	for _, b := range []Body{sampleBody(s), gcp, dev} {
 		raw := must(b.Encode())
 		back, err := DecodeBody(raw)
@@ -113,7 +112,7 @@ func TestHash(t *testing.T) {
 	if Hash(raw) != must(b.Hash()) || Hash(raw) != setupwire.CtxHandoverOrder.Hash(raw) {
 		t.Fatal("hash")
 	}
-	if Hash(raw) == setupwire.CtxDKGOrder.Hash(raw) {
+	if Hash(raw) == setupwire.CtxImportOrder.Hash(raw) {
 		t.Fatal("the handover order hash is the DKG order's")
 	}
 }
@@ -145,8 +144,8 @@ func TestVerify(t *testing.T) {
 	// Under the DKG order's context: refused.
 	enc := must(body.Encode())
 	d := &Order{Body: body, Approvals: []setupwire.Approval{
-		{Position: 0, Signature: dkgorder.SignBody(approverKey(1), enc)},
-		{Position: 1, Signature: dkgorder.SignBody(approverKey(2), enc)}}}
+		{Position: 0, Signature: setupwire.SignApproval(approverKey(1), setupwire.CtxImportOrder, false, enc)},
+		{Position: 1, Signature: setupwire.SignApproval(approverKey(2), setupwire.CtxImportOrder, false, enc)}}}
 	if err := d.Verify(set); err == nil {
 		t.Fatal("an order signed under the DKG order context verified")
 	}
@@ -193,7 +192,7 @@ func TestScope(t *testing.T) {
 	if err := b.CheckImage(s.Locked.AllowedImageMeasurements, false); err != nil {
 		t.Fatal(err)
 	}
-	b.Target = Runner{Name: "dev-1b", SetupHash: [32]byte{0x54}, Verifier: dkgorder.VerifierDev}
+	b.Target = Runner{Name: "dev-1b", SetupHash: [32]byte{0x54}, Verifier: VerifierDev}
 	if err := b.CheckImage(s.Locked.AllowedImageMeasurements, false); err == nil || !strings.Contains(err.Error(), "dev runner") {
 		t.Fatalf("dev target on a cloud runner: %v", err)
 	}
@@ -234,7 +233,6 @@ func TestChecks(t *testing.T) {
 		{"target: setup_sha256 is zero", func(b *Body) { b.Target.SetupHash = [32]byte{} }},
 		{"source: setup_sha256 is zero", func(b *Body) { b.Source.SetupHash = [32]byte{} }},
 		{"same setup_sha256", func(b *Body) { b.Target.SetupHash = b.Source.SetupHash }},
-		{"an operator key does not apply", func(b *Body) { b.Target.OperatorKey = pub(approverKey(9)) }},
 		{"target: name", func(b *Body) { b.Target.Name = "has space" }},
 		{"target: image is 31 bytes", func(b *Body) { b.Target.Image = b.Target.Image[:31] }},
 		{"source: aws-nitro needs PCR3", func(b *Body) { b.Source.NitroPCR3 = [48]byte{} }},
@@ -339,7 +337,7 @@ func TestHashedSignature(t *testing.T) {
 	if err := o.Verify(set); err != nil {
 		t.Fatalf("hashed and direct: %v", err)
 	}
-	o.Approvals[0].Signature = setupwire.SignApproval(approverKey(1), setupwire.CtxDKGOrder, true, enc)
+	o.Approvals[0].Signature = setupwire.SignApproval(approverKey(1), setupwire.CtxImportOrder, true, enc)
 	if err := o.Verify(set); err == nil || !strings.Contains(err.Error(), "does not verify") {
 		t.Fatalf("hashed under the DKG order context: %v", err)
 	}

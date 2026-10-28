@@ -1,4 +1,4 @@
-//go:build !peerselect
+//go:build !verifierselect
 
 package runnerclient
 
@@ -14,15 +14,14 @@ import (
 
 	"github.com/lidofinance/tee-signer/attestation-verify"
 	"github.com/lidofinance/tee-signer/attestation-verify/internal/testgen"
-	"github.com/lidofinance/tee-signer/governance/dkgorder"
+	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/tee-signer/handover"
-	"github.com/lidofinance/tee-signer/tee-signer/handoverorder"
 )
 
 // A handover target checks the source's origin proof (handover) the way
 // checkOrigin in tee-signer/server/handover_import.go does: the settings of the
-// order's source give a document verifier (OrderAttestation,
+// order's source give a document verifier (RunnerAttestation,
 // NewDocumentVerifier), which checks the page's document against the page's
 // nonce and handover.OriginUserData(order hash, origin key). These tests run
 // that path with the platform fakes of the identity tests: NSM documents
@@ -54,7 +53,7 @@ type originPlatform struct {
 	bindsNonce bool
 }
 
-// originProject is the gcp-cs source's project. OrderParticipant needs one,
+// originProject is the gcp-cs source's project. OrderRunner needs one,
 // and the fake token's default "p" is not a valid project ID.
 const originProject = "signer-project"
 
@@ -158,16 +157,16 @@ var (
 const originNotAfter = 1_800_000_000
 
 // originOrder drafts a handover order whose source runs with settings a and
-// setup, the way an approver's tool does (OrderParticipant). It returns the
+// setup, the way an approver's tool does (OrderRunner). It returns the
 // body the target decodes from the order's wire form, and the order hash.
 func originOrder(t *testing.T, a Attestation, setup [32]byte, notAfter uint64) (*handoverorder.Body, [32]byte) {
 	t.Helper()
-	src, err := a.OrderParticipant("signer-2", setup, [32]byte{})
+	src, err := a.OrderRunner("signer-2", setup)
 	if err != nil {
 		t.Fatalf("source participant: %v", err)
 	}
 	b := handoverorder.Body{ClusterID: [32]byte{0xc1}, ChainHash: [32]byte{0xc2}, NotAfter: notAfter, Source: src,
-		Target: handoverorder.Runner{Name: "signer-2b", SetupHash: [32]byte{0x52}, Verifier: dkgorder.VerifierDev}}
+		Target: handoverorder.Runner{Name: "signer-2b", SetupHash: [32]byte{0x52}, Verifier: handoverorder.VerifierDev}}
 	raw, err := b.Encode()
 	if err != nil {
 		t.Fatalf("encode order: %v", err)
@@ -213,7 +212,7 @@ func (p *originPlatform) check(t *testing.T, b *handoverorder.Body, hash [32]byt
 		t.Fatalf("decode page: %v", err)
 	}
 	src := b.Source
-	a := OrderAttestation(&src)
+	a := RunnerAttestation(&src)
 	verify, err := a.NewDocumentVerifier(p.opts...)
 	if err != nil {
 		t.Fatalf("the source's settings: %v", err)

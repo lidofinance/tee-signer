@@ -6,22 +6,22 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/lidofinance/tee-signer/governance/dkgorder"
+	"github.com/lidofinance/tee-signer/governance/handoverorder"
 )
 
-// DKG orders (backend/dkgorder) carry each participant's attestation
+// Handover orders (governance/handoverorder) carry each runner's attestation
 // settings in a fixed binary form. These two functions turn one into the
-// other: OrderAttestation for the runner and the coordinator, which check
-// each participant with the verifier the order names; OrderParticipant
-// (order_draft.go, not in a key generation runner) for signer-config, which
-// drafts an order from each signer's cloud.json.
+// other: RunnerAttestation for the runner, which checks the other runner
+// with the verifier the order names; OrderRunner (order_draft.go, not in a
+// runner build) for signer-admin, which drafts an order from each signer's
+// cloud.json.
 
-// OrderAttestation is the attestation settings of a DKG order participant,
-// with its setup_hash pinned.
-func OrderAttestation(p *dkgorder.Participant) Attestation {
+// RunnerAttestation is the attestation settings of a handover order's
+// runner, with its setup_hash pinned.
+func RunnerAttestation(p *handoverorder.Runner) Attestation {
 	a := Attestation{Verifier: p.Verifier.String(), SetupSHA256: hex.EncodeToString(p.SetupHash[:])}
 	switch p.Verifier {
-	case dkgorder.VerifierNitro:
+	case handoverorder.VerifierNitro:
 		a.NitroPCRs = map[string]string{
 			"0": hex.EncodeToString(p.Image[:48]), "1": hex.EncodeToString(p.Image[48:96]),
 			"2": hex.EncodeToString(p.Image[96:144]), "3": hex.EncodeToString(p.NitroPCR3[:]),
@@ -29,11 +29,11 @@ func OrderAttestation(p *dkgorder.Participant) Attestation {
 		if p.NitroPCR8 != nil {
 			a.NitroPCRs["8"] = hex.EncodeToString(p.NitroPCR8[:])
 		}
-	case dkgorder.VerifierAzure:
+	case handoverorder.VerifierAzure:
 		a.MAAHost = p.MAAHost
 		a.CCEPolicySHA256 = hex.EncodeToString(p.Image)
 		a.ComplianceStatus = p.Compliance.String()
-	case dkgorder.VerifierGCP:
+	case handoverorder.VerifierGCP:
 		a.GCPImageDigest = "sha256:" + hex.EncodeToString(p.Image)
 		a.GCPAudience = p.GCPAudience
 		a.GCPHWModels = slices.Clone(p.GCPHWModels)
@@ -46,7 +46,7 @@ func OrderAttestation(p *dkgorder.Participant) Attestation {
 
 // Google's Confidential Space token issuer and the host of its key set
 // (attest.ConfidentialSpaceIssuer and ConfidentialSpaceJWKSURL, which a
-// build without peer_gcp lacks; a test keeps the two in step).
+// build without platform_gcp lacks; a test keeps the two in step).
 const (
 	csIssuerEndpoint = "confidentialcomputing.googleapis.com:443"
 	csJWKSEndpoint   = "www.googleapis.com:443"
@@ -60,7 +60,7 @@ const (
 // does gcp-cs with a key set file. Another gcp-cs issuer names its key set
 // host only in its openid-configuration, so the list holds its issuer
 // alone. A runner whose egress is limited (a Nitro enclave) must reach
-// these for every peer it checks.
+// these for every runner it checks.
 func (a *Attestation) Endpoints() []string {
 	var out []string
 	switch a.Verifier {

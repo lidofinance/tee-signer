@@ -1,4 +1,4 @@
-//go:build !debugimport && !(peer_azure || peer_aws || peer_gcp || peer_dev)
+//go:build !debugimport
 
 // Release build: no -allow-import flag and no plaintext share import.
 // debugimport.go is the debug-build counterpart.

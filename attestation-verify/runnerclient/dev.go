@@ -1,4 +1,4 @@
-//go:build !peerselect || peer_dev
+//go:build !verifierselect || platform_dev
 
 package runnerclient
 
