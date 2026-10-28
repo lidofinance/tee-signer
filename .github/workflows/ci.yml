@@ -52,7 +52,8 @@ jobs:
       - run: make test-modules
       # Show every failing test with its output, not only the log's tail.
       - if: failure()
-        run: grep -h -B2 -A40 -E -- '--- FAIL|^panic:|WARNING: DATA RACE' logs/*.log || true
+        run: |
+          grep -h -B2 -A40 -E -- '--- FAIL|^panic:|WARNING: DATA RACE' logs/*.log || true
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
