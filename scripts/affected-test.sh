@@ -92,8 +92,10 @@ has() {
 }
 
 check docs-only "" README.md slashing-log/docs/marklog.md docs/new.md LICENSE
-check leaf-module web3signer-api web3signer-api/api.go
-check leaf-module-and-docs web3signer-api web3signer-api/api.go tee-signer/README.md
+# web3signer-api: itself and the gateway, which uses it.
+check leaf-module "web3signer-api gateway" web3signer-api/api.go
+check leaf-module-and-docs "web3signer-api gateway" web3signer-api/api.go tee-signer/README.md
+check gateway gateway gateway/cmd/gateway/main.go
 check tests-module tests tests/e2e/x_test.go
 check makefile ALL Makefile
 check signer-core ALL signer-core/go/core.go
@@ -118,7 +120,7 @@ has governance-transitive "$(affected governance governance/x.go)" \
 
 # ci-scope.sh: CI_MODULES|CI_CORE|CI_E2E|CI_TESTS.
 expect scope-docs-only "none|0|0|0" "$(scope docs-only README.md docs/new.md LICENSE .github/CODEOWNERS)"
-expect scope-leaf "web3signer-api|0|0|1" "$(scope leaf web3signer-api/api.go)"
+expect scope-leaf "web3signer-api gateway|0|0|1" "$(scope leaf web3signer-api/api.go)"
 expect scope-tests "tests|0|1|1" "$(scope tests tests/e2e/x_test.go)"
 expect scope-signer-core "ALL|1|1|1" "$(scope signer-core signer-core/src/sign.c)"
 expect scope-markformat "ALL|1|1|1" "$(scope markformat markformat/markformat.go)"
