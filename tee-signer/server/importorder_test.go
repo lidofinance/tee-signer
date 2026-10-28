@@ -135,21 +135,37 @@ func TestImportSplit(t *testing.T) {
 	}
 }
 
-// A GCP signer takes no share of a single-node split (t = n = 1), on any
-// chain: the import order's 1 of 1 is refused (setupwire.CheckThresholdOn).
-func TestImportSingleNodeOnGCP(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "governance", "setupwire", "testdata", "setup-gcp.bin"))
-	if err != nil {
-		t.Fatal(err)
+// A single-node split (t = n = 1) is taken under an import order on every
+// platform's setup, GCP included: the threshold rule knows no platform.
+func TestImportSingleNode(t *testing.T) {
+	for _, name := range []string{"setup-dev", "setup-nitro", "setup-azure", "setup-gcp"} {
+		t.Run(name, func(t *testing.T) {
+			raw, err := os.ReadFile(filepath.Join("..", "..", "governance", "setupwire", "testdata", name+".bin"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			g, err := setupwire.DecodeSetup(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			e := newTgtEnv(t, "dev", func(s *setupwire.Setup) { s.Platform = g.Platform })
+			sk, pk := newKey(t)
+			if err := e.importSealed(pk, sk, 5, nil); err != nil {
+				t.Fatalf("1 of 1 on %s: %v", g.Platform.Platform, err)
+			}
+			if !hasKey(e.srv.Signer.Keys(), pk) {
+				t.Fatalf("1 of 1 on %s: the key did not load", g.Platform.Platform)
+			}
+		})
 	}
-	g, err := setupwire.DecodeSetup(raw)
-	if err != nil {
-		t.Fatal(err)
+}
+
+// hasKey reports whether keys holds pk.
+func hasKey(keys []backend.ValidatorKey, pk backend.Pubkey) bool {
+	for _, k := range keys {
+		if k.Pubkey == pk {
+			return true
+		}
 	}
-	e := newTgtEnv(t, "dev", func(s *setupwire.Setup) { s.Platform = g.Platform })
-	sk, pk := newKey(t)
-	err = e.importSealed(pk, sk, 5, nil)
-	if err == nil || !strings.Contains(err.Error(), "single-node") {
-		t.Fatalf("1 of 1 on gcp: %v", err)
-	}
+	return false
 }

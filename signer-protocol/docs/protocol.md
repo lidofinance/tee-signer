@@ -351,14 +351,14 @@ platform has no real attestation`, and on other chains HEALTH's
 chains the runner starts; a failed read leaves
 `key_release_hash` zero and logs a warning.
 
-A GCP signer never holds a key alone: a DKG order or an import order with
-t = n = 1 is refused on GCP on every chain, with or without
-`no_lock_accepted` (`setupwire.CheckThresholdOn`). The setup has no
-single-node mode of its own; t = n = 1 in a DKG or import order is the
-single-node trigger, and the runner's
--dkg-policy flag path applies the same check. Tests: TestThresholdOnGCP
-(setupwire), TestSingleNodeOnGCP (dkgorder), TestImportSingleNodeOnGCP
-(tee-signer/server).
+The threshold rule of an import order (`setupwire.CheckThreshold`) is the
+same on every platform: a single-node signer (t = n = 1) is taken on GCP
+as on the others, with or without `no_lock_accepted`; a GCP signer's
+protection against a changed key rule is the warning above and the
+watchdog. A single-node signer is not a split, so the mainnet overlap rule
+(2t - n >= 2) does not apply to it; it applies to every real split.
+Tests: TestSingleNodeOnEveryPlatform (setupwire), TestImportSingleNode
+(tee-signer/server), TestSetupSingleSignerOnEveryPlatform (signer-admin).
 
 HEALTH reports the result as `key_lock`: `locked`, `not_locked`, `none`
 (GCP, dev) or `unread`, and the reason as `key_lock_why`. Runners without
