@@ -1,0 +1,49 @@
+{
+  "Version": "2012-10-17",
+  "Id": "signer-runner-enclave",
+  "Statement": [
+    {
+      "Sid": "KeyAdministration",
+      "Effect": "Allow",
+      "Principal": { "AWS": "arn:aws:iam::${ACCOUNT_ID}:role/${ADMIN_ROLE}" },
+      "Action": [
+        "kms:Describe*", "kms:Get*", "kms:List*", "kms:PutKeyPolicy",
+        "kms:EnableKeyRotation", "kms:ScheduleKeyDeletion", "kms:CancelKeyDeletion"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "OperatorEncryptsRecordCredentials",
+      "Effect": "Allow",
+      "Principal": { "AWS": "arn:aws:iam::${ACCOUNT_ID}:role/${ADMIN_ROLE}" },
+      "Action": ["kms:Encrypt"],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": { "kms:EncryptionContext:purpose": "record-creds" },
+        "ForAllValues:StringEquals": { "kms:EncryptionContextKeys": ["purpose"] }
+      }
+    },
+    {
+      "Sid": "EnclaveOnlyDataKeys",
+      "Effect": "Allow",
+      "Principal": { "AWS": "arn:aws:iam::${ACCOUNT_ID}:role/${PARENT_INSTANCE_ROLE}" },
+      "Action": ["kms:Decrypt", "kms:GenerateDataKey"],
+      "Resource": "*",
+      "Condition": {
+        "StringEqualsIgnoreCase": {
+          "kms:RecipientAttestation:PCR0": "${PCR0}",
+          "kms:RecipientAttestation:PCR1": "${PCR1}",
+          "kms:RecipientAttestation:PCR2": "${PCR2}",
+          "kms:RecipientAttestation:PCR3": "${PCR3}"
+        }
+      }
+    },
+    {
+      "Sid": "EnclaveReadsItsKeyPolicy",
+      "Effect": "Allow",
+      "Principal": { "AWS": "arn:aws:iam::${ACCOUNT_ID}:role/${PARENT_INSTANCE_ROLE}" },
+      "Action": ["kms:DescribeKey", "kms:GetKeyPolicy"],
+      "Resource": "*"
+    }
+  ]
+}

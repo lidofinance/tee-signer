@@ -1,0 +1,17 @@
+[package]
+name = "signer-nts-nostd-check"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Build check only: signer-nts-core in a no_std static library"
+
+[lib]
+name = "signer_nts_nostd_check"
+crate-type = ["staticlib"]
+test = false
+doctest = false
+bench = false
+
+[dependencies]
+signer-nts-core = { path = "../core" }

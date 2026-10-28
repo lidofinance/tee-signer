@@ -1,0 +1,54 @@
+{
+  "name": "hoodi",
+  "source": {
+    "repo": "https://github.com/eth-clients/hoodi",
+    "commit": "ef8998901c1350f41a0bcc0a2a8d4baad973abcf",
+    "commit_title": "feat: schedule Hoodi Glamsterdam activation (#31), 2026-10-09",
+    "files": {
+      "config": "metadata/config.yaml",
+      "genesis_validators_root": "metadata/genesis_validators_root.txt",
+      "genesis_time": "README.md (Launch Date: Mar/17, 2025, 12:10 UTC, Linux Epoch time: 1742213400)"
+    },
+    "read_on": "2026-10-17"
+  },
+  "config": {
+    "PRESET_BASE": "mainnet",
+    "CONFIG_NAME": "hoodi",
+    "MIN_GENESIS_TIME": "1742212800",
+    "GENESIS_DELAY": "600",
+    "GENESIS_FORK_VERSION": "0x10000910",
+    "ALTAIR_FORK_VERSION": "0x20000910",
+    "ALTAIR_FORK_EPOCH": "0",
+    "BELLATRIX_FORK_VERSION": "0x30000910",
+    "BELLATRIX_FORK_EPOCH": "0",
+    "CAPELLA_FORK_VERSION": "0x40000910",
+    "CAPELLA_FORK_EPOCH": "0",
+    "DENEB_FORK_VERSION": "0x50000910",
+    "DENEB_FORK_EPOCH": "0",
+    "ELECTRA_FORK_VERSION": "0x60000910",
+    "ELECTRA_FORK_EPOCH": "2048",
+    "FULU_FORK_VERSION": "0x70000910",
+    "FULU_FORK_EPOCH": "50688",
+    "GLOAS_FORK_VERSION": "0x80000910",
+    "GLOAS_FORK_EPOCH": "132352",
+    "SECONDS_PER_SLOT": "12",
+    "SLOT_DURATION_MS": "12000",
+    "DEPOSIT_CHAIN_ID": "560048",
+    "DEPOSIT_NETWORK_ID": "560048",
+    "DEPOSIT_CONTRACT_ADDRESS": "0x00000000219ab540356cBB839Cbe05303d7705Fa"
+  },
+  "forks": ["ALTAIR", "BELLATRIX", "CAPELLA", "DENEB", "ELECTRA", "FULU", "GLOAS"],
+  "slots_per_epoch": 32,
+  "genesis_validators_root": "0x212f13fc4df078b6cb7db228f1c8307566dcecf900867401a92023d7ba99cb5f",
+  "genesis_time": 1742213400,
+  "policy_note": "Not chain data: the signer policy that chain.sh build puts into hoodi.json unless the environment overrides it. gas_limit_max covers the GAS_LIMIT_SCHEDULE of the config (200000000 from epoch 132352). The fee recipient is a burn address until the operator picks one.",
+  "policy": {
+    "max_epochs_ahead": 2,
+    "exit_allowlist": [],
+    "fee_recipients": ["0x000000000000000000000000000000000000dEaD"],
+    "gas_limit_min": 30000000,
+    "gas_limit_max": 200000000,
+    "registration_max_future_seconds": 3600,
+    "commit_ahead": {"block_slots": 32, "source_epochs": 2, "target_epochs": 2}
+  }
+}

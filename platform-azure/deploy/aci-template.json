@@ -1,0 +1,60 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "description": "One PoC signer: the runner in one confidential container group, plus the network entry container that deploy.sh render adds from network/<NETWORK>.json (an optional overlay; this tree has none). The runner does the attestation and the key release itself, in process; no other container in the group listens on a port. Its command holds only the flags that are the same for every signer; the signer's values come in its setup (signerSetup, base64 of the binary setup, into SIGNER_SETUP). deploy.sh render fills the capitalised placeholders between two at signs per signer; do not deploy this file as it is. signerSetup and the network part's parameters have no default on purpose: az confcom turns such a parameter into a wildcard rule, so their values stay out of the CCE policy hash."
+  },
+  "parameters": {
+    "name": { "type": "string", "defaultValue": "@GROUP_NAME@" },
+    "location": { "type": "string", "defaultValue": "@LOCATION@" },
+    "runnerImage": { "type": "string", "defaultValue": "@RUNNER_IMAGE@" },
+    "identityId": { "type": "string", "defaultValue": "@IDENTITY_ID@" },
+    "registryServer": { "type": "string", "defaultValue": "@REGISTRY_SERVER@" },
+    "signerSetup": { "type": "string", "metadata": { "description": "Base64 of the signer's binary setup (runner/cmd/setup-tool encode). Not secret. No default: wildcard in the CCE policy, so one policy serves every signer." } }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.ContainerInstance/containerGroups",
+      "apiVersion": "2023-05-01",
+      "name": "[parameters('name')]",
+      "location": "[parameters('location')]",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": { "[parameters('identityId')]": {} }
+      },
+      "properties": {
+        "sku": "Confidential",
+        "confidentialComputeProperties": { "ccePolicy": "" },
+        "osType": "Linux",
+        "restartPolicy": "OnFailure",
+        "imageRegistryCredentials": [
+          { "server": "[parameters('registryServer')]", "identity": "[parameters('identityId')]" }
+        ],
+        "containers": [
+          {
+            "name": "runner",
+            "properties": {
+              "image": "[parameters('runnerImage')]",
+              "command": [
+                "/runner",
+                "-platform", "azure",
+                "-setup", "platform",
+                "-listen", "tcp:127.0.0.1:7100",
+                "-state-dir", "/var/lib/signer",
+                "-restart-floor=true", "-persist-watermarks=false",
+                "-record", "none",
+                "-nts-clock",
+                "-nts-coarse-urls", "https://login.microsoftonline.com/,https://management.azure.com/,https://www.cloudflare.com/",
+                "-log-json"
+              ],
+              "environmentVariables": [
+                { "name": "SIGNER_SETUP", "value": "[parameters('signerSetup')]" }
+              ],
+              "resources": { "requests": { "cpu": 1, "memoryInGB": 1 } }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

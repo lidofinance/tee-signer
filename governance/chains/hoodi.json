@@ -1,0 +1,52 @@
+{
+  "genesis_validators_root": "0x212f13fc4df078b6cb7db228f1c8307566dcecf900867401a92023d7ba99cb5f",
+  "genesis_fork_version": "0x10000910",
+  "forks": [
+    {
+      "epoch": 0,
+      "version": "0x20000910"
+    },
+    {
+      "epoch": 0,
+      "version": "0x30000910"
+    },
+    {
+      "epoch": 0,
+      "version": "0x40000910"
+    },
+    {
+      "epoch": 0,
+      "version": "0x50000910"
+    },
+    {
+      "epoch": 2048,
+      "version": "0x60000910"
+    },
+    {
+      "epoch": 50688,
+      "version": "0x70000910"
+    },
+    {
+      "epoch": 132352,
+      "version": "0x80000910"
+    }
+  ],
+  "gloas_fork_epoch": 132352,
+  "voluntary_exit_fork_version": "0x40000910",
+  "genesis_time": 1742213400,
+  "seconds_per_slot": 12,
+  "slots_per_epoch": 32,
+  "max_epochs_ahead": 2,
+  "exit_allowlist": [],
+  "fee_recipients": [
+    "0x000000000000000000000000000000000000dEaD"
+  ],
+  "gas_limit_min": 30000000,
+  "gas_limit_max": 200000000,
+  "registration_max_future_seconds": 3600,
+  "commit_ahead": {
+    "block_slots": 32,
+    "source_epochs": 2,
+    "target_epochs": 2
+  }
+}

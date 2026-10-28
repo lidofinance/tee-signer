@@ -1,0 +1,6 @@
+# Build outputs (native, cross and mutant builds)
+/build/
+# Downloaded release tarballs and extracted test vectors
+/vectors/
+# Local run logs
+/logs/

@@ -1,0 +1,16 @@
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -113,7 +113,12 @@
+             .add_info(vec![output_path, "Open"])
+         })?;
+ 
+-    let kernel_image_name = match std::env::consts::ARCH {
++    // Local patch: NITRO_CLI_TARGET_ARCH (x86_64 or aarch64) names the arch
++    // of the blobs in NITRO_CLI_BLOBS, so an EIF for one arch can be built on a
++    // host of the other. Unset, the arch of this binary is used as before.
++    let target_arch = std::env::var("NITRO_CLI_TARGET_ARCH")
++        .unwrap_or_else(|_| std::env::consts::ARCH.to_string());
++    let kernel_image_name = match target_arch.as_str() {
+         "aarch64" => "Image",
+         "x86_64" => "bzImage",
+         _ => "undefined",

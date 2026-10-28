@@ -1,0 +1,18 @@
+Real AWS Nitro attestation documents, copied unchanged.
+
+Repository: https://github.com/blocky/nitrite
+Commit:     a6f5b6da1e509d7600dfdf9ba5000e38f7113186
+Files:      internal/testdata/nitro_attestation.b64
+            internal/testdata/nitro_attestation_debug.b64
+License:    MIT, see LICENSE in this directory (copied from the repository)
+Fetched:    2026-10-13
+
+Document times, as given in internal/testdata.go of that repository and
+as found in the documents:
+  nitro_attestation.b64        2024-09-07T14:37:39.545Z  (PCR0-2 set)
+  nitro_attestation_debug.b64  2024-09-07T14:38:06.508Z  (debug mode, PCRs zero)
+
+sha256:
+54c31e87b6920d1190d3efc2e2969585fa0a1f1f018ba159a0e5b8a33be5b8d0  nitro_attestation.b64
+56160cdde256b19183a9ebe2ae2174efec16c9e482c3cf1bb7b9d11b7f3b4c7e  nitro_attestation_debug.b64
+1a7d8e4c82fbe42aa8c125bb8a19bc999783d9f72ddf608a2f149bb903eff17e  LICENSE
