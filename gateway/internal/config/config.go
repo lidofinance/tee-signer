@@ -103,6 +103,9 @@ type Config struct {
 		// certificate the signers accept (their -tls-client-ca, signing role).
 		ClientCert string `yaml:"client_cert"`
 		ClientKey  string `yaml:"client_key"`
+		// CertReloadInterval is how often the gateway reads ClientCert and
+		// ClientKey again for a renewed pair (default 10s).
+		CertReloadInterval time.Duration `yaml:"cert_reload_interval"`
 		// Timeout bounds one sign request, from the HTTP request to the
 		// combined signature, and each key list call (default 5s).
 		Timeout time.Duration `yaml:"timeout"`
@@ -175,6 +178,12 @@ func (c *Config) loadSigners(base string) error {
 	}
 	if s.ClientCert == "" || s.ClientKey == "" {
 		return errors.New("signers.client_cert and signers.client_key are required")
+	}
+	if s.CertReloadInterval == 0 {
+		s.CertReloadInterval = 10 * time.Second
+	}
+	if s.CertReloadInterval < 0 {
+		return errors.New("signers.cert_reload_interval must be positive")
 	}
 	if s.Timeout == 0 {
 		s.Timeout = 5 * time.Second

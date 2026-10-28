@@ -134,6 +134,7 @@ chain:
 signers:
   client_cert: gateway.pem        # client certificate of the signing role, with its chain
   client_key: gateway-key.pem
+  # cert_reload_interval: 10s     # how often both files are read again for a renewed pair
   # timeout: 5s                   # one sign request, and each key list call
   # dial_timeout: 30s             # each new connection: TCP, TLS, IDENTITY, attestation check
   # connections: 2                # connections to each signer, 1 to 16
@@ -173,7 +174,17 @@ policy:
 
 The `attestation` settings of each signer are those of `runnerclient.Attestation`, under the same names; [attestation-verify/runnerclient/runnerclient.go](../attestation-verify/runnerclient/runnerclient.go) says what each one checks. Settings of one verifier are refused with another, and a required one that is missing stops the start. Quote map keys such as the `nitro_pcrs` indices. A local dev runner takes `attestation: {verifier: dev}`, which proves nothing about the code that answered.
 
-Relative paths in the file resolve against the file's directory. The gateway refuses to start without `chain.genesis_validators_root`, with fork epochs out of order, without signers or a client certificate, and with an unknown key anywhere in the file. A new fork needs a config line before its epoch, as it does in the beacon node and in the signers. The gateway reads the client certificate at start; restart it to use a new one.
+Relative paths in the file resolve against the file's directory. The gateway refuses to start without `chain.genesis_validators_root`, with fork epochs out of order, without signers or a client certificate, and with an unknown key anywhere in the file. A new fork needs a config line before its epoch, as it does in the beacon node and in the signers.
+
+## Client certificate renewal
+
+The client certificate is short-lived, so the gateway picks up a renewed one without a restart. It reads `signers.client_cert` and `signers.client_key` at start, where a pair that fails the checks below stops the start, and again every `signers.cert_reload_interval` (default 10s). A pair that changed takes effect only if it parses, the key belongs to the certificate, and the certificate is valid at the gateway's clock. Otherwise the pair in force stays, and the gateway logs `client certificate on disk refused, keeping the one in force` once for that content, not at every read. A certificate that is not valid yet is checked again at each read and takes effect once it is. Write the new files to temporary names and rename them over the old ones: a key written a read after its certificate costs one refused line and no outage.
+
+A good new pair logs `client certificate reloaded` with its serial and expiry. New clients use it at once. The connections already open move to it in the background, one connection to each signer at a time: the gateway dials a new connection with the new certificate, runs every check of a new connection on it (attestation, pins, chain mark, nonce), and only then puts it in the place of an idle connection on the old certificate and closes that one (`connection moved to the new client certificate`). Each signer keeps `signers.connections` connections throughout, and a request in flight ends on the connection it started on. A new connection that fails a check leaves the old one in place and is tried again 5 s later. A connection whose certificate expired before it could move (its signer was down, say) takes the new certificate at its next request.
+
+If the certificate in force expires with no valid replacement on disk, the gateway logs `client certificate expired and no valid replacement on disk` once a minute, and every sign request fails: a 500 to the validator client, and a `signing failed` line whose `err` names the certificate file and its expiry. A valid pair written there ends it at the next read.
+
+The gateway has no metrics endpoint, so the certificate's expiry and the reloads are in the log only.
 
 Each signing request leaves one log line (`msg=signed`, `"denied by signers"`, `"signing failed"`, `"bad request"`, ...). Once the body parses, the line carries the request `type` and the `signer_call`, the signer message it becomes; signed, denied and failed lines also carry `signer_ms`. The reasons of the signers that refused or failed are in the `err` of a denied or failed line. A partial signature that does not verify is logged on its own (`bad partial signature`, with the signer's name). Each attested connection logs `signer attested` with the signer's setup state.
 
@@ -185,9 +196,9 @@ Each signing request leaves one log line (`msg=signed`, `"denied by signers"`, `
 | `scripts/test-unit.sh` | `go vet` and `go test ./...`. |
 | `scripts/update-spec-vectors.sh` | Regenerates the Web3Signer example vectors in `web3signer-api/signing/testdata` from the pinned Web3Signer tag. |
 
-From the repo root, `scripts/test-modules.sh gateway` runs gofmt, vet and the unit tests under the race detector. The unit tests run the combining against fake signers (2 of 3, a signer down, a slow signer, a partial that does not verify, refusals, all down) and the connections against a fake TLS signer (attestation on every new connection, a wrong `tls_key_pin`, a wrong chain mark, an attestation without the nonce).
+From the repo root, `scripts/test-modules.sh gateway` runs gofmt, vet and the unit tests under the race detector. The unit tests run the combining against fake signers (2 of 3, a signer down, a slow signer, a partial that does not verify, refusals, all down) and the connections against a fake TLS signer (attestation on every new connection, a wrong `tls_key_pin`, a wrong chain mark, an attestation without the nonce). The reload tests write good and bad pairs in random order and check that the last good one stays in force, and swap the certificate under load against fake signers that accept only the old certificate and then only the new one, with no failed request.
 
-`TestE2EGateway` in [tests/e2e](../tests/e2e) is the end-to-end test: three dev runners of `scripts/build-runner.sh` with mutual TLS, each with one share of a 2-of-3 key, and the gateway binary in front of them. It sends a validator client's HTTP requests (attestation, block, selection proof, aggregate), checks each signature under the validator key against the root the signer core computes, and checks a double vote, an aggregate with a bad selection proof, one signer down, two down, and a signer that restarts with a new TLS key:
+`TestE2EGateway` in [tests/e2e](../tests/e2e) is the end-to-end test: three dev runners of `scripts/build-runner.sh` with mutual TLS, each with one share of a 2-of-3 key, and the gateway binary in front of them. It sends a validator client's HTTP requests (attestation, block, selection proof, aggregate), checks each signature under the validator key against the root the signer core computes, and checks a double vote, an aggregate with a bad selection proof, one signer down, two down, a new client certificate written mid-run while requests go on, and a signer that restarts with a new TLS key:
 
 ```sh
 scripts/build-runner.sh
@@ -201,6 +212,7 @@ cmd/gateway          main: config, signers, HTTP server
 cmd/blsverify        independent verifier: hand-written SSZ on crypto/sha256 + blst
 internal/config      gateway.yml: defaults, required keys, chain pin and fork schedule, signers
 internal/backend     the signers: connections (runnerclient), typed messages, share indices, fan-out, combining
+internal/certreload  the client certificate in force: reads it again, checks a new pair, swaps it in
 internal/policy      exit and registration rules
 internal/server      HTTP handlers, content negotiation, error bodies
 internal/coalesce    one call to the signers for identical non-slashable requests, results kept 2 slots

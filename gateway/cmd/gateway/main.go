@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/gateway/internal/backend"
+	"github.com/lidofinance/tee-signer/gateway/internal/certreload"
 	"github.com/lidofinance/tee-signer/gateway/internal/config"
 	"github.com/lidofinance/tee-signer/gateway/internal/policy"
 	"github.com/lidofinance/tee-signer/gateway/internal/server"
@@ -70,9 +71,18 @@ func run(cfgPath string, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	certs, err := certreload.New(cfg.Signers.ClientCert, cfg.Signers.ClientKey, log)
+	if err != nil {
+		return err
+	}
+	cur := certs.Current()
+	log.Info("client certificate", "cert", cfg.Signers.ClientCert, "serial", cur.Serial(),
+		"not_after", cur.NotAfter().UTC().Format(time.RFC3339), "reload_interval", cfg.Signers.CertReloadInterval.String())
+	go certs.Run(ctx, cfg.Signers.CertReloadInterval)
+
 	bcfg := backend.Config{
 		Connections: cfg.Signers.Connections, Timeout: cfg.Signers.Timeout, DialTimeout: cfg.Signers.DialTimeout,
-		MaxShareIndex: cfg.Signers.MaxShareIndex,
+		MaxShareIndex: cfg.Signers.MaxShareIndex, Certs: certs,
 	}
 	for i, n := range cfg.Signers.Nodes {
 		bcfg.Signers = append(bcfg.Signers, backend.SignerConfig{Name: n.Name, Connection: cfg.Connection(i)})

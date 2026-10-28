@@ -110,7 +110,8 @@ func TestSignersSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := c.Signers
-	if s.Timeout != 5*time.Second || s.DialTimeout != 30*time.Second || s.Connections != 2 || s.MaxShareIndex != 3 {
+	if s.Timeout != 5*time.Second || s.DialTimeout != 30*time.Second || s.Connections != 2 || s.MaxShareIndex != 3 ||
+		s.CertReloadInterval != 10*time.Second {
 		t.Fatalf("defaults: %+v", s)
 	}
 	if s.Nodes[2].Name != "signer-3" || !filepath.IsAbs(s.ClientCert) || !filepath.IsAbs(s.ClientKey) {
@@ -125,6 +126,7 @@ func TestSignersSettings(t *testing.T) {
   client_cert: /c.crt
   client_key: /c.key
   timeout: 2s
+  cert_reload_interval: 1m
   connections: 4
   max_share_index: 5
   nodes:
@@ -149,7 +151,8 @@ func TestSignersSettings(t *testing.T) {
 	}
 	a := c.Signers.Nodes[0].Attestation.Attestation
 	if a.MAAHost != "example.attest.azure.net" || !a.Mainnet || a.KeyReleaseSHA256 != strings.Repeat("33", 32) ||
-		c.Signers.Nodes[0].TLSKeyPin != strings.Repeat("ab", 32) || c.Signers.Timeout != 2*time.Second || c.Signers.Connections != 4 {
+		c.Signers.Nodes[0].TLSKeyPin != strings.Repeat("ab", 32) || c.Signers.Timeout != 2*time.Second || c.Signers.Connections != 4 ||
+		c.Signers.CertReloadInterval != time.Minute {
 		t.Fatalf("azure node: %+v", c.Signers)
 	}
 	if p := c.Signers.Nodes[1].Attestation.NitroPCRs; len(p) != 3 || p["1"] != strings.Repeat("55", 48) {
@@ -158,6 +161,7 @@ func TestSignersSettings(t *testing.T) {
 
 	for name, body := range map[string]string{
 		"no nodes":            pin + "signers:\n  client_cert: c\n  client_key: k\n",
+		"negative reload":     pin + "signers:\n  client_cert: c\n  client_key: k\n  cert_reload_interval: -1s\n  nodes: [{address: tcp:127.0.0.1:1, attestation: {verifier: dev}}]\n",
 		"no client cert":      pin + "signers:\n  nodes: [{address: \"tcp:1:1\", attestation: {verifier: dev}}]\n",
 		"no address":          pin + "signers:\n  client_cert: c\n  client_key: k\n  nodes: [{attestation: {verifier: dev}}]\n",
 		"no verifier":         pin + "signers:\n  client_cert: c\n  client_key: k\n  nodes: [{address: \"tcp:1:1\"}]\n",

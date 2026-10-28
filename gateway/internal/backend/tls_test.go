@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -13,6 +14,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
 	"log/slog"
 	"math/big"
@@ -21,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -99,6 +102,11 @@ type tlsRunner struct {
 	root  phase0.Root
 	// badDoc makes its attestation document carry another nonce.
 	badDoc bool
+	// allowed, if set, is the one client certificate (DER) a new
+	// connection may present.
+	allowed atomic.Pointer[[]byte]
+	// hsDelay delays each new connection, as a slow attestation does.
+	hsDelay atomic.Int64
 
 	mu     sync.Mutex
 	frames map[wire.MsgType]int
@@ -132,16 +140,24 @@ func startTLSRunner(t *testing.T, ca *testCA, k *testKey, i int, badDoc bool, ex
 	}
 	leaf, _ := x509.ParseCertificate(der)
 	h := sha256.Sum256(leaf.RawSubjectPublicKeyInfo)
+	r := &tlsRunner{spki: h[:], share: &k.shares[i], root: testRoot, badDoc: badDoc, frames: map[wire.MsgType]int{},
+		key: proto.ValidatorKey{Pubkey: proto.Pubkey(k.pk), SharePubkey: proto.Pubkey(pubOf(&k.shares[i])), Index: proto.IndexUnknown}}
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
 		MinVersion:   tls.VersionTLS13,
 		Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leaf}},
 		ClientAuth:   tls.RequireAndVerifyClientCert, ClientCAs: ca.pool,
+		VerifyPeerCertificate: func(raw [][]byte, _ [][]*x509.Certificate) error {
+			if a := r.allowed.Load(); a != nil && !bytes.Equal(raw[0], *a) {
+				return errors.New("client certificate not accepted")
+			}
+
+			return nil
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &tlsRunner{ln: ln, spki: h[:], share: &k.shares[i], root: testRoot, badDoc: badDoc, frames: map[wire.MsgType]int{},
-		key: proto.ValidatorKey{Pubkey: proto.Pubkey(k.pk), SharePubkey: proto.Pubkey(pubOf(&k.shares[i])), Index: proto.IndexUnknown}}
+	r.ln = ln
 	t.Cleanup(func() { ln.Close(); r.dropConns() })
 	go func() {
 		for {
@@ -152,12 +168,21 @@ func startTLSRunner(t *testing.T, ca *testCA, k *testKey, i int, badDoc bool, ex
 			r.mu.Lock()
 			r.conns = append(r.conns, c)
 			r.mu.Unlock()
-			go r.serve(c)
+			go func() {
+				time.Sleep(time.Duration(r.hsDelay.Load()))
+				r.serve(c)
+			}()
 		}
 	}()
 
 	return r
 }
+
+// allow makes the runner take only the client certificate der on new
+// connections. Connections already open stay.
+func (r *tlsRunner) allow(der []byte) { r.allowed.Store(&der) }
+
+func (r *tlsRunner) setHandshakeDelay(d time.Duration) { r.hsDelay.Store(int64(d)) }
 
 func (r *tlsRunner) addr() string { return "tcp:" + r.ln.Addr().String() }
 
@@ -234,7 +259,7 @@ func devConnection(t *testing.T, ca *testCA, r *tlsRunner) runnerclient.Connecti
 
 func testNode(t *testing.T, conn runnerclient.Connection) *node {
 	t.Helper()
-	n, err := newNode(conn, 1, runnerclient.WithTimeout(3*time.Second))
+	n, err := newNode(conn, poolConfig{size: 1}, runnerclient.WithTimeout(3*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +355,7 @@ func TestNodeRefusesWrongChainMark(t *testing.T) {
 	}
 	conn := devConnection(t, ca, testnet)
 	conn.Attestation.Mainnet = true
-	n, err := newNode(conn, 1, runnerclient.WithTimeout(3*time.Second))
+	n, err := newNode(conn, poolConfig{size: 1}, runnerclient.WithTimeout(3*time.Second))
 	if err != nil {
 		// The settings themselves may refuse mainnet with this verifier.
 		t.Logf("mainnet settings with the dev verifier: %v", err)
@@ -340,7 +365,7 @@ func TestNodeRefusesWrongChainMark(t *testing.T) {
 	defer n.Close()
 	other := startTLSRunner(t, ca, k, 0, false, chainMark(t, proto.Version{0x10, 0, 0, 0}))
 	conn.Address = other.addr()
-	n2, err := newNode(conn, 1, runnerclient.WithTimeout(3*time.Second))
+	n2, err := newNode(conn, poolConfig{size: 1}, runnerclient.WithTimeout(3*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}

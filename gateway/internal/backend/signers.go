@@ -12,6 +12,7 @@ import (
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
+	"github.com/lidofinance/tee-signer/gateway/internal/certreload"
 	proto "github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/web3signer-api/signing"
 )
@@ -44,6 +45,10 @@ type Config struct {
 	// MaxShareIndex is the highest share index deriveGroup tries (0: the
 	// number of signers).
 	MaxShareIndex int
+	// Certs, if set, is the client certificate in force. The connections
+	// move to each new one, and requests fail once it expired. Without
+	// it the connections present the files of each Connection, read once.
+	Certs *certreload.Watcher
 }
 
 // Signers signs through the TEE signers. A request goes to every signer
@@ -58,6 +63,8 @@ type Signers struct {
 	timeout  time.Duration
 	log      *slog.Logger
 	keys     *keyList
+	// certs is the client certificate in force, nil without reload.
+	certs certSource
 
 	mu sync.Mutex
 	// listed is each signer's last PUBLIC_KEYS answer, nil before the
@@ -89,6 +96,10 @@ func New(cfg Config, log *slog.Logger) (*Signers, error) {
 	if dialTimeout == 0 {
 		dialTimeout = 30 * time.Second
 	}
+	pc := poolConfig{size: max(cfg.Connections, 1), warm: dialTimeout + timeout, log: log}
+	if cfg.Certs != nil {
+		pc.certs = cfg.Certs
+	}
 	var nodes []runner
 	var names []string
 	closeAll := func() {
@@ -102,8 +113,7 @@ func New(cfg Config, log *slog.Logger) (*Signers, error) {
 			log.Info("signer attested", append([]any{"signer", name, "address", sc.Connection.Address},
 				runnerclient.SetupLog(&id.State, time.Now())...)...)
 		}
-		n, err := newNode(sc.Connection, max(cfg.Connections, 1),
-			runnerclient.WithTimeout(dialTimeout), runnerclient.WithVerified(verified))
+		n, err := newNode(sc.Connection, pc, runnerclient.WithTimeout(dialTimeout), runnerclient.WithVerified(verified))
 		if err != nil {
 			closeAll()
 
@@ -113,7 +123,10 @@ func New(cfg Config, log *slog.Logger) (*Signers, error) {
 		names = append(names, name)
 	}
 
-	return newSigners(names, nodes, cfg.MaxShareIndex, timeout, log), nil
+	s := newSigners(names, nodes, cfg.MaxShareIndex, timeout, log)
+	s.certs = pc.certs
+
+	return s, nil
 }
 
 func newSigners(names []string, nodes []runner, maxIndex int, timeout time.Duration, log *slog.Logger) *Signers {
@@ -233,6 +246,11 @@ func groupID(pk phase0.BLSPubKey, shares []share) string {
 
 // Sign implements Signer.
 func (s *Signers) Sign(ctx context.Context, pubkey phase0.BLSPubKey, job *signing.Job) (phase0.BLSSignature, error) {
+	if s.certs != nil {
+		if err := s.certs.Usable(); err != nil {
+			return phase0.BLSSignature{}, err
+		}
+	}
 	g, ok := s.keys.get(ctx, pubkey)
 	if !ok {
 		return phase0.BLSSignature{}, ErrUnknownKey

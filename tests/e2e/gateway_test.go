@@ -36,6 +36,21 @@ func TestE2EGateway(t *testing.T) {
 	dir := t.TempDir()
 	roles := rolePKI(t, dir, "gw", 24*time.Hour, 24*time.Hour)
 	certFile, keyFile := writeSigningPair(t, dir, roles.signing)
+	// The renewed client certificate comes from a second CA. The runners
+	// trust both, so the swap mid-run below needs no runner restart.
+	renewed := rolePKI(t, dir, "gw2", 24*time.Hour, 24*time.Hour)
+	bothCAs := filepath.Join(dir, "gw-both-ca.pem")
+	var caPEM []byte
+	for _, f := range []string{roles.caFile, renewed.caFile} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		caPEM = append(caPEM, b...)
+	}
+	if err := os.WriteFile(bothCAs, caPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	sk, _ := core.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
@@ -49,7 +64,7 @@ func TestE2EGateway(t *testing.T) {
 	var addrs []string
 	for i := range shares {
 		addr := fmt.Sprintf("tcp:127.0.0.1:%d", freePort(t))
-		r := newRunnerArgs(t, fmt.Sprintf("gw-runner-%d", i+1), c, addr, "-tls-client-ca", roles.caFile)
+		r := newRunnerArgs(t, fmt.Sprintf("gw-runner-%d", i+1), c, addr, "-tls-client-ca", bothCAs)
 		r.start()
 		cl, err := newTLSClient(addr, roles.signing, remote.DevVerifier, remote.WithTimeout(10*time.Second))
 		if err != nil {
@@ -82,6 +97,7 @@ chain:
 signers:
   client_cert: %s
   client_key: %s
+  cert_reload_interval: 1s
   timeout: 5s
   nodes:
 %spolicy:
@@ -178,6 +194,47 @@ signers:
 		t.Fatalf("no slashing refusal in the gateway log:\n%s", gw.logText())
 	}
 	t.Logf("double vote for target %d: 412", e1)
+
+	// A renewed client certificate is written mid-run, by rename as a
+	// renewal tool does, while requests go on. Every request signs, and
+	// each of the 2 connections to each of the 3 signers moves to the new
+	// certificate after a new connection with it passed every check.
+	attestedBefore := strings.Count(gw.logText(), "signer attested")
+	newDir := filepath.Join(dir, "renewed")
+	if err := os.Mkdir(newDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	newCert, newKey := writeSigningPair(t, newDir, renewed.signing)
+	const wantMoved = 3 * 2
+	swapped := false
+	deadline := time.Now().Add(60 * time.Second)
+	for i := uint64(0); ; i++ {
+		s := e1*slotsPerEpoch - 1 - i
+		mustSign(fmt.Sprintf("selection proof %d during the certificate swap", i),
+			fmt.Sprintf(`{"type":"AGGREGATION_SLOT",%s,"aggregation_slot":{"slot":"%d"}}`, forkInfo, s), &backend.SelectionProof{Slot: s})
+		if i == 3 && !swapped {
+			for _, mv := range [][2]string{{newCert, certFile}, {newKey, keyFile}} {
+				if err := os.Rename(mv[0], mv[1]); err != nil {
+					t.Fatal(err)
+				}
+			}
+			swapped = true
+		}
+		if swapped && strings.Count(gw.logText(), "connection moved to the new client certificate") >= wantMoved {
+			t.Logf("client certificate renewed mid-run: %d requests signed, none failed, %d connections moved", i+1, wantMoved)
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("connections not moved to the new certificate:\n%s", gw.logText())
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if n := strings.Count(gw.logText(), "client certificate reloaded"); n != 1 {
+		t.Fatalf("%d reloads logged, want 1", n)
+	}
+	if n := strings.Count(gw.logText(), "signer attested") - attestedBefore; n < wantMoved {
+		t.Fatalf("%d new attested connections for the new certificate, want %d", n, wantMoved)
+	}
 
 	// One signer down: the other two sign. Two down: no signature.
 	runners[0].stop()
