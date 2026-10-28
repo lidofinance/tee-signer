@@ -13,6 +13,7 @@ import (
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
 	"github.com/lidofinance/tee-signer/gateway/internal/certreload"
+	"github.com/lidofinance/tee-signer/gateway/internal/metrics"
 	proto "github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/web3signer-api/signing"
 )
@@ -49,6 +50,9 @@ type Config struct {
 	// move to each new one, and requests fail once it expired. Without
 	// it the connections present the files of each Connection, read once.
 	Certs *certreload.Watcher
+	// Metrics, if set, receives the metrics of the signers, the keys and
+	// the signing.
+	Metrics *metrics.Gateway
 }
 
 // Signers signs through the TEE signers. A request goes to every signer
@@ -65,6 +69,7 @@ type Signers struct {
 	keys     *keyList
 	// certs is the client certificate in force, nil without reload.
 	certs certSource
+	m     *metrics.Gateway
 
 	mu sync.Mutex
 	// listed is each signer's last PUBLIC_KEYS answer, nil before the
@@ -96,7 +101,11 @@ func New(cfg Config, log *slog.Logger) (*Signers, error) {
 	if dialTimeout == 0 {
 		dialTimeout = 30 * time.Second
 	}
-	pc := poolConfig{size: max(cfg.Connections, 1), warm: dialTimeout + timeout, log: log}
+	m := cfg.Metrics
+	if m == nil {
+		m = metrics.New()
+	}
+	pc := poolConfig{size: max(cfg.Connections, 1), warm: dialTimeout + timeout, log: log, m: m}
 	if cfg.Certs != nil {
 		pc.certs = cfg.Certs
 	}
@@ -113,7 +122,9 @@ func New(cfg Config, log *slog.Logger) (*Signers, error) {
 			log.Info("signer attested", append([]any{"signer", name, "address", sc.Connection.Address},
 				runnerclient.SetupLog(&id.State, time.Now())...)...)
 		}
-		n, err := newNode(sc.Connection, pc, runnerclient.WithTimeout(dialTimeout), runnerclient.WithVerified(verified))
+		npc := pc
+		npc.name = name
+		n, err := newNode(sc.Connection, npc, runnerclient.WithTimeout(dialTimeout), runnerclient.WithVerified(verified))
 		if err != nil {
 			closeAll()
 
@@ -125,6 +136,7 @@ func New(cfg Config, log *slog.Logger) (*Signers, error) {
 
 	s := newSigners(names, nodes, cfg.MaxShareIndex, timeout, log)
 	s.certs = pc.certs
+	s.m = m
 
 	return s, nil
 }
@@ -134,7 +146,7 @@ func newSigners(names []string, nodes []runner, maxIndex int, timeout time.Durat
 		maxIndex = len(nodes)
 	}
 	s := &Signers{nodes: nodes, names: names, maxIndex: min(maxIndex, maxShareIndex), timeout: timeout, log: log,
-		listed: make([][]proto.ValidatorKey, len(nodes)), derived: map[string]derivedGroup{}}
+		listed: make([][]proto.ValidatorKey, len(nodes)), derived: map[string]derivedGroup{}, m: metrics.New()}
 	s.keys = newKeyList(s.loadKeys, keysMaxAge, log)
 
 	return s
@@ -196,6 +208,7 @@ func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, err
 			continue
 		}
 		s.listed[i] = a.keys
+		s.m.SignerKeysRefreshed.Set(float64(time.Now().UnixMilli())/1000, s.names[i])
 	}
 	shares := map[phase0.BLSPubKey][]share{}
 	answered := false
@@ -229,6 +242,7 @@ func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, err
 	if len(groups) == 0 {
 		return nil, errors.New("the signers hold no key the gateway can sign for")
 	}
+	s.m.Keys.Set(float64(len(groups)))
 
 	return groups, nil
 }
@@ -260,8 +274,13 @@ func (s *Signers) Sign(ctx context.Context, pubkey phase0.BLSPubKey, job *signin
 		return phase0.BLSSignature{}, err
 	}
 	req := proto.SignRequest{Pubkey: proto.Pubkey(pubkey), Message: msg, Domain: proto.Root(job.Domain)}
+	t0 := time.Now()
+	sig, err := s.fanOut(ctx, pubkey, g, req, job.SigningRoot)
+	if err == nil {
+		s.m.SignDuration.Observe(time.Since(t0).Seconds(), job.Type)
+	}
 
-	return s.fanOut(ctx, pubkey, g, req, job.SigningRoot)
+	return sig, err
 }
 
 // partial is one signer's answer.
@@ -292,6 +311,7 @@ func (s *Signers) fanOut(ctx context.Context, pubkey phase0.BLSPubKey, g group, 
 			if err == nil {
 				if verr := VerifyBLS(sh.pub, root, p.sig); verr != nil {
 					p.err = fmt.Errorf("partial signature does not verify under the share key: %w", verr)
+					s.m.CombineFailures.Inc("bad_partial")
 					s.log.Warn("bad partial signature", "signer", s.names[sh.node], "pubkey", fmt.Sprintf("%#x", pubkey),
 						"kind", req.Message.Kind().String(), "signing_root", fmt.Sprintf("%#x", root))
 				}
@@ -322,6 +342,8 @@ func (s *Signers) fanOut(ctx context.Context, pubkey phase0.BLSPubKey, g group, 
 				return s.combineVerified(pubkey, root, good)
 			}
 			if len(good)+len(g.shares)-got < g.threshold {
+				s.m.CombineFailures.Inc("below_threshold")
+
 				return phase0.BLSSignature{}, notEnough(g, len(good), denied, failed)
 			}
 		case <-ctx.Done():
@@ -329,6 +351,7 @@ func (s *Signers) fanOut(ctx context.Context, pubkey phase0.BLSPubKey, g group, 
 				len(good), len(g.shares), g.threshold, ctx.Err())
 		}
 	}
+	s.m.CombineFailures.Inc("below_threshold")
 
 	return phase0.BLSSignature{}, notEnough(g, len(good), denied, failed)
 }
@@ -341,9 +364,13 @@ func (s *Signers) combineVerified(pubkey phase0.BLSPubKey, root phase0.Root, par
 	}
 	sig, err := combine(indices, sigs)
 	if err != nil {
+		s.m.CombineFailures.Inc("verify")
+
 		return phase0.BLSSignature{}, fmt.Errorf("combine: %w", err)
 	}
 	if err := VerifyBLS(pubkey, root, sig); err != nil {
+		s.m.CombineFailures.Inc("verify")
+
 		return phase0.BLSSignature{}, fmt.Errorf("combined signature: %w", err)
 	}
 

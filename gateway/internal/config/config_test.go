@@ -177,3 +177,20 @@ func TestSignersSettings(t *testing.T) {
 		}
 	}
 }
+
+// metrics is off without the key, and must be HOST:PORT other than listen.
+func TestMetricsSetting(t *testing.T) {
+	const pin = "chain:\n  genesis_validators_root: \"0x4b363db94e286120d76eb905340fdd4e54bfe9f06bf33ff6cf5ad27f511bfe95\"\n"
+	c, err := load(t, pin)
+	if err != nil || c.Metrics != "" {
+		t.Fatalf("default: %q %v", c.Metrics, err)
+	}
+	if c, err = load(t, "metrics: 127.0.0.1:19001\n"+pin); err != nil || c.Metrics != "127.0.0.1:19001" {
+		t.Fatalf("set: %v", err)
+	}
+	for _, bad := range []string{"metrics: 19001\n", "metrics: 127.0.0.1:19000\n"} {
+		if _, err := load(t, bad+pin); err == nil || !strings.Contains(err.Error(), "metrics") {
+			t.Fatalf("%q: %v", bad, err)
+		}
+	}
+}

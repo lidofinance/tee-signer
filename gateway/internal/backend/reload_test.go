@@ -261,6 +261,11 @@ func TestRotationRedialsBeforeCloseOneAtATime(t *testing.T) {
 		t.Fatalf("closed %d, closed under a request %d, fewest usable %d (want 3), most redials at once %d (want 1)",
 			b.closed, b.closedBusy, b.minUsable, b.maxWarming)
 	}
+	m := n.pc.m
+	// The count follows the swap of the last connection.
+	waitFor(t, "3 rotations counted", 5*time.Second, func() bool { return m.SignerRotations.Value("fake", "ok") == 3 })
+	expectMetric(t, "rotations failed", m.SignerRotations.Value("fake", "failed"), 0)
+	expectMetric(t, "connections up after the moves", m.SignerConnectionsUp.Value("fake"), 3)
 }
 
 // A redial that fails leaves the old connections in place and is tried
@@ -283,6 +288,11 @@ func TestRotationRetriesAFailedRedial(t *testing.T) {
 	if m := b.get(func(b *poolBook) int { return b.minUsable }); m < 2 {
 		t.Fatalf("fewest usable %d", m)
 	}
+	m := n.pc.m
+	if m.SignerRotations.Value("fake", "failed") < 1 {
+		t.Error("no failed rotation counted")
+	}
+	waitFor(t, "2 rotations counted", 5*time.Second, func() bool { return m.SignerRotations.Value("fake", "ok") == 2 })
 }
 
 // A connection whose certificate expired before the pool could move it

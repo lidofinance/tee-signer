@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -18,6 +19,7 @@ import (
 	"github.com/lidofinance/tee-signer/gateway/internal/backend"
 	"github.com/lidofinance/tee-signer/gateway/internal/certreload"
 	"github.com/lidofinance/tee-signer/gateway/internal/config"
+	"github.com/lidofinance/tee-signer/gateway/internal/metrics"
 	"github.com/lidofinance/tee-signer/gateway/internal/policy"
 	"github.com/lidofinance/tee-signer/gateway/internal/server"
 	"github.com/lidofinance/tee-signer/web3signer-api/eth2"
@@ -79,10 +81,12 @@ func run(cfgPath string, log *slog.Logger) error {
 	log.Info("client certificate", "cert", cfg.Signers.ClientCert, "serial", cur.Serial(),
 		"not_after", cur.NotAfter().UTC().Format(time.RFC3339), "reload_interval", cfg.Signers.CertReloadInterval.String())
 	go certs.Run(ctx, cfg.Signers.CertReloadInterval)
+	m := metrics.New()
+	m.Certs(certs)
 
 	bcfg := backend.Config{
 		Connections: cfg.Signers.Connections, Timeout: cfg.Signers.Timeout, DialTimeout: cfg.Signers.DialTimeout,
-		MaxShareIndex: cfg.Signers.MaxShareIndex, Certs: certs,
+		MaxShareIndex: cfg.Signers.MaxShareIndex, Certs: certs, Metrics: m,
 	}
 	for i, n := range cfg.Signers.Nodes {
 		bcfg.Signers = append(bcfg.Signers, backend.SignerConfig{Name: n.Name, Connection: cfg.Connection(i)})
@@ -93,6 +97,22 @@ func run(cfgPath string, log *slog.Logger) error {
 		return err
 	}
 	defer signers.Close()
+	errCh := make(chan error, 2)
+	if cfg.Metrics != "" {
+		// Its own listener, so the signing API and the metrics can sit on
+		// different interfaces. It starts before the first key load, so a
+		// start that waits for the signers shows in the metrics.
+		ln, err := net.Listen("tcp", cfg.Metrics)
+		if err != nil {
+			return fmt.Errorf("metrics: %w", err)
+		}
+		mux := http.NewServeMux()
+		mux.Handle("GET /metrics", m.Registry)
+		msrv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+		go func() { errCh <- fmt.Errorf("metrics: %w", msrv.Serve(ln)) }()
+		defer msrv.Close()
+		log.Info("metrics", "addr", cfg.Metrics, "path", "/metrics")
+	}
 	// The signers may still be starting; retry the first key load for a minute.
 	for attempt := 1; ; attempt++ {
 		n, err := signers.Refresh(ctx)
@@ -107,7 +127,7 @@ func run(cfgPath string, log *slog.Logger) error {
 		time.Sleep(2 * time.Second)
 	}
 
-	handler := server.New(signers, pol, chain, log, cfg.Signers.Timeout)
+	handler := server.New(signers, pol, chain, log, cfg.Signers.Timeout).WithMetrics(m)
 	if *cfg.Coalesce.Enabled {
 		handler = handler.WithCoalescing(cfg.CoalesceKeep())
 	}
@@ -118,7 +138,6 @@ func run(cfgPath string, log *slog.Logger) error {
 		Handler:           handler.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
 	log.Info("listening", "addr", cfg.Listen)
 

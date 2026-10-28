@@ -19,6 +19,7 @@ import (
 
 	"github.com/lidofinance/tee-signer/gateway/internal/backend"
 	"github.com/lidofinance/tee-signer/gateway/internal/coalesce"
+	"github.com/lidofinance/tee-signer/gateway/internal/metrics"
 	"github.com/lidofinance/tee-signer/gateway/internal/policy"
 	"github.com/lidofinance/tee-signer/web3signer-api/signing"
 )
@@ -44,6 +45,7 @@ type Server struct {
 	verify      Verifier
 	// shared is nil unless WithCoalescing turned it on.
 	shared *coalesce.Group[signed]
+	m      *metrics.Gateway
 }
 
 // signed is the outcome of one call to the signers: the signature, which
@@ -65,7 +67,15 @@ func New(signer backend.Signer, pol *policy.Policy, chain signing.Chain, log *sl
 		signTimeout = 15 * time.Second
 	}
 
-	return &Server{signer: signer, policy: pol, chain: chain, log: log, signTimeout: signTimeout}
+	return &Server{signer: signer, policy: pol, chain: chain, log: log, signTimeout: signTimeout, m: metrics.New()}
+}
+
+// WithMetrics counts the sign requests in m (metrics.Gateway.Requests).
+// Without it they go to a registry of their own.
+func (s *Server) WithMetrics(m *metrics.Gateway) *Server {
+	s.m = m
+
+	return s
 }
 
 // WithVerifier makes the server check every signature against the
@@ -142,12 +152,14 @@ func (s *Server) sign(w http.ResponseWriter, r *http.Request) {
 
 	pubkey, ok := parsePubkey(identifier)
 	if !ok || !s.signer.HasKey(r.Context(), pubkey) {
+		s.m.Requests.Inc(job.Type, "unknown_key")
 		log.Info("unknown public key")
 		writeError(w, http.StatusNotFound, "Not Found")
 		return
 	}
 
 	if err := s.policy.Check(pubkey, job); err != nil {
+		s.m.Requests.Inc(job.Type, "policy")
 		log.Warn("refused by policy", "err", err.Error())
 		writeError(w, http.StatusPreconditionFailed, err.Error())
 		return
@@ -184,6 +196,7 @@ func (s *Server) sign(w http.ResponseWriter, r *http.Request) {
 	case coalesce.Cached:
 		timing = []any{"cache_hit", true}
 	}
+	s.m.Requests.Inc(job.Type, requestResult(err))
 	if err != nil {
 		var (
 			denied     *backend.DeniedError
@@ -216,6 +229,25 @@ func (s *Server) sign(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", contentTypeText)
 	_, _ = io.WriteString(w, signature)
+}
+
+// requestResult is the result of a sign request for the metrics, once it
+// passed the key and policy checks: ok, unknown_key, denied (the signers
+// refused), timeout or error.
+func requestResult(err error) string {
+	var denied *backend.DeniedError
+	switch {
+	case err == nil:
+		return "ok"
+	case errors.Is(err, backend.ErrUnknownKey):
+		return "unknown_key"
+	case errors.As(err, &denied):
+		return "denied"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	default:
+		return "error"
+	}
 }
 
 // call makes one call to the signers and checks the signature with the

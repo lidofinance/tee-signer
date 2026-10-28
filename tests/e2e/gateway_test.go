@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -37,8 +38,9 @@ func TestE2EGateway(t *testing.T) {
 	roles := rolePKI(t, dir, "gw", 24*time.Hour, 24*time.Hour)
 	certFile, keyFile := writeSigningPair(t, dir, roles.signing)
 	// The renewed client certificate comes from a second CA. The runners
-	// trust both, so the swap mid-run below needs no runner restart.
-	renewed := rolePKI(t, dir, "gw2", 24*time.Hour, 24*time.Hour)
+	// trust both, so the swap mid-run below needs no runner restart. It
+	// expires a day later than the first, so the metrics tell them apart.
+	renewed := rolePKI(t, dir, "gw2", 48*time.Hour, 48*time.Hour)
 	bothCAs := filepath.Join(dir, "gw-both-ca.pem")
 	var caPEM []byte
 	for _, f := range []string{roles.caFile, renewed.caFile} {
@@ -88,7 +90,9 @@ func TestE2EGateway(t *testing.T) {
 		fmt.Fprintf(&nodes, "    - {name: gw-runner-%d, address: %q, attestation: {verifier: dev}}\n", i+1, addrs[i])
 	}
 	listen := fmt.Sprintf("127.0.0.1:%d", freePort(t))
+	metricsAddr := fmt.Sprintf("127.0.0.1:%d", freePort(t))
 	cfg := fmt.Sprintf(`listen: %s
+metrics: %s
 chain:
   preset: mainnet
   slots_per_epoch: %d
@@ -99,10 +103,11 @@ signers:
   client_key: %s
   cert_reload_interval: 1s
   timeout: 5s
+  connections: 3
   nodes:
 %spolicy:
   fee_recipient_allowlist: ["0x1111111111111111111111111111111111111111"]
-`, listen, slotsPerEpoch, c.cfg.GenesisForkVersion[:], c.cfg.GenesisValidatorsRoot[:], certFile, keyFile, nodes.String())
+`, listen, metricsAddr, slotsPerEpoch, c.cfg.GenesisForkVersion[:], c.cfg.GenesisValidatorsRoot[:], certFile, keyFile, nodes.String())
 	gw := startGateway(t, dir, cfg, listen)
 	url := "http://" + listen
 
@@ -195,9 +200,33 @@ signers:
 	}
 	t.Logf("double vote for target %d: 412", e1)
 
+	// The metrics after these requests: each of the 3 signers has its 3
+	// connections up, the requests counted by type and result, and the
+	// certificate in force is the one in the file.
+	metricsURL := "http://" + metricsAddr + "/metrics"
+	m := scrapePools(t, metricsURL, 3, 3)
+	for series, want := range map[string]float64{
+		`teesigner_gateway_requests_total{type="ATTESTATION",result="ok"}`:             1,
+		`teesigner_gateway_requests_total{type="ATTESTATION",result="denied"}`:         1,
+		`teesigner_gateway_requests_total{type="AGGREGATE_AND_PROOF",result="ok"}`:     1,
+		`teesigner_gateway_requests_total{type="AGGREGATE_AND_PROOF",result="denied"}`: 1,
+		`teesigner_gateway_keys`:                                   1,
+		`teesigner_gateway_client_cert_not_after_seconds`:          certNotAfter(t, certFile),
+		`teesigner_gateway_client_cert_reloads_total{result="ok"}`: 0,
+	} {
+		if got := m[series]; got != want {
+			t.Fatalf("%s = %v, want %v", series, got, want)
+		}
+	}
+	if m[`teesigner_gateway_sign_duration_seconds_count{type="BLOCK_V2"}`] != 1 {
+		t.Fatalf("no signing time for the block")
+	}
+	firstNotAfter := m[`teesigner_gateway_client_cert_not_after_seconds`]
+	t.Logf("metrics: 3 connections up to each signer, requests by type and result, certificate expiry %v", firstNotAfter)
+
 	// A renewed client certificate is written mid-run, by rename as a
 	// renewal tool does, while requests go on. Every request signs, and
-	// each of the 2 connections to each of the 3 signers moves to the new
+	// each of the 3 connections to each of the 3 signers moves to the new
 	// certificate after a new connection with it passed every check.
 	attestedBefore := strings.Count(gw.logText(), "signer attested")
 	newDir := filepath.Join(dir, "renewed")
@@ -205,7 +234,7 @@ signers:
 		t.Fatal(err)
 	}
 	newCert, newKey := writeSigningPair(t, newDir, renewed.signing)
-	const wantMoved = 3 * 2
+	const wantMoved = 3 * 3
 	swapped := false
 	deadline := time.Now().Add(60 * time.Second)
 	for i := uint64(0); ; i++ {
@@ -235,6 +264,19 @@ signers:
 	if n := strings.Count(gw.logText(), "signer attested") - attestedBefore; n < wantMoved {
 		t.Fatalf("%d new attested connections for the new certificate, want %d", n, wantMoved)
 	}
+	m = scrapePools(t, metricsURL, 3, 3)
+	if got, want := m[`teesigner_gateway_client_cert_not_after_seconds`], certNotAfter(t, certFile); got != want || got == firstNotAfter {
+		t.Fatalf("certificate expiry after the reload %v, want %v (before %v)", got, want, firstNotAfter)
+	}
+	if got := m[`teesigner_gateway_client_cert_reloads_total{result="ok"}`]; got != 1 {
+		t.Fatalf("%v reloads in the metrics, want 1", got)
+	}
+	for i := range 3 {
+		if got := m[fmt.Sprintf(`teesigner_gateway_signer_rotations_total{signer="gw-runner-%d",result="ok"}`, i+1)]; got != 3 {
+			t.Fatalf("gw-runner-%d: %v connections moved in the metrics, want 3", i+1, got)
+		}
+	}
+	t.Logf("metrics after the reload: new expiry %v, 1 reload, 3 connections moved and up per signer", m[`teesigner_gateway_client_cert_not_after_seconds`])
 
 	// One signer down: the other two sign. Two down: no signature.
 	runners[0].stop()
@@ -272,6 +314,74 @@ signers:
 	if after := strings.Count(gw.logText(), "signer attested"); after <= before {
 		t.Fatalf("no new attested connection after the restart")
 	}
+}
+
+// scrapeMetrics reads the gateway's /metrics: each sample as its series
+// (name and labels) and value.
+func scrapeMetrics(t *testing.T, url string) map[string]float64 {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if ct := resp.Header.Get("Content-Type"); resp.StatusCode != http.StatusOK || !strings.HasPrefix(ct, "text/plain; version=0.0.4") {
+		t.Fatalf("metrics: %d %q", resp.StatusCode, ct)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	out := map[string]float64{}
+	for _, l := range strings.Split(string(b), "\n") {
+		if l == "" || strings.HasPrefix(l, "#") {
+			continue
+		}
+		i := strings.LastIndexByte(l, ' ')
+		v, err := strconv.ParseFloat(l[i+1:], 64)
+		if i < 0 || err != nil {
+			t.Fatalf("metrics line %q", l)
+		}
+		out[l[:i]] = v
+	}
+	return out
+}
+
+// scrapePools scrapes until each of the signers gw-runner-1 to n has
+// want connections up; a connection counts once a request went on it.
+func scrapePools(t *testing.T, url string, n int, want float64) map[string]float64 {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		m := scrapeMetrics(t, url)
+		ok := true
+		for i := range n {
+			ok = ok && m[fmt.Sprintf(`teesigner_gateway_signer_connections_up{signer="gw-runner-%d"}`, i+1)] == want
+		}
+		if ok {
+			return m
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("not %v connections up to each signer: %v", want, m)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// certNotAfter is the expiry of the first certificate in a PEM file, in
+// Unix seconds.
+func certNotAfter(t *testing.T, path string) float64 {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blk, _ := pem.Decode(b)
+	if blk == nil {
+		t.Fatalf("%s: no PEM", path)
+	}
+	c, err := x509.ParseCertificate(blk.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return float64(c.NotAfter.Unix())
 }
 
 // writeSigningPair writes the client certificate chain and key of cfg

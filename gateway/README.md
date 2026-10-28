@@ -113,6 +113,7 @@ Both are refused with 412 and a message naming the rule, before any signer is co
 
 ```yaml
 listen: 127.0.0.1:19000
+# metrics: 127.0.0.1:19001        # Prometheus endpoint, see Metrics; absent: off
 chain:
   preset: mainnet                 # mainnet or minimal; sets SSZ list limits and slots per epoch
   genesis_fork_version: "0x00000000"   # first entry of the fork schedule; also for VALIDATOR_REGISTRATION
@@ -184,9 +185,50 @@ A good new pair logs `client certificate reloaded` with its serial and expiry. N
 
 If the certificate in force expires with no valid replacement on disk, the gateway logs `client certificate expired and no valid replacement on disk` once a minute, and every sign request fails: a 500 to the validator client, and a `signing failed` line whose `err` names the certificate file and its expiry. A valid pair written there ends it at the next read.
 
-The gateway has no metrics endpoint, so the certificate's expiry and the reloads are in the log only.
+The expiry of the certificate in force and the result of each read are also in the metrics (see Metrics).
 
 Each signing request leaves one log line (`msg=signed`, `"denied by signers"`, `"signing failed"`, `"bad request"`, ...). Once the body parses, the line carries the request `type` and the `signer_call`, the signer message it becomes; signed, denied and failed lines also carry `signer_ms`. The reasons of the signers that refused or failed are in the `err` of a denied or failed line. A partial signature that does not verify is logged on its own (`bad partial signature`, with the signer's name). Each attested connection logs `signer attested` with the signer's setup state.
+
+## Metrics
+
+With `metrics: HOST:PORT` in the config, the gateway serves Prometheus metrics at `GET /metrics` on that address: plain HTTP, the text format 0.0.4, and nothing else on that listener. Without `metrics` there is no endpoint. It has no TLS and no authentication, so bind it to loopback (`127.0.0.1:19001`) or to a monitoring network. The exporter is a small registry in `internal/metrics` on the standard library, so the gateway needs no Prometheus client module.
+
+No label holds a public key or a value a client picks. `signer` is a name from `signers.nodes`, `type` is a Web3Signer request type the gateway parsed, and the other labels take the values listed here.
+
+| Metric | Type | Labels | What it counts |
+|---|---|---|---|
+| `teesigner_gateway_client_cert_not_after_seconds` | gauge | | Unix time the client certificate in force expires |
+| `teesigner_gateway_client_cert_not_before_seconds` | gauge | | Unix time it became valid |
+| `teesigner_gateway_client_cert_reloads_total` | counter | `result`: `ok`, `refused`, `unchanged` | Reads of `client_cert` and `client_key`: a new pair swapped in, content refused (at every read until it changes), or the pair in force |
+| `teesigner_gateway_client_cert_last_reload_timestamp_seconds` | gauge | | Unix time the pair in force took effect: the start or the last successful reload |
+| `teesigner_gateway_signer_connections_up` | gauge | `signer` | Connections that passed every check and have not failed since |
+| `teesigner_gateway_signer_dials_total` | counter | `signer`, `result`: `ok`, `failed` | New connections, with every check |
+| `teesigner_gateway_signer_rotations_total` | counter | `signer`, `result`: `ok`, `failed` | Connections moved to a new client certificate; a failed move is tried again 5 s later |
+| `teesigner_gateway_signer_attestation_failures_total` | counter | `signer`, `reason`: `tls`, `key_pin`, `identity`, `verifier` | New connections a check refused: `tls` the handshake (client certificate, build flavour, chain mark), `key_pin` the `tls_key_pin`, `identity` the `IDENTITY` exchange and its TLS key, `verifier` the attestation document and the setup pins |
+| `teesigner_gateway_signer_requests_total` | counter | `signer`, `result`: `ok`, `refused`, `error`, `timeout` | Calls to the signer, `SIGN` and `PUBLIC_KEYS`; `refused` is an answer with a refusal (slashing protection, policy, not ready) |
+| `teesigner_gateway_signer_keys_refreshed_timestamp_seconds` | gauge | `signer` | Unix time of the last key list the signer answered, 0 before the first |
+| `teesigner_gateway_keys` | gauge | | Validator keys the gateway signs for |
+| `teesigner_gateway_requests_total` | counter | `type`, `result`: `ok`, `unknown_key`, `policy`, `denied`, `error`, `timeout` | Sign requests whose body parsed. `policy` is the gateway's own rule, `denied` a refusal by the signers (both 412), `timeout` the end of `signers.timeout`. A body that does not parse has no type and is not counted |
+| `teesigner_gateway_sign_duration_seconds` | histogram | `type` | Time from sending a request to the signers to the combined signature, for requests that signed; buckets from 5 ms to 10 s. A request that got a shared or stored signature (Coalescing) made no call and is not in it |
+| `teesigner_gateway_combine_failures_total` | counter | `reason`: `bad_partial`, `below_threshold`, `verify` | Partial signatures that do not verify under their share key, requests that got too few good partial signatures before the deadline ran out of signers, and combined signatures that do not verify |
+
+The gateway connects on demand and sends no probes, so the connection metrics show what the requests found. A connection counts as up from the first request on it. One the signer closed counts until the next request on it fails. A dial the request gave up on goes on in the background and is not counted. Each series of a signer exists with 0 from the start, so `increase()` sees the first event.
+
+An alert for a client certificate that expires in under 2 days:
+
+```yaml
+groups:
+  - name: tee-signer-gateway
+    rules:
+      - alert: GatewayClientCertExpiresSoon
+        expr: teesigner_gateway_client_cert_not_after_seconds - time() < 2 * 86400
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The gateway client certificate expires in {{ $value | humanizeDuration }}"
+          description: "Renew signers.client_cert. If a renewed pair was written, see client_cert_reloads_total{result=\"refused\"} and the gateway log."
+```
 
 ## Build and test
 
@@ -196,9 +238,9 @@ Each signing request leaves one log line (`msg=signed`, `"denied by signers"`, `
 | `scripts/test-unit.sh` | `go vet` and `go test ./...`. |
 | `scripts/update-spec-vectors.sh` | Regenerates the Web3Signer example vectors in `web3signer-api/signing/testdata` from the pinned Web3Signer tag. |
 
-From the repo root, `scripts/test-modules.sh gateway` runs gofmt, vet and the unit tests under the race detector. The unit tests run the combining against fake signers (2 of 3, a signer down, a slow signer, a partial that does not verify, refusals, all down) and the connections against a fake TLS signer (attestation on every new connection, a wrong `tls_key_pin`, a wrong chain mark, an attestation without the nonce). The reload tests write good and bad pairs in random order and check that the last good one stays in force, and swap the certificate under load against fake signers that accept only the old certificate and then only the new one, with no failed request.
+From the repo root, `scripts/test-modules.sh gateway` runs gofmt, vet and the unit tests under the race detector. The unit tests run the combining against fake signers (2 of 3, a signer down, a slow signer, a partial that does not verify, refusals, all down) and the connections against a fake TLS signer (attestation on every new connection, a wrong `tls_key_pin`, a wrong chain mark, an attestation without the nonce). The reload tests write good and bad pairs in random order and check that the last good one stays in force, and swap the certificate under load against fake signers that accept only the old certificate and then only the new one, with no failed request. The metrics tests check the text format and that each counter moves on its event: calls by result, dials, connections up, each attestation failure reason against the fake TLS signer, rotations, combine failures, request results and reload results.
 
-`TestE2EGateway` in [tests/e2e](../tests/e2e) is the end-to-end test: three dev runners of `scripts/build-runner.sh` with mutual TLS, each with one share of a 2-of-3 key, and the gateway binary in front of them. It sends a validator client's HTTP requests (attestation, block, selection proof, aggregate), checks each signature under the validator key against the root the signer core computes, and checks a double vote, an aggregate with a bad selection proof, one signer down, two down, a new client certificate written mid-run while requests go on, and a signer that restarts with a new TLS key:
+`TestE2EGateway` in [tests/e2e](../tests/e2e) is the end-to-end test: three dev runners of `scripts/build-runner.sh` with mutual TLS, each with one share of a 2-of-3 key, and the gateway binary in front of them. It sends a validator client's HTTP requests (attestation, block, selection proof, aggregate), checks each signature under the validator key against the root the signer core computes, and checks a double vote, an aggregate with a bad selection proof, one signer down, two down, a new client certificate written mid-run while requests go on, and a signer that restarts with a new TLS key. It scrapes `/metrics` before and after the new certificate: 3 connections up to each signer, the requests by type and result, the expiry of the certificate in the file, one reload and 3 connections moved per signer:
 
 ```sh
 scripts/build-runner.sh
@@ -208,11 +250,12 @@ cd tests && RUNNER_BIN="$PWD/../build/x86_64/bin/runner-dev" go test -race -coun
 ## Code
 
 ```
-cmd/gateway          main: config, signers, HTTP server
+cmd/gateway          main: config, signers, HTTP server, metrics listener
 cmd/blsverify        independent verifier: hand-written SSZ on crypto/sha256 + blst
 internal/config      gateway.yml: defaults, required keys, chain pin and fork schedule, signers
 internal/backend     the signers: connections (runnerclient), typed messages, share indices, fan-out, combining
 internal/certreload  the client certificate in force: reads it again, checks a new pair, swaps it in
+internal/metrics     Prometheus registry and text format, and the gateway's metrics
 internal/policy      exit and registration rules
 internal/server      HTTP handlers, content negotiation, error bodies
 internal/coalesce    one call to the signers for identical non-slashable requests, results kept 2 slots

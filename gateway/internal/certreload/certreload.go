@@ -45,6 +45,9 @@ func (p *Pair) Gen() uint64 { return p.gen }
 // NotAfter is the end of the certificate's validity.
 func (p *Pair) NotAfter() time.Time { return p.cert.Leaf.NotAfter }
 
+// NotBefore is the start of the certificate's validity.
+func (p *Pair) NotBefore() time.Time { return p.cert.Leaf.NotBefore }
+
 // Serial is the certificate's serial number in decimal.
 func (p *Pair) Serial() string { return p.cert.Leaf.SerialNumber.String() }
 
@@ -98,6 +101,18 @@ type Watcher struct {
 	// expiredLogged is when the expiry of cur was last logged.
 	expiredLogged time.Time
 	subs          []chan struct{}
+	stats         Stats
+}
+
+// Stats counts the polls by result.
+type Stats struct {
+	// Reloaded counts the polls that swapped in a new pair, Refused those
+	// that refused the content on disk (each poll of the same content
+	// again), and Unchanged those that found the pair in force.
+	Reloaded, Refused, Unchanged uint64
+	// Since is when the pair in force took effect: the start or the last
+	// swap.
+	Since time.Time
 }
 
 // New reads the pair at certPath and keyPath. It fails if the pair does
@@ -118,6 +133,7 @@ func newWatcher(certPath, keyPath string, log *slog.Logger, now func() time.Time
 	}
 	p.gen = 1
 	w.cur = p
+	w.stats.Since = now()
 
 	return w, nil
 }
@@ -171,6 +187,14 @@ func (w *Watcher) Current() *Pair {
 	return w.cur
 }
 
+// Stats returns the poll counts so far.
+func (w *Watcher) Stats() Stats {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	return w.stats
+}
+
 // Subscribe returns a channel that receives after each swap. It holds one
 // notice; a subscriber that is slow misses none but may get two as one.
 func (w *Watcher) Subscribe() <-chan struct{} {
@@ -215,12 +239,14 @@ func (w *Watcher) Poll() bool {
 	switch {
 	case err == nil && d == w.cur.digest:
 		w.refused = [32]byte{}
+		w.stats.Unchanged++
 	default:
 		var p *Pair
 		if err == nil {
 			p, err = w.check(certPEM, keyPEM, now)
 		}
 		if err != nil {
+			w.stats.Refused++
 			if d != w.refused {
 				w.refused = d
 				w.log.Error(msgRefused, "err", err.Error(), "serial", w.cur.Serial(),
@@ -231,6 +257,8 @@ func (w *Watcher) Poll() bool {
 		}
 		p.gen = w.cur.gen + 1
 		w.cur, w.refused, w.expiredLogged, swapped = p, [32]byte{}, time.Time{}, true
+		w.stats.Reloaded++
+		w.stats.Since = now
 		w.log.Info(msgReloaded, "cert", w.certPath, "serial", p.Serial(), "not_after", p.NotAfter().UTC().Format(time.RFC3339),
 			"generation", p.gen)
 		for _, ch := range w.subs {

@@ -7,12 +7,15 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
 	"github.com/lidofinance/tee-signer/gateway/internal/certreload"
+	"github.com/lidofinance/tee-signer/gateway/internal/metrics"
 	proto "github.com/lidofinance/tee-signer/signer-protocol"
 )
 
@@ -52,13 +55,23 @@ type poolConfig struct {
 	// 5 s).
 	retry time.Duration
 	log   *slog.Logger
+	// name is the signer in the metrics (default: the address).
+	name string
+	// m receives the metrics of the signer (default: a registry of its
+	// own).
+	m *metrics.Gateway
 }
 
 // slot is one place in a node's pool. pair is the client certificate its
-// client presents (nil without certs).
+// client presents (nil without certs). up says that its client holds a
+// connection that passed every check, as far as the node saw: it turns
+// true with the first call that reaches the signer and false with a
+// failed dial or an error on the connection. A connection the signer
+// closed counts as up until the next call on it finds out.
 type slot struct {
 	c    runner
 	pair *certreload.Pair
+	up   bool
 }
 
 // node is one TEE signer behind a few runner clients. Each client holds
@@ -137,6 +150,13 @@ func newPool(addr string, pc poolConfig, mk func(*certreload.Pair) (runner, erro
 	if pc.log == nil {
 		pc.log = slog.New(slog.DiscardHandler)
 	}
+	if pc.name == "" {
+		pc.name = addr
+	}
+	if pc.m == nil {
+		pc.m = metrics.New()
+	}
+	pc.m.Signer(pc.name)
 	n := &node{addr: addr, pc: pc, mk: mk, now: time.Now, avail: make(chan struct{}, pc.size), released: make(chan struct{})}
 	var pair *certreload.Pair
 	if pc.certs != nil {
@@ -186,13 +206,16 @@ func (n *node) acquire(ctx context.Context) (*slot, error) {
 	}
 	c, err := n.mk(cur)
 	if err != nil {
+		n.pc.m.SignerRotations.Inc(n.pc.name, "failed")
 		n.pc.log.Warn("new client for an expired certificate failed", "address", n.addr, "err", err.Error())
 
 		return s, nil
 	}
+	n.pc.m.SignerRotations.Inc(n.pc.name, "ok")
 	n.mu.Lock()
 	old := s.c
-	s.c, s.pair = c, cur
+	s.c, s.pair, s.up = c, cur, false
+	n.publishUpLocked()
 	n.mu.Unlock()
 	go old.Close()
 	n.pc.log.Info("connection moved to the new client certificate", "address", n.addr, "serial", cur.Serial(),
@@ -217,22 +240,135 @@ func (n *node) release(s *slot) {
 // again with the same signature, so a SIGN may go twice. A refusal, a
 // failed check, a timeout or the end of ctx is not tried again. With an
 // expired client certificate f does not run.
-func (n *node) do(ctx context.Context, f func(runner) error) error {
+func (n *node) do(ctx context.Context, f func(runner) error) (err error) {
+	defer func() { n.pc.m.SignerRequests.Inc(n.pc.name, callResult(err)) }()
 	if n.pc.certs != nil {
 		if err := n.pc.certs.Usable(); err != nil {
 			return fmt.Errorf("%s: %w", n.addr, err)
 		}
 	}
 	for attempt := 1; ; attempt++ {
-		s, err := n.acquire(ctx)
+		var s *slot
+		s, err = n.acquire(ctx)
 		if err != nil {
 			return err
 		}
 		err = f(s.c)
+		n.track(ctx, s, err)
 		n.release(s)
 		if err == nil || attempt == 2 || ctx.Err() != nil || !connectionLost(err) {
 			return err
 		}
+	}
+}
+
+// track updates the state of s after a call on its client, which the
+// caller holds, and counts the dial the call made, if any.
+func (n *node) track(ctx context.Context, s *slot, err error) {
+	n.mu.Lock()
+	wasUp := s.up
+	n.mu.Unlock()
+	up := n.dialed(ctx, wasUp, err)
+	if up == wasUp {
+		return
+	}
+	n.mu.Lock()
+	s.up = up
+	n.publishUpLocked()
+	n.mu.Unlock()
+}
+
+// dialed counts the dial a call made and reports whether the client holds
+// a connection after it. A client dials when it has none, so on a client
+// that had none, a call that reached the signer (an answer or a refusal)
+// means a dial that passed every check. A dial that the caller gave up on
+// goes on in the background and is not counted; the next call finds its
+// connection.
+func (n *node) dialed(ctx context.Context, hadConn bool, err error) bool {
+	if failed, reason := dialFailure(err); failed {
+		if ctx.Err() == nil {
+			n.pc.m.SignerDials.Inc(n.pc.name, "failed")
+			if reason != "" {
+				n.pc.m.SignerAttestationFailures.Inc(n.pc.name, reason)
+			}
+		}
+
+		return false
+	}
+	var refused *proto.RefusedError
+	switch {
+	case err == nil || errors.As(err, &refused):
+		if !hadConn {
+			n.pc.m.SignerDials.Inc(n.pc.name, "ok")
+		}
+
+		return true
+	case errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled):
+		// The call ended before it was sent; the connection stays.
+		return hadConn
+	default:
+		// The client drops its connection after an I/O error or a
+		// timeout on it.
+		return false
+	}
+}
+
+// publishUpLocked sets the gauge of connections up. The caller holds
+// n.mu.
+func (n *node) publishUpLocked() {
+	up := 0
+	for _, s := range n.all {
+		if s.up {
+			up++
+		}
+	}
+	n.pc.m.SignerConnectionsUp.Set(float64(up), n.pc.name)
+}
+
+// dialFailure reports whether err is a failed dial of a remote client and,
+// if a check of the new connection refused the signer, which one (a
+// metrics.AttestationReasons value). It reads the texts of
+// signer-protocol/remote (Client.dial and roundTrip), which wrap no error
+// type of their own; the TLS tests of this package pin each reason.
+func dialFailure(err error) (failed bool, reason string) {
+	if err == nil {
+		return false, ""
+	}
+	msg := err.Error()
+	i := strings.Index(msg, "remote: dial ")
+	if i < 0 {
+		return false, ""
+	}
+	msg = msg[i:]
+	switch {
+	case strings.Contains(msg, ": tls handshake: "), strings.Contains(msg, ": runner sent no certificate"):
+		reason = "tls"
+	case strings.Contains(msg, " is not the pinned key "):
+		reason = "key_pin"
+	case strings.Contains(msg, ": identity: "), strings.Contains(msg, " but its attested identity names "):
+		reason = "identity"
+	case strings.Contains(msg, ": attestation: "):
+		reason = "verifier"
+	}
+
+	return true, reason
+}
+
+// callResult is the result of a call to a signer for the metrics: ok,
+// refused (the signer answered with a refusal), timeout or error.
+func callResult(err error) string {
+	var refused *proto.RefusedError
+	timeout := errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded)
+	failed, _ := dialFailure(err)
+	switch {
+	case err == nil:
+		return "ok"
+	case timeout:
+		return "timeout"
+	case !failed && errors.As(err, &refused):
+		return "refused"
+	default:
+		return "error"
 	}
 }
 
@@ -264,11 +400,15 @@ func (n *node) move(ctx context.Context) {
 			wctx, cancel := context.WithTimeout(ctx, n.pc.warm)
 			_, err = c.PublicKeys(wctx)
 			cancel()
+			n.dialed(ctx, false, err)
 			if err != nil {
 				_ = c.Close()
 			}
 		}
 		if err != nil {
+			if ctx.Err() == nil {
+				n.pc.m.SignerRotations.Inc(n.pc.name, "failed")
+			}
 			if err.Error() != lastErr {
 				lastErr = err.Error()
 				n.pc.log.Warn("connection on the new client certificate failed, keeping the old one", "address", n.addr,
@@ -282,7 +422,9 @@ func (n *node) move(ctx context.Context) {
 
 			continue
 		}
-		if !n.swapIn(ctx, c, cur) {
+		if n.swapIn(ctx, c, cur) {
+			n.pc.m.SignerRotations.Inc(n.pc.name, "ok")
+		} else {
 			_ = c.Close()
 		}
 	}
@@ -318,7 +460,8 @@ func (n *node) swapIn(ctx context.Context, c runner, cur *certreload.Pair) bool 
 				continue
 			}
 			old := s.c
-			s.c, s.pair = c, cur
+			s.c, s.pair, s.up = c, cur, true
+			n.publishUpLocked()
 			n.mu.Unlock()
 			_ = old.Close()
 			n.pc.log.Info("connection moved to the new client certificate", "address", n.addr, "serial", cur.Serial())

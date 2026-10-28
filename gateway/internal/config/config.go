@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,7 +71,10 @@ func (a *Attestation) UnmarshalYAML(n *yaml.Node) error {
 // Config is the gateway configuration file.
 type Config struct {
 	Listen string `yaml:"listen"`
-	Chain  struct {
+	// Metrics, if set, is the HOST:PORT of the Prometheus endpoint: plain
+	// HTTP, GET /metrics only. Absent: no endpoint.
+	Metrics string `yaml:"metrics"`
+	Chain   struct {
 		// Preset is mainnet (all public networks) or minimal (spec tests, Web3Signer examples).
 		Preset string `yaml:"preset"`
 		// SlotsPerEpoch overrides the preset value when set.
@@ -140,6 +144,14 @@ func Load(path string) (*Config, error) {
 	}
 	if c.Listen == "" {
 		c.Listen = "127.0.0.1:19000"
+	}
+	if c.Metrics != "" {
+		if _, _, err := net.SplitHostPort(c.Metrics); err != nil {
+			return nil, fmt.Errorf("metrics: %w", err)
+		}
+		if c.Metrics == c.Listen {
+			return nil, errors.New("metrics must be another address than listen")
+		}
 	}
 	if c.Chain.Preset == "" {
 		c.Chain.Preset = "mainnet"
