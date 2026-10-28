@@ -10,6 +10,8 @@
 #                               files of this repo that go list -deps picks for
 #                               its tags, plus the C core, plus the Rust NTS
 #                               crate for the builds with the tag nts
+#   scripts/loc.sh zones        per zone of SECURITY-SCOPE.md (PERIMETER,
+#                               PERIPHERY), by module
 #   scripts/loc.sh files MOD    the counted files of one module
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
@@ -74,5 +76,15 @@ case "${1:-modules}" in
       all="$(cloc --quiet --list-file="$tmp/b.list" --csv 2>/dev/null | awk -F, '$2 == "SUM" { print $5 }')"
       printf '%-34s Go %6s, with the C core%s %6s\n' "$name" "$go" "$(has_nts "$name" && echo ' and NTS' || echo '        ')" "$all"
     done ;;
-  *) echo "usage: loc.sh [modules|builds|files MODULE]" >&2; exit 2 ;;
+  zones)
+    [ -f SECURITY-SCOPE.md ] || { echo "loc: no SECURITY-SCOPE.md" >&2; exit 1; }
+    for zone in PERIMETER PERIPHERY; do
+      : >"$tmp/$zone.list"
+      zm="$(awk -F'|' -v z="$zone" '$3 ~ z && match($2, /[(][a-z0-9-]+[)]/) { print substr($2, RSTART + 1, RLENGTH - 2) }' SECURITY-SCOPE.md)"
+      for m in $zm; do files "$m" >>"$tmp/$zone.list"; done
+      echo "$zone: $(echo $zm)"
+      count "$tmp/$zone.list"
+    done
+    echo "(whole modules; the parts SECURITY-SCOPE.md lists as the other zone count with their module)" ;;
+  *) echo "usage: loc.sh [modules|builds|zones|files MODULE]" >&2; exit 2 ;;
 esac
