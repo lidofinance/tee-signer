@@ -37,16 +37,18 @@ func TestNTSInteropPublicServers(t *testing.T) {
 	}
 
 	type sampleRow struct {
-		Round        int
-		Operator     string
-		Error        string  `json:",omitempty"`
-		DelayMs      float64 `json:",omitempty"`
-		BoundMs      float64 `json:",omitempty"`
-		OffsetHostMs float64 `json:",omitempty"`
-		RootDelayMs  float64 `json:",omitempty"`
-		RootDispMs   float64 `json:",omitempty"`
-		Stratum      int     `json:",omitempty"`
-		Precision    int     `json:",omitempty"`
+		Round          int
+		Operator       string
+		Error          string  `json:",omitempty"`
+		DelayMs        float64 `json:",omitempty"`
+		BoundMs        float64 `json:",omitempty"`
+		OffsetHostMs   float64 `json:",omitempty"`
+		RootDelayMs    float64 `json:",omitempty"`
+		RootDispMs     float64 `json:",omitempty"`
+		Stratum        int     `json:",omitempty"`
+		Precision      int     `json:",omitempty"`
+		CookiesHeld    int     `json:",omitempty"`
+		CookiesInReply int     `json:",omitempty"`
 		// RawDriftPPM: this server's offset to CLOCK_MONOTONIC_RAW since its
 		// previous sample, per elapsed time: the local clock's rate error.
 		RawDriftPPM float64 `json:",omitempty"`
@@ -92,17 +94,17 @@ func TestNTSInteropPublicServers(t *testing.T) {
 				s := p.Sample
 				row.DelayMs, row.BoundMs, row.OffsetHostMs = ms(s.Delay), ms(s.Bound), ms(p.Stats.LastOffsetFromHost)
 				row.RootDelayMs, row.RootDispMs = ms(s.RootDelay), ms(s.RootDispersion)
-				row.Stratum, row.Precision = s.Stratum, s.Precision
+				row.Stratum, row.Precision, row.CookiesHeld, row.CookiesInReply = s.Stratum, s.Precision, s.CookiesHeld, s.CookiesReceived
 				if q := prev[op]; q != nil && s.T4 > q.T4 {
 					row.RawDriftPPM = float64(s.Offset-q.Offset) / float64(s.T4-q.T4) * 1e6
 				}
 				prev[op] = s
 			}
 			samples = append(samples, row)
-			t.Logf("round %d %-10s %-20s KE ok %d fail %d (%v) | delay %.3f ms bound %.3f ms offset-vs-host %+.3f ms stratum %d prec %d rootdelay %.3f rootdisp %.3f | raw clock drift %+.1f ppm %s",
-				round, op, p.Host, p.Stats.KEOK, p.Stats.KEFail, p.Stats.LastKE.Round(time.Millisecond),
+			t.Logf("round %d %-10s %-20s KE ok %d fail %d (%v, %d cookies) | delay %.3f ms bound %.3f ms offset-vs-host %+.3f ms stratum %d prec %d rootdelay %.3f rootdisp %.3f | cookies %d (+%d) | raw clock drift %+.1f ppm %s",
+				round, op, p.Host, p.Stats.KEOK, p.Stats.KEFail, p.Stats.LastKE.Round(time.Millisecond), p.Stats.CookiesAfterKE,
 				row.DelayMs, row.BoundMs, row.OffsetHostMs, row.Stratum, row.Precision, row.RootDelayMs, row.RootDispMs,
-				row.RawDriftPPM, p.LastErr)
+				row.CookiesHeld, row.CookiesInReply, row.RawDriftPPM, p.LastErr)
 		}
 		rr := roundRow{Round: round, Members: st.Members, QuorumBoundMs: ms(st.Bound), QuorumWidthMs: ms(time.Duration(st.Hi - st.Lo)), DriftPPM: st.DriftPPM}
 		raw, goNow := nts.Monotonic(), time.Now()

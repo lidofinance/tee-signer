@@ -2,6 +2,8 @@ module github.com/lidofinance/tee-signer/signer-core
 
 go 1.26.0
 
+toolchain go1.27.3
+
 require (
 	github.com/lidofinance/tee-signer/governance v0.0.0
 	github.com/lidofinance/tee-signer/signer-protocol v0.0.0

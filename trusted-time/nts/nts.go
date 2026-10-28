@@ -24,17 +24,17 @@ const (
 	// KEPort is the NTS-KE port (RFC 8915 section 4).
 	KEPort = 4460
 	// exchangeTimeout bounds an NTS-KE or NTP exchange whose context has no
-	// deadline, and the key exchange the library runs again by itself when
-	// its cookies run out.
+	// deadline.
 	exchangeTimeout = 10 * time.Second
 )
 
 // Error codes: what refused an exchange.
 const (
-	CodeKE     = 1 // the key exchange: TLS, ALPN, the records
-	CodeNTP    = 2 // the NTP response: not authentic, not ours, malformed
-	CodeSample = 3 // the measurement (RFC 5905 checks)
-	CodeQuorum = 4 // the quorum
+	CodeKE       = 1 // the key exchange: TLS, ALPN, the records
+	CodeNTP      = 2 // the NTP response: not authentic, not ours, malformed
+	CodeSample   = 3 // the measurement (RFC 5905 checks)
+	CodeQuorum   = 4 // the quorum
+	CodeNoCookie = 5 // no cookie left for a request
 )
 
 // Error is a refusal with the code of the step that refused.
@@ -58,32 +58,23 @@ type KissError struct{ Code string }
 
 func (k *KissError) Error() string { return "nts: Kiss-o'-Death " + k.Code }
 
-// Version names the NTS library this build links, for example
-// "beevik/nts v0.3.3".
+// Version names this NTS client and the NTP library it runs on, for
+// example "signer-nts go on beevik/ntp v1.6.0".
 func Version() string {
+	v := "signer-nts go on beevik/ntp"
 	if bi, ok := debug.ReadBuildInfo(); ok {
 		for _, d := range bi.Deps {
-			if d.Path == "github.com/beevik/nts" {
-				return "beevik/nts " + d.Version
+			if d.Path == "github.com/beevik/ntp" {
+				return v + " " + d.Version
 			}
 		}
 	}
-	return "beevik/nts"
+	return v
 }
 
 // DialFunc opens a connection. Go owns every socket of NTS: TCP for NTS-KE
 // and UDP for NTP. Tests and a vsock proxy plug in here.
 type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
-
-func dialWith(dial DialFunc, ctx context.Context, network, addr string) (net.Conn, error) {
-	if dial != nil {
-		return dial(ctx, network, addr)
-	}
-	var d net.Dialer
-	// A connected UDP socket: the kernel drops datagrams from other
-	// addresses.
-	return d.DialContext(ctx, network, addr)
-}
 
 // timeoutOf is the time left in ctx, or exchangeTimeout without a deadline.
 func timeoutOf(ctx context.Context) time.Duration {

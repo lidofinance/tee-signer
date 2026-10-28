@@ -2,6 +2,8 @@ module github.com/lidofinance/tee-signer/attestation-verify
 
 go 1.26.0
 
+toolchain go1.27.3
+
 require (
 	github.com/fxamacker/cbor/v2 v2.9.6
 	github.com/mdlayher/socket v0.6.0 // indirect

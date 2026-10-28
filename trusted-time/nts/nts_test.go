@@ -5,6 +5,7 @@ package nts
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,8 +22,8 @@ import (
 
 func TestVersion(t *testing.T) {
 	v := Version()
-	if !strings.HasPrefix(v, "beevik/nts") {
-		t.Fatalf("Version() = %q, want a string that starts with %q", v, "beevik/nts")
+	if !strings.HasPrefix(v, "signer-nts go on beevik/ntp") {
+		t.Fatalf("Version() = %q, want a string that starts with %q", v, "signer-nts go on beevik/ntp")
 	}
 	t.Log(v)
 }
@@ -29,6 +31,30 @@ func TestVersion(t *testing.T) {
 func TestAESSIVSelfTest(t *testing.T) {
 	if err := AESSIVSelfTest(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The self-test and Version are safe to call from many goroutines at once.
+func TestCallsFromManyGoroutines(t *testing.T) {
+	var wg sync.WaitGroup
+	errs := make(chan error, 16)
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				if err := AESSIVSelfTest(); err != nil {
+					errs <- err
+					return
+				}
+				_ = Version()
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
 	}
 }
 
@@ -53,9 +79,110 @@ func TestRunnerBuiltWithTheTag(t *testing.T) {
 	}
 }
 
+func TestKEValues(t *testing.T) {
+	if ALPN != "ntske/1" || ExporterLabel != "EXPORTER-network-time-security" {
+		t.Fatalf("ALPN %q, label %q", ALPN, ExporterLabel)
+	}
+	if c := ExporterContext(false); !bytes.Equal(c, []byte{0, 0, 0, 15, 0}) {
+		t.Fatalf("C2S context %x", c)
+	}
+	if c := ExporterContext(true); !bytes.Equal(c, []byte{0, 0, 0, 15, 1}) {
+		t.Fatalf("S2C context %x", c)
+	}
+	if r := hex.EncodeToString(KERequest()); r != "80010002000080040002000f80000000" {
+		t.Fatalf("KE request %s", r)
+	}
+	if _, done, err := keResponseLength([]byte{0x80, 0x01}); done || err != nil {
+		t.Fatalf("2 octets: done %v err %v", done, err)
+	}
+	if _, _, err := keResponseLength([]byte{0x00, 0x05, 0x04, 0x01}); err == nil || !strings.Contains(err.Error(), "at most 1024") {
+		t.Fatalf("over-long record: %v", err)
+	}
+	// The record rules: each refused response, and the reason.
+	rec := func(critical bool, typ uint16, body ...byte) []byte {
+		if critical {
+			typ |= 0x8000
+		}
+		r := []byte{byte(typ >> 8), byte(typ), byte(len(body) >> 8), byte(len(body))}
+		return append(r, body...)
+	}
+	eom := rec(true, 0)
+	proto := rec(true, 1, 0, 0)
+	aead := rec(true, 4, 0, 15)
+	cookie := rec(false, 5, 1, 2, 3)
+	join := func(rs ...[]byte) []byte {
+		var out []byte
+		for _, r := range rs {
+			out = append(out, r...)
+		}
+		return out
+	}
+	if r, err := parseKEResponse(join(proto, aead, cookie, rec(false, 6, 'h', 'o', 's', 't'), rec(false, 7, 0x10, 0x7b), eom)); err != nil || r.server != "host" || r.port != 4219 || len(r.cookies) != 1 {
+		t.Fatalf("good response: %+v %v", r, err)
+	}
+	for _, c := range []struct {
+		name string
+		resp []byte
+		want string
+	}{
+		{"no cookie", join(proto, aead, eom), "no cookie"},
+		{"no protocol", join(aead, cookie, eom), "no Next Protocol"},
+		{"no aead", join(proto, cookie, eom), "no AEAD"},
+		{"other aead", join(proto, rec(true, 4, 0, 30), cookie, eom), "AEAD_AES_SIV_CMAC_256"},
+		{"other protocol", join(rec(true, 1, 0, 1), aead, cookie, eom), "NTPv4"},
+		{"repeated protocol", join(proto, proto, aead, cookie, eom), "repeated"},
+		{"error record", join(rec(true, 2, 0, 1), eom), "server error 1"},
+		{"warning record", join(proto, aead, cookie, rec(true, 3, 0, 0), eom), "server warning 0"},
+		{"unknown critical", join(proto, aead, cookie, rec(true, 99), eom), "unknown critical record 99"},
+		{"trailing bytes", join(proto, aead, cookie, eom, []byte{1}), "after End of Message"},
+		{"no eom", join(proto, aead, cookie), "before End of Message"},
+		{"empty cookie", join(proto, aead, rec(false, 5), eom), "cookie of 0 octets"},
+	} {
+		if _, err := parseKEResponse(c.resp); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", c.name, err, c.want)
+		}
+	}
+	// An unknown non-critical record is ignored; cookies past 8 are dropped.
+	many := join(proto, aead)
+	for i := 0; i < 12; i++ {
+		many = append(many, cookie...)
+	}
+	if r, err := parseKEResponse(join(many, rec(false, 99, 1, 2), eom)); err != nil || len(r.cookies) != 8 {
+		t.Fatalf("12 cookies and an unknown record: %+v %v", r, err)
+	}
+}
+
+// The AES-SIV of this package against the test server's independent one,
+// on random inputs, and against RFC 5297 appendix A (AESSIVSelfTest).
+func TestSIVMatchesTestServer(t *testing.T) {
+	for i := 0; i < 200; i++ {
+		key := make([]byte, 32)
+		ad := make([]byte, i%40)
+		nonce := make([]byte, 1+i%20)
+		pt := make([]byte, i)
+		for _, b := range [][]byte{key, ad, nonce, pt} {
+			rand.Read(b)
+		}
+		k, err := newSIVKey(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ours := k.Seal([][]byte{ad, nonce}, pt)
+		theirs := ntstest.Seal(key, ad, nonce, pt)
+		if !bytes.Equal(ours, theirs) {
+			t.Fatalf("%d: seal differs", i)
+		}
+		if p, ok := k.Open([][]byte{ad, nonce}, theirs); !ok || !bytes.Equal(p, pt) {
+			t.Fatalf("%d: open of the server's ciphertext", i)
+		}
+		if _, ok := ntstest.Open(key, ad, nonce, ours); !ok {
+			t.Fatalf("%d: the server does not open ours", i)
+		}
+	}
+}
+
 // The test server's AES-SIV against RFC 5297 appendix A.1, so the cross
-// check below means something, and the library's AES-SIV against the test
-// server's on the self-test's input.
+// check below means something.
 func TestTestServerSIVMatchesRFC5297(t *testing.T) {
 	h := func(s string) []byte { b, _ := hex.DecodeString(s); return b }
 	key := h("fffefdfcfbfaf9f8f7f6f5f4f3f2f1f0f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff")
@@ -72,15 +199,6 @@ func TestTestServerSIVMatchesRFC5297(t *testing.T) {
 	ct[3] ^= 1
 	if _, ok := ntstest.Open(key, ad, []byte("nonce"), ct); ok {
 		t.Fatal("tampered ciphertext opened")
-	}
-	// The same input through both: the known answer of AESSIVSelfTest.
-	key2 := h("7f7e7d7c7b7a79787776757473727170404142434445464748494a4b4c4d4e4f")
-	ad2 := h("00112233445566778899aabbccddeeffdeaddadadeaddadaffeeddccbbaa99887766554433221100")
-	nonce2 := h("09f911029d74e35bd84156c5635688c0")
-	pt2 := h("7468697320697320736f6d6520706c61696e7465787420746f20656e6372797074207573696e67205349562d414553")
-	want2 := h("85825e22e90cf2ddda2c548dc7c1b6310dcdaca0cebf9dc6cb90583f5bf1506e02cd48832b00e4e598b2b22a53e6199d4df0c1666a35a0433b250dc134d776")
-	if got := ntstest.Seal(key2, ad2, nonce2, pt2); !bytes.Equal(got, want2) {
-		t.Fatalf("test server on the self-test input: %x", got)
 	}
 }
 
@@ -125,8 +243,8 @@ func TestKeyExchangeAndQuery(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ke.Assoc.Close()
-	if ke.NTPAddr != f.ntp.Addr {
-		t.Fatalf("NTP addr %s (want %s)", ke.NTPAddr, f.ntp.Addr)
+	if ke.NTPAddr != f.ntp.Addr || ke.Assoc.Cookies() != 8 {
+		t.Fatalf("NTP addr %s (want %s), cookies %d", ke.NTPAddr, f.ntp.Addr, ke.Assoc.Cookies())
 	}
 	for i := 0; i < 12; i++ {
 		s, err := ke.Assoc.Query(ctx(t, 2*time.Second), ke.NTPAddr, time.Now(), nil)
@@ -140,17 +258,15 @@ func TestKeyExchangeAndQuery(t *testing.T) {
 		if diff := time.Duration(est - now); diff.Abs() > s.Bound+5*time.Millisecond {
 			t.Fatalf("estimate off by %v, bound %v", diff, s.Bound)
 		}
-		if s.Bound < s.RootDelay/2+s.RootDispersion || s.Stratum != 1 {
+		if s.Bound < s.RootDelay/2+s.RootDispersion || s.CookiesHeld != 8 || s.Stratum != 1 {
 			t.Fatalf("sample %+v", s)
 		}
 		if i == 0 {
 			t.Logf("sample %+v", s)
 		}
 	}
-	// Twelve queries used twelve cookies and got twelve back: one key
-	// exchange served them all.
-	if n := f.ke.Sessions.Load(); n != 1 {
-		t.Fatalf("%d key exchanges for 12 queries, want 1", n)
+	if n := ke.Assoc.Cookies(); n != 8 {
+		t.Fatalf("cookies after 12 queries: %d", n)
 	}
 }
 
@@ -205,8 +321,8 @@ func TestKERefusals(t *testing.T) {
 		want string
 	}{
 		{"TLS 1.2 only", ntstest.KEOptions{TLS12: true}, "protocol version"},
-		{"no ALPN", ntstest.KEOptions{NoALPN: true}, "not negotiated"},
-		{"error record", ntstest.KEOptions{ErrorCode: 2}, "bad request"},
+		{"no ALPN", ntstest.KEOptions{NoALPN: true}, "ALPN"},
+		{"error record", ntstest.KEOptions{ErrorCode: 2}, "server error 1"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -246,11 +362,11 @@ func TestKissForgeryAndNTSN(t *testing.T) {
 	if _, err := ke.Assoc.Query(ctx(t, 2*time.Second), ke.NTPAddr, time.Now(), nil); !errors.As(err, &k) || k.Code != "RATE" {
 		t.Fatalf("RATE: %v", err)
 	}
-	// A response whose authenticator does not verify is refused: the
-	// library takes the first answer, so this query fails and says why.
+	// A response whose authenticator does not verify is refused: the first
+	// answer is taken, so this query fails and says why.
 	f.ntp.Set(ntstest.NTPOptions{BadAuth: true})
 	_, err = ke.Assoc.Query(ctx(t, 500*time.Millisecond), ke.NTPAddr, time.Now(), nil)
-	if !errors.Is(err, &Error{Code: CodeNTP}) || !strings.Contains(err.Error(), "authentication failed") {
+	if !errors.Is(err, &Error{Code: CodeNTP}) || !strings.Contains(err.Error(), "authenticator does not verify") {
 		t.Fatalf("forged: %v", err)
 	}
 	// The server forgets its cookies: NTSN (RFC 8915 section 5.7).
@@ -272,9 +388,7 @@ func TestKissForgeryAndNTSN(t *testing.T) {
 	}
 }
 
-// When the eight cookies of a key exchange are gone (eight requests without
-// an answer), the next query runs NTS-KE again by itself.
-func TestCookiesRunOutRunsKeyExchangeAgain(t *testing.T) {
+func TestCookiesRunOut(t *testing.T) {
 	f := newFixture(t, ntstest.KEOptions{}, ntstest.NTPOptions{Drop: true})
 	ke, err := KeyExchange(ctx(t, 5*time.Second), f.cfg)
 	if err != nil {
@@ -286,15 +400,9 @@ func TestCookiesRunOutRunsKeyExchangeAgain(t *testing.T) {
 			t.Fatal("dropped request answered")
 		}
 	}
-	if n := f.ke.Sessions.Load(); n != 1 {
-		t.Fatalf("%d key exchanges after 8 lost requests, want 1", n)
-	}
-	f.ntp.Set(ntstest.NTPOptions{})
-	if _, err := ke.Assoc.Query(ctx(t, 2*time.Second), ke.NTPAddr, time.Now(), nil); err != nil {
-		t.Fatalf("ninth query: %v", err)
-	}
-	if n := f.ke.Sessions.Load(); n != 2 {
-		t.Fatalf("%d key exchanges after the cookies ran out, want 2", n)
+	_, err = ke.Assoc.Query(ctx(t, 50*time.Millisecond), ke.NTPAddr, time.Now(), nil)
+	if !errors.Is(err, &Error{Code: CodeNoCookie}) {
+		t.Fatalf("after 8 lost requests: %v", err)
 	}
 }
 

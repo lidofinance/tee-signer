@@ -1,10 +1,14 @@
-// Package nts is the signer's NTS time client over github.com/beevik/nts
-// (NTS-KE, cookies, the AES-SIV extension fields) and github.com/beevik/ntp
-// (the NTPv4 exchange). Go owns the sockets and the clock.
+// Package nts is the signer's NTS time client (RFC 8915) on the standard
+// library and github.com/beevik/ntp (the NTPv4 exchange). Go owns the
+// sockets and the clock.
 //
-//   - ke.go: NTS-KE over crypto/tls (TLS 1.3, ALPN ntske/1), with a
-//     caller-given clock for certificates and pinned roots.
-//   - query.go: one NTP query over UDP, with T1 and T4 on Monotonic.
+//   - siv.go: AES-SIV-CMAC-256 (RFC 5297) on crypto/aes, the one AEAD offered.
+//   - ke.go: NTS-KE over crypto/tls (TLS 1.3, ALPN ntske/1), the records,
+//     the keys from the exporter, with a caller-given clock for certificates
+//     and pinned roots.
+//   - query.go: one NTP query over UDP on the library's extension hook: the
+//     Unique Identifier, cookie, placeholders and authenticator, with T1 and
+//     T4 on Monotonic.
 //   - sample.go: offset, delay and error bound of a response and the
 //     RFC 5905 checks.
 //   - quorum.go: the time from several servers, one of which may be wrong.

@@ -2,6 +2,8 @@ module github.com/lidofinance/tee-signer/tee-signer
 
 go 1.26.0
 
+toolchain go1.27.3
+
 require (
 	github.com/aws/aws-sdk-go-v2 v1.47.3
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.6 // indirect
@@ -34,12 +36,7 @@ require (
 	github.com/lidofinance/tee-signer/trusted-time v0.0.0
 )
 
-require (
-	github.com/aead/cmac v0.0.0-20160719120800-7af84192f0b1 // indirect
-	github.com/beevik/ntp v1.6.0 // indirect
-	github.com/beevik/nts v0.3.3 // indirect
-	github.com/secure-io/siv-go v0.0.0-20180922214919-5ff40651e2c4 // indirect
-)
+require github.com/beevik/ntp v1.6.0 // indirect
 
 replace (
 	github.com/lidofinance/tee-signer/attestation-verify => ../attestation-verify

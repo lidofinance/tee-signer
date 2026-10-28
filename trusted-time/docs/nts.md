@@ -1,7 +1,9 @@
 # nts: the signer's NTS time client
 
 The runner's trusted time comes from Network Time Security (RFC 8915) over
-NTPv4 (RFC 5905), from several operators at once, and from nothing else. This
+NTPv4 (RFC 5905), from several operators at once, and from nothing else. The
+client is this package on the Go standard library; only the NTPv4 exchange
+itself comes from a library. This
 note says what the client is made of, what it guarantees and how it is tested.
 The clock built on it is `trusted-time/clock.NTS`; its rules (polls, drift
 check, coarse check, the bound that fails `Now` over 100 ms) are in that
@@ -11,20 +13,26 @@ package's comments.
 
 | Part | Where | What |
 | --- | --- | --- |
-| NTS-KE: TLS 1.3 with ALPN `ntske/1`, the records, the two keys from the TLS exporter, the cookies | `github.com/beevik/nts` | one `Session` per server; it runs the exchange again by itself when its cookies ran out |
-| The NTP request and response with the NTS extension fields (Unique Identifier, cookie, placeholders, the AES-SIV authenticator), the origin check | `github.com/beevik/nts` with `github.com/beevik/ntp` and `github.com/secure-io/siv-go` | one query per call; the first answer is taken |
-| The socket, the roots, the clock that checks the certificate | `nts/ke.go`, `nts/roots.go` | `KeyExchange` dials through the platform (`DialFunc`), pins the operator's roots and checks the certificate against the caller's clock, never the host's |
+| AES-SIV-CMAC-256 (RFC 5297), the one AEAD offered | `nts/siv.go` on `crypto/aes` | branch-free `dbl`, constant-time tag compare; checked against RFC 5297 appendix A.1 and A.2 (`AESSIVSelfTest`) and against `ntstest`'s independent AES-SIV on random inputs |
+| NTS-KE: TLS 1.3 with ALPN `ntske/1`, the records, the two keys from the TLS exporter, the cookies | `nts/ke.go` on `crypto/tls` | `KeyExchange` dials through the platform (`DialFunc`), pins the operator's roots and checks the certificate against the caller's clock, never the host's; the records are read with the caps below |
+| The NTPv4 header, the random transmit timestamp, the socket, the origin check | `github.com/beevik/ntp` | one query per call; the first answer is taken |
+| The NTS extension fields: Unique Identifier, cookie, placeholders, the authenticator; the new cookies | `nts/query.go` on the library's extension hook | the authenticator covers the header and every field before it; an answer without our identifier or a verifying authenticator is refused |
 | T1 and T4 | `nts/query.go` | the library's `GetSystemTime` hook returns `Monotonic` (`CLOCK_MONOTONIC_RAW`), so every offset is real time minus the local monotonic clock |
-| Kiss-o'-Death | `nts/query.go` | NTSN from the library's NTS-NAK; RATE, DENY and RSTR read from the refused datagram (stratum 0 with our Unique Identifier, as RFC 8915 section 5.7 allows) |
+| Kiss-o'-Death | `nts/query.go` | stratum 0 with our Unique Identifier, taken without an authenticator as RFC 8915 section 5.7 allows: NTSN runs NTS-KE again, RATE, DENY and RSTR go to the clock |
 | Sample: offset, delay, error bound and the RFC 5905 checks | `nts/sample.go` | `measure`, below |
 | Quorum of 3 to 16 operators, one of which may be wrong | `nts/quorum.go` | `Quorum`, below |
 | Pinned roots per operator, the public servers | `nts/roots.go`, `nts/roots/` | |
 | Loopback NTS-KE and NTP servers for tests, with their own AES-SIV | `nts/ntstest/` | checked against RFC 5297 appendix A.1 |
 
+Caps on untrusted bytes: an NTS-KE response of at most 65536 octets, 64
+records, a record body of 1024, cookies of 1 to 1024 octets, 8 cookies kept,
+a server name of 255; an NTP answer of at most 2048 octets, at most 8
+cookies in one answer.
+
 The package has code only with the build tag `nts`: the cloud runners carry
 it, the dev runners do not (`scripts/common.sh`, `runner_tags`;
 `scripts/check-deps.sh` checks both, and that only the builds with the tag
-link the library and, through it, `golang.org/x/net` and `x/sys`).
+link the NTP library and, through it, `golang.org/x/net` and `x/sys`).
 
 ## Sample (RFC 5905 sections 7.3, 8, 11.2)
 
@@ -46,12 +54,12 @@ is the midpoint, bound (hi - lo) / 2.
 
 ## Tests
 
-- `nts`: key exchange and queries against the loopback servers; the
-  certificate checked against the given clock; TLS 1.2, a missing ALPN, an
-  Error record and foreign roots refused; RATE, a forged authenticator and
-  NTSN; the key exchange run again when the cookies ran out; the quorum; the
-  pinned roots; the AES-SIV self-test and the cross check of the library
-  against the test server's AES-SIV.
+- `nts`: the record rules of NTS-KE on hand-made responses; key exchange and
+  queries against the loopback servers; the certificate checked against the
+  given clock; TLS 1.2, a missing ALPN, an Error record and foreign roots
+  refused; RATE, a forged authenticator and NTSN; no cookie left after eight
+  lost requests; the quorum; the pinned roots; the AES-SIV self-test and the
+  cross check against the test server's AES-SIV.
 - `clock`: the quorum of three, one server wrong, two wrong, the bound that
   grows until `Now` fails, the coarse check, the Kiss-o'-Death codes, NTSN,
   the drift check, duplicate operators, time that never goes back.

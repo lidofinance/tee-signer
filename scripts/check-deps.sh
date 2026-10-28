@@ -13,8 +13,8 @@
 #      hf/nsm, mdlayher/vsock and socket and golang.org/x/{net,sync,sys} are
 #      for the AWS build only, fxamacker/cbor and x448/float16 too (the
 #      Nitro verifier's CBOR parser). The cloud builds (tag nts) also hold
-#      the NTS library (beevik/nts, beevik/ntp, secure-io/siv-go, aead/cmac)
-#      and, through it, golang.org/x/net and x/sys. The dev builds hold
+#      the NTP library under the NTS clock (beevik/ntp) and, through it,
+#      golang.org/x/net and x/sys. The dev builds hold
 #      nothing third-party but the embedded root certificates
 #      (x509roots/fallback).
 #   2b. The attestation verifier of the build's own platform only (tag
@@ -58,8 +58,8 @@ cloud_in() {
 module_ok() {
   case "$2" in
     github.com/lidofinance/tee-signer/*|golang.org/x/crypto/x509roots/fallback) return 0 ;;
-    # The NTS clock's library (trusted-time/nts): every cloud build.
-    github.com/beevik/nts|github.com/beevik/ntp|github.com/secure-io/siv-go|github.com/aead/cmac)
+    # The NTP library under the NTS clock (trusted-time/nts): every cloud build.
+    github.com/beevik/ntp)
       [ "${3:-0}" = 1 ] && return 0 ;;
     # x/net and x/sys: the AWS SDK, and the NTP library's socket options.
     golang.org/x/net|golang.org/x/sys)
