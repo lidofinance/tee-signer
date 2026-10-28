@@ -30,7 +30,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26.x"
+          go-version: "1.27.x"
           cache: false
       - run: sudo apt-get install -y -qq cloc jq
       - run: make check
@@ -44,11 +44,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26.x"
+          go-version: "1.27.x"
           cache: false
       - run: bash scripts/deps.sh
       - run: make core
-      - run: make nts
       - run: make test-modules
       # Show every failing test with its output, not only the log's tail.
       - if: failure()
@@ -82,7 +81,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26.x"
+          go-version: "1.27.x"
           cache: false
       - run: bash scripts/deps.sh
       - run: bash signer-core/scripts/fetch.sh

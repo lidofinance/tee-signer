@@ -86,7 +86,7 @@ generation.
 
 ## Build and test
 
-Ubuntu 22.04 or 24.04, x86_64 or arm64, Go 1.26 or newer (for
+Ubuntu 22.04 or 24.04, x86_64 or arm64, Go 1.27.3 or newer (for
 `crypto/hpke`), Docker for the image builds. `make help` lists the targets.
 From the repo root:
 

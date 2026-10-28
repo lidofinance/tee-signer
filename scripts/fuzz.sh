@@ -27,6 +27,7 @@ n=0
 tags_of() {
   case "$1" in
     tee-signer) runner_tags runner-dev ;;
+    trusted-time) echo nts ;;
     platform-aws) echo platform_aws ;;
     platform-azure) echo platform_azure ;;
     platform-gcp) echo platform_gcp ;;

@@ -63,7 +63,7 @@ type NTSServer struct {
 //     runs NTS-KE again (RFC 8915 section 5.7). NTS-KE failures back off
 //     from Interval to NTSMaxPoll.
 //   - The latest sample of each server, at most 4 x Interval old, goes to
-//     the Rust quorum (one server may be wrong). The result is an offset
+//     the quorum, nts.Quorum (one server may be wrong). The result is an offset
 //     from the local monotonic clock and an error bound.
 //   - Between quorums the bound grows by nts.RhoPPM of the elapsed
 //     monotonic time. Now fails once it is over MaxBound, so the signer
@@ -167,6 +167,8 @@ type NTSPeerStats struct {
 	Kisses             map[string]int
 	Errors             int
 	LastKE             time.Duration // duration of the last NTS-KE
+	CookiesAfterKE     int
+	CookiesHeld        int
 	LastDelay          time.Duration
 	LastBound          time.Duration
 	LastOffsetFromHost time.Duration // the sample's time minus the host clock, for logs only
@@ -242,7 +244,7 @@ func (n *NTS) Refresh(ctx context.Context) error {
 	var wg sync.WaitGroup
 	now := coarseLocal
 	for _, p := range n.peers {
-		if p.disabled != "" || now < p.nextPoll {
+		if now < p.nextPoll {
 			continue
 		}
 		wg.Add(1)
@@ -259,7 +261,11 @@ func (n *NTS) Refresh(ctx context.Context) error {
 // written, and Refresh runs one poll per peer at a time.
 func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time) {
 	now := n.local()
-	if p.assoc == nil {
+	if p.assoc == nil || p.assoc.Cookies() == 0 {
+		if p.assoc != nil {
+			p.assoc.Close()
+			p.assoc = nil
+		}
 		if now < p.nextKE {
 			return
 		}
@@ -287,33 +293,61 @@ func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time) {
 		}
 		p.stats.KEOK++
 		p.stats.LastKE = r.Elapsed
+		p.stats.CookiesAfterKE = r.Assoc.Cookies()
 		p.keWait = 0
 		p.assoc, p.ntpAddr = r.Assoc, r.NTPAddr
 		n.logf(slog.LevelInfo, "nts: key exchange", "operator", p.srv.Operator, "host", p.srv.Host, "ntp", r.NTPAddr,
-			"took", r.Elapsed.Round(time.Millisecond))
+			"cookies", p.stats.CookiesAfterKE, "took", r.Elapsed.Round(time.Millisecond))
 	}
-	qctx, cancel := context.WithTimeout(ctx, ntsExchangeTimeout)
+	// A query gets the exchange timeout, or half the poll interval if that
+	// is shorter: a sample that takes longer is stale before the quorum
+	// runs, and a Kiss-o'-Death keeps a query reading for a while.
+	qctx, cancel := context.WithTimeout(ctx, min(ntsExchangeTimeout, n.interval()/2))
 	s, err := p.assoc.Query(qctx, p.ntpAddr, coarse, n.Dial)
 	cancel()
 	p.stats.Queries++
+	p.stats.CookiesHeld = p.assoc.Cookies()
 	p.nextPoll = n.local() + int64(p.poll)
 	var kiss *nts.KissError
 	switch {
 	case errors.As(err, &kiss):
-		p.stats.Kisses[kiss.Code]++
+		// A Kiss-o'-Death may be forged: the fields it must match travel
+		// in the clear, so anyone on the path who saw the request can send
+		// one, and only a server that holds the cookie's keys can
+		// authenticate one (never an NTSN: it says the server has no keys
+		// for that cookie). So the codes are counted under a few fixed
+		// keys; an unauthenticated KoD changes nothing but the count, the
+		// next poll comes at its time with the next cookie, and NTS-KE runs
+		// when the cookies run out, as RFC 8915 section 5.7 asks; an
+		// authenticated one is obeyed: RATE doubles the poll, DENY and RSTR
+		// cost this server NTSMaxPoll of silence and a new key exchange,
+		// never the rest of the process. A forger gains no more than
+		// dropping the answers would give.
+		key := kiss.Code
+		switch key {
+		case "RATE", "NTSN", "DENY", "RSTR":
+		default:
+			key = "OTHER"
+		}
+		p.stats.Kisses[key]++
 		p.lastErr = err
-		switch kiss.Code {
-		case "RATE":
+		switch {
+		case !kiss.Authentic:
+		case kiss.Code == "RATE":
 			p.poll = min(2*p.poll, NTSMaxPoll)
 			p.nextPoll = n.local() + int64(p.poll)
-		case "DENY", "RSTR":
+		case kiss.Code == "DENY" || kiss.Code == "RSTR":
 			p.disabled = kiss.Code
 			p.sample = nil
-		case "NTSN":
+			p.poll = NTSMaxPoll
+			p.nextPoll = n.local() + int64(NTSMaxPoll)
+			p.assoc.Close()
+			p.assoc = nil
+		case kiss.Code == "NTSN":
 			p.assoc.Close()
 			p.assoc = nil
 		}
-		n.logf(slog.LevelWarn, "nts: kiss-o'-death", "operator", p.srv.Operator, "code", kiss.Code, "poll", p.poll)
+		n.logf(slog.LevelWarn, "nts: kiss-o'-death", "operator", p.srv.Operator, "code", kiss.Code, "authenticated", kiss.Authentic, "poll", p.poll)
 	case err != nil:
 		p.stats.Errors++
 		p.lastErr = err
@@ -322,6 +356,7 @@ func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time) {
 		p.stats.Samples++
 		p.sample = &s
 		p.lastErr = nil
+		p.disabled = ""
 		p.poll = max(p.poll/2, max(n.interval(), n.minPollD()))
 		p.stats.LastDelay, p.stats.LastBound = s.Delay, s.Bound
 		p.stats.LastOffsetFromHost = time.Duration(s.Offset + nts.Monotonic() - time.Now().UnixNano())
@@ -518,8 +553,10 @@ type NTSStatus struct {
 
 // NTSPeerStatus is one server's part of NTSStatus.
 type NTSPeerStatus struct {
-	Host     string
-	NTPAddr  string
+	Host    string
+	NTPAddr string
+	// Disabled is the DENY or RSTR code this server last sent; it is asked
+	// again after NTSMaxPoll, and the field clears on its next good answer.
 	Disabled string
 	Poll     time.Duration
 	Sample   *nts.Sample

@@ -8,7 +8,6 @@ import (
 	"math"
 	"math/bits"
 	"net"
-	"runtime/debug"
 	"syscall"
 	"time"
 	"unsafe"
@@ -24,17 +23,21 @@ const (
 	// KEPort is the NTS-KE port (RFC 8915 section 4).
 	KEPort = 4460
 	// exchangeTimeout bounds an NTS-KE or NTP exchange whose context has no
-	// deadline, and the key exchange the library runs again by itself when
-	// its cookies run out.
+	// deadline.
 	exchangeTimeout = 10 * time.Second
+	// kissGrace is how long a query reads on after a Kiss-o'-Death for the
+	// real answer: a forged KoD sent before it must not end the query. The
+	// real answer follows within a round trip; this is far more.
+	kissGrace = 500 * time.Millisecond
 )
 
 // Error codes: what refused an exchange.
 const (
-	CodeKE     = 1 // the key exchange: TLS, ALPN, the records
-	CodeNTP    = 2 // the NTP response: not authentic, not ours, malformed
-	CodeSample = 3 // the measurement (RFC 5905 checks)
-	CodeQuorum = 4 // the quorum
+	CodeKE       = 1 // the key exchange: TLS, ALPN, the records
+	CodeNTP      = 2 // the NTP response: not authentic, not ours, malformed
+	CodeSample   = 3 // the measurement (RFC 5905 checks)
+	CodeQuorum   = 4 // the quorum
+	CodeNoCookie = 5 // no cookie left for a request
 )
 
 // Error is a refusal with the code of the step that refused.
@@ -53,37 +56,32 @@ func (e *Error) Is(target error) bool {
 	return ok && t.Code == e.Code
 }
 
-// KissError is a Kiss-o'-Death response (RFC 5905 section 7.4).
-type KissError struct{ Code string }
-
-func (k *KissError) Error() string { return "nts: Kiss-o'-Death " + k.Code }
-
-// Version names the NTS library this build links, for example
-// "beevik/nts v0.3.3".
-func Version() string {
-	if bi, ok := debug.ReadBuildInfo(); ok {
-		for _, d := range bi.Deps {
-			if d.Path == "github.com/beevik/nts" {
-				return "beevik/nts " + d.Version
-			}
-		}
-	}
-	return "beevik/nts"
+// KissError is a Kiss-o'-Death response (RFC 5905 section 7.4). Code is
+// the reference ID as the server sent it, 4 octets: "RATE", "NTSN",
+// "DENY", "RSTR" or another. Authentic is true when the KoD carried an
+// authenticator that verifies with the S2C key: only such a KoD is known
+// to come from the server, since the fields a KoD must match travel in
+// the clear and anyone on the path can forge one (RFC 8915 sections 5.7
+// and 8.5). A server sends NTSN without one, so NTSN is never authentic.
+type KissError struct {
+	Code      string
+	Authentic bool
 }
+
+func (k *KissError) Error() string {
+	if k.Authentic {
+		return fmt.Sprintf("nts: Kiss-o'-Death %q", k.Code)
+	}
+	return fmt.Sprintf("nts: Kiss-o'-Death %q (not authenticated)", k.Code)
+}
+
+// Version names this NTS client: the Go port of the signer's NTS core on
+// the standard library alone.
+func Version() string { return "signer-nts go 1" }
 
 // DialFunc opens a connection. Go owns every socket of NTS: TCP for NTS-KE
 // and UDP for NTP. Tests and a vsock proxy plug in here.
 type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
-
-func dialWith(dial DialFunc, ctx context.Context, network, addr string) (net.Conn, error) {
-	if dial != nil {
-		return dial(ctx, network, addr)
-	}
-	var d net.Dialer
-	// A connected UDP socket: the kernel drops datagrams from other
-	// addresses.
-	return d.DialContext(ctx, network, addr)
-}
 
 // timeoutOf is the time left in ctx, or exchangeTimeout without a deadline.
 func timeoutOf(ctx context.Context) time.Duration {
@@ -139,11 +137,6 @@ func Monotonic() int64 {
 	}
 	return ts.Nano()
 }
-
-// monoTime is Monotonic as a time.Time: what the NTP library takes as the
-// local clock for T1 and T4, so every offset it measures is real time minus
-// Monotonic, as the samples define it.
-func monoTime() time.Time { return time.Unix(0, Monotonic()) }
 
 func wrapf(code int, format string, args ...any) error {
 	return &Error{Code: code, Err: fmt.Errorf(format, args...)}

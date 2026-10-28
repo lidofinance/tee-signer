@@ -125,6 +125,7 @@ type KEOptions struct {
 	NoALPN    bool   // do not offer ntske/1
 	TLS12     bool   // only TLS 1.2
 	ErrorCode int    // > 0: answer with an Error record of code ErrorCode-1
+	Trailing  bool   // octets after End of Message
 }
 
 // KEServer is an NTS-KE server on 127.0.0.1.
@@ -225,6 +226,9 @@ func (s *KEServer) handle(c *tls.Conn) {
 		resp = append(resp, record(true, 7, binary.BigEndian.AppendUint16(nil, s.opts.NTPPort))...)
 	}
 	resp = append(resp, record(true, 0, nil)...)
+	if s.opts.Trailing {
+		resp = append(resp, 1, 2, 3)
+	}
 	_, _ = c.Write(resp)
 }
 
@@ -240,6 +244,17 @@ type NTPOptions struct {
 	Drop       bool   // do not answer
 	BadAuth    bool   // flip a bit of the authenticator
 	ZeroRefTim bool   // reference timestamp 0
+	// Decoy sends a forged answer before the real one: a copy with a
+	// broken authenticator, as an on-path spoofer who saw the request
+	// (its Unique Identifier and transmit timestamp) could send.
+	Decoy bool
+	// KissPlain sends the Kiss-o'-Death of Kiss without an authenticator,
+	// as a forger would; an honest server authenticates a RATE, DENY or
+	// RSTR when it holds the cookie's keys (never an NTSN).
+	KissPlain bool
+	// KissDecoy sends an unauthenticated Kiss-o'-Death with this code
+	// before the real answer, as a forger on the path would.
+	KissDecoy string
 	// Clock is the server clock before Offset; nil means time.Now.
 	Clock func() time.Time
 }
@@ -353,14 +368,16 @@ func (s *NTPServer) serve() {
 		recv := o.now().Add(o.Offset)
 		p := append([]byte(nil), buf[:n]...)
 		go func() {
-			if out := s.answer(p, recv, o); out != nil {
+			for _, out := range s.answer(p, recv, o) {
 				_, _ = s.conn.WriteToUDP(out, from)
 			}
 		}()
 	}
 }
 
-func (s *NTPServer) answer(p []byte, recv time.Time, o NTPOptions) []byte {
+// answer is the datagrams sent for one request, in order: none, a
+// Kiss-o'-Death, or the response, with a decoy before it if asked.
+func (s *NTPServer) answer(p []byte, recv time.Time, o NTPOptions) [][]byte {
 	r := parse(p)
 	if r == nil || r.uid == nil || r.cookie == nil || o.Drop {
 		return nil
@@ -396,12 +413,11 @@ func (s *NTPServer) answer(p []byte, recv time.Time, o NTPOptions) []byte {
 	copy(h[24:], r.transmit)
 	binary.BigEndian.PutUint64(h[32:], ntpTime(recv))
 	if kiss != "" {
-		// RFC 5905 section 7.4: leap 3, stratum 0, the code in the reference ID.
-		h[0] |= 3 << 6
-		h[1] = 0
-		copy(h[12:], kiss)
-		binary.BigEndian.PutUint64(h[40:], ntpTime(recv))
-		return append(h, field(0x0104, r.uid)...)
+		return [][]byte{kissPacket(h, r, kiss, k, ok && !o.KissPlain && kiss != "NTSN")}
+	}
+	var outs [][]byte
+	if o.KissDecoy != "" {
+		outs = append(outs, kissPacket(h, r, o.KissDecoy, k, false))
 	}
 	binary.BigEndian.PutUint64(h[40:], ntpTime(o.now().Add(o.Offset)))
 	out := append(h, field(0x0104, r.uid)...)
@@ -412,15 +428,48 @@ func (s *NTPServer) answer(p []byte, recv time.Time, o NTPOptions) []byte {
 	nonce := make([]byte, 16)
 	_, _ = rand.Read(nonce)
 	ct := Seal(k.s2c, out, nonce, plain)
-	if o.BadAuth {
-		ct[0] ^= 1
+	withAuth := func(ct []byte) []byte {
+		body := binary.BigEndian.AppendUint16(nil, 16)
+		body = binary.BigEndian.AppendUint16(body, uint16(len(ct)))
+		body = append(body, nonce...)
+		body = append(body, ct...)
+		body = append(body, make([]byte, (len(ct)+3)/4*4-len(ct))...)
+		return append(append([]byte(nil), out...), field(0x0404, body)...)
 	}
-	body := binary.BigEndian.AppendUint16(nil, 16)
-	body = binary.BigEndian.AppendUint16(body, uint16(len(ct)))
-	body = append(body, nonce...)
-	body = append(body, ct...)
-	body = append(body, make([]byte, (len(ct)+3)/4*4-len(ct))...)
-	return append(out, field(0x0404, body)...)
+	forged := append([]byte(nil), ct...)
+	forged[0] ^= 1
+	switch {
+	case o.BadAuth:
+		return append(outs, withAuth(forged))
+	case o.Decoy:
+		return append(outs, withAuth(forged), withAuth(ct))
+	}
+	return append(outs, withAuth(ct))
+}
+
+// kissPacket is a Kiss-o'-Death for the request (RFC 5905 section 7.4):
+// leap 3, stratum 0, the code in the reference ID, the receive time as
+// transmit time, our Unique Identifier, and, when asked, the authenticator
+// with the S2C key over all of it, as an honest server that holds the
+// cookie's keys sends a RATE, DENY or RSTR.
+func kissPacket(h []byte, r *request, code string, k keyPair, authenticate bool) []byte {
+	p := append([]byte(nil), h...)
+	p[0] |= 3 << 6
+	p[1] = 0
+	copy(p[12:], code)
+	copy(p[40:48], p[32:40])
+	p = append(p, field(0x0104, r.uid)...)
+	if authenticate {
+		nonce := make([]byte, 16)
+		_, _ = rand.Read(nonce)
+		ct := Seal(k.s2c, p, nonce, nil)
+		body := binary.BigEndian.AppendUint16(nil, 16)
+		body = binary.BigEndian.AppendUint16(body, uint16(len(ct)))
+		body = append(body, nonce...)
+		body = append(body, ct...)
+		p = append(p, field(0x0404, body)...)
+	}
+	return p
 }
 
 func (o NTPOptions) now() time.Time {

@@ -21,7 +21,7 @@ func TestDriftLongOutage(t *testing.T) {
 		{213 * day, 9_201_600_000_000},
 		{214 * day, 9_244_800_000_000},
 		{10 * 365 * day, 157_680_000_000_000},
-		{math.MaxInt64, 4_611_686_018_427_388}, // drift_ns(i64::MAX) in nts/core/src/sample.rs
+		{math.MaxInt64, 4_611_686_018_427_388}, // drift_ns(i64::MAX) in the Rust core's sample.rs, before the port
 	} {
 		if got := Drift(tc.d); got != tc.want {
 			t.Errorf("Drift(%v) = %v (%d ns), want %d ns", tc.d, got, int64(got), int64(tc.want))

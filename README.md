@@ -45,7 +45,7 @@ every module builds and tests on its own.
 ## Build
 
 Inside an Ubuntu 22.04 or 24.04 workbench (native, WSL2 or a VM), with Go
-1.26 or newer, gcc, Docker, and for arm64 builds the aarch64 cross compiler
+1.27.3 or newer, gcc, Docker, and for arm64 builds the aarch64 cross compiler
 and qemu-user. `make deps` installs the apt packages.
 
 ```sh

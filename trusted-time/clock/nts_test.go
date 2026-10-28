@@ -268,7 +268,7 @@ func TestNTSClockKissCodes(t *testing.T) {
 		t.Fatalf("rate poll %v, deny %q", st.Peers["rate"].Poll, st.Peers["deny"].Disabled)
 	}
 	// 60 ms later the others are due again, the RATE server is not (100 ms),
-	// and the DENY server never again.
+	// and the DENY server not before NTSMaxPoll.
 	time.Sleep(60 * time.Millisecond)
 	rate, deny := fs[3].ntp.Requests.Load(), fs[4].ntp.Requests.Load()
 	if err := refresh(t, n); err != nil {
@@ -295,10 +295,19 @@ func TestNTSClockNTSNRunsKeyExchangeAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 	fs[0].store.Forget()
-	time.Sleep(60 * time.Millisecond)
-	_ = refresh(t, n) // a gets NTSN, the quorum uses its earlier sample
-	if k := n.Status().Peers["a"].Stats.Kisses["NTSN"]; k != 1 {
-		t.Fatalf("NTSN count %d", k)
+	// RFC 8915 section 5.7: an NTSN is not authenticated, so a keeps
+	// polling with the cookies it holds, one per poll, and runs NTS-KE
+	// again only when they run out; the quorum uses its earlier sample
+	// meanwhile.
+	for i := 1; i <= 8; i++ {
+		time.Sleep(60 * time.Millisecond)
+		_ = refresh(t, n)
+		if k := n.Status().Peers["a"].Stats.Kisses["NTSN"]; k != i {
+			t.Fatalf("poll %d: NTSN count %d", i, k)
+		}
+		if s := fs[0].ke.Sessions.Load(); s != 1 {
+			t.Fatalf("poll %d: NTS-KE ran again with cookies left", i)
+		}
 	}
 	time.Sleep(60 * time.Millisecond)
 	if err := refresh(t, n); err != nil {
@@ -306,6 +315,32 @@ func TestNTSClockNTSNRunsKeyExchangeAgain(t *testing.T) {
 	}
 	if s := fs[0].ke.Sessions.Load(); s != 2 {
 		t.Fatalf("NTS-KE sessions with a: %d, want 2", s)
+	}
+	if n.Status().Peers["a"].Sample == nil {
+		t.Fatal("no sample from a after the new key exchange")
+	}
+}
+
+// A forged Kiss-o'-Death, one without an authenticator, is counted and
+// changes nothing else: the server is not disabled, its poll is not
+// doubled, and its next poll takes a sample again.
+func TestNTSClockIgnoresForgedKiss(t *testing.T) {
+	fs := newServers(t, map[string]ntstest.NTPOptions{"d": {Kiss: "DENY", KissPlain: true}}, "a", "b", "c", "d")
+	n := newNTS(fs, &coarseClock{})
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	st := n.Status()
+	if p := st.Peers["d"]; p.Disabled != "" || p.Poll != 50*time.Millisecond || p.Stats.Kisses["DENY"] != 1 || p.Sample != nil {
+		t.Fatalf("after a forged DENY: %+v", p)
+	}
+	fs[3].ntp.Set(opt(ntstest.NTPOptions{}))
+	time.Sleep(60 * time.Millisecond)
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	if p := n.Status().Peers["d"]; p.Sample == nil || fs[3].ke.Sessions.Load() != 1 {
+		t.Fatalf("after the forged DENY the server was not asked again: %+v, sessions %d", p, fs[3].ke.Sessions.Load())
 	}
 }
 

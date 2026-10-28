@@ -12,9 +12,8 @@
 #      or in a module the build's clouds may use. The AWS SDK, smithy-go,
 #      hf/nsm, mdlayher/vsock and socket and golang.org/x/{net,sync,sys} are
 #      for the AWS build only, fxamacker/cbor and x448/float16 too (the
-#      Nitro verifier's CBOR parser). The cloud builds (tag nts) also hold
-#      the NTS library (beevik/nts, beevik/ntp, secure-io/siv-go, aead/cmac)
-#      and, through it, golang.org/x/net and x/sys. The dev builds hold
+#      Nitro verifier's CBOR parser). The NTS clock (tag nts) is on the
+#      standard library alone and adds no module. The dev builds hold
 #      nothing third-party but the embedded root certificates
 #      (x509roots/fallback).
 #   2b. The attestation verifier of the build's own platform only (tag
@@ -54,16 +53,13 @@ cloud_in() {
   return 1
 }
 
-# module_ok <clouds> <module path> <nts: 1 for a build with the tag nts>
+# module_ok <clouds> <module path>
 module_ok() {
   case "$2" in
     github.com/lidofinance/tee-signer/*|golang.org/x/crypto/x509roots/fallback) return 0 ;;
-    # The NTS clock's library (trusted-time/nts): every cloud build.
-    github.com/beevik/nts|github.com/beevik/ntp|github.com/secure-io/siv-go|github.com/aead/cmac)
-      [ "${3:-0}" = 1 ] && return 0 ;;
-    # x/net and x/sys: the AWS SDK, and the NTP library's socket options.
+    # x/net and x/sys: the AWS SDK.
     golang.org/x/net|golang.org/x/sys)
-      { cloud_in "$1" aws || [ "${3:-0}" = 1 ]; } && return 0 ;;
+      cloud_in "$1" aws && return 0 ;;
     # The Nitro verifier's CBOR parser: the AWS platform.
     github.com/fxamacker/cbor/*|github.com/x448/float16)
       cloud_in "$1" aws && return 0 ;;
@@ -108,10 +104,9 @@ linked() { awk -v w="$2" '$1 == w { found = 1 } END { exit !found }' "$1"; }
 
 # check_source <name> <goarch>
 check_source() {
-  local name="$1" goarch="$2" tags clouds nts list viol pkg mod cloud c want n
+  local name="$1" goarch="$2" tags clouds list viol pkg mod cloud c want n
   tags="netgo,osusergo,$(runner_tags "$name")"
   clouds="$(clouds_of "$tags")"
-  nts=0; has_nts "$name" && nts=1
   list="$(mktemp)"
   viol="$(mktemp)"
   # Lines of: import path, module path, imports. The standard library is left out.
@@ -121,7 +116,7 @@ check_source() {
   while read -r pkg mod _; do
     [ -n "$pkg" ] || continue
     cloud="$(package_cloud "$pkg")"
-    if ! module_ok "$clouds" "$mod" "$nts"; then
+    if ! module_ok "$clouds" "$mod"; then
       echo "$pkg $mod" >>"$viol"
     elif ! verifier_package_ok "$clouds" "$pkg"; then
       echo "$pkg verifier-of-another-cloud" >>"$viol"
@@ -169,14 +164,13 @@ check_source() {
 
 # check_binary <file> <name>
 check_binary() {
-  local file="$1" name="$2" want got clouds nts mod
+  local file="$1" name="$2" want got clouds mod
   want="netgo,osusergo,$(runner_tags "$name")"
   clouds="$(clouds_of "$want")"
-  nts=0; has_nts "$name" && nts=1
   got="$(go version -m "$file" | awk '$1 == "build" && $2 ~ /^-tags=/ { sub(/^-tags=/, "", $2); print $2 }')"
   [ "$got" = "$want" ] || bad "$file: built with -tags=$got, expected -tags=$want"
   while read -r mod; do
-    module_ok "$clouds" "$mod" "$nts" || bad "$file links the module $mod, and a build for: $clouds must not"
+    module_ok "$clouds" "$mod" || bad "$file links the module $mod, and a build for: $clouds must not"
   done < <(go version -m "$file" | awk '$1 == "dep" { print $2 }')
 }
 

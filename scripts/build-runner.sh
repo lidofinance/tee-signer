@@ -159,10 +159,10 @@ for arch in "${archs[@]}"; do
     # The NTS library and the -nts-clock flag in the cloud builds only; the
     # test servers' variable in their debug builds only.
     if has_nts "$name"; then
-      has_string "$out/$name" "github.com/beevik/nts" yes "a cloud build links the NTS library"
+      has_string "$out/$name" "github.com/lidofinance/tee-signer/trusted-time/nts" yes "a cloud build has the NTS clock"
       has_string "$out/$name" "nts-coarse-urls" yes "a cloud build has the NTS clock flags"
     else
-      has_string "$out/$name" "github.com/beevik/nts" no "a dev build has no NTS library"
+      has_string "$out/$name" "github.com/lidofinance/tee-signer/trusted-time/nts" no "a dev build has no NTS clock"
       has_string "$out/$name" "nts-coarse-urls" no "a dev build has no NTS clock flags"
     fi
     case "$name" in

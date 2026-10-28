@@ -1,24 +1,12 @@
 module github.com/lidofinance/tee-signer/platform-aws
 
-go 1.26.0
+go 1.27.3
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.47.3
-	github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.6 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.8.6 // indirect
 	github.com/aws/aws-sdk-go-v2/service/kms v1.61.4
-	github.com/aws/smithy-go v1.28.5 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.6
 	github.com/hf/nsm v0.0.0-20220930140112-cd181bd646b9
-	github.com/mdlayher/socket v0.6.0 // indirect
-	github.com/mdlayher/vsock v1.3.0 // indirect
-	github.com/x448/float16 v0.8.4 // indirect
-	golang.org/x/net v0.59.0 // indirect
-	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.48.0 // indirect
-)
-
-require (
 	github.com/lidofinance/tee-signer/attestation-verify v0.0.0
 	github.com/lidofinance/tee-signer/governance v0.0.0
 	github.com/lidofinance/tee-signer/platform v0.0.0
@@ -29,12 +17,17 @@ require (
 )
 
 require (
-	github.com/aead/cmac v0.0.0-20160719120800-7af84192f0b1 // indirect
-	github.com/beevik/ntp v1.6.0 // indirect
-	github.com/beevik/nts v0.3.3 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.6 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.8.6 // indirect
+	github.com/aws/smithy-go v1.28.5 // indirect
 	github.com/lidofinance/tee-signer/devkit v0.0.0 // indirect
 	github.com/lidofinance/tee-signer/signer-core v0.0.0 // indirect
-	github.com/secure-io/siv-go v0.0.0-20180922214919-5ff40651e2c4 // indirect
+	github.com/mdlayher/socket v0.6.0 // indirect
+	github.com/mdlayher/vsock v1.3.0 // indirect
+	github.com/x448/float16 v0.8.4 // indirect
+	golang.org/x/net v0.59.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
 )
 
 replace (

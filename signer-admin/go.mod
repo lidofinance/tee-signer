@@ -1,6 +1,6 @@
 module github.com/lidofinance/tee-signer/signer-admin
 
-go 1.26.0
+go 1.27.3
 
 require (
 	github.com/fxamacker/cbor/v2 v2.9.6 // indirect
