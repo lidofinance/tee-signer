@@ -1,4 +1,4 @@
-//go:build !peerselect
+//go:build !verifierselect
 
 // Package identity checks a runner's attested identity
 // (backend.Identity) with the verifiers in package attest. Config.Verify

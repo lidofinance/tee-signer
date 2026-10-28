@@ -1,6 +1,6 @@
-//go:build !peerselect
+//go:build !verifierselect
 
-// The command line flags of the tools. A runner built with peerselect has no
+// The command line flags of the tools. A runner built with verifierselect has no
 // such flags, and maybe not every verifier constant they name.
 
 package runnerclient

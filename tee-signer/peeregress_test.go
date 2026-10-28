@@ -1,4 +1,4 @@
-//go:build !peerselect || peer_azure || peer_gcp
+//go:build !verifierselect || platform_azure || platform_gcp
 
 package main
 

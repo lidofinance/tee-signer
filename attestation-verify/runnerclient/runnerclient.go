@@ -445,14 +445,14 @@ func (a *Attestation) verifier(o *options) (remote.VerifyFunc, error) {
 }
 
 // verifierFactories holds the verifiers built into this program. Each
-// verifier's file adds its own. A runner built with the tag peerselect has
-// only those its peer_* tags name (key generation, runner/keygen); every
-// other program has all four.
+// verifier's file adds its own. A runner built with the tag verifierselect
+// has only those its platform_* tags name (the handover checks the other
+// image with its own platform's verifier); every other program has all four.
 var verifierFactories = map[string]func(a *Attestation, o *options) (remote.VerifyFunc, error){}
 
 // peerTags names the build tag of each verifier, for the error above.
 var peerTags = map[string]string{
-	VerifierDev: "peer_dev", VerifierAzureMAA: "peer_azure", VerifierAWSNitro: "peer_aws", VerifierGCPCS: "peer_gcp",
+	VerifierDev: "platform_dev", VerifierAzureMAA: "platform_azure", VerifierAWSNitro: "platform_aws", VerifierGCPCS: "platform_gcp",
 }
 
 // Available reports whether the verifier is built into this program.

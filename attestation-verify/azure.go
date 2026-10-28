@@ -1,4 +1,4 @@
-//go:build !peerselect || peer_azure
+//go:build !verifierselect || platform_azure
 
 package attest
 

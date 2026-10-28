@@ -1,4 +1,4 @@
-//go:build !peerselect
+//go:build !verifierselect
 
 package main
 

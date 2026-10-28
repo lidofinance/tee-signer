@@ -1,4 +1,4 @@
-//go:build (peer_azure || peer_aws || peer_gcp || peer_dev) && !debugimport
+//go:build !debugimport
 
 package server
 
@@ -7,14 +7,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lidofinance/tee-signer/governance/dkgorder"
+	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
 	"github.com/lidofinance/tee-signer/slashing-log"
 	"github.com/lidofinance/tee-signer/tee-signer/handover"
-	"github.com/lidofinance/tee-signer/tee-signer/handoverorder"
 )
 
 // Tests of the source side (handover_source.go): a source and a target in
@@ -102,8 +101,8 @@ func (e *tgtEnv) addKeys(n, gen int, order [32]byte, mark *backend.Watermark) []
 func srcOrder(t *testing.T, src, tgt *tgtEnv, ids []byte, change func(b *handoverorder.Body)) ([]byte, [32]byte) {
 	t.Helper()
 	b := handoverorder.Body{ClusterID: src.setup.ClusterID, ChainHash: src.setup.Chain.Hash(), NotAfter: src.now() + 12*3600,
-		Source: handoverorder.Runner{Name: "signer-1", SetupHash: src.hash, Verifier: dkgorder.VerifierDev},
-		Target: handoverorder.Runner{Name: "signer-1b", SetupHash: tgt.hash, Verifier: dkgorder.VerifierDev}}
+		Source: handoverorder.Runner{Name: "signer-1", SetupHash: src.hash, Verifier: handoverorder.VerifierDev},
+		Target: handoverorder.Runner{Name: "signer-1b", SetupHash: tgt.hash, Verifier: handoverorder.VerifierDev}}
 	if change != nil {
 		change(&b)
 	}

@@ -1,4 +1,4 @@
-//go:build !peerselect
+//go:build !verifierselect
 
 package runnerclient
 
@@ -11,11 +11,11 @@ import (
 	"github.com/lidofinance/tee-signer/attestation-verify"
 )
 
-// cloud.json settings -> order participant -> settings: the order carries
+// cloud.json settings -> order runner -> settings: the order carries
 // what the verifier checks, with the setup pinned and the defaults filled
 // in.
-func TestOrderParticipantRoundTrip(t *testing.T) {
-	setup, op := [32]byte{0x51}, [32]byte{0x52}
+func TestOrderRunnerRoundTrip(t *testing.T) {
+	setup := [32]byte{0x51}
 	pcr := func(b byte) string { return strings.Repeat(string("0123456789abcdef"[b%16])+"1", 48) }
 	for _, a := range []Attestation{
 		{Verifier: VerifierAWSNitro, NitroPCRs: map[string]string{"0": pcr(1), "1": pcr(2), "2": pcr(3), "3": pcr(4), "8": pcr(5)}},
@@ -25,18 +25,18 @@ func TestOrderParticipantRoundTrip(t *testing.T) {
 			GCPHWModels: []string{"GCP_INTEL_TDX", "GCP_AMD_SEV"}, GCPServiceAccount: "s@p.iam.gserviceaccount.com", GCPProjectID: "signer-project"},
 		{Verifier: VerifierDev},
 	} {
-		p, err := a.OrderParticipant("x", setup, op)
+		p, err := a.OrderRunner("x", setup)
 		if err != nil {
 			t.Fatalf("%s: %v", a.Verifier, err)
 		}
-		back := OrderAttestation(&p)
+		back := RunnerAttestation(&p)
 		if back.Verifier != a.Verifier || back.SetupSHA256 != strings.Repeat("51", 1)+strings.Repeat("00", 31) {
 			t.Fatalf("%s: %+v", a.Verifier, back)
 		}
 		if err := back.Validate(); err != nil {
 			t.Fatalf("%s: the settings from the order do not validate: %v", a.Verifier, err)
 		}
-		again, err := back.OrderParticipant("x", setup, op)
+		again, err := back.OrderRunner("x", setup)
 		if err != nil || !reflect.DeepEqual(again, p) {
 			t.Fatalf("%s: second trip %+v %v", a.Verifier, again, err)
 		}
@@ -57,7 +57,7 @@ func TestOrderParticipantRoundTrip(t *testing.T) {
 	}
 }
 
-func TestOrderParticipantRefusals(t *testing.T) {
+func TestOrderRunnerRefusals(t *testing.T) {
 	pcrs := map[string]string{"0": strings.Repeat("11", 48), "1": strings.Repeat("22", 48), "2": strings.Repeat("33", 48)}
 	for _, c := range []struct {
 		a    Attestation
@@ -71,14 +71,14 @@ func TestOrderParticipantRefusals(t *testing.T) {
 		{Attestation{Verifier: VerifierDev, AllowUnpinnedSetup: true}, "always pins"},
 		{Attestation{Verifier: VerifierDev, MAAHost: "x"}, "belong to the verifier"},
 	} {
-		if _, err := c.a.OrderParticipant("x", [32]byte{1}, [32]byte{2}); err == nil || !strings.Contains(err.Error(), c.want) {
+		if _, err := c.a.OrderRunner("x", [32]byte{1}); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%+v: got %v, want %q", c.a, err, c.want)
 		}
 	}
 }
 
 // The hosts each verifier fetches its key set from: what a Nitro runner's
-// setup must list in keygen_peer_attestation_hosts for that peer.
+// setup must list in keygen_peer_attestation_hosts for that runner.
 func TestEndpoints(t *testing.T) {
 	cs := []string{"confidentialcomputing.googleapis.com:443", "www.googleapis.com:443"}
 	for _, c := range []struct {
@@ -106,14 +106,14 @@ func TestEndpoints(t *testing.T) {
 			t.Fatalf("%s: host %s is not in %v", u, host, cs)
 		}
 	}
-	// An order's participant gives the same list as its cloud.json settings.
+	// An order's runner gives the same list as its cloud.json settings.
 	a := Attestation{Verifier: VerifierGCPCS, GCPImageDigest: "sha256:" + strings.Repeat("cd", 32), GCPAudience: "signer-runner-identity",
 		GCPHWModels: []string{"GCP_AMD_SEV"}, GCPServiceAccount: "s@p.iam.gserviceaccount.com", GCPProjectID: "signer-project"}
-	p, err := a.OrderParticipant("g", [32]byte{1}, [32]byte{2})
+	p, err := a.OrderRunner("g", [32]byte{1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	back := OrderAttestation(&p)
+	back := RunnerAttestation(&p)
 	if got := back.Endpoints(); !reflect.DeepEqual(got, cs) {
 		t.Fatalf("from the order: %v", got)
 	}

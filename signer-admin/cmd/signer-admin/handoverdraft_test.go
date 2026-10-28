@@ -11,9 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lidofinance/tee-signer/governance/dkgorder"
+	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
-	"github.com/lidofinance/tee-signer/tee-signer/handoverorder"
 )
 
 // show, sign and assemble take a handover order offline, as they take a
@@ -38,8 +37,8 @@ func TestHandoverOrderOffline(t *testing.T) {
 	var target [32]byte
 	rand.Read(target[:])
 	b := &handoverorder.Body{ClusterID: s.ClusterID, ChainHash: s.Chain.Hash(), NotAfter: uint64(time.Now().Unix()) + 12*3600,
-		Source: handoverorder.Runner{Name: "s1", SetupHash: sh, Verifier: dkgorder.VerifierDev},
-		Target: handoverorder.Runner{Name: "s1b", SetupHash: target, Verifier: dkgorder.VerifierDev}}
+		Source: handoverorder.Runner{Name: "s1", SetupHash: sh, Verifier: handoverorder.VerifierDev},
+		Target: handoverorder.Runner{Name: "s1b", SetupHash: target, Verifier: handoverorder.VerifierDev}}
 	enc, err := b.Encode()
 	if err != nil {
 		t.Fatal(err)
@@ -66,9 +65,9 @@ func TestHandoverOrderOffline(t *testing.T) {
 	wantIn(t, out, "signatures: complete and valid against the approver set", "approver_signature position 2")
 	out = failTool(t, "sign", "-key", keys[1].file, signed)
 	wantIn(t, out, "signed already")
-	// A DKG order's signature is not a handover order's.
+	// Another order kind's signature is not a handover order's.
 	dkgSig := writeFile(t, filepath.Join(dir, "dkg.sig"), string((&sigFile{bodyHash: handoverorder.Hash(enc), key: [32]byte(mustKey(t, keys[1].pub)),
-		sig: dkgorder.SignBody(readKeyT(t, keys[1].file), enc)}).format()))
+		sig: setupwire.SignApproval(readKeyT(t, keys[1].file), setupwire.CtxImportOrder, false, enc)}).format()))
 	out = failTool(t, "assemble", "-out", filepath.Join(dir, "x.signed"), body, sigs[0], dkgSig)
 	wantIn(t, out, "does not verify")
 	// The active values of another signer are not the order's source.

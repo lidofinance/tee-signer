@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 # The handover release gate (signer-protocol/docs/protocol.md, "Handover"): runs
-# tests/e2e TestE2EHandoverGate, in which a dev key generation runner of
-# this tree hands its shares over to another runner of this tree, which
-# then hands over to a third, with signing above the mark after each step.
-# It runs once per build flavour: the default build (runner-dev-dkg-dev)
-# and the testnet build (runner-dev-testnet-dkg-dev, test with -tags
-# testnet). The test must run and pass in both; a skip, a missing test or
+# tests/e2e TestE2EHandoverGate, in which a dev release runner of this
+# tree hands its shares over to another runner of this tree, which then
+# hands over to a third, with signing above the mark after each step. It
+# runs once per build flavour: the default build (runner-dev) and the
+# testnet build (runner-dev-testnet, test with -tags testnet). The test
+# must run and pass in both; a skip, a missing test or
 # a failure fails the gate. On success it writes build/handover-gate.stamp with the source
 # id of the tree (common.sh handover_source_id), which every image build
 # checks (require_handover_gate in platform-azure/deploy/build-image.sh,
 # platform-gcp/deploy/build-image.sh and scripts/nitro-eif.sh).
 #
 # The runners are built here from this tree into a temp dir, with the tags
-# of runner-dev-dkg-dev and runner-dev-testnet-dkg-dev, linking the core libraries build/<arch>/lib already
+# of runner-dev and runner-dev-testnet, linking the core libraries build/<arch>/lib already
 # holds (run scripts/build-core.sh first if there are none). It does not
 # touch build/core-src or build/<arch>/lib.
 #
@@ -53,8 +53,8 @@ gate() {
     exit 1
   fi
 }
-gate default runner-dev-dkg-dev RUNNER_DKG_BIN ""
-gate testnet runner-dev-testnet-dkg-dev RUNNER_TESTNET_DKG_BIN testnet
+gate default runner-dev RUNNER_BIN ""
+gate testnet runner-dev-testnet RUNNER_TESTNET_BIN testnet
 # The sources must be the ones the test ran on.
 [ "$(handover_source_id)" = "$id" ] || { echo "handover gate: the sources changed during the run" >&2; exit 1; }
 mkdir -p "$BUILD"
