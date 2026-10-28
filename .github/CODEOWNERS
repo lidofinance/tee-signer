@@ -1,0 +1,26 @@
+# Code owners per module. Replace each placeholder with a GitHub user or
+# team before this file goes to main; GitHub refuses unknown owners.
+# Review rules: CONTRIBUTING.md. Zones: SECURITY-SCOPE.md.
+
+*                     @PLACEHOLDER-maintainers
+
+/signer-core/         @PLACEHOLDER-signer-core-owners
+/signer-protocol/     @PLACEHOLDER-runner-owners
+/governance/          @PLACEHOLDER-governance-owners
+/tee-signer/          @PLACEHOLDER-runner-owners
+/slashing-log/        @PLACEHOLDER-slashing-log-owners
+/platform/            @PLACEHOLDER-platform-owners
+/platform-aws/        @PLACEHOLDER-platform-aws-owners
+/platform-azure/      @PLACEHOLDER-platform-azure-owners
+/platform-gcp/        @PLACEHOLDER-platform-gcp-owners
+/attestation-verify/  @PLACEHOLDER-attestation-owners
+/trusted-time/        @PLACEHOLDER-trusted-time-owners
+/signer-admin/        @PLACEHOLDER-admin-tools-owners
+/web3signer-api/      @PLACEHOLDER-web3signer-owners
+/devkit/              @PLACEHOLDER-maintainers
+/tests/               @PLACEHOLDER-maintainers
+
+# Build, release gate and guards
+/scripts/             @PLACEHOLDER-release-owners
+/Makefile             @PLACEHOLDER-release-owners
+/.github/             @PLACEHOLDER-release-owners
