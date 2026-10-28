@@ -66,10 +66,8 @@ var runnerBuilds = map[string]struct{ env, tags string }{
 	"azure-debug": {"RUNNER_AZURE_DEBUG_BIN", "platform_azure,debugimport,nts"},
 	"gcp":         {"RUNNER_GCP_BIN", "platform_gcp,nts"},
 	"gcp-debug":   {"RUNNER_GCP_DEBUG_BIN", "platform_gcp,debugimport,nts"},
-	"dev-dkg":     {"RUNNER_DKG_BIN", "platform_dev,peerselect,peer_dev"},
 	// The testnet builds (testnet_test.go, -tags testnet).
-	"dev-testnet":     {"RUNNER_TESTNET_BIN", "platform_dev,testnet"},
-	"dev-testnet-dkg": {"RUNNER_TESTNET_DKG_BIN", "platform_dev,testnet,peerselect,peer_dev"},
+	"dev-testnet": {"RUNNER_TESTNET_BIN", "platform_dev,testnet"},
 }
 
 var (

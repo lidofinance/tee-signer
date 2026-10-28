@@ -10,11 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lidofinance/tee-signer/governance/dkgorder"
+	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	adminapprover "github.com/lidofinance/tee-signer/signer-admin/approver"
 	"github.com/lidofinance/tee-signer/signer-admin/approver/fakeagent"
-	"github.com/lidofinance/tee-signer/tee-signer/handoverorder"
 )
 
 // An approver whose key is on an OpenPGP card (a fake gpg-agent with the
@@ -74,29 +73,14 @@ func TestOpenPGPApprover(t *testing.T) {
 	mustTool(t, "exit-draft", "-cluster", cl, "-pubkey", pk.String(), "-index", "7", "-epoch", "1000", "-balance", "32000000000", "-out", exit)
 	assemble(exit, fc.path("exit.signed"), "exit_approvals_needed 2")
 
-	// A DKG order and a handover order over s1's setup, whose locked
-	// group (version 0) holds the same approvers.
+	// A handover order over s1's setup, whose locked group (version 0)
+	// holds the same approvers.
 	raw := mustRead(t, filepath.Join(fc.dir, "setups", "s1.setup"))
 	s, err := setupwire.DecodeSetup(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
 	notAfter := uint64(time.Now().Add(24 * time.Hour).Unix())
-	ob := &dkgorder.Body{ClusterID: s.ClusterID, ChainHash: s.Chain.Hash(), Label: "card", Path: dkgorder.PathDirk, Threshold: 3, NotAfter: notAfter}
-	for _, n := range names {
-		var sh [32]byte
-		hex.Decode(sh[:], []byte(fc.hashes[n]))
-		pub, _, _ := ed25519.GenerateKey(rand.Reader)
-		ob.Participants = append(ob.Participants, dkgorder.Participant{Name: n, SetupHash: sh, OperatorKey: [32]byte(pub), Verifier: dkgorder.VerifierDev})
-	}
-	enc, err := ob.Encode()
-	if err != nil {
-		t.Fatal(err)
-	}
-	order := writeFile(t, fc.path("order.bin"), string(enc))
-	writeJSONFile(t, order+".active", activeFile{Setup: hex.EncodeToString(raw)})
-	assemble(order, fc.path("order.signed"), "approvers 0,1 of 3")
-
 	sh, err := setupwire.SetupHash(raw)
 	if err != nil {
 		t.Fatal(err)
@@ -104,16 +88,17 @@ func TestOpenPGPApprover(t *testing.T) {
 	var target [32]byte
 	rand.Read(target[:])
 	hb := &handoverorder.Body{ClusterID: s.ClusterID, ChainHash: s.Chain.Hash(), NotAfter: notAfter,
-		Source: handoverorder.Runner{Name: "s1", SetupHash: sh, Verifier: dkgorder.VerifierDev},
-		Target: handoverorder.Runner{Name: "s1b", SetupHash: target, Verifier: dkgorder.VerifierDev}}
-	if enc, err = hb.Encode(); err != nil {
+		Source: handoverorder.Runner{Name: "s1", SetupHash: sh, Verifier: handoverorder.VerifierDev},
+		Target: handoverorder.Runner{Name: "s1b", SetupHash: target, Verifier: handoverorder.VerifierDev}}
+	enc, err := hb.Encode()
+	if err != nil {
 		t.Fatal(err)
 	}
 	handover := writeFile(t, fc.path("handover.bin"), string(enc))
 	writeJSONFile(t, handover+".active", activeFile{Setup: hex.EncodeToString(raw)})
 	assemble(handover, fc.path("handover.signed"), "approvers 0,1 of 3 (k 2)")
 
-	if _, _, n := agent.Last(); n != 5 {
+	if _, _, n := agent.Last(); n != 4 {
 		t.Fatalf("the card signed %d messages, want one per kind", n)
 	}
 }

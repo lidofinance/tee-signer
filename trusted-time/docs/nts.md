@@ -299,8 +299,8 @@ version, runs the self-test, exits) and has the NTS clock.
 `scripts/build-runner.sh` builds the library first (`build-nts.sh --no-test`,
 offline, in the toolchain image) and gives the tag to the cloud runners:
 `runner-azure`, `runner-aws`, `runner-gcp`, their `-debugimport` builds and
-their key generation builds (`scripts/common.sh`, `runner_tags`). The dev
-runners (`runner-dev`, `runner-dev-debugimport`, `runner-dev-dkg-dev`) stay
+their debug builds (`scripts/common.sh`, `runner_tags`). The dev
+runners (`runner-dev`, `runner-dev-debugimport`) stay
 without it; `scripts/build-runner-nts.sh` still makes tagged copies of every
 build for `test-nts.sh`. The link flags are
 `-linkmode external -extldflags -static`. `check-deps.sh` checks that the

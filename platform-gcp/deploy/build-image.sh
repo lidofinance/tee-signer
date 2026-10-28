@@ -39,20 +39,14 @@ done
 mkdir -p "$OUT"
 # The chain record of the per-chain images: a generic image has none.
 rm -f "$OUT/runner.chain"
-# The handover release gate: the image's runner must hand over (a key
-# generation build), and scripts/handover-gate.sh must have passed on these
-# sources (common.sh require_handover_gate).
+# The handover release gate: scripts/handover-gate.sh must have passed on
+# these sources (common.sh require_handover_gate).
 require_handover_gate "runner-gcp$IMAGE_SUFFIX" || die "no image without the handover gate"
 log "building the runners (scripts/build-runner.sh)"
-if ! IMAGE_FLAVOR="$IMAGE_FLAVOR" PEERS="${IMAGE_PEERS:-${PEERS-}}" bash "$ROOT/scripts/build-runner.sh" x86_64 >"$OUT/build-runner.log" 2>&1; then
+if ! IMAGE_FLAVOR="$IMAGE_FLAVOR" bash "$ROOT/scripts/build-runner.sh" x86_64 >"$OUT/build-runner.log" 2>&1; then
   tail -n 20 "$OUT/build-runner.log" >&2
   die "scripts/build-runner.sh failed (log: $OUT/build-runner.log)"
 fi
-# IMAGE_PEERS (for example "azure aws gcp") takes the key generation build
-# with those DKG peers (scripts/build-runner.sh, runner-gcp-dkg-<peers>);
-# common.sh puts the peer set in the image name and the build folder. Unset,
-# the runner without key generation, as before. IMAGE_FLAVOR=testnet takes
-# the testnet build (runner-gcp-testnet...).
 RUNNER="$BUILD/x86_64/bin/runner-gcp$IMAGE_SUFFIX"
 TAGS="netgo,osusergo,$(runner_tags "runner-gcp$IMAGE_SUFFIX")"
 [ -x "$RUNNER" ] || die "$RUNNER was not built"

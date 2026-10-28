@@ -156,15 +156,13 @@ func CheckPending(s *backend.SetupState, now time.Time) error {
 	return nil
 }
 
-// OrderKind names the kind of a pending order: "handover" (1) or "dkg" (2).
+// OrderKind names the kind of a pending order: "handover" (1).
 func OrderKind(k uint8) string {
 	switch k {
 	case 0:
 		return "none"
 	case 1:
 		return "handover"
-	case 2:
-		return "dkg"
 	}
 	return fmt.Sprintf("kind %d", k)
 }

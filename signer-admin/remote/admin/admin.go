@@ -1,5 +1,5 @@
 // Package admin is the client side of the admin messages: share import,
-// config updates, exit approvals, key generation and handovers. A runner
+// config updates, exit approvals and handovers. A runner
 // answers them only to a client of the admin role (docs/protocol.md,
 // "Client roles"). Client wraps a remote.Client, so it has the signing and
 // attestation calls too; the Dirk fork builds remote without this package.
@@ -10,14 +10,13 @@ import (
 	"crypto/rand"
 	"errors"
 
+	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/signer-protocol"
-	"github.com/lidofinance/tee-signer/signer-protocol/dkgmsg"
 	"github.com/lidofinance/tee-signer/signer-protocol/remote"
 	"github.com/lidofinance/tee-signer/signer-protocol/sealedimport"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
 	wireadmin "github.com/lidofinance/tee-signer/signer-protocol/wire/admin"
 	"github.com/lidofinance/tee-signer/tee-signer/handover"
-	"github.com/lidofinance/tee-signer/tee-signer/handoverorder"
 )
 
 // Client is a remote.Client with the admin calls.
@@ -173,157 +172,4 @@ func (c *Client) HandoverOrder(ctx context.Context, signed []byte) (*handoverord
 		return nil, err
 	}
 	return handoverorder.DecodeState(b)
-}
-
-// The client side of the runners' key generation (docs/dkg.md). The client
-// is a relay: it passes messages between runners and checks nothing that
-// the runners do not check themselves. Every message it carries is public.
-
-// DKGHello starts a session on the runner and returns its encoded hello.
-func (c *Client) DKGHello(ctx context.Context, q *dkgmsg.HelloRequest) ([]byte, error) {
-	p, err := q.Encode()
-	if err != nil {
-		return nil, err
-	}
-	return c.RoundTrip(ctx, dkgmsg.TypeHello, p)
-}
-
-// DKGDeal gives the runner every participant's hello, in share ID order, and
-// returns its encoded deal.
-func (c *Client) DKGDeal(ctx context.Context, hellos [][]byte) ([]byte, error) {
-	return c.RoundTrip(ctx, dkgmsg.TypeDeal, dkgmsg.EncodeList(hellos))
-}
-
-// DKGFinish gives the runner every participant's deal, in share ID order.
-func (c *Client) DKGFinish(ctx context.Context, deals [][]byte) (*dkgmsg.Finished, error) {
-	b, err := c.RoundTrip(ctx, dkgmsg.TypeFinish, dkgmsg.EncodeList(deals))
-	if err != nil {
-		return nil, err
-	}
-	return dkgmsg.DecodeFinished(b)
-}
-
-// DKGCommit gives the runner every participant's confirmation. It returns
-// the keys the runner now holds.
-func (c *Client) DKGCommit(ctx context.Context, q *dkgmsg.CommitRequest) ([]backend.ValidatorKey, error) {
-	b, err := c.RoundTrip(ctx, dkgmsg.TypeCommit, q.Encode())
-	if err != nil {
-		return nil, err
-	}
-	return wire.DecodeKeys(b)
-}
-
-// DKGAbort ends the runner's session in progress, if any.
-func (c *Client) DKGAbort(ctx context.Context) error {
-	b, err := c.RoundTrip(ctx, dkgmsg.TypeAbort, nil)
-	if err == nil && len(b) != 0 {
-		err = errors.New("remote: unexpected DKG_ABORT body")
-	}
-	return err
-}
-
-// DKGOperator asks for the runner's attested operator key. The caller
-// checks the attestation (OperatorInfo.AttestNonce).
-func (c *Client) DKGOperator(ctx context.Context, q *dkgmsg.OperatorRequest) (*dkgmsg.OperatorInfo, error) {
-	p, err := q.Encode()
-	if err != nil {
-		return nil, err
-	}
-	b, err := c.RoundTrip(ctx, dkgmsg.TypeOperator, p)
-	if err != nil {
-		return nil, err
-	}
-	return dkgmsg.DecodeOperatorInfo(b)
-}
-
-// DKGSetupSign asks for a setup signature: a partial signature (96 bytes)
-// for a deposit or a registration, or a dkgmsg.LockSigned for a lock.
-func (c *Client) DKGSetupSign(ctx context.Context, q *dkgmsg.SetupRequest) ([]byte, error) {
-	p, err := q.Encode()
-	if err != nil {
-		return nil, err
-	}
-	return c.RoundTrip(ctx, dkgmsg.TypeSetupSign, p)
-}
-
-// ---- DKG orders (dkgmsg/order.go) ----------------------------------------
-
-// DKGOrder pushes a signed DKG order and returns the runner's state of it.
-// Pushing it again does no harm and reads the state.
-func (c *Client) DKGOrder(ctx context.Context, signed []byte) (*dkgmsg.OrderState, error) {
-	b, err := c.RoundTrip(ctx, dkgmsg.TypeOrder, signed)
-	if err != nil {
-		return nil, err
-	}
-	return dkgmsg.DecodeOrderState(b)
-}
-
-// OrderClient is the key generation of one DKG order on a runner: the
-// DKG_* calls, each in a DKG_IN_ORDER envelope that names the order. It is
-// a relay.Runner.
-type OrderClient struct {
-	c     *Client
-	order [32]byte
-}
-
-// InOrder returns the client of the order with this hash on the runner.
-func (c *Client) InOrder(order [32]byte) *OrderClient { return &OrderClient{c: c, order: order} }
-
-func (o *OrderClient) call(ctx context.Context, t wire.MsgType, payload []byte) ([]byte, error) {
-	p, err := (&dkgmsg.InOrder{Order: o.order, Type: t, Payload: payload}).Encode()
-	if err != nil {
-		return nil, err
-	}
-	return o.c.RoundTrip(ctx, dkgmsg.TypeInOrder, p)
-}
-
-// DKGHello starts a session of the order and returns the runner's hello.
-func (o *OrderClient) DKGHello(ctx context.Context, q *dkgmsg.HelloRequest) ([]byte, error) {
-	p, err := q.Encode()
-	if err != nil {
-		return nil, err
-	}
-	return o.call(ctx, dkgmsg.TypeHello, p)
-}
-
-// DKGDeal gives the runner every hello and returns its deal.
-func (o *OrderClient) DKGDeal(ctx context.Context, hellos [][]byte) ([]byte, error) {
-	return o.call(ctx, dkgmsg.TypeDeal, dkgmsg.EncodeList(hellos))
-}
-
-// DKGFinish gives the runner every deal.
-func (o *OrderClient) DKGFinish(ctx context.Context, deals [][]byte) (*dkgmsg.Finished, error) {
-	b, err := o.call(ctx, dkgmsg.TypeFinish, dkgmsg.EncodeList(deals))
-	if err != nil {
-		return nil, err
-	}
-	return dkgmsg.DecodeFinished(b)
-}
-
-// DKGCommit gives the runner every confirmation and returns the keys it now
-// holds of the session.
-func (o *OrderClient) DKGCommit(ctx context.Context, q *dkgmsg.CommitRequest) ([]backend.ValidatorKey, error) {
-	b, err := o.call(ctx, dkgmsg.TypeCommit, q.Encode())
-	if err != nil {
-		return nil, err
-	}
-	return wire.DecodeKeys(b)
-}
-
-// DKGAbort ends the order's session in progress on the runner, if any.
-func (o *OrderClient) DKGAbort(ctx context.Context) error {
-	b, err := o.call(ctx, dkgmsg.TypeAbort, nil)
-	if err == nil && len(b) != 0 {
-		err = errors.New("remote: unexpected DKG_ABORT body")
-	}
-	return err
-}
-
-// DKGSetupSign asks for a setup signature of a key made under the order.
-func (o *OrderClient) DKGSetupSign(ctx context.Context, q *dkgmsg.SetupRequest) ([]byte, error) {
-	p, err := q.Encode()
-	if err != nil {
-		return nil, err
-	}
-	return o.call(ctx, dkgmsg.TypeSetupSign, p)
 }

@@ -4,7 +4,7 @@
 > Not audited. Not for production or mainnet funds. Interfaces and formats will
 > change without notice.
 
-In this repo, signer-core is the C module of the TEE signer: the runner links it through its Go binding (`core`, with `dkgmath` and the development backend `software`; module path `github.com/lidofinance/tee-signer/signer-core`). blst is vendored in `third_party/blst` at the pin in `scripts/common.sh`, checked against `third_party/blst.sha256`. The OP-TEE trusted app and the other folders this README names outside signer-core stay in `lidofinance/threshold-signer-poc`.
+In this repo, signer-core is the C module of the TEE signer: the runner links it through its Go binding (`core`, with the development backend `software`; module path `github.com/lidofinance/tee-signer/signer-core`). blst is vendored in `third_party/blst` at the pin in `scripts/common.sh`, checked against `third_party/blst.sha256`. The OP-TEE trusted app and the other folders this README names outside signer-core stay in `lidofinance/threshold-signer-poc`.
 
 Portable C signing core of the threshold signer, for the cloud runner and
 the OP-TEE trusted app of each "hardware Dirk" node (`../ta/`):

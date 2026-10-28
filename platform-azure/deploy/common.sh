@@ -87,16 +87,7 @@ check_network() {
   die "NETWORK=${NETWORK:-unset}: this tree has no Azure network entry; the build overlay (SIGNER_BUILD_OVERLAY_DIR) adds its own (README, Network entry)"
 }
 
-# IMAGE_PEERS (for example "azure aws gcp"): the image with the key
-# generation build of those DKG peers (runner-azure-dkg-<peers>). It gets its
-# own build folder and local image name, so build-image.sh and deploy.sh
-# (policy) agree on it and the image without key generation stays as it is.
-# IMAGE_FLAVOR=testnet puts "-testnet" before the peer set:
-# build/azure-testnet-dkg-aws-azure-gcp, runner-azure-testnet-dkg-....
-PEER_SUFFIX=""
-if [ -n "${IMAGE_PEERS:-}" ]; then
-  PEER_SUFFIX="$(peer_suffix "$IMAGE_PEERS")"
-fi
+# IMAGE_FLAVOR=testnet puts "-testnet" into the build folder and the image name.
 IMAGE_SUFFIX="$(image_suffix)"
 OUT="$OUT$IMAGE_SUFFIX"
 

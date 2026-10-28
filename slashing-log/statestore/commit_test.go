@@ -219,7 +219,7 @@ func TestApplyAllOrNothing(t *testing.T) {
 	// The change: 400 new key records, 300 new shares, 200 changed shares and
 	// 10 deletes. It is larger than maxInline, so it writes a segment, and
 	// the merge into segment 0 makes it the whole state: two chunks.
-	puts := filled(400, "dkg/keys/", 1500, 2)
+	puts := filled(400, "shares/k/", 1500, 2)
 	maps.Copy(puts, filled(300, "shares/n", 224, 3))
 	for i := range 200 {
 		puts[fmt.Sprintf("shares/%06d", i)] = []byte("changed")
@@ -308,7 +308,7 @@ func TestCommitsAgainstModel(t *testing.T) {
 			n = 300 // larger than maxInline
 		}
 		for range n {
-			k := fmt.Sprintf("dkg/keys/%05d", rng.IntN(3000))
+			k := fmt.Sprintf("shares/k/%05d", rng.IntN(3000))
 			if rng.IntN(4) == 0 {
 				c.Delete(k)
 				delete(model, k)
@@ -366,7 +366,7 @@ func TestWriteCostPerSessionIsFlat(t *testing.T) {
 	key := 0
 	for sess := 0; sess < 128; sess++ {
 		before := s.bytesOut
-		pend := fmt.Sprintf("dkg/pending/%064d", sess)
+		pend := fmt.Sprintf("handover/pd/%064d", sess)
 		if err := s.Put(pend, bytes.Repeat([]byte{'p'}, 16982)); err != nil {
 			t.Fatal(err)
 		}
@@ -375,9 +375,9 @@ func TestWriteCostPerSessionIsFlat(t *testing.T) {
 		for range 64 {
 			pk := fmt.Sprintf("%096x", key)
 			key++
-			c.Put("dkg/keys/"+pk, bytes.Repeat([]byte{'r'}, 661))
+			c.Put("shares/k/"+pk, bytes.Repeat([]byte{'r'}, 661))
 			c.Put("shares/"+pk, bytes.Repeat([]byte{'s'}, 224))
-			recs = append(recs, "dkg/keys/"+pk)
+			recs = append(recs, "shares/k/"+pk)
 		}
 		if err := s.Apply(c); err != nil {
 			t.Fatal(err)
@@ -391,7 +391,7 @@ func TestWriteCostPerSessionIsFlat(t *testing.T) {
 			}
 		}
 		if sess > 0 {
-			if err := s.Delete(fmt.Sprintf("dkg/pending/%064d", sess-1)); err != nil {
+			if err := s.Delete(fmt.Sprintf("handover/pd/%064d", sess-1)); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -414,7 +414,7 @@ func TestWriteCostPerSessionIsFlat(t *testing.T) {
 		t.Fatalf("an object of %d bytes", largest)
 	}
 	objs, b := s.objects, s.bytesOut
-	if err := s.Put("operator/key", []byte("one small change")); err != nil {
+	if err := s.Put("handover/key", []byte("one small change")); err != nil {
 		t.Fatal(err)
 	}
 	if s.objects-objs != 1 || s.bytesOut-b > 8<<10 {
@@ -438,10 +438,10 @@ func TestMissingChunk(t *testing.T) {
 	if err := s.Apply(changeOf(state, nil)); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Put("operator/key", []byte("k")); err != nil {
+	if err := s.Put("handover/key", []byte("k")); err != nil {
 		t.Fatal(err)
 	}
-	state["operator/key"] = []byte("k")
+	state["handover/key"] = []byte("k")
 	first := s.segs[0].chunks[0].sum
 	now = now.Add(48 * time.Hour)
 	if err := s.Refresh(context.Background(), 24*time.Hour); err != nil || s.segs[0].chunks[0].sum == first {
@@ -475,23 +475,23 @@ func TestDeleteFinishedAtStart(t *testing.T) {
 	l := newMemLog()
 	local := newMemLocal()
 	s, _ := open(t, local, l, keysOf("image-a"), Options{})
-	s.Put("dkg/pending/01", []byte("committed"))
+	s.Put("handover/pd/01", []byte("committed"))
 	s.Put("shares/aa", []byte("share"))
-	if err := s.Delete("dkg/pending/01"); err != nil {
+	if err := s.Delete("handover/pd/01"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := local.Get("dkg/pending/01"); !errors.Is(err, platform.ErrNotFound) {
+	if _, err := local.Get("handover/pd/01"); !errors.Is(err, platform.ErrNotFound) {
 		t.Fatal("the local delete did not happen")
 	}
-	local.Put("dkg/pending/01", []byte("committed")) // as if the crash came first
+	local.Put("handover/pd/01", []byte("committed")) // as if the crash came first
 	if _, err := open(t, local, l, keysOf("image-a"), Options{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := local.Get("dkg/pending/01"); !errors.Is(err, platform.ErrNotFound) {
+	if _, err := local.Get("handover/pd/01"); !errors.Is(err, platform.ErrNotFound) {
 		t.Fatal("the start did not finish the delete")
 	}
-	local.Put("dkg/pending/02", []byte("never in the copy"))
-	if _, err := open(t, local, l, keysOf("image-a"), Options{}); err == nil || !strings.Contains(err.Error(), "dkg/pending/02") {
+	local.Put("handover/pd/02", []byte("never in the copy"))
+	if _, err := open(t, local, l, keysOf("image-a"), Options{}); err == nil || !strings.Contains(err.Error(), "handover/pd/02") {
 		t.Fatalf("a local key the copy never had: %v", err)
 	}
 }
@@ -521,7 +521,7 @@ func TestRefreshCompacts(t *testing.T) {
 	s, _ := open(t, newMemLocal(), l, keysOf("image-a"), Options{Now: func() time.Time { return now }})
 	for i := range 2000 {
 		c := &platform.Change{}
-		c.Put(fmt.Sprintf("dkg/keys/%04d", i%700), bytes.Repeat([]byte{byte(i)}, 700))
+		c.Put(fmt.Sprintf("shares/k/%04d", i%700), bytes.Repeat([]byte{byte(i)}, 700))
 		if err := s.Apply(c); err != nil {
 			t.Fatal(err)
 		}

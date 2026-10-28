@@ -46,8 +46,6 @@ const setupWait = 2 * time.Minute
 // the values the setup carries, and the flags that let a host weaken the
 // signer or that a phase 1 image does not have. -record is allowed as
 // "none" only; -platform-opt only for options the setup does not set.
-// -dkg-policy exists only in a key generation build, so dkg_hooks.go adds
-// its entry: a build without peer tags holds no key generation string.
 var setupRefuses = map[string]string{
 	"config":         "the setup carries the chain, safety and first config values",
 	"tls-client-ca":  "the setup carries allowed_client_ca",

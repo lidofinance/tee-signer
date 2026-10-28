@@ -2,7 +2,7 @@
 // which lists the signers of one cluster, and each signer's connection
 // file (cloud.json, as attest/runnerclient reads it). It reads a signer's
 // attested state and probes the client role of a connection (probe.go).
-// dkg-coordinator and handover-target share it with signer-admin.
+// handover-target shares it with signer-admin.
 //
 // cluster.json lists the signers of one cluster, with paths relative to it:
 //

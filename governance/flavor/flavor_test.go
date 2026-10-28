@@ -3,7 +3,7 @@ package flavor
 import (
 	"testing"
 
-	"github.com/lidofinance/tee-signer/governance/dkgorder"
+	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 )
 
@@ -35,7 +35,7 @@ func TestBuildConstants(t *testing.T) {
 }
 
 // Wait, OrderWait and CheckActivateAt under this build's flavour agree with
-// setupwire and dkgorder, which use the build's constants.
+// setupwire and handoverorder, which use the build's constants.
 func TestSameRulesAsSetupwire(t *testing.T) {
 	l := Build.Limits()
 	img := func(b byte) setupwire.Image {
@@ -57,8 +57,8 @@ func TestSameRulesAsSetupwire(t *testing.T) {
 		if got, want := l.TimeLock(a), a.ChangeDelay(); got != want {
 			t.Errorf("active %d: TimeLock %d, setupwire %d", i, got, want)
 		}
-		if got, want := l.OrderWait(a, false), dkgorder.Wait(a); got != want {
-			t.Errorf("active %d: OrderWait %d, dkgorder %d", i, got, want)
+		if got, want := l.OrderWait(a, false), handoverorder.Wait(a, false); got != want {
+			t.Errorf("active %d: OrderWait %d, handoverorder %d", i, got, want)
 		}
 		if got := l.OrderWait(a, true); got != a.ChangeDelay() {
 			t.Errorf("active %d: dev OrderWait %d, want the time lock %d", i, got, a.ChangeDelay())

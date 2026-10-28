@@ -87,38 +87,6 @@ cc_for() {
 RUNNER_RELEASE_BINS=(runner-azure runner-aws runner-gcp)
 RUNNER_BINS=(runner-azure runner-aws runner-gcp runner-dev runner-dev-debugimport runner-azure-debugimport runner-aws-debugimport runner-gcp-debugimport)
 
-# Key generation peers (tee-signer/keygen, tee-signer/docs/dkg.md). A runner that takes
-# part in key generation is built with the attestation verifiers of its
-# cluster's peers and nothing else: tags peerselect and peer_<cloud>. PEERS
-# names that set (azure, aws, gcp, dev; dev only with the dev platform);
-# the default is our three-cloud cluster. Each such build is named after it,
-# runner-<cloud>-dkg-<sorted peers>, next to the default runner-<cloud>,
-# which stays without key generation. PEERS="" builds none.
-PEERS="${PEERS-azure aws gcp}"
-
-# peers_sorted <peer list>: sorted, unique, space separated.
-peers_sorted() { tr ', ' '\n\n' <<<"$1" | sed '/^$/d' | sort -u | tr '\n' ' ' | sed 's/ $//'; }
-
-# peer_suffix <peer list>: -dkg-aws-azure-gcp for "azure aws gcp".
-peer_suffix() { local p; p="$(peers_sorted "$1")"; [ -n "$p" ] && echo "-dkg-${p// /-}"; }
-
-# peer_tags <peer list>: peerselect,peer_aws,peer_azure,peer_gcp.
-peer_tags() {
-  local p out=peerselect
-  for p in $(peers_sorted "$1"); do
-    case "$p" in azure|aws|gcp|dev) out="$out,peer_$p" ;; *) echo "unknown peer $p (want azure, aws, gcp or dev)" >&2; return 1 ;; esac
-  done
-  echo "$out"
-}
-
-# The key generation builds: each release cloud runner with PEERS, and the
-# dev runner with the dev peer only, which the local tests use.
-RUNNER_DKG_BINS=()
-if [ -n "$(peers_sorted "$PEERS")" ]; then
-  for c in azure aws gcp; do RUNNER_DKG_BINS+=("runner-$c$(peer_suffix "$PEERS")"); done
-fi
-RUNNER_DKG_BINS+=(runner-dev-dkg-dev)
-
 # IMAGE_FLAVOR is the build flavour of the runners and images
 # (signer-protocol/buildflavor): default, or testnet, the same code built with
 # -tags testnet, whose governance times run in minutes (a 2-minute default
@@ -126,10 +94,9 @@ RUNNER_DKG_BINS+=(runner-dev-dkg-dev)
 # Sepolia and Chiado only. With testnet the runner lists above hold the
 # release builds of that flavour instead (no debug builds):
 #   runner-azure-testnet, runner-aws-testnet, runner-gcp-testnet, runner-dev-testnet
-#   runner-<cloud>-testnet-dkg-<peers>, runner-dev-testnet-dkg-dev
 # and the image scripts put FLAVOR_SUFFIX (-testnet) into build folders,
-# local image names, registry tags and fingerprint files, before the peer
-# suffix, so testnet and default images never overwrite each other.
+# local image names, registry tags and fingerprint files, so testnet and
+# default images never overwrite each other.
 IMAGE_FLAVOR="${IMAGE_FLAVOR:-default}"
 case "$IMAGE_FLAVOR" in
   default) FLAVOR_SUFFIX="" ;;
@@ -139,29 +106,24 @@ esac
 if [ "$IMAGE_FLAVOR" = testnet ]; then
   RUNNER_RELEASE_BINS=(runner-azure-testnet runner-aws-testnet runner-gcp-testnet)
   RUNNER_BINS=("${RUNNER_RELEASE_BINS[@]}" runner-dev-testnet)
-  RUNNER_DKG_BINS=()
-  if [ -n "$(peers_sorted "$PEERS")" ]; then
-    for c in azure aws gcp; do RUNNER_DKG_BINS+=("runner-$c-testnet$(peer_suffix "$PEERS")"); done
-  fi
-  RUNNER_DKG_BINS+=(runner-dev-testnet-dkg-dev)
 fi
 
 # image_suffix: the suffix of an image's runner, folder, names and record:
-# the flavour, then the peer set of IMAGE_PEERS (-testnet-dkg-aws-azure-gcp).
-image_suffix() { echo "$FLAVOR_SUFFIX$(peer_suffix "${IMAGE_PEERS:-}")"; }
+# the flavour (-testnet, or nothing).
+image_suffix() { echo "$FLAVOR_SUFFIX"; }
 
 # runner_tags <binary name>: its platform tags, then debugimport for a debug
-# build, then nts for a cloud build, then testnet for that flavour, then the
-# peer tags of a key generation build. The cloud runners (azure, aws, gcp,
-# their debug and key generation builds) link the Rust NTS library (nts/,
-# build/nts/<arch>/lib) and their images run the NTS clock
-# (-nts-clock). The dev builds stay without it.
-runner_tags() {
+# build, then nts for a cloud build, then testnet for that flavour, then
+# verifierselect: a runner links the attestation verifier of its own
+# platform only (attestation-verify, the handover checks the other image
+# with it), where the tools and the tests link every verifier. The cloud
+# runners (azure, aws, gcp and their debug builds) link the Rust NTS
+# library (trusted-time, build/nts/<arch>/lib) and their images run the NTS
+# clock (-nts-clock). The dev builds stay without it.
+runner_tags() { echo "$(runner_base_tags "$1"),verifierselect"; }
+runner_base_tags() {
   case "$1" in
-    runner-*-dkg-*)
-      local base="${1%%-dkg-*}" peers="${1#*-dkg-}"
-      echo "$(runner_tags "$base"),$(peer_tags "${peers//-/ }")" ;;
-    runner-*-testnet) echo "$(runner_tags "${1%-testnet}"),testnet" ;;
+    runner-*-testnet) echo "$(runner_base_tags "${1%-testnet}"),testnet" ;;
     runner-azure) echo platform_azure,nts ;;
     runner-aws) echo platform_aws,nts ;;
     runner-gcp) echo platform_gcp,nts ;;
@@ -328,16 +290,9 @@ handover_source_id() {
   } | sha256sum | cut -c1-64
 }
 
-# require_handover_gate <runner binary name>: the image's runner has the
-# handover source side (a key generation build, -dkg-<peers>: the source
-# checks a target with the DKG peer verifiers), and the gate passed on
+# require_handover_gate <runner binary name>: the handover gate passed on
 # exactly these sources. There is no override.
 require_handover_gate() {
-  case "$1" in
-    *-dkg-*) ;;
-    *) echo "$1 cannot hand over: only a key generation build (IMAGE_PEERS set, runner-<cloud>-dkg-<peers>) has the handover source side, and no image may go out without it" >&2
-       return 1 ;;
-  esac
   local want got
   want="$(handover_source_id)"
   got="$(cat "$HANDOVER_GATE_STAMP" 2>/dev/null || true)"
