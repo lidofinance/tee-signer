@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -21,8 +20,8 @@ import (
 
 func TestVersion(t *testing.T) {
 	v := Version()
-	if !strings.HasPrefix(v, "signer-nts ") {
-		t.Fatalf("Version() = %q, want a string that starts with %q", v, "signer-nts ")
+	if !strings.HasPrefix(v, "beevik/nts") {
+		t.Fatalf("Version() = %q, want a string that starts with %q", v, "beevik/nts")
 	}
 	t.Log(v)
 }
@@ -30,31 +29,6 @@ func TestVersion(t *testing.T) {
 func TestAESSIVSelfTest(t *testing.T) {
 	if err := AESSIVSelfTest(); err != nil {
 		t.Fatal(err)
-	}
-}
-
-// Go calls C from whatever thread runs the goroutine. The library must not
-// care which one.
-func TestCallsFromManyGoroutines(t *testing.T) {
-	var wg sync.WaitGroup
-	errs := make(chan error, 16)
-	for i := 0; i < 16; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 50; j++ {
-				if err := AESSIVSelfTest(); err != nil {
-					errs <- err
-					return
-				}
-				_ = Version()
-			}
-		}()
-	}
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		t.Error(err)
 	}
 }
 
@@ -79,40 +53,9 @@ func TestRunnerBuiltWithTheTag(t *testing.T) {
 	}
 }
 
-// cgo's view of the structs must match the sizes the header states (the
-// Rust test checks the Rust side against the same numbers).
-func TestStructSizesMatchTheHeader(t *testing.T) {
-	if cSizes != headerSizes {
-		t.Fatalf("C struct sizes %v, header says %v", cSizes, headerSizes)
-	}
-}
-
-func TestKEValues(t *testing.T) {
-	if ALPN() != "ntske/1" || ExporterLabel() != "EXPORTER-network-time-security" {
-		t.Fatalf("ALPN %q, label %q", ALPN(), ExporterLabel())
-	}
-	if c := ExporterContext(false); !bytes.Equal(c, []byte{0, 0, 0, 15, 0}) {
-		t.Fatalf("C2S context %x", c)
-	}
-	if c := ExporterContext(true); !bytes.Equal(c, []byte{0, 0, 0, 15, 1}) {
-		t.Fatalf("S2C context %x", c)
-	}
-	if r := hex.EncodeToString(KERequest()); r != "80010002000080040002000f80000000" {
-		t.Fatalf("KE request %s", r)
-	}
-	if _, done, err := KEResponseLength([]byte{0x80, 0x01}); done || err != nil {
-		t.Fatalf("2 octets: done %v err %v", done, err)
-	}
-	_, _, err := KEResponseLength([]byte{0x00, 0x05, 0x04, 0x01})
-	var e *Error
-	if !errors.As(err, &e) || e.Code != CodeKE || e.Kind() != 4 {
-		t.Fatalf("over-long record: %v", err)
-	}
-	t.Log(err)
-}
-
 // The test server's AES-SIV against RFC 5297 appendix A.1, so the cross
-// check below means something.
+// check below means something, and the library's AES-SIV against the test
+// server's on the self-test's input.
 func TestTestServerSIVMatchesRFC5297(t *testing.T) {
 	h := func(s string) []byte { b, _ := hex.DecodeString(s); return b }
 	key := h("fffefdfcfbfaf9f8f7f6f5f4f3f2f1f0f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff")
@@ -129,6 +72,15 @@ func TestTestServerSIVMatchesRFC5297(t *testing.T) {
 	ct[3] ^= 1
 	if _, ok := ntstest.Open(key, ad, []byte("nonce"), ct); ok {
 		t.Fatal("tampered ciphertext opened")
+	}
+	// The same input through both: the known answer of AESSIVSelfTest.
+	key2 := h("7f7e7d7c7b7a79787776757473727170404142434445464748494a4b4c4d4e4f")
+	ad2 := h("00112233445566778899aabbccddeeffdeaddadadeaddadaffeeddccbbaa99887766554433221100")
+	nonce2 := h("09f911029d74e35bd84156c5635688c0")
+	pt2 := h("7468697320697320736f6d6520706c61696e7465787420746f20656e6372797074207573696e67205349562d414553")
+	want2 := h("85825e22e90cf2ddda2c548dc7c1b6310dcdaca0cebf9dc6cb90583f5bf1506e02cd48832b00e4e598b2b22a53e6199d4df0c1666a35a0433b250dc134d776")
+	if got := ntstest.Seal(key2, ad2, nonce2, pt2); !bytes.Equal(got, want2) {
+		t.Fatalf("test server on the self-test input: %x", got)
 	}
 }
 
@@ -173,8 +125,8 @@ func TestKeyExchangeAndQuery(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ke.Assoc.Close()
-	if ke.NTPAddr != f.ntp.Addr || ke.Assoc.Cookies() != 8 {
-		t.Fatalf("NTP addr %s (want %s), cookies %d", ke.NTPAddr, f.ntp.Addr, ke.Assoc.Cookies())
+	if ke.NTPAddr != f.ntp.Addr {
+		t.Fatalf("NTP addr %s (want %s)", ke.NTPAddr, f.ntp.Addr)
 	}
 	for i := 0; i < 12; i++ {
 		s, err := ke.Assoc.Query(ctx(t, 2*time.Second), ke.NTPAddr, time.Now(), nil)
@@ -188,15 +140,17 @@ func TestKeyExchangeAndQuery(t *testing.T) {
 		if diff := time.Duration(est - now); diff.Abs() > s.Bound+5*time.Millisecond {
 			t.Fatalf("estimate off by %v, bound %v", diff, s.Bound)
 		}
-		if s.Bound < s.RootDelay/2+s.RootDispersion || s.CookiesHeld != 8 || s.Stratum != 1 {
+		if s.Bound < s.RootDelay/2+s.RootDispersion || s.Stratum != 1 {
 			t.Fatalf("sample %+v", s)
 		}
 		if i == 0 {
 			t.Logf("sample %+v", s)
 		}
 	}
-	if n := ke.Assoc.Cookies(); n != 8 {
-		t.Fatalf("cookies after 12 queries: %d", n)
+	// Twelve queries used twelve cookies and got twelve back: one key
+	// exchange served them all.
+	if n := f.ke.Sessions.Load(); n != 1 {
+		t.Fatalf("%d key exchanges for 12 queries, want 1", n)
 	}
 }
 
@@ -251,8 +205,8 @@ func TestKERefusals(t *testing.T) {
 		want string
 	}{
 		{"TLS 1.2 only", ntstest.KEOptions{TLS12: true}, "protocol version"},
-		{"no ALPN", ntstest.KEOptions{NoALPN: true}, "ALPN"},
-		{"error record", ntstest.KEOptions{ErrorCode: 2}, "server error (value: error code, RFC 8915 4.1.3): 1"},
+		{"no ALPN", ntstest.KEOptions{NoALPN: true}, "not negotiated"},
+		{"error record", ntstest.KEOptions{ErrorCode: 2}, "bad request"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -292,11 +246,11 @@ func TestKissForgeryAndNTSN(t *testing.T) {
 	if _, err := ke.Assoc.Query(ctx(t, 2*time.Second), ke.NTPAddr, time.Now(), nil); !errors.As(err, &k) || k.Code != "RATE" {
 		t.Fatalf("RATE: %v", err)
 	}
-	// A response whose authenticator does not verify is skipped; nothing
-	// else comes, so the query times out and says why.
+	// A response whose authenticator does not verify is refused: the
+	// library takes the first answer, so this query fails and says why.
 	f.ntp.Set(ntstest.NTPOptions{BadAuth: true})
 	_, err = ke.Assoc.Query(ctx(t, 500*time.Millisecond), ke.NTPAddr, time.Now(), nil)
-	if err == nil || !strings.Contains(err.Error(), "authenticator does not verify") {
+	if !errors.Is(err, &Error{Code: CodeNTP}) || !strings.Contains(err.Error(), "authentication failed") {
 		t.Fatalf("forged: %v", err)
 	}
 	// The server forgets its cookies: NTSN (RFC 8915 section 5.7).
@@ -318,7 +272,9 @@ func TestKissForgeryAndNTSN(t *testing.T) {
 	}
 }
 
-func TestCookiesRunOut(t *testing.T) {
+// When the eight cookies of a key exchange are gone (eight requests without
+// an answer), the next query runs NTS-KE again by itself.
+func TestCookiesRunOutRunsKeyExchangeAgain(t *testing.T) {
 	f := newFixture(t, ntstest.KEOptions{}, ntstest.NTPOptions{Drop: true})
 	ke, err := KeyExchange(ctx(t, 5*time.Second), f.cfg)
 	if err != nil {
@@ -330,9 +286,15 @@ func TestCookiesRunOut(t *testing.T) {
 			t.Fatal("dropped request answered")
 		}
 	}
-	_, err = ke.Assoc.Query(ctx(t, 50*time.Millisecond), ke.NTPAddr, time.Now(), nil)
-	if !errors.Is(err, &Error{Code: CodeNoCookie}) {
-		t.Fatalf("after 8 lost requests: %v", err)
+	if n := f.ke.Sessions.Load(); n != 1 {
+		t.Fatalf("%d key exchanges after 8 lost requests, want 1", n)
+	}
+	f.ntp.Set(ntstest.NTPOptions{})
+	if _, err := ke.Assoc.Query(ctx(t, 2*time.Second), ke.NTPAddr, time.Now(), nil); err != nil {
+		t.Fatalf("ninth query: %v", err)
+	}
+	if n := f.ke.Sessions.Load(); n != 2 {
+		t.Fatalf("%d key exchanges after the cookies ran out, want 2", n)
 	}
 }
 

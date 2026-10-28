@@ -54,9 +54,14 @@ checks() {
       go test $RACE -count=1 -v -tags testnet -run 'Flavor|ImageCheck' ./server || return 1
       # The tags a release runner is built with (scripts/common.sh runner_tags).
       go test $RACE -count=1 -tags "$(runner_tags runner-dev)" ./server . || return 1 ;;
-    platform|slashing-log|platform-aws|platform-azure|platform-gcp|trusted-time|signer-admin)
-      # The operator tools and the clock build without the runner tags.
-      case "$1" in trusted-time|signer-admin) ;; *) vet_builds || return 1 ;; esac
+    trusted-time)
+      # The clock builds without the runner tags; the NTS client has code
+      # with the tag nts only (the cloud runners' build).
+      go test $RACE -count=1 -v ./... || return 1
+      go vet -tags nts ./... && go test $RACE -count=1 -v -tags nts ./... || return 1 ;;
+    platform|slashing-log|platform-aws|platform-azure|platform-gcp|signer-admin)
+      # The operator tools build without the runner tags.
+      case "$1" in signer-admin) ;; *) vet_builds || return 1 ;; esac
       go test $RACE -count=1 -v -tags "$ALL_TAGS" ./... || return 1 ;;
     attestation-verify)
       # The clients against the debug runners, when they are built.

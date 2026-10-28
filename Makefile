@@ -15,7 +15,7 @@ FUZZ_SECONDS ?= 3
 MODEL_RUNS ?= 500
 
 .DEFAULT_GOAL := help
-.PHONY: help deps check core nts build test test-modules e2e test-core test-rust fuzz fuzz-core model race release-gate handover-gate loc clean
+.PHONY: help deps check core build test test-modules e2e test-core fuzz fuzz-core model race release-gate handover-gate loc clean
 
 help: ## list targets
 	@grep -E '^[a-z][a-z0-9-]+:.*## ' $(firstword $(MAKEFILE_LIST)) | \
@@ -34,13 +34,10 @@ check: ## guards: module boundaries, secret scan, release gate self-test, gofmt
 core: ## the C signer core and the vendored blst, static libraries for cgo (build/<arch>/lib)
 	bash $(ROOT)/scripts/build-core.sh
 
-nts: ## the Rust NTS library (trusted-time/rust) for both arches, offline in its toolchain image, with its tests
-	bash $(ROOT)/scripts/build-nts.sh
-
 build: ## static runners (one per cloud), host tools; runs the release gate and the dependency check on each
 	bash $(ROOT)/scripts/build-runner.sh
 
-test-modules: core nts ## gofmt, vet and unit tests of every Go module, each on its own go.mod
+test-modules: core ## gofmt, vet and unit tests of every Go module, each on its own go.mod
 	bash $(ROOT)/scripts/test-modules.sh
 
 race: test-modules ## same as test-modules (the race detector is on unless RACE=)
@@ -54,10 +51,7 @@ test: ## everything: guards, build, release gate, modules, e2e, signer-core suit
 test-core: ## signer-core's own suites (VECTORS_DIR names fetched vectors when offline)
 	bash $(ROOT)/signer-core/scripts/test.sh
 
-test-rust: ## the Rust NTS crate's tests and checks (same as nts)
-	bash $(ROOT)/scripts/build-nts.sh
-
-fuzz: core nts ## every Go fuzz target for FUZZ_TIME each
+fuzz: core ## every Go fuzz target for FUZZ_TIME each
 	FUZZ_TIME=$(FUZZ_TIME) bash $(ROOT)/scripts/fuzz.sh
 
 fuzz-core: ## the C fuzz targets (ASan, UBSan): regression inputs, then FUZZ_SECONDS each

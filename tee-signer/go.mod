@@ -14,9 +14,9 @@ require (
 	github.com/mdlayher/vsock v1.3.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	golang.org/x/crypto/x509roots/fallback v0.0.0-20260908180501-3f62bf119e84
-	golang.org/x/net v0.55.0 // indirect
+	golang.org/x/net v0.59.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
 )
 
 require (
@@ -32,6 +32,13 @@ require (
 	github.com/lidofinance/tee-signer/signer-protocol v0.0.0
 	github.com/lidofinance/tee-signer/slashing-log v0.0.0
 	github.com/lidofinance/tee-signer/trusted-time v0.0.0
+)
+
+require (
+	github.com/aead/cmac v0.0.0-20160719120800-7af84192f0b1 // indirect
+	github.com/beevik/ntp v1.6.0 // indirect
+	github.com/beevik/nts v0.3.3 // indirect
+	github.com/secure-io/siv-go v0.0.0-20180922214919-5ff40651e2c4 // indirect
 )
 
 replace (

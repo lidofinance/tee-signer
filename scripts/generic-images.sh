@@ -48,7 +48,7 @@
 # signer-vault). Go runs with GOPROXY=off and GOTOOLCHAIN=local, and the
 # EIF build uses the local nitro-cli image (NITRO_CLI_REUSE=1): nothing here
 # downloads. The pinned sources in third_party/ and the docker images
-# (nitro-cli, the NTS toolchain, and what the overlay needs) must be there.
+# (nitro-cli, and what the overlay needs) must be there.
 set -euo pipefail
 # shellcheck source=common.sh
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"

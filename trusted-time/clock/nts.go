@@ -167,8 +167,6 @@ type NTSPeerStats struct {
 	Kisses             map[string]int
 	Errors             int
 	LastKE             time.Duration // duration of the last NTS-KE
-	CookiesAfterKE     int
-	CookiesHeld        int
 	LastDelay          time.Duration
 	LastBound          time.Duration
 	LastOffsetFromHost time.Duration // the sample's time minus the host clock, for logs only
@@ -261,11 +259,7 @@ func (n *NTS) Refresh(ctx context.Context) error {
 // written, and Refresh runs one poll per peer at a time.
 func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time) {
 	now := n.local()
-	if p.assoc == nil || p.assoc.Cookies() == 0 {
-		if p.assoc != nil {
-			p.assoc.Close()
-			p.assoc = nil
-		}
+	if p.assoc == nil {
 		if now < p.nextKE {
 			return
 		}
@@ -293,17 +287,15 @@ func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time) {
 		}
 		p.stats.KEOK++
 		p.stats.LastKE = r.Elapsed
-		p.stats.CookiesAfterKE = r.Assoc.Cookies()
 		p.keWait = 0
 		p.assoc, p.ntpAddr = r.Assoc, r.NTPAddr
 		n.logf(slog.LevelInfo, "nts: key exchange", "operator", p.srv.Operator, "host", p.srv.Host, "ntp", r.NTPAddr,
-			"cookies", p.stats.CookiesAfterKE, "took", r.Elapsed.Round(time.Millisecond))
+			"took", r.Elapsed.Round(time.Millisecond))
 	}
 	qctx, cancel := context.WithTimeout(ctx, ntsExchangeTimeout)
 	s, err := p.assoc.Query(qctx, p.ntpAddr, coarse, n.Dial)
 	cancel()
 	p.stats.Queries++
-	p.stats.CookiesHeld = p.assoc.Cookies()
 	p.nextPoll = n.local() + int64(p.poll)
 	var kiss *nts.KissError
 	switch {

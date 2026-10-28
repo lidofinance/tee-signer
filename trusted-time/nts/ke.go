@@ -7,19 +7,13 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
-	"fmt"
-	"io"
 	"net"
 	"strconv"
+	"sync"
 	"time"
+
+	beevik "github.com/beevik/nts"
 )
-
-// KEPort is the TCP port of NTS-KE (RFC 8915 section 4).
-const KEPort = 4460
-
-// DialFunc opens a connection. Go owns every socket of NTS: TCP for NTS-KE
-// and UDP for NTP. Tests and a vsock proxy plug in here.
-type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
 // KEConfig is one NTS-KE server.
 type KEConfig struct {
@@ -47,17 +41,30 @@ type KEResult struct {
 	Elapsed time.Duration
 }
 
-func (c *KEConfig) dial(ctx context.Context, network, addr string) (net.Conn, error) {
-	if c.Dial != nil {
-		return c.Dial(ctx, network, addr)
-	}
-	var d net.Dialer
-	return d.DialContext(ctx, network, addr)
+// Association holds the keys and cookies of one NTS-KE session, inside the
+// library's session. When its cookies run out the library runs NTS-KE
+// again by itself, with the same configuration. Close drops it. The
+// methods are safe for concurrent use.
+type Association struct {
+	mu   sync.Mutex
+	sess *beevik.Session
+	// Server and Port are the NTP server and port the KE server named
+	// (RFC 8915 sections 4.1.7, 4.1.8), or the KE host and 123.
+	Server string
+	Port   uint16
+}
+
+// Close drops the association.
+func (a *Association) Close() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.sess = nil
 }
 
 // KeyExchange runs NTS-KE (RFC 8915 section 4): TLS 1.3 with ALPN ntske/1,
 // the request, the response, and the two keys from the TLS exporter
-// (section 5.1). The Rust library builds and checks the records.
+// (section 5.1), all in the library. This side owns the socket, the roots
+// and the clock the certificate is checked against.
 func KeyExchange(ctx context.Context, cfg KEConfig) (*KEResult, error) {
 	if cfg.Time == nil || cfg.Roots == nil || cfg.Host == "" {
 		return nil, errors.New("nts: KEConfig needs Host, Roots and Time")
@@ -66,87 +73,56 @@ func KeyExchange(ctx context.Context, cfg KEConfig) (*KEResult, error) {
 	if addr == "" {
 		addr = net.JoinHostPort(cfg.Host, strconv.Itoa(KEPort))
 	}
-	start := time.Now()
-	raw, err := cfg.dial(ctx, "tcp", addr)
-	if err != nil {
-		return nil, fmt.Errorf("nts-ke %s: %w", cfg.Host, err)
-	}
-	defer raw.Close()
-	if dl, ok := ctx.Deadline(); ok {
-		_ = raw.SetDeadline(dl)
-	}
-	conn := tls.Client(raw, &tls.Config{
-		ServerName: cfg.Host,
-		RootCAs:    cfg.Roots,
-		// RFC 8915 section 3: NTS-KE MUST NOT use a TLS version below 1.3.
-		MinVersion: tls.VersionTLS13,
-		MaxVersion: tls.VersionTLS13,
-		NextProtos: []string{ALPN()},
-		Time:       cfg.Time,
-	})
-	if err := conn.HandshakeContext(ctx); err != nil {
-		return nil, fmt.Errorf("nts-ke %s: TLS: %w", cfg.Host, err)
-	}
-	st := conn.ConnectionState()
-	// RFC 8915 section 4: the connection is NTS-KE only if the server chose
-	// our ALPN ID. Go accepts a server that chose none, so check here.
-	if st.NegotiatedProtocol != ALPN() {
-		return nil, fmt.Errorf("nts-ke %s: server chose ALPN %q, not %q", cfg.Host, st.NegotiatedProtocol, ALPN())
-	}
-	if _, err := conn.Write(KERequest()); err != nil {
-		return nil, fmt.Errorf("nts-ke %s: write: %w", cfg.Host, err)
-	}
-	resp, err := readKEResponse(conn)
-	if err != nil {
-		return nil, fmt.Errorf("nts-ke %s: %w", cfg.Host, err)
-	}
-	c2s, err := st.ExportKeyingMaterial(ExporterLabel(), ExporterContext(false), KeyLen)
-	if err != nil {
-		return nil, fmt.Errorf("nts-ke %s: export C2S: %w", cfg.Host, err)
-	}
-	s2c, err := st.ExportKeyingMaterial(ExporterLabel(), ExporterContext(true), KeyLen)
-	if err != nil {
-		clear(c2s)
-		return nil, fmt.Errorf("nts-ke %s: export S2C: %w", cfg.Host, err)
-	}
-	a, err := NewAssociation(resp, c2s, s2c)
-	clear(c2s)
-	clear(s2c)
-	if err != nil {
-		return nil, fmt.Errorf("nts-ke %s: %w", cfg.Host, err)
-	}
-	host := cfg.Host
-	if a.Server != "" {
-		host = a.Server
-	}
-	return &KEResult{Assoc: a, NTPAddr: net.JoinHostPort(host, strconv.Itoa(int(a.Port))), Elapsed: time.Since(start)}, nil
-}
-
-// readKEResponse reads until the library sees End of Message. The server
-// may close the connection after it (RFC 8915 section 4).
-func readKEResponse(r io.Reader) ([]byte, error) {
-	buf := make([]byte, 0, 1024)
-	chunk := make([]byte, 4096)
-	for {
-		n, err := r.Read(chunk)
-		buf = append(buf, chunk[:n]...)
-		if len(buf) > 0 {
-			l, done, perr := KEResponseLength(buf)
-			if perr != nil {
-				return nil, perr
-			}
-			if done {
-				return buf[:l], nil
-			}
+	first := ctx
+	dialer := func(network, addr string, tc *tls.Config) (*tls.Conn, error) {
+		// The first exchange runs under the caller's context; the ones the
+		// library runs later, when its cookies ran out, under their own
+		// timeout.
+		dctx, cancel := context.WithTimeout(context.Background(), exchangeTimeout)
+		if first != nil && first.Err() == nil {
+			cancel()
+			dctx, cancel = context.WithTimeout(first, timeoutOf(first))
 		}
-		if len(buf) > KEMaxResponseLen {
-			return nil, fmt.Errorf("response over %d octets", KEMaxResponseLen)
-		}
+		defer cancel()
+		first = nil
+		raw, err := dialWith(cfg.Dial, dctx, network, addr)
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return nil, fmt.Errorf("response ends after %d octets, before End of Message", len(buf))
-			}
 			return nil, err
 		}
+		if dl, ok := dctx.Deadline(); ok {
+			_ = raw.SetDeadline(dl)
+		}
+		conn := tls.Client(raw, tc)
+		if err := conn.HandshakeContext(dctx); err != nil {
+			raw.Close()
+			return nil, err
+		}
+		return conn, nil
 	}
+	start := time.Now()
+	sess, err := beevik.NewSessionWithOptions(addr, &beevik.SessionOptions{
+		TLSConfig: &tls.Config{
+			ServerName: cfg.Host,
+			RootCAs:    cfg.Roots,
+			// RFC 8915 section 3: NTS-KE MUST NOT use a TLS version below 1.3.
+			MinVersion: tls.VersionTLS13,
+			MaxVersion: tls.VersionTLS13,
+			Time:       cfg.Time,
+		},
+		Timeout: timeoutOf(ctx),
+		Dialer:  dialer,
+	})
+	if err != nil {
+		return nil, wrapf(CodeKE, "nts-ke %s: %w", cfg.Host, err)
+	}
+	host, portStr, err := net.SplitHostPort(sess.Address())
+	if err != nil {
+		return nil, wrapf(CodeKE, "nts-ke %s: NTP address %q: %w", cfg.Host, sess.Address(), err)
+	}
+	port, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil {
+		return nil, wrapf(CodeKE, "nts-ke %s: NTP port %q: %w", cfg.Host, portStr, err)
+	}
+	a := &Association{sess: sess, Server: host, Port: uint16(port)}
+	return &KEResult{Assoc: a, NTPAddr: sess.Address(), Elapsed: time.Since(start)}, nil
 }
