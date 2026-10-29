@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/remote"
 	"github.com/lidofinance/tee-signer/slashing-log/wormfake"
@@ -198,7 +199,7 @@ func plainImport(t *testing.T, sk [32]byte, pk backend.Pubkey) func(*remote.Clie
 // another position (-mark-signer s2) try the log.
 func TestE2EMarkLogLostState(t *testing.T) {
 	c := newChain(t)
-	sk, _ := core.NewSecret()
+	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
 	logDir := t.TempDir()
 	flags := []string{"-mark-store", "file:" + logDir, "-mark-signer", "s1"}
@@ -262,7 +263,7 @@ func lastLine(text, prefix string) string {
 // client against wormfake with Object Lock.
 func TestE2EMarkLogLostStateS3(t *testing.T) {
 	c := newChain(t)
-	sk, _ := core.NewSecret()
+	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
 	srv := wormfake.New(wormfake.S3, "signer-marks")
 	t.Cleanup(srv.Close)
@@ -397,7 +398,7 @@ func acceptAny(context.Context, []byte, *backend.Identity) error { return nil }
 // release that does not open the records' keys) try the log.
 func TestE2EMarkLogLostStateGCP(t *testing.T) {
 	c := newChain(t)
-	sk, _ := core.NewSecret()
+	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
 	const image = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 	g := fakeGoogle(t, image)

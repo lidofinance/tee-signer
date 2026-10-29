@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/threshold"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/tee-signer/charonlock"
 )
@@ -361,7 +362,7 @@ func shimSigns(t *testing.T, k *dkgCluster, c chain, out *dkgOutput, shims, shim
 		}
 		ids, sigs = append(ids, uint64(i+1)), append(sigs, sig)
 	}
-	full, err := core.RecoverSignature(ids, sigs)
+	full, err := threshold.RecoverSignature(ids, sigs)
 	if err != nil || !core.Verify(gk, root, full) {
 		t.Fatal("the two shims' partial signatures do not combine under the validator key")
 	}

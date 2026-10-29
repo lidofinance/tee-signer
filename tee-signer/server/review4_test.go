@@ -9,6 +9,7 @@ import (
 	"github.com/lidofinance/tee-signer/governance/importorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/sealedimport"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
@@ -98,7 +99,7 @@ func vote(source, target uint64) *backend.AttestationData {
 
 func newKey(t *testing.T) ([32]byte, backend.Pubkey) {
 	t.Helper()
-	sk, err := core.NewSecret()
+	sk, err := software.NewSecret()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +256,7 @@ func TestReview5R5SealedShareNotBoundToValidatorKey(t *testing.T) {
 func TestReview5R1SealedImportMinorityThreshold(t *testing.T) {
 	e := newTgtEnv(t, "dev", nil)
 	sk, pk := newKey(t)
-	shares, err := core.Split(sk, 2, 4)
+	shares, err := software.Split(sk, 2, 4)
 	if err != nil {
 		t.Fatal(err)
 	}

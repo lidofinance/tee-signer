@@ -23,6 +23,7 @@ import (
 	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/platform/dev"
 	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/sealedimport"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
@@ -302,8 +303,8 @@ func newSource(t *testing.T, gen, imp int, orders [][32]byte, mark backend.Water
 	src := &source{t: t, mark: mark, nonce: []byte("handover-import-test-nonce-0001")}
 	_, src.originKey, _ = ed25519.GenerateKey(rand.Reader)
 	for i := range gen + imp {
-		sk, _ := core.NewSecret()
-		other, _ := core.NewSecret()
+		sk, _ := software.NewSecret()
+		other, _ := software.NewSecret()
 		pk, _ := core.PubkeyOf(other) // the validator key; sk is its share
 		sp, _ := core.PubkeyOf(sk)
 		sh := srcShare{pk: pk, share: sp, secret: sk, index: uint64(100 + i), origin: handover.OriginImported}
@@ -650,7 +651,7 @@ func TestHandoverImportNeedsAnEmptyTarget(t *testing.T) {
 
 	// A key imported before.
 	e := newTgtEnv(t, "dev", nil)
-	sk, _ := core.NewSecret()
+	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
 	if _, err := e.srv.addShare(pk, &sk, 1, nil, "sealed"); err != nil {
 		t.Fatal(err)
@@ -729,9 +730,9 @@ func TestHandoverImportMidway(t *testing.T) {
 	_, err = e.imp(order, newSource(t, 1, 0, [][32]byte{{0xd1}}, higher).pages(e.sealTo(), hash, 4)[0], 0)
 	refusedImport(t, err, backend.StatusBadRequest, "this import has")
 
-	sk, _ := core.NewSecret()
+	sk, _ := software.NewSecret()
 	sp, _ := core.PubkeyOf(sk)
-	other, _ := core.NewSecret()
+	other, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(other)
 	req := backend.SealedImportRequest{Pubkey: pk, SharePubkey: sp, Index: 1}
 	if req.Sealed, err = sealedimport.Seal(e.sealTo(), &req, &sk); err != nil {

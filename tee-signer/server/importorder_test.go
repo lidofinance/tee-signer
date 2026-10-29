@@ -12,6 +12,7 @@ import (
 	"github.com/lidofinance/tee-signer/governance/importorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/sealedimport"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
@@ -79,7 +80,7 @@ func TestImportOrderRequired(t *testing.T) {
 func TestImportSplit(t *testing.T) {
 	e := newTgtEnv(t, "dev", nil)
 	sk, pk := newKey(t)
-	shares, commitments, err := core.SplitWithCommitments(sk, 2, 3)
+	shares, commitments, err := software.SplitWithCommitments(sk, 2, 3)
 	if err != nil {
 		t.Fatal(err)
 	}

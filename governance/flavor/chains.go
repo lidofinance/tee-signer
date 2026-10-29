@@ -16,7 +16,7 @@ import (
 // value of a network, and not both of an allowed one, is refused: a known
 // fork version with another root is a copy or a mistake, not a devnet.
 // Every other chain counts as a devnet. Kurtosis devnets (ethereum-package
-// GENESIS_FORK_VERSION 0x10000038) and core.DevConfig (0x00000001) have
+// GENESIS_FORK_VERSION 0x10000038) and software.DevConfig (0x00000001) have
 // fork versions no public network below has.
 //
 // The values come from these sources:

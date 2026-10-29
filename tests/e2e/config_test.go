@@ -17,6 +17,7 @@ import (
 	"github.com/lidofinance/tee-signer/governance/importorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/remote"
 	"github.com/lidofinance/tee-signer/signer-protocol/sealedimport"
@@ -187,7 +188,7 @@ func TestE2EConfigUpdate(t *testing.T) {
 	cl := connect()
 	waitReady(t, cl)
 
-	sk, _ := core.NewSecret()
+	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
 	req := &backend.SealedImportRequest{Pubkey: pk, SharePubkey: pk, Index: 3,
 		Order: importOrder(t, s, hash, pk, 1, 1, 1, []backend.Pubkey{pk}), T: 1, N: 1, ShareIndex: 1, Commitments: []backend.Pubkey{pk}}

@@ -15,6 +15,7 @@ import (
 	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/platform/dev"
 	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/sealedimport"
 	"github.com/lidofinance/tee-signer/slashing-log"
@@ -208,7 +209,7 @@ func runModel(t *testing.T, ops []byte) (signed int) {
 		if !r.ok || len(keys) >= 6 {
 			return
 		}
-		sk, err := core.NewSecret()
+		sk, err := software.NewSecret()
 		if err != nil {
 			t.Fatal(err)
 		}

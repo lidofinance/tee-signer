@@ -202,7 +202,7 @@ func TestE2ETestnetWaits(t *testing.T) {
 	if setupwire.DefaultTimeLock != buildflavor.TestnetFlavorTimeLock || setupwire.ImagesMinTimeLock != buildflavor.TestnetFlavorImagesMinTimeLock {
 		t.Fatal("this test binary does not have the testnet constants")
 	}
-	c := newChain(t) // a devnet: core.DevConfig's fork version and root
+	c := newChain(t) // a devnet: software.DevConfig's fork version and root
 	k := newOrderClusterWith(t, c, orderOpts{bin: "dev-testnet-dkg", testnet: true})
 	for i, cl := range k.clients {
 		h, err := cl.Health(ctx)

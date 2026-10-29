@@ -8,6 +8,7 @@ import (
 
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-core/dkgmath"
+	"github.com/lidofinance/tee-signer/signer-core/threshold"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
@@ -100,7 +101,7 @@ func (l *Lock) VerifyShares() error {
 			for k, x := range ids {
 				pks[k] = shares[x-1]
 			}
-			got, err := core.RecoverPubkey(ids, pks)
+			got, err := threshold.RecoverPubkey(ids, pks)
 			if err != nil || got != gk {
 				return fmt.Errorf("charonlock: validator %d: shares %v do not give the validator key", i, ids)
 			}

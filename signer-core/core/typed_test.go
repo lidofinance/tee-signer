@@ -1,10 +1,12 @@
-package core
+package core_test
 
 import (
 	"bytes"
 	"encoding/binary"
 	"testing"
 
+	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
 )
@@ -42,7 +44,7 @@ func contribution(aggregator, slot, sub uint64, proof backend.Signature) []byte 
 // With the unverified switch off (the default) the typed kinds sign
 // aggregates and contributions, and the core checks their content.
 func TestTypedAggregatesAndContributions(t *testing.T) {
-	s, pk, cfg := newTestSigner(t, NewMemHooks())
+	s, pk, cfg := newTestSigner(t, software.NewMemHooks())
 	if cfg.AllowUnverifiedNonslashable {
 		t.Fatal("DevConfig turns the switch on")
 	}
@@ -57,7 +59,7 @@ func TestTypedAggregatesAndContributions(t *testing.T) {
 			t.Fatalf("%v: %v", m.Kind(), err)
 		}
 		root, err := cfg.SigningRoot(m)
-		if err != nil || !Verify(pk, root, sig) {
+		if err != nil || !core.Verify(pk, root, sig) {
 			t.Fatalf("%v: signature does not verify (%v)", m.Kind(), err)
 		}
 		return sig
@@ -160,7 +162,7 @@ type Kind = backend.Kind
 
 // The preset follows the config: minimal for 8 slots an epoch unless set.
 func TestPresetName(t *testing.T) {
-	c := DevConfig(genesis, 6, 8)
+	c := software.DevConfig(genesis, 6, 8)
 	if c.PresetName() != "minimal" {
 		t.Fatal(c.PresetName())
 	}

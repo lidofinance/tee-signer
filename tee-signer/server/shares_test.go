@@ -9,6 +9,7 @@ import (
 	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/platform/dev"
 	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/tee-signer/state"
 	"github.com/lidofinance/tee-signer/trusted-time/clock"
 )
@@ -50,7 +51,7 @@ func (s *shareStore) List(prefix string) ([]string, error) {
 // shareServer is a server of setup with the mark log's logID, on store.
 func shareServer(t *testing.T, store platform.Store, setup, logID [32]byte) *Server {
 	t.Helper()
-	cfg := core.DevConfig(uint64(time.Now().Unix())-3600, 12, 32)
+	cfg := software.DevConfig(uint64(time.Now().Unix())-3600, 12, 32)
 	sealer := dev.NewDevSealer()
 	hooks, err := state.New(cfg, state.Mode{Floor: true, FloorMargin: state.DefaultFloorMargin(cfg)}, clock.System{}, store, sealer, quiet)
 	if err != nil {
@@ -73,7 +74,7 @@ func TestSharesBoundToSetupAndLog(t *testing.T) {
 	store := &shareStore{m: map[string][]byte{}}
 	setupA, setupB := [32]byte{0xa}, [32]byte{0xb}
 	log1, log2 := [32]byte{1}, [32]byte{2}
-	sk, _ := core.NewSecret()
+	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
 	if _, err := shareServer(t, store, setupA, log1).addShare(pk, &sk, 7, nil, "test"); err != nil {
 		t.Fatal(err)
@@ -97,7 +98,7 @@ func TestSharesBoundToSetupAndLog(t *testing.T) {
 	if _, err := unclaimed.LoadListedShares(listed); err == nil {
 		t.Fatal("loaded shares before the mark log had a log_id")
 	}
-	sk2, _ := core.NewSecret()
+	sk2, _ := software.NewSecret()
 	pk2, _ := core.PubkeyOf(sk2)
 	if _, err := unclaimed.addShare(pk2, &sk2, 8, nil, "test"); err == nil {
 		t.Fatal("stored a share before the mark log had a log_id")
@@ -120,7 +121,7 @@ func TestSharesBoundToSetupAndLog(t *testing.T) {
 func TestOnlyTheFirstListLoads(t *testing.T) {
 	store := &shareStore{m: map[string][]byte{}}
 	setup, logID := [32]byte{0xa}, [32]byte{1}
-	sk, _ := core.NewSecret()
+	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
 	if _, err := shareServer(t, store, setup, logID).addShare(pk, &sk, 7, nil, "test"); err != nil {
 		t.Fatal(err)

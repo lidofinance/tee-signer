@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/tee-signer/handover"
 )
@@ -158,7 +159,7 @@ func oneKey(t *testing.T, e *tgtEnv) []backend.ValidatorKey {
 
 func newSecret(t *testing.T) [32]byte {
 	t.Helper()
-	sk, err := core.NewSecret()
+	sk, err := software.NewSecret()
 	if err != nil {
 		t.Fatal(err)
 	}

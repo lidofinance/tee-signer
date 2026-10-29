@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/threshold"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
@@ -110,7 +111,7 @@ func TestFeldmanAndRecovery(t *testing.T) {
 		ids, pks = append(ids, x), append(pks, pk)
 	}
 	for _, pick := range [][]int{{0, 1}, {0, 2}, {1, 2}} {
-		got, err := core.RecoverPubkey([]uint64{ids[pick[0]], ids[pick[1]]}, []backend.Pubkey{pks[pick[0]], pks[pick[1]]})
+		got, err := threshold.RecoverPubkey([]uint64{ids[pick[0]], ids[pick[1]]}, []backend.Pubkey{pks[pick[0]], pks[pick[1]]})
 		if err != nil {
 			t.Fatal(err)
 		}

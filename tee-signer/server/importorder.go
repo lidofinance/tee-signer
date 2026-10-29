@@ -3,7 +3,7 @@ package server
 import (
 	"github.com/lidofinance/tee-signer/governance/importorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
-	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/threshold"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
@@ -61,7 +61,7 @@ func (s *Server) checkSplit(req *backend.SealedImportRequest, b *importorder.Bod
 	case req.Commitments[0] != req.Pubkey:
 		return backend.Refused(backend.StatusBadKey, "commitment 0 is not the validator key %s", req.Pubkey.String()[:18])
 	}
-	want, err := core.FeldmanEval(req.Commitments, uint64(req.ShareIndex))
+	want, err := threshold.FeldmanEval(req.Commitments, uint64(req.ShareIndex))
 	if err != nil {
 		return backend.Refused(backend.StatusBadKey, "commitments: %v", err)
 	}

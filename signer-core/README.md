@@ -4,7 +4,16 @@
 > Not audited. Not for production or mainnet funds. Interfaces and formats will
 > change without notice.
 
-In this repo, signer-core is the C module of the TEE signer: the runner links it through its Go binding (`core`, with `dkgmath` and the development backend `software`; module path `github.com/lidofinance/tee-signer/signer-core`). blst is vendored in `third_party/blst` at the pin in `scripts/common.sh`, checked against `third_party/blst.sha256`. The OP-TEE trusted app and the other folders this README names outside signer-core stay in `lidofinance/threshold-signer-poc`.
+In this repo, signer-core is the C module of the TEE signer. The runner links it through its Go binding (`core`; module path `github.com/lidofinance/tee-signer/signer-core`). blst is vendored in `third_party/blst` at the pin in `scripts/common.sh`, checked against `third_party/blst.sha256`. The OP-TEE trusted app and the other folders this README names outside signer-core stay in `lidofinance/threshold-signer-poc`.
+
+The Go packages have separate roles:
+
+- `core` binds signing, policy and slashing protection. Its only first-party production dependency is `signer-protocol`.
+- `threshold` checks polynomial commitments and recovers signatures and public keys from shares. It links blst directly and does not import `core`. The current provisioning path still uses its commitment checks.
+- `dkgmath` provides arithmetic for distributed key generation.
+- `software` is the development backend. It also holds the sample chain configuration, memory-only hooks, random key generation and share splitting used by tests. Runners do not import it.
+
+The binding tests use the public `core` API from an external test package. Development and threshold helpers are test dependencies, so the bindings do not depend on them.
 
 Portable C signing core of the threshold signer, for the cloud runner and
 the OP-TEE trusted app of each "hardware Dirk" node (`../ta/`):

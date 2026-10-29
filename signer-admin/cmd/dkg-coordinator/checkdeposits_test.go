@@ -14,6 +14,7 @@ import (
 
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-core/dkgmath"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/dkgmsg"
 	"github.com/lidofinance/tee-signer/tee-signer/charonlock"
@@ -36,7 +37,7 @@ type fixture struct {
 	pol        *keygen.Policy
 	res        *Result
 	secrets    [][32]byte
-	shares     [][]core.Share
+	shares     [][]software.Share
 	wc         backend.Root
 }
 
@@ -67,11 +68,11 @@ func newFixture(t *testing.T, setup string, count int) *fixture {
 		f.res.Participants = append(f.res.Participants, Participant{Name: fmt.Sprintf("op%d", i+1), ShareID: i + 1})
 	}
 	for range count {
-		s, err := core.NewSecret()
+		s, err := software.NewSecret()
 		if err != nil {
 			t.Fatal(err)
 		}
-		sh, err := core.Split(s, 2, 3)
+		sh, err := software.Split(s, 2, 3)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -10,6 +10,7 @@ import (
 	"github.com/lidofinance/tee-signer/platform/dev"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-core/dkgmath"
+	"github.com/lidofinance/tee-signer/signer-core/threshold"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/dkgmsg"
 	"github.com/lidofinance/tee-signer/tee-signer/charonlock"
@@ -87,7 +88,7 @@ func combine(t *testing.T, rs []*testRunner, ids []uint64, q *dkgmsg.SetupReques
 		copy(s[:], b)
 		sigs = append(sigs, s)
 	}
-	full, err := core.RecoverSignature(ids, sigs)
+	full, err := threshold.RecoverSignature(ids, sigs)
 	if err != nil {
 		t.Fatal(err)
 	}

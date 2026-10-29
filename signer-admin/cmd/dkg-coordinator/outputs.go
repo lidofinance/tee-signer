@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/threshold"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
 )
 
@@ -112,7 +113,7 @@ func checkResult(r *Result) error {
 			for _, id := range ids {
 				pks = append(pks, shares[v][id-1])
 			}
-			got, err := core.RecoverPubkey(ids, pks)
+			got, err := threshold.RecoverPubkey(ids, pks)
 			if err != nil || got != gk {
 				return fmt.Errorf("validator %d: public shares %v do not give the key", v, ids)
 			}

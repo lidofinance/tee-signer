@@ -1,4 +1,4 @@
-package core
+package core_test
 
 import (
 	"bytes"
@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
@@ -15,7 +17,7 @@ import (
 // R11: selection proof, sync committee message and sync selection proof
 // roots too).
 func TestUnverifiedSwitch(t *testing.T) {
-	roots := func(cfg Config) []*backend.RootMessage {
+	roots := func(cfg core.Config) []*backend.RootMessage {
 		return []*backend.RootMessage{
 			{Type: backend.RootAggregateAndProof, Epoch: 20, ObjectRoot: backend.Root{9}, Domain: cfg.Domain(backend.DomainAggregateAndProof, 20)},
 			{Type: backend.RootSyncCommitteeContributionAndProof, Epoch: 20, ObjectRoot: backend.Root{6}, Domain: cfg.Domain(backend.DomainContributionAndProof, 20)},
@@ -24,7 +26,7 @@ func TestUnverifiedSwitch(t *testing.T) {
 			{Type: backend.RootSyncCommitteeSelectionProof, Epoch: 20, ObjectRoot: backend.Root{7}, Domain: cfg.Domain(backend.DomainSyncCommitteeSelectionProof, 20)},
 		}
 	}
-	checked := func(cfg Config) []*backend.RootMessage {
+	checked := func(cfg core.Config) []*backend.RootMessage {
 		return []*backend.RootMessage{
 			{Type: backend.RootRandaoReveal, Epoch: 20, ObjectRoot: backend.HashTreeRootUint64(20), Domain: cfg.Domain(backend.DomainRandao, 20)},
 		}
@@ -32,7 +34,7 @@ func TestUnverifiedSwitch(t *testing.T) {
 
 	// Off (the default): every unverified root refused, RANDAO signs,
 	// nothing counted.
-	off, pk, cfg := newTestSigner(t, NewMemHooks())
+	off, pk, cfg := newTestSigner(t, software.NewMemHooks())
 	if cfg.AllowUnverifiedNonslashable {
 		t.Fatal("DevConfig turns the switch on")
 	}
@@ -52,14 +54,14 @@ func TestUnverifiedSwitch(t *testing.T) {
 	// On: they sign and verify, and each one is counted. The domain check
 	// and the clock horizon still apply.
 	cfg.AllowUnverifiedNonslashable = true
-	on, pk, cfg := newTestSignerWith(t, NewMemHooks(), cfg)
+	on, pk, cfg := newTestSignerWith(t, software.NewMemHooks(), cfg)
 	for _, m := range roots(cfg) {
 		sig, err := on.Sign(signReq(on, pk, m))
 		if err != nil {
 			t.Fatalf("type %d with the switch on: %v", m.Type, err)
 		}
 		root, _ := cfg.SigningRoot(m)
-		if !Verify(pk, root, sig) {
+		if !core.Verify(pk, root, sig) {
 			t.Fatalf("type %d: signature does not verify", m.Type)
 		}
 	}
@@ -85,7 +87,7 @@ func TestUnverifiedSwitch(t *testing.T) {
 
 // A config file without the field loads with the switch off; with it, on.
 func TestUnverifiedSwitchConfigFile(t *testing.T) {
-	raw, err := json.Marshal(DevConfig(genesis, 12, 32))
+	raw, err := json.Marshal(software.DevConfig(genesis, 12, 32))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,12 +101,12 @@ func TestUnverifiedSwitchConfigFile(t *testing.T) {
 		t.Fatal("field still in the old-style file")
 	}
 	dir := t.TempDir()
-	load := func(b []byte) Config {
+	load := func(b []byte) core.Config {
 		p := filepath.Join(dir, "chain.json")
 		if err := os.WriteFile(p, b, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		c, _, err := LoadConfig(p)
+		c, _, err := core.LoadConfig(p)
 		if err != nil {
 			t.Fatal(err)
 		}

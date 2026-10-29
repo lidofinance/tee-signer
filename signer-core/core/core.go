@@ -7,7 +7,7 @@
 package core
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/../include -I${SRCDIR}/../third_party/blst/bindings
+#cgo CFLAGS: -I${SRCDIR}/../include
 #cgo linux,amd64 LDFLAGS: -L${SRCDIR}/../../build/x86_64/lib -lsigner_core -lblst
 #cgo linux,arm64 LDFLAGS: -L${SRCDIR}/../../build/aarch64/lib -lsigner_core -lblst
 #include <stdlib.h>
@@ -15,8 +15,6 @@ package core
 #include "signer_core.h"
 
 void scgo_make_ops(sc_host_ops *ops, uintptr_t handle);
-int scgo_p2_lincomb(const uint8_t *points, const uint8_t *scalars, size_t n, uint8_t out[96]);
-int scgo_p1_lincomb(const uint8_t *points, const uint8_t *scalars, size_t n, uint8_t out[48]);
 */
 import "C"
 

@@ -17,6 +17,7 @@ import (
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/platform/dev"
 	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/threshold"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/dkgmsg"
 	"github.com/lidofinance/tee-signer/tee-signer/charonlock"
@@ -315,7 +316,7 @@ func combineIn(t *testing.T, ns []*orderNode, h [32]byte, ids []uint64, q *dkgms
 		}
 		sigs = append(sigs, backend.Signature(b))
 	}
-	full, err := core.RecoverSignature(ids, sigs)
+	full, err := threshold.RecoverSignature(ids, sigs)
 	if err != nil {
 		t.Fatal(err)
 	}

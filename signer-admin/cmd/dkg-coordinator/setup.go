@@ -16,6 +16,7 @@ import (
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-core/dkgmath"
+	"github.com/lidofinance/tee-signer/signer-core/threshold"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/dkgmsg"
 	"github.com/lidofinance/tee-signer/tee-signer/charonlock"
@@ -107,7 +108,7 @@ func (e *setupEnv) threshold(ctx context.Context, v int, q *dkgmsg.SetupRequest,
 	if len(ids) < e.res.Threshold {
 		return backend.Signature{}, fmt.Errorf("%s of validator %d: %d of %d partial signatures: %w", what, v, len(ids), e.res.Threshold, errors.Join(errs...))
 	}
-	full, err := core.RecoverSignature(ids, sigs)
+	full, err := threshold.RecoverSignature(ids, sigs)
 	if err != nil || !core.Verify(e.gks[v], root, full) {
 		return backend.Signature{}, fmt.Errorf("%s of validator %d: combined signature does not verify under the validator key", what, v)
 	}

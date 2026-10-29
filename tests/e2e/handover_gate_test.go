@@ -15,6 +15,7 @@ import (
 	"github.com/lidofinance/tee-signer/governance/flavor"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/sealedimport"
 	"github.com/lidofinance/tee-signer/tee-signer/handoverorder"
@@ -127,7 +128,7 @@ func TestE2EHandoverGate(t *testing.T) {
 	// Keys: sealed imports under import orders of k approvers.
 	var keys []backend.Pubkey
 	for i := range nKeys {
-		sk, _ := core.NewSecret()
+		sk, _ := software.NewSecret()
 		pk, _ := core.PubkeyOf(sk)
 		req := &backend.SealedImportRequest{Pubkey: pk, SharePubkey: pk, Index: uint64(10 + i),
 			Order: importOrder(t, s, cur.hash, pk, 1, 1, 1, []backend.Pubkey{pk}), T: 1, N: 1, ShareIndex: 1, Commitments: []backend.Pubkey{pk}}

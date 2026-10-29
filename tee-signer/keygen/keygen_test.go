@@ -20,6 +20,8 @@ import (
 	"github.com/lidofinance/tee-signer/platform/dev"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-core/dkgmath"
+	"github.com/lidofinance/tee-signer/signer-core/software"
+	"github.com/lidofinance/tee-signer/signer-core/threshold"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/dkgmsg"
 	"github.com/lidofinance/tee-signer/signer-protocol/remote"
@@ -93,7 +95,7 @@ var (
 // testChain is the runners' chain config: the dev chain with one allowed
 // fee recipient and a gas limit range.
 var testChain = func() core.Config {
-	c := core.DevConfig(1_700_000_000, 12, 32)
+	c := software.DevConfig(1_700_000_000, 12, 32)
 	c.GenesisForkVersion = backend.Version{0x10, 0, 0x09, 0x10}
 	c.FeeRecipients = []backend.Address{testFee}
 	c.GasLimitMin, c.GasLimitMax = 30_000_000, 60_000_000
@@ -463,7 +465,7 @@ func TestDKGThreeRunners(t *testing.T) {
 		// Charon v1.11.0's lock check: the shares at x = 1..t give the key,
 		// and every further share with the first t-1 gives it too.
 		for _, ids := range [][]uint64{{1, 2}, {1, 3}} {
-			got, err := core.RecoverPubkey(ids, []backend.Pubkey{res.PublicShares[v][ids[0]-1], res.PublicShares[v][ids[1]-1]})
+			got, err := threshold.RecoverPubkey(ids, []backend.Pubkey{res.PublicShares[v][ids[0]-1], res.PublicShares[v][ids[1]-1]})
 			if err != nil || got != gk {
 				t.Fatalf("validator %d: public shares %v do not recover the key", v, ids)
 			}
@@ -917,7 +919,7 @@ func TestDKGFiveRunnersThresholdThree(t *testing.T) {
 		if pk, _ := core.PubkeyOf(lagrange0(ids, shares)); pk != gk {
 			t.Fatalf("validator %d: shares 2, 4, 5 do not give the key", v)
 		}
-		got, err := core.RecoverPubkey([]uint64{1, 2, 3}, out.Result.PublicShares[v][:3])
+		got, err := threshold.RecoverPubkey([]uint64{1, 2, 3}, out.Result.PublicShares[v][:3])
 		if err != nil || got != gk {
 			t.Fatal("public shares 1..3 do not recover the key")
 		}

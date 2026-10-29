@@ -16,6 +16,7 @@ import (
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/platform/setup"
 	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/remote"
 	"github.com/lidofinance/tee-signer/signer-protocol/sealedimport"
@@ -187,9 +188,9 @@ func TestE2ESetupSharesStayWithTheSetup(t *testing.T) {
 	first := startSetupRunner(t, filepath.Join(dir, "first.log"), nil, args("one")...)
 	cl := connect()
 	waitReady(t, cl)
-	sk, _ := core.NewSecret()
+	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
-	shares, commitments, _ := core.SplitWithCommitments(sk, 2, 3)
+	shares, commitments, _ := software.SplitWithCommitments(sk, 2, 3)
 	share := shares[0].Secret
 	sharePk, _ := core.PubkeyOf(share)
 	req := &backend.SealedImportRequest{Pubkey: pk, SharePubkey: sharePk, Index: 3,

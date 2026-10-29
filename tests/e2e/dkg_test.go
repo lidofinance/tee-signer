@@ -20,6 +20,8 @@ import (
 
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-core/dkgmath"
+	"github.com/lidofinance/tee-signer/signer-core/software"
+	"github.com/lidofinance/tee-signer/signer-core/threshold"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/dkgmsg"
 	"github.com/lidofinance/tee-signer/signer-protocol/remote"
@@ -67,7 +69,7 @@ const hoodiGenesis = 1742213400
 func dkgChain(t *testing.T) chain {
 	t.Helper()
 	now := uint64(time.Now().Unix())
-	cfg := core.DevConfig(now-1000*epochSecs, secondsPerSlot, slotsPerEpoch)
+	cfg := software.DevConfig(now-1000*epochSecs, secondsPerSlot, slotsPerEpoch)
 	cfg.Forks = nil
 	cfg.GenesisForkVersion = hoodiFork
 	raw, _ := json.MarshalIndent(cfg, "", "  ")
@@ -279,11 +281,11 @@ func forgedResultRefused(t *testing.T, k *dkgCluster, wc backend.Root) {
 	if err := json.Unmarshal(mustReadFile(t, filepath.Join(k.dir, "dkg-result.json")), &res); err != nil {
 		t.Fatal(err)
 	}
-	s, err := core.NewSecret()
+	s, err := software.NewSecret()
 	if err != nil {
 		t.Fatal(err)
 	}
-	sh, err := core.Split(s, 2, 3)
+	sh, err := software.Split(s, 2, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -413,7 +415,7 @@ func scanForShares(t *testing.T, k *dkgCluster, out *dkgOutput) {
 		}
 	}
 	// Control: the scanner finds a planted value in both forms and orders.
-	ctl, _ := core.NewSecret()
+	ctl, _ := software.NewSecret()
 	cpk, _ := core.PubkeyOf(ctl)
 	needles[cpk] = "control"
 	rev := ctl
@@ -482,7 +484,7 @@ func TestE2EDKG(t *testing.T) {
 		}
 	}
 	for _, pick := range [][]int{{0, 1}, {0, 2}, {1, 2}} {
-		full, err := core.RecoverSignature([]uint64{uint64(pick[0] + 1), uint64(pick[1] + 1)}, []backend.Signature{sigs[pick[0]], sigs[pick[1]]})
+		full, err := threshold.RecoverSignature([]uint64{uint64(pick[0] + 1), uint64(pick[1] + 1)}, []backend.Signature{sigs[pick[0]], sigs[pick[1]]})
 		if err != nil || !core.Verify(gk, root, full) {
 			t.Fatalf("runners %v: combined signature does not verify under the validator key", pick)
 		}

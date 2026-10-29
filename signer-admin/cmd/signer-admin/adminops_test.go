@@ -17,6 +17,7 @@ import (
 	"github.com/lidofinance/tee-signer/governance/exitapproval"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
@@ -92,9 +93,9 @@ func readCerts(t *testing.T, path string) []*x509.Certificate {
 
 // split writes the split file of a t-of-n split of one new validator and
 // returns its key, the shares, and the path.
-func split(t *testing.T, dir string, tt, n int, names []string) (backend.Pubkey, []core.Share, string) {
+func split(t *testing.T, dir string, tt, n int, names []string) (backend.Pubkey, []software.Share, string) {
 	t.Helper()
-	sk, err := core.NewSecret()
+	sk, err := software.NewSecret()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +103,7 @@ func split(t *testing.T, dir string, tt, n int, names []string) (backend.Pubkey,
 	if err != nil {
 		t.Fatal(err)
 	}
-	shares, comm, err := core.SplitWithCommitments(sk, tt, n)
+	shares, comm, err := software.SplitWithCommitments(sk, tt, n)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +297,7 @@ func TestAdminFlowDevRunner(t *testing.T) {
 // The shares file: both line formats, and a share pubkey that is not the
 // secret's is refused at import; a file others can read is refused.
 func TestReadShares(t *testing.T) {
-	sk, _ := core.NewSecret()
+	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
 	p := filepath.Join(t.TempDir(), "s.txt")
 	if err := os.WriteFile(p, fmt.Appendf(nil, "# a comment\n%s - 0x%x\n0x%x %s 9 %s\n", pk, sk, sk, pk, pk), 0o600); err != nil {

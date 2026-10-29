@@ -120,7 +120,7 @@ audit_layer_ok() {
   case "$1" in
     "$root"/signer-protocol|"$root"/signer-protocol/*)
       case "$2" in "$root"/signer-protocol|"$root"/signer-protocol/*) return 0 ;; esac ;;
-    "$root"/signer-core/core)
+    "$root"/signer-core/core|"$root"/signer-core/threshold|"$root"/signer-core/dkgmath)
       [ "$2" = "$root/signer-protocol" ] && return 0 ;;
     "$root"/trusted-time/*)
       case "$2" in "$root"/trusted-time/*) return 0 ;; esac ;;

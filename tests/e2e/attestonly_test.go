@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/remote"
 )
@@ -42,7 +43,7 @@ func TestE2EAttestOnlyCertificate(t *testing.T) {
 	}
 	defer full.Close()
 	waitReady(t, full)
-	sk, _ := core.NewSecret()
+	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
 	if _, err := adminOf(full).ImportShareSealed(ctx, backend.ImportShareRequest{Pubkey: pk, Secret: sk, Index: 9}, pk, remote.DevVerifier); err != nil {
 		t.Fatal(err)
