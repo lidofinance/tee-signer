@@ -29,9 +29,7 @@ The platform store (`-state-dir`) holds, by prefix:
 | Prefix | What | In the copy |
 | --- | --- | --- |
 | `sealing/` | the sealing data key, wrapped by key release (Azure: RSA-OAEP to the released Key Vault key; GCP: Cloud KMS) | yes |
-| `shares/` | the sealed shares, imported or made by key generation | yes |
-| `dkg/` | key generation: key records, and one record per session ("Key generation records") | yes |
-| `operator/` | the sealed operator key (the key generation policy names it) | yes |
+| `shares/` | the sealed shares | yes |
 | `mark-hint/` | the mark log's hint, written with every record | no |
 | `rr/` | repeat roots, written with every vote | no |
 | `wm/` | persisted marks (not used with the mark log) | no |
@@ -137,25 +135,6 @@ The local store follows the copy: `Apply` writes the local files after the
 commit. If they fail, the process refuses further changes until a restart,
 which writes them from the copy.
 
-Key generation uses this (`keygen.Manager.Commit`). A session's shares and
-their key records are one change, and the runner loads the shares into the
-signer core only once the change landed, so a restart from the copy never
-sees a share without its key record or the reverse. The key records a
-Charon lock closes are one change too. A store without the copy (Nitro's
-host agent) takes the writes one by one: the key records go first, so a
-crash leaves at most records without shares, which setup signing refuses
-and the next COMMIT writes again. `TestApplyAllOrNothing` fails each write
-of a three-object commit in turn, refused and with the reply lost;
-`TestDKGCommitAllOrNothingWithStateCopy` and `TestDKGCommitOrderWithoutBatch`
-do the same for a key generation commit.
-
-A runner with a setup makes keys under DKG orders (`tee-signer/docs/dkg.md`), one
-manager per order, and each manager commits the same way: the key records,
-with the order's hash and path, go in the change with the shares.
-`TestDKGOrderCommitStateCopyRestart` fails each write of COMMIT under a
-Dirk order and under a Charon order, refused and with the reply lost,
-starts a new runner from the copy alone, and sends the COMMIT again.
-
 ### Segments and compaction
 
 A commit carries its changes when they take at most 128 KiB, the changes
@@ -175,20 +154,6 @@ the segments' chunks.
 The writer keeps the state in memory, about the size of the durable state,
 so it writes merged segments without reading them
 back.
-
-### Key generation records
-
-Each session's record (`dkg/pending/<session>`) holds the session's result,
-the participants' session keys and this runner's shares until COMMIT. At
-COMMIT it shrinks to the session's state and its validator keys (6.8 KB
-sealed for 64 keys here, from about 17 KB), so a repeated COMMIT still
-answers. The first COMMIT more than 24 hours later (`keygen.FinishedKeep`)
-deletes it, whichever order's manager runs that COMMIT. An aborted session keeps its state only. A record that never got its
-COMMIT stays: it holds this runner's shares of a session the other runners
-may have committed, and the coordinator can send that COMMIT again
-(`dkg-result.json` keeps the confirmations). Deletes need a store that can
-delete: the file store can, Nitro's host agent cannot, so there the records
-shrink but stay.
 
 ### Write and restore
 
@@ -260,29 +225,21 @@ copy rolls back to its old share brings that share back to life. It still
 signs under its mark, but its partial signature with the old share is the
 t-th one the attacker needs, and the honest runners sign with the new
 shares: two full signatures of one validator for the same target, one per
-share set. The code has no reshare today (key generation makes new keys;
-nothing replaces the share of an existing validator), so this is a
+share set. The code has no reshare today (nothing replaces the share of an
+existing validator), so this is a
 condition on a future feature: with a reshare, keep the copy in the locked
 bucket (it cannot be rolled back while retention holds and refresh runs),
-or bind the share set's generation into the mark log. The same holds for
-key generation state: a rollback of `dkg/` returns an older session
-record, which costs at most a session the coordinator runs again; this follows
-from the code and is not tested.
+or bind the share set's generation into the mark log.
 
 ### Cost
 
-A key generation session's own commits upload about the same amount
-whatever the size of the state (`TestWriteCostPerSessionIsFlat`). Merges
-into segment 0 write the whole state, so the mean upload per session grows
-with the log of the state. A restart reads the copy also when the state
-directory is kept.
+A commit of many keys uploads about the same amount whatever the size of
+the state (`TestWriteCostPerSessionIsFlat`, which writes keys as the key
+generation of earlier builds did). Merges into segment 0 write the whole
+state, so the mean upload per commit grows with the log of the state. A
+restart reads the copy also when the state directory is kept.
 
-The lock is the slow step. `charon-lock` asks for a deposit signature and
-a builder registration signature for each validator, and each one updates
-the key record with its own Put, so its own commit: 1,024 commits on a
-runner for 512 validators, and the closing change of the lock one more.
-The Dirk deposits follow the same pattern, 64 commits a session. On a
-cloud object store each commit is at least one object create.
+On a cloud object store each commit is at least one object create.
 
 ### Design notes
 
@@ -291,8 +248,7 @@ cloud object store each commit is at least one object create.
   leaves no share without its key record, and a retried COMMIT writes a
   missing key record.
 - The file store's `List` walks only the prefix's folder, not the whole
-  state directory. The lock check lists `dkg/keys/` and COMMIT lists
-  `dkg/pending/`.
+  state directory.
 - The file store fsyncs each file, and a 64-key COMMIT writes 129 files.
   With the copy, the local writes after a commit and the restore sync the
   file system once instead (`syncfs`); without the copy (Nitro) each write
@@ -374,7 +330,7 @@ handover would add nothing as long as the admin can rewrite the policy.
 
 ## Handover under an order (runners with a setup)
 
-A runner with a setup, built with key generation (peer tags), hands over
+A runner with a setup, in a release build, hands over
 under an approver-signed handover order (`signer-protocol/docs/protocol.md`,
 "Handover").
 
@@ -389,7 +345,7 @@ under an approver-signed handover order (`signer-protocol/docs/protocol.md`,
   handover_source.go) carries the order, the target's IDENTITY answer and
   its published setup. Before the tombstone the runner checks the order
   (its wait, not_after, signatures and the image list in force), that no
-  config update or DKG order is pending here, and the target: its
+  config update is pending here, and the target: its
   published setup hashes to the order's setup_hash and its attested
   identity carries it; the attestation verifies with the order's settings;
   cluster_id, chain and safety are this runner's, handover_generation is
@@ -401,8 +357,8 @@ under an approver-signed handover order (`signer-protocol/docs/protocol.md`,
   seals each page from that read. After the tombstone, also after a
   restart, it answers that target only, with the same mark.
 - Each share's header adds its key origin (imported, or generated under
-  a DKG order, from the key generation records) to the sealed import's
-  header. The page carries the carry: the key set handed over and the
+  a DKG order in an earlier build, from its sealed record) to the sealed
+  import's header. The page carries the carry: the key set handed over and the
   day's exits of the mark log. Each share is sealed under the HPKE
   associated data `signer-handover-share-v1` over its header and the
   carry's hash. The runner signs each header with an origin key it makes
@@ -414,8 +370,8 @@ under an approver-signed handover order (`signer-protocol/docs/protocol.md`,
 
 ### The target
 
-A runner with a setup takes the sealed pages as a target, in a build with
-key generation: IMPORT_HANDOVER (0x33, `tee-signer/handover`
+A runner with a setup takes the sealed pages as a target, in a release
+build: IMPORT_HANDOVER (0x33, `tee-signer/handover`
 import.go, `tee-signer/server` handover_import.go). Its setup comes from
 `signer-config setup -handover-from`: the source's cluster_id, chain and
 safety, handover_generation 2, version 0 of both groups equal to the
@@ -433,9 +389,8 @@ fresh log, carries that config as version 0 of both groups.
   the order into the order slot of its mark log's state. It checks version
   0 and no key again while it writes, under the locks of config writes and
   share additions, so an update or a share that came in meanwhile stops
-  the start. From then on it signs nothing, takes no plain sealed import,
-  no generated share, no CONFIG_UPDATE, no DKG order and no new key
-  generation session, and HEALTH is not ready, also after a restart: the
+  the start. From then on it signs nothing, takes no plain sealed import
+  and no CONFIG_UPDATE, and HEALTH is not ready, also after a restart: the
   slot is in the locked log. Only the record that ends the import clears
   the slot, once the runner holds exactly the carry's key set and a share
   of the request opened under that carry: a rotation that comes into force
@@ -491,17 +446,12 @@ CCE policy hash or the image digest.
   copy holding the state before or after and the same process writing the
   change again (`TestApplyAllOrNothing`); 4,000 random commits against a
   model with restarts from the copy alone (`TestCommitsAgainstModel`);
-  8,192 keys written as key generation writes them, upload per session
-  flat, every object under 1 MiB, one small change one small object
-  (`TestWriteCostPerSessionIsFlat`); a lost
+  8,192 keys written as the key generation of earlier builds wrote them,
+  upload per batch flat, every object under 1 MiB, one small change one
+  small object (`TestWriteCostPerSessionIsFlat`); a lost
   chunk (fallback to an older commit, then refusal); a delete finished at
   start; repeat roots and hints never uploaded; refresh compacting.
-- `tee-signer/keygen`: a key generation commit with each store write failing,
-  with the state copy (whole or nothing) and without it (no share without
-  its key record), then finished by the next COMMIT; the session record
-  shrinking at COMMIT and deleted after `FinishedKeep`, a never-committed
-  one kept. `platform/filestore`: `PutMany`, `Delete`, `List` by
-  folder.
+- `platform/filestore`: `PutMany`, `Delete`, `List` by folder.
 - `slashing-log` `TestHandOverTombstone`, `TestUntargetedTombstone`,
   `TestAppendMerges`; `tee-signer/handover` and the handover tests of
   `tee-signer/server`; `platform-gcp/gcp` `TestFederatedTokenWithoutServiceAccount` (KMS and

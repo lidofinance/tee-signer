@@ -35,11 +35,11 @@ func TestRBRSTA01FailedDeleteInACompactingCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Put("dkg/pending/01", []byte("session")); err != nil {
+	if err := s.Put("handover/pending/01", []byte("session")); err != nil {
 		t.Fatal(err)
 	}
 	c := &platform.Change{}
-	c.Delete("dkg/pending/01")
+	c.Delete("handover/pending/01")
 	c.Put("shares/big", bytes.Repeat([]byte{7}, maxInline+1)) // over maxInline: a new segment
 	local.fail = true
 	_ = s.Apply(c) // fails either before or after the commit
@@ -47,9 +47,9 @@ func TestRBRSTA01FailedDeleteInACompactingCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the start after a failed local delete: %v", err)
 	}
-	_, inLocal := local.m["dkg/pending/01"]
-	_, inCopy := s2.state["dkg/pending/01"]
+	_, inLocal := local.m["handover/pending/01"]
+	_, inCopy := s2.state["handover/pending/01"]
 	if inLocal != inCopy {
-		t.Fatalf("dkg/pending/01: local %v, copy %v", inLocal, inCopy)
+		t.Fatalf("handover/pending/01: local %v, copy %v", inLocal, inCopy)
 	}
 }

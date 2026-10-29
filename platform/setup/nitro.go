@@ -22,8 +22,8 @@ const (
 	PortSTS        = 8001
 	PortCoarse     = 8002 // the third coarse-time host
 	PortMarkBucket = 8004
-	// The peer endpoint block: the setup's keygen_peer_attestation_hosts, in their sorted
-	// order, on 8010 up to 8025. The DKG peer verifiers fetch their key
+	// The peer endpoint block: the setup's peer_attestation_hosts, in their sorted
+	// order, on 8010 up to 8025. The handover verifier fetches its key
 	// sets through these (an Azure peer's MAA host, Google's Confidential
 	// Space hosts).
 	PortPeerFirst  = 8010
@@ -68,20 +68,20 @@ func NitroRoutes(p *setupwire.PlatformConfig) ([]Route, error) {
 		{Port: PortMarkBucket, Host: MarkBucketHost(&p.SlashingLogStore), HostPort: 443},
 	}
 	routes = append(routes, NitroNTSKE...)
-	if n := len(p.KeygenPeerAttestationHosts); n > NitroPeerPorts {
-		return nil, fmt.Errorf("setup: %d keygen_peer_attestation_hosts, but the nitro port map has %d ports for them (%d to %d)",
+	if n := len(p.PeerAttestationHosts); n > NitroPeerPorts {
+		return nil, fmt.Errorf("setup: %d peer_attestation_hosts, but the nitro port map has %d ports for them (%d to %d)",
 			n, NitroPeerPorts, PortPeerFirst, PortPeerFirst+NitroPeerPorts-1)
 	}
 	fixed := map[string]uint32{}
 	for _, r := range routes {
 		fixed[r.hostPort()] = r.Port
 	}
-	for i, e := range p.KeygenPeerAttestationHosts {
+	for i, e := range p.PeerAttestationHosts {
 		if err := setupwire.CheckEndpoint(e); err != nil {
 			return nil, fmt.Errorf("setup: %w", err)
 		}
 		if port, ok := fixed[e]; ok {
-			return nil, fmt.Errorf("setup: keygen_peer_attestation_hosts %s is the fixed route of port %d; leave it out", e, port)
+			return nil, fmt.Errorf("setup: peer_attestation_hosts %s is the fixed route of port %d; leave it out", e, port)
 		}
 		host, portText, _ := strings.Cut(e, ":")
 		port, _ := strconv.Atoi(portText)

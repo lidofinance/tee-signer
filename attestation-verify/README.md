@@ -98,8 +98,7 @@ cl, err := c.New() // refuses a bad or incomplete configuration
 
   The Dirk fork's adapter, `cloud-import` (again on the identity it seals
   each share to), `proof-check`, `share-import`, `identity-check`,
-  `dkg-coordinator` and the key generation peers (a policy participant's
-  `attestation`) all apply these rules. `WithVerified` hands each passed
+  and the runner's own handover checks all apply these rules. `WithVerified` hands each passed
   identity to the caller, and `SetupLog`, `DescribeSetup`,
   `EffectiveVersion` and `CheckPending` read the state for logs and tools.
 - It refuses to build a client for a missing, unreadable, expired or

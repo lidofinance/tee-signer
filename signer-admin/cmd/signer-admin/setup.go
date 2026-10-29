@@ -153,8 +153,8 @@ func cmdSetup(args []string, out io.Writer) error {
 	// Every split of the cluster's keys has at most as many shares as the
 	// file has signers. t = n is the split the threshold rule refuses
 	// last, so a cluster that fails it can hold no key at all: one GCP
-	// signer (1 of 1 is refused there on every chain), or one signer on
-	// mainnet. The runners refuse such an order; this refuses the setup.
+	// signer (1 of 1 is refused there on every chain). The runners refuse
+	// such an order; this refuses the setup.
 	for _, s := range setups {
 		if err := setupwire.CheckThresholdOn(s.Platform.Platform, s.Chain.GenesisForkVersion, len(setups), len(setups)); err != nil {
 			return fmt.Errorf("signer %s: a cluster of %d signer(s) can hold no key: %w", s.SignerName, len(setups), err)
@@ -208,19 +208,6 @@ func cmdSetup(args []string, out io.Writer) error {
 		pr, _ := s.PolicyRoot()
 		fprintf(out, "%s setup_sha256 %s %s\n", s.SignerName, fullHex(h), p)
 		fprintf(out, "%s policy_root %s\n", s.SignerName, fullHex(pr))
-	}
-	// Nitro signers: the hosts their key generation reaches, and what the
-	// other signers of the file need there.
-	peers := make([]peerHosts, len(setups))
-	for i, s := range setups {
-		peers[i] = setupPeer(s)
-	}
-	for i, s := range setups {
-		if !limitedEgress(s) {
-			continue
-		}
-		fprintf(out, "%s keygen_peer_attestation_hosts %s\n", s.SignerName, cmpOr(strings.Join(s.Platform.KeygenPeerAttestationHosts, " "), "none"))
-		warnPeerEndpoints(out, s, missingPeerEndpoints(s, peers, i), "its key generation refuses orders with these peers")
 	}
 	return nil
 }

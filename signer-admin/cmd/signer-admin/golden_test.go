@@ -9,8 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lidofinance/tee-signer/governance/dkgorder"
-	"github.com/lidofinance/tee-signer/tee-signer/handoverorder"
+	"github.com/lidofinance/tee-signer/governance/handoverorder"
 )
 
 // updateHandoverBodies rewrites testdata/golden/handover-bodies.hex from
@@ -23,12 +22,12 @@ func goldenHandoverBodies() []handoverorder.Body {
 	pcr3[0] = 0x33
 	bodies := []handoverorder.Body{
 		{ClusterID: [32]byte{1}, ChainHash: [32]byte{2}, NotAfter: 1_800_000_000,
-			Source: dkgorder.Participant{Name: "signer-1", SetupHash: [32]byte{3}, Verifier: dkgorder.VerifierDev},
-			Target: dkgorder.Participant{Name: "signer-1b", SetupHash: [32]byte{4}, Verifier: dkgorder.VerifierDev}},
+			Source: handoverorder.Runner{Name: "signer-1", SetupHash: [32]byte{3}, Verifier: handoverorder.VerifierDev},
+			Target: handoverorder.Runner{Name: "signer-1b", SetupHash: [32]byte{4}, Verifier: handoverorder.VerifierDev}},
 		{ClusterID: [32]byte{5}, ChainHash: [32]byte{6}, NotAfter: 1_800_003_600,
-			Source: dkgorder.Participant{Name: "signer-2", SetupHash: [32]byte{7}, Verifier: dkgorder.VerifierNitro,
+			Source: handoverorder.Runner{Name: "signer-2", SetupHash: [32]byte{7}, Verifier: handoverorder.VerifierNitro,
 				Image: bytes.Repeat([]byte{0x2a}, 144), NitroPCR3: pcr3},
-			Target: dkgorder.Participant{Name: "signer-2b", SetupHash: [32]byte{8}, Verifier: dkgorder.VerifierNitro,
+			Target: handoverorder.Runner{Name: "signer-2b", SetupHash: [32]byte{8}, Verifier: handoverorder.VerifierNitro,
 				Image: bytes.Repeat([]byte{0x2b}, 144), NitroPCR3: pcr3}},
 	}
 	return bodies

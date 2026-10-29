@@ -10,7 +10,6 @@ The Go packages have separate roles:
 
 - `core` binds signing, policy and slashing protection. Its only first-party production dependency is `signer-protocol`.
 - `threshold` checks polynomial commitments and recovers signatures and public keys from shares. It links blst directly and does not import `core`. The current provisioning path still uses its commitment checks.
-- `dkgmath` provides arithmetic for distributed key generation.
 - `software` is the development backend. It also holds the sample chain configuration, memory-only hooks, random key generation and share splitting used by tests. Runners do not import it.
 
 The binding tests use the public `core` API from an external test package. Development and threshold helpers are test dependencies, so the bindings do not depend on them.

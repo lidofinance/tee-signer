@@ -29,16 +29,10 @@ var (
 	CtxConfigUpdate = Context{"signer-config-update-v1"}
 	// Approvers: handover order.
 	CtxHandoverOrder = Context{"signer-handover-order-v1"}
-	// Approvers: DKG order.
-	CtxDKGOrder = Context{"signer-dkg-order-v1"}
 	// One approver: PAUSE.
 	CtxPause = Context{"signer-pause-v1"}
 	// IdentityUserData (IDENTITY, with the key origin).
 	CtxRunnerIdentity = Context{"signer-runner-identity-v1"}
-	// DKGHelloUserData: a DKG hello's identity (TKGPEER-01).
-	CtxDKGHello = Context{"signer-dkg-hello-v1"}
-	// DKGOperatorUserData: a DKG_OPERATOR answer's identity.
-	CtxDKGOperator = Context{"signer-dkg-operator-v1"}
 	// Mark log: record signature, mark key AAD, hint AAD, share AAD.
 	CtxMark     = Context{"signer-mark-v1"}
 	CtxMarkKey  = Context{"signer-mark-key-v1"}
@@ -116,7 +110,6 @@ var (
 	// "Hardware approver keys"). The verifiers take either form per
 	// signature (VerifyApproval).
 	CtxConfigUpdateHash   = Context{"signer-config-update-hash-v1"}
-	CtxDKGOrderHash       = Context{"signer-dkg-order-hash-v1"}
 	CtxHandoverOrderHash  = Context{"signer-handover-order-hash-v1"}
 	CtxImportOrderHash    = Context{"signer-import-order-hash-v1"}
 	CtxTAExitApprovalHash = Context{"signer-ta-exit-approval-hash-v1"}
@@ -131,14 +124,13 @@ var (
 // hashedForm maps each approver context to its hash-then-sign context.
 var hashedForm = map[Context]Context{
 	CtxConfigUpdate:   CtxConfigUpdateHash,
-	CtxDKGOrder:       CtxDKGOrderHash,
 	CtxHandoverOrder:  CtxHandoverOrderHash,
 	CtxImportOrder:    CtxImportOrderHash,
 	CtxTAExitApproval: CtxTAExitApprovalHash,
 }
 
 // HashedContext is the hash-then-sign context of the approver context c;
-// false if c is not one of the five approver contexts.
+// false if c is not one of the four approver contexts.
 func HashedContext(c Context) (Context, bool) {
 	h, ok := hashedForm[c]
 	return h, ok
@@ -183,7 +175,7 @@ func VerifyApproval(k [32]byte, c Context, sig [64]byte, body ...[]byte) bool {
 
 // Contexts lists the registry in a fixed order.
 var Contexts = []Context{
-	CtxSetup, CtxConfigUpdate, CtxHandoverOrder, CtxDKGOrder, CtxPause,
+	CtxSetup, CtxConfigUpdate, CtxHandoverOrder, CtxPause,
 	CtxRunnerIdentity, CtxMark, CtxMarkKey, CtxMarkHint, CtxShare,
 	CtxAzureSealing, CtxAzureKeyWrap,
 	CtxTAPolicy, CtxTAExitApproval, CtxTAPause, CtxTAResume,
@@ -194,8 +186,8 @@ var Contexts = []Context{
 	CtxKeygenOrders, CtxKeyRelease,
 	CtxHandoverShare, CtxHandoverOrigin, CtxHandoverOriginKey,
 	CtxImportOrder, CtxImportCommitments,
-	CtxConfigUpdateHash, CtxDKGOrderHash, CtxHandoverOrderHash, CtxImportOrderHash, CtxTAExitApprovalHash,
-	CtxHandoverCarry, CtxDKGHello, CtxDKGOperator,
+	CtxConfigUpdateHash, CtxHandoverOrderHash, CtxImportOrderHash, CtxTAExitApprovalHash,
+	CtxHandoverCarry,
 }
 
 func (c Context) String() string { return c.name }

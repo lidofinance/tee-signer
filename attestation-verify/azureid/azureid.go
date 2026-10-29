@@ -1,4 +1,4 @@
-//go:build !peerselect || peer_azure
+//go:build !verifierselect || platform_azure
 
 // Package azureid checks the MAA token in an Azure runner's IDENTITY
 // response. It turns the identity and the client's nonce into the runtime

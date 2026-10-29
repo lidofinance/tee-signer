@@ -1,4 +1,4 @@
-//go:build !peerselect
+//go:build !verifierselect
 
 // Command handover-target is the target half of the handover tool
 // (signer-protocol docs/protocol.md, "Handover"). The source half is
@@ -48,12 +48,12 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
+	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	admincluster "github.com/lidofinance/tee-signer/signer-admin/cluster"
 	remoteadmin "github.com/lidofinance/tee-signer/signer-admin/remote/admin"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/tee-signer/handover"
-	"github.com/lidofinance/tee-signer/tee-signer/handoverorder"
 )
 
 // identityFile is what the identity step writes and the source half reads.

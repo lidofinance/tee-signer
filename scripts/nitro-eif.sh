@@ -74,11 +74,8 @@ case "$arch" in
 esac
 # One nitro-cli image per host arch. It builds EIFs for both arches.
 NITRO_IMAGE="signer-cloud/nitro-cli:$NITRO_CLI_TAG-$HOST_ARCH"
-# IMAGE_PEERS (for example "azure aws gcp") takes the key generation build
-# with those DKG peers (runner-aws-dkg-<peers>); the image name and the
-# output folder carry the peer set. Unset: the runner without key generation.
-# IMAGE_FLAVOR=testnet takes the testnet build, "-testnet" before the peer
-# set (runner-aws-testnet-dkg-..., build/nitro-testnet-dkg-...).
+# IMAGE_FLAVOR=testnet takes the testnet build (runner-aws-testnet,
+# build/nitro-testnet).
 SUFFIX="$(image_suffix)"
 TAGS="netgo,osusergo,$(runner_tags "runner-aws$SUFFIX")"
 # The handover release gate (common.sh require_handover_gate).
@@ -98,7 +95,7 @@ if [ "${NITRO_CLI_REUSE:-}" = 1 ]; then
 else
   bash "$ROOT/scripts/nitro-cli-image.sh" >/dev/null
 fi
-IMAGE_FLAVOR="$IMAGE_FLAVOR" PEERS="${IMAGE_PEERS:-${PEERS-}}" bash "$ROOT/scripts/build-runner.sh" "$arch" >/dev/null 2>&1
+IMAGE_FLAVOR="$IMAGE_FLAVOR" bash "$ROOT/scripts/build-runner.sh" "$arch" >/dev/null 2>&1
 RUNNER="$BUILD/$arch/bin/runner-aws$SUFFIX"
 [ -x "$RUNNER" ] || die "$RUNNER was not built"
 if grep -qa -- "allow-import" "$RUNNER"; then

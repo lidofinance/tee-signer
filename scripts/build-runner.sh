@@ -19,18 +19,8 @@
 #                            the dev platform too, so the vsock tests run on it
 #   runner-gcp-debugimport   test build: the GCP runner with STS, IAM and KMS at a
 #                            test URL (tests/e2e mark log tests)
-#   runner-<cloud>-dkg-<peers>
-#                            release, key generation (tee-signer/keygen) with the
-#                            attestation verifiers of the peers in PEERS
-#                            (default: azure aws gcp, our three-cloud
-#                            cluster); <peers> is the sorted set, and
-#                            runner-<cloud>-dkg-<peers>.peers next to it
-#                            records the set and the tags. PEERS="" builds none.
-#   runner-dev-dkg-dev       dev platform, key generation with the dev peer only
-#                            (local tests)
 #   with IMAGE_FLAVOR=testnet, instead of the runners above (common.sh):
-#   runner-<cloud>-testnet, runner-dev-testnet, runner-<cloud>-testnet-dkg-<peers>,
-#   runner-dev-testnet-dkg-dev
+#   runner-<cloud>-testnet, runner-dev-testnet
 #                            release builds with -tags testnet: governance
 #                            times in minutes, devnets and test networks only
 #                            (signer-protocol/buildflavor)
@@ -39,16 +29,14 @@
 #   udprelay                 pure Go (Nitro parent side): the NTS clock's NTP datagrams
 #                            between vsock and UDP, allowlist and rate limits
 #
-# The cloud runners (azure, aws, gcp and their debug and key generation
-# builds) have the build tag nts: they link the Rust NTS library, which
-# scripts/build-nts.sh builds first (build/nts/<arch>/lib, offline, in
-# its toolchain image), and their images turn the NTS clock on (-nts-clock).
-# runner-dev, runner-dev-debugimport and runner-dev-dkg-dev stay without it.
+# The cloud runners (azure, aws, gcp and their debug builds) have the build
+# tag nts: they link the Rust NTS library, which scripts/build-nts.sh builds
+# first (build/nts/<arch>/lib, offline, in its toolchain image), and their
+# images turn the NTS clock on (-nts-clock). runner-dev and
+# runner-dev-debugimport stay without it.
 #
-# Only the three release binaries named after a cloud, or with PEERS set their
-# key generation builds, go into images; the debug builds never do. The
-# builds without key generation are byte for byte what they were before it
-# existed (its code is behind the peer tags). The script checks that every binary is static and of
+# Only the three release binaries named after a cloud go into images; the
+# debug builds never do. The script checks that every binary is static and of
 # the arch asked for, that every default-flavour binary passes the release
 # gate (scripts/release-gate.sh: no testnet role, legacy or
 # debug code, no test-only package in a release build), that no
@@ -116,7 +104,7 @@ LDFLAGS="-s -w -buildid= -linkmode external -extldflags -static"
 for arch in "${archs[@]}"; do
   out="$BUILD/$arch/bin"
   mkdir -p "$out"
-  for name in "${RUNNER_BINS[@]}" "${RUNNER_DKG_BINS[@]}"; do
+  for name in "${RUNNER_BINS[@]}"; do
     (cd "$ROOT/tee-signer" && \
       CGO_ENABLED=1 GOOS=linux GOARCH="$(goarch_of "$arch")" CC="$(cc_for "$arch")" \
       go build -trimpath -buildvcs=false ${OVERLAY_FLAGS[@]+"${OVERLAY_FLAGS[@]}"} -tags "netgo,osusergo,$(runner_tags "$name")" -ldflags "$LDFLAGS" -o "$out/$name" .)
@@ -143,7 +131,7 @@ for arch in "${archs[@]}"; do
     fi
     # The flavour shows in HEALTH's version and the TLS certificate's name.
     case "$name" in
-      *-testnet|*-testnet-dkg-*)
+      *-testnet)
         if [ -n "$OVERLAY_DIR" ]; then
           has_string "$out/$name" signer-build-overlay yes "a testnet build with SIGNER_BUILD_OVERLAY_DIR has the overlay"
         else
@@ -157,14 +145,13 @@ for arch in "${archs[@]}"; do
         has_string "$out/$name" "0.1.0+testnet" no "a default build is not a testnet build"
         has_string "$out/$name" allow-unlisted-image no "a default build always holds the image check (signer-protocol/docs/protocol.md, Image check)" ;;
     esac
+    # Every release build has both handover sides; the debug builds have
+    # neither (tee-signer/server, tag debugimport).
     case "$name" in
-      *-dkg-*)
-        has_string "$out/$name" dkg-policy yes "a key generation build has -dkg-policy"
-        has_string "$out/$name" signer-handover-order-record-v1 yes "a key generation build has the handover source side"
-        printf 'peers=%s\ntags=%s\n' "${name#*-dkg-}" "$(runner_tags "$name")" >"$out/$name.peers" ;;
+      *-debugimport)
+        has_string "$out/$name" signer-handover-order-record-v1 no "a debug build cannot hand over, so no image takes it" ;;
       *)
-        has_string "$out/$name" dkg-policy no "a build without peer tags has no key generation"
-        has_string "$out/$name" signer-handover-order-record-v1 no "a build without peer tags cannot hand over, so no image takes it (require_handover_gate)" ;;
+        has_string "$out/$name" signer-handover-order-record-v1 yes "a release build has the handover source side" ;;
     esac
     for opt in test_nsm_url test_snp_hostdata test_imds_url test_google_url; do
       case "$name:$opt" in

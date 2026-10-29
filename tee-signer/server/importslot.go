@@ -33,8 +33,7 @@ import (
 //     with nothing pending, checked again under the lock that orders every
 //     config write (setImportOrder), so an update that arrived after the
 //     first request's checks stops the import before it starts;
-//   - CONFIG_UPDATE is refused while the slot is set (Updates.Accept), and
-//     so are a DKG order and a new key generation session (dkg.go);
+//   - CONFIG_UPDATE is refused while the slot is set (Updates.Accept);
 //   - a rotation that comes into force keeps the slot (Updates.compute):
 //     it drops what the old set signed and is pending, but the shares of an
 //     import are on their way from a source that wrote its tombstone.

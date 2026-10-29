@@ -1,12 +1,12 @@
-//go:build (peer_azure || peer_aws || peer_gcp || peer_dev) && !debugimport
+//go:build !debugimport
 
 package server
 
 import (
 	"testing"
 
+	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/slashing-log"
-	"github.com/lidofinance/tee-signer/tee-signer/handoverorder"
 )
 
 // SHO-01: a source whose host lost its pending order's body reads the slot

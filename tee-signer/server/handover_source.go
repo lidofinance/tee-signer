@@ -1,11 +1,10 @@
-//go:build (peer_azure || peer_aws || peer_gcp || peer_dev) && !debugimport
+//go:build !debugimport
 
 // HANDOVER_ORDER and HANDOVER as a source (signer-protocol docs/protocol.md,
-// "Handover"), so every image can hand its shares to the next one. Only a
-// runner with a
-// setup built with key generation serves it: the attestation verifiers it
-// checks a target with are the ones it checks DKG peers with
-// (attest/runnerclient, peer_* tags), the same ones its own import uses.
+// "Handover"), so every image can hand its shares to the next one. Every
+// release build with a setup serves it: the attestation verifier it checks
+// a target with is the one of its own platform (attestation-verify/runnerclient,
+// tag verifierselect), the same one its own import uses.
 //
 // The order. k approvers in force sign a handover order that names this
 // runner's setup as the source and one target: its setup_hash, its image
@@ -22,7 +21,7 @@
 // second order is refused while one is pending, unless the pending one
 // has expired or is void (its approvers or image no longer in force). At
 // its not_after an order leaves the slot by itself (Updates.compute), so
-// it no longer stands in IDENTITY in front of a DKG order that waits;
+// it no longer stands in IDENTITY in front of a later order;
 // after the tombstone it stays.
 //
 // The order slot also holds a handover import in progress on a target
@@ -39,7 +38,7 @@
 //   - the order is this runner's pending order, past its wait, before its
 //     not_after, signed by k approvers in force, its target image on the
 //     allowed list in force;
-//   - no config update and no DKG order is pending here;
+//   - no config update is pending here;
 //   - the target's published setup hashes to the order's target
 //     setup_hash (H(policy_root, platform_commitment), rebuilt here from
 //     the leaves and salts), which its identity carries;
@@ -91,6 +90,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
+	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-protocol"
@@ -98,7 +98,6 @@ import (
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
 	"github.com/lidofinance/tee-signer/slashing-log"
 	"github.com/lidofinance/tee-signer/tee-signer/handover"
-	"github.com/lidofinance/tee-signer/tee-signer/handoverorder"
 )
 
 // HandoverSourceOptions configure EnableHandoverSource.
@@ -107,9 +106,8 @@ type HandoverSourceOptions struct {
 	// client for the key sets).
 	VerifierOptions []runnerclient.Option
 	// LimitedEgress and PeerEndpoints: on a runner that reaches only its
-	// setup's peer hosts (setup.PeerEgress), every host the target's
-	// verifier fetches a key set from must be one of them, as for DKG
-	// peers.
+	// setup's peer hosts (setup.AttestationEgress), every host the target's
+	// verifier fetches a key set from must be one of them.
 	LimitedEgress bool
 	PeerEndpoints []string
 }
@@ -307,6 +305,17 @@ func (u *Updates) putOrder(ctx context.Context, now uint64, o markstore.Order, n
 	return nil
 }
 
+// TrustedTime is the time a handover order is checked against, as a
+// config update is: the NTS clock with a quorum (any clock on the dev
+// platform).
+func (u *Updates) TrustedTime() (uint64, error) {
+	now, err := u.trustedNow()
+	if err != nil {
+		return 0, backend.Refused(backend.StatusClock, "handover order: %v", err)
+	}
+	return now, nil
+}
+
 // targetVerifier is the verifier of the order's target: the settings the
 // order names, a verifier built into this runner, the dev verifier on the
 // dev platform only, and key set hosts this runner reaches.
@@ -315,7 +324,7 @@ func (h *sourceHandover) targetVerifier(b *handoverorder.Body, hash [32]byte) (r
 		return h.verifier, nil
 	}
 	p := b.Target
-	a := runnerclient.OrderAttestation(&p)
+	a := runnerclient.RunnerAttestation(&p)
 	switch {
 	case !runnerclient.Available(a.Verifier):
 		return nil, fmt.Errorf("handover order: target verifier %q is not built into this runner", a.Verifier)
@@ -553,11 +562,6 @@ func (h *sourceHandover) handover(ctx context.Context, payload []byte) ([]byte, 
 		}
 		if p := v.state.Open.Pending; p != nil {
 			return bad(fmt.Errorf("an open config update (version %d) is pending here; hand over once it is in force or replaced", p.Version))
-		}
-		if dkgOrders != nil {
-			if p := dkgOrders.PendingSlot(); p.Kind != 0 {
-				return bad(fmt.Errorf("DKG order %x is pending here; no handover while it waits", p.Hash[:8]))
-			}
 		}
 	}
 	id, pol, err := h.checkTarget(ctx, q, b, hash, v, handed)

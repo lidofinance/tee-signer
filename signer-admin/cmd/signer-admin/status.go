@@ -156,8 +156,8 @@ func facets(st *signerState) map[string]string {
 		}
 		f[g.String()+"_pending"] = p
 	}
-	// A DKG order is pushed to every signer; a handover order names one
-	// source, so the others never hold it and it is no difference.
+	// A handover order names one source, so the others never hold it and
+	// it is no difference; no other order kind exists today.
 	o := "none"
 	if s.Order.Kind != 0 && runnerclient.OrderKind(s.Order.Kind) != "handover" {
 		o = hex8(s.Order.Hash)

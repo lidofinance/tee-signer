@@ -4,7 +4,7 @@
 > Not audited. Not for production or mainnet funds. Interfaces and formats will
 > change without notice.
 
-The wire protocol between a runner and its clients: the request and answer types (package `backend` at the module root), frame encoding (`wire`, `wire/admin`), transports (`transport`: TCP, Unix socket, vsock), the client connection (`remote`), the key generation messages (`dkgmsg`), sealed share import (`sealedimport`) and the build flavour constants (`buildflavor`). The fixed watermark storage codec (`watermark.go`) also lives here. Pure Go, no cgo.
+The wire protocol between a runner and its clients: the request and answer types (package `backend` at the module root), frame encoding (`wire`, `wire/admin`), transports (`transport`: TCP, Unix socket, vsock), the client connection (`remote`), sealed share import (`sealedimport`) and the build flavour constants (`buildflavor`). The fixed watermark storage codec (`watermark.go`) also lives here. Pure Go, no cgo.
 
 The protocol is described in [docs/protocol.md](docs/protocol.md).
 

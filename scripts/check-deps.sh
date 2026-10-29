@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Dependency check: each runner uses only its selected clouds and peers,
+# Dependency check: each runner uses only its selected clouds,
 # keeps operator tools out, and preserves the inner audit layers. It exits
 # non-zero when a dependency crosses one of these boundaries.
 #
@@ -11,15 +11,14 @@
 #   1. Every package that is not the standard library is ours (github.com/lidofinance/tee-signer/...)
 #      or in a module the build's clouds may use. The AWS SDK, smithy-go,
 #      hf/nsm, mdlayher/vsock and socket and golang.org/x/{net,sync,sys} are
-#      for the AWS build only. fxamacker/cbor and x448/float16 are for the
-#      AWS build and for a build with the peer_aws tag: key generation with an
-#      AWS peer checks its Nitro document, and only github.com/lidofinance/tee-signer/attestation-verify may
-#      import them there. The Azure, GCP and dev builds hold nothing
-#      third-party but the embedded root certificates (x509roots/fallback).
-#   2b. Key generation code only in key generation builds (tag peerselect):
-#      tee-signer/keygen and signer-core/dkgmath, and the verifiers of the build's
-#      peers only (attestation-verify/azureid with peer_azure, github.com/lidofinance/tee-signer/attestation-verify with
-#      any cloud peer).
+#      for the AWS build only, fxamacker/cbor and x448/float16 too (the
+#      Nitro verifier's CBOR parser). The Azure, GCP and dev builds hold
+#      nothing third-party but the embedded root certificates
+#      (x509roots/fallback).
+#   2b. The attestation verifier of the build's own platform only (tag
+#      verifierselect): attestation-verify/azureid with platform_azure,
+#      github.com/lidofinance/tee-signer/attestation-verify with any cloud
+#      platform, none in the dev build.
 #   2. No package of another cloud: the nitro platform and the host agent
 #      only in AWS builds, azure and gcp only in theirs.
 #   3. The build's own platform package is there, so a tag that stopped
@@ -56,34 +55,23 @@ cloud_in() {
   return 1
 }
 
-# peers_of <tags>: the peer verifiers in a tag list, for example "aws gcp".
-peers_of() {
-  local t out=()
-  for t in ${1//,/ }; do
-    case "$t" in peer_*) out+=("${t#peer_}") ;; esac
-  done
-  echo "${out[*]}"
-}
-
-# module_ok <clouds> <module path> [peers]
+# module_ok <clouds> <module path>
 module_ok() {
   case "$2" in
     github.com/lidofinance/tee-signer/*|golang.org/x/crypto/x509roots/fallback) return 0 ;;
-    # The Nitro verifier's CBOR parser: the AWS platform, or an AWS DKG peer.
+    # The Nitro verifier's CBOR parser: the AWS platform.
     github.com/fxamacker/cbor/*|github.com/x448/float16)
-      { cloud_in "$1" aws || cloud_in "${3:-}" aws; } && return 0 ;;
+      cloud_in "$1" aws && return 0 ;;
     github.com/aws/*|github.com/hf/nsm|github.com/mdlayher/*|golang.org/x/net|golang.org/x/sync|golang.org/x/sys)
       cloud_in "$1" aws && return 0 ;;
   esac
   return 1
 }
 
-# peer_package_ok <peers> <import path>: key generation and verifier code
-# only in the builds whose peers need it.
-peer_package_ok() {
+# verifier_package_ok <clouds> <import path>: verifier code only in the
+# builds whose platform needs it.
+verifier_package_ok() {
   case "$2" in
-    github.com/lidofinance/tee-signer/tee-signer/keygen|github.com/lidofinance/tee-signer/tee-signer/keygen/*|github.com/lidofinance/tee-signer/signer-core/dkgmath|github.com/lidofinance/tee-signer/signer-protocol/dkgmsg|github.com/lidofinance/tee-signer/governance/dkgorder|github.com/lidofinance/tee-signer/tee-signer/charonlock)
-      [ -n "$1" ] ;;
     github.com/lidofinance/tee-signer/attestation-verify/azureid) cloud_in "$1" azure ;;
     github.com/lidofinance/tee-signer/attestation-verify) cloud_in "$1" "azure|aws|gcp" ;;
     *) return 0 ;;
@@ -120,7 +108,7 @@ audit_layer_ok() {
   case "$1" in
     "$root"/signer-protocol|"$root"/signer-protocol/*)
       case "$2" in "$root"/signer-protocol|"$root"/signer-protocol/*) return 0 ;; esac ;;
-    "$root"/signer-core/core|"$root"/signer-core/threshold|"$root"/signer-core/dkgmath)
+    "$root"/signer-core/core|"$root"/signer-core/threshold)
       [ "$2" = "$root/signer-protocol" ] && return 0 ;;
     "$root"/trusted-time/*)
       case "$2" in "$root"/trusted-time/*) return 0 ;; esac ;;
@@ -134,10 +122,9 @@ linked() { awk -v w="$2" '$1 == w { found = 1 } END { exit !found }' "$1"; }
 
 # check_source <name> <goarch>
 check_source() {
-  local name="$1" goarch="$2" tags clouds peers list viol pkg mod imports dep cloud c want n
+  local name="$1" goarch="$2" tags clouds list viol pkg mod imports dep cloud c want n
   tags="netgo,osusergo,$(runner_tags "$name")"
   clouds="$(clouds_of "$tags")"
-  peers="$(peers_of "$tags")"
   list="$(mktemp)"
   viol="$(mktemp)"
   # Lines of: import path, module path, imports. The standard library is left out.
@@ -147,10 +134,10 @@ check_source() {
   while read -r pkg mod imports; do
     [ -n "$pkg" ] || continue
     cloud="$(package_cloud "$pkg")"
-    if ! module_ok "$clouds" "$mod" "$peers"; then
+    if ! module_ok "$clouds" "$mod"; then
       echo "$pkg $mod" >>"$viol"
-    elif ! peer_package_ok "$peers" "$pkg"; then
-      echo "$pkg not-for-peers($peers)" >>"$viol"
+    elif ! verifier_package_ok "$clouds" "$pkg"; then
+      echo "$pkg verifier-of-another-cloud" >>"$viol"
     elif [ -n "$cloud" ] && ! cloud_in "$clouds" "$cloud"; then
       echo "$pkg code-of-$cloud" >>"$viol"
     fi
@@ -166,9 +153,6 @@ check_source() {
     awk 'NR == FNR { if ($2 ~ /^github.com\/fxamacker\/cbor\// || $2 == "github.com/x448/float16") v[$1] = 1; next }
          $1 == "github.com/lidofinance/tee-signer/attestation-verify" || ($1 in v) { next }
          { for (i = 3; i <= NF; i++) if ($i in v) print $1 " CBOR-outside-github.com/lidofinance/tee-signer/attestation-verify" }' "$list" "$list" >>"$viol"
-  fi
-  if [ -n "$peers" ]; then
-    linked "$list" github.com/lidofinance/tee-signer/tee-signer/keygen || bad "$name ($goarch): a key generation build without tee-signer/keygen"
   fi
   if [ -s "$viol" ]; then
     n="$(wc -l <"$viol")"
@@ -203,24 +187,23 @@ check_source() {
 
 # check_binary <file> <name>
 check_binary() {
-  local file="$1" name="$2" want got clouds peers mod
+  local file="$1" name="$2" want got clouds mod
   want="netgo,osusergo,$(runner_tags "$name")"
   clouds="$(clouds_of "$want")"
-  peers="$(peers_of "$want")"
   got="$(go version -m "$file" | awk '$1 == "build" && $2 ~ /^-tags=/ { sub(/^-tags=/, "", $2); print $2 }')"
   [ "$got" = "$want" ] || bad "$file: built with -tags=$got, expected -tags=$want"
   while read -r mod; do
-    module_ok "$clouds" "$mod" "$peers" || bad "$file links the module $mod, and a build for: $clouds must not"
+    module_ok "$clouds" "$mod" || bad "$file links the module $mod, and a build for: $clouds must not"
   done < <(go version -m "$file" | awk '$1 == "dep" { print $2 }')
 }
 
 for goarch in amd64 arm64; do
-  for name in "${RUNNER_BINS[@]}" "${RUNNER_DKG_BINS[@]}"; do
+  for name in "${RUNNER_BINS[@]}"; do
     check_source "$name" "$goarch"
   done
 done
 for arch in "$@"; do
-  for name in "${RUNNER_BINS[@]}" "${RUNNER_DKG_BINS[@]}"; do
+  for name in "${RUNNER_BINS[@]}"; do
     file="$BUILD/$arch/bin/$name"
     if [ -f "$file" ]; then check_binary "$file" "$name"; else bad "$file: no such binary (scripts/build-runner.sh builds it)"; fi
   done
@@ -230,4 +213,4 @@ if [ "$fail" != 0 ]; then
   echo "check-deps: FAILED: a runner build crosses a dependency boundary" >&2
   exit 1
 fi
-log "check-deps: $((${#RUNNER_BINS[@]} + ${#RUNNER_DKG_BINS[@]})) runner builds preserve cloud, peer and audit layer boundaries (PEERS=$PEERS)"
+log "check-deps: the ${#RUNNER_BINS[@]} runner builds preserve cloud and audit layer boundaries"

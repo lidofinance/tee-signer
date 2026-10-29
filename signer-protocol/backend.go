@@ -233,16 +233,6 @@ const AttestOnlyPerMinute = 4
 const (
 	IdentityContext = "signer-runner-identity-v1"
 	AttestContext   = "signer-runner-attest-v1"
-	// DKGHelloContext is the context of a DKG hello's user data
-	// (DKGHelloUserData, setupwire.CtxDKGHello). The hello's identity has
-	// the IDENTITY layout under its own context, so an IDENTITY answer,
-	// whose nonce any signing or attest-only client chooses, never passes
-	// for a hello (TKGPEER-01).
-	DKGHelloContext = "signer-dkg-hello-v1"
-	// DKGOperatorContext is the context of a DKG_OPERATOR answer's user
-	// data (DKGOperatorUserData, setupwire.CtxDKGOperator), for the same
-	// reason: an IDENTITY answer never passes for an operator key.
-	DKGOperatorContext = "signer-dkg-operator-v1"
 )
 
 // SetupState is what a runner says about its setup and config in IDENTITY,
@@ -283,9 +273,8 @@ type PendingUpdate struct {
 	EffectiveAt uint64 `json:"effective_at"` // Unix seconds
 }
 
-// Order is a pending handover (kind 1) or DKG order (kind 2). Kind 0, all
-// zero: none. Runners take DKG orders only; handover orders do not exist
-// yet, so kind 1 does not occur.
+// Order is the pending handover order (kind 1). Kind 0, all zero: none.
+// Kind 2 was the DKG order of earlier builds and no longer occurs.
 type Order struct {
 	Kind  uint8  `json:"kind"`
 	Hash  Root   `json:"hash"`
@@ -447,20 +436,6 @@ func userDataHash(context string, nonce []byte) hash.Hash {
 // setup state and the keys. Every variable-length field is length-prefixed.
 func IdentityUserData(nonce []byte, id *Identity) []byte {
 	return identityUserData(IdentityContext, nonce, id)
-}
-
-// DKGHelloUserData is what a runner binds into the platform document of a
-// DKG hello's identity: IdentityUserData's layout under DKGHelloContext,
-// with the hello's AttestNonce as nonce.
-func DKGHelloUserData(nonce []byte, id *Identity) []byte {
-	return identityUserData(DKGHelloContext, nonce, id)
-}
-
-// DKGOperatorUserData is what a runner binds into the platform document of
-// a DKG_OPERATOR answer: IdentityUserData's layout under
-// DKGOperatorContext, with the answer's AttestNonce as nonce.
-func DKGOperatorUserData(nonce []byte, id *Identity) []byte {
-	return identityUserData(DKGOperatorContext, nonce, id)
 }
 
 func identityUserData(context string, nonce []byte, id *Identity) []byte {

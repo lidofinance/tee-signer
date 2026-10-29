@@ -8,21 +8,20 @@
 #
 # Tags: the runner modules test with all four platform tags at once, as the
 # platform packages need; tee-signer also with each tag alone (package main),
-# with the tags of the key generation build and with testnet.
+# with testnet and with the tags of a release runner.
 # Logs: logs/test-<module>.log.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 mkdir -p "$LOGS"
 RACE="${RACE--race}"
 ALL_TAGS=platform_dev,platform_aws,platform_azure,platform_gcp
-DKG_TAGS="$(runner_tags runner-dev-dkg-dev)"
 
 # vet_builds: go vet with the tags of every runner build, both flavours.
 vet_builds() {
   local name tags
-  for name in "${RUNNER_BINS[@]}" "${RUNNER_DKG_BINS[@]}"; do go vet -tags "$(runner_tags "$name")" ./... || return 1; done
+  for name in "${RUNNER_BINS[@]}"; do go vet -tags "$(runner_tags "$name")" ./... || return 1; done
   # shellcheck disable=SC2016 # the inner script's $1, expanded by the inner bash
-  for tags in $(IMAGE_FLAVOR=testnet bash -c '. "$1"; for n in "${RUNNER_BINS[@]}" "${RUNNER_DKG_BINS[@]}"; do runner_tags "$n"; done' _ "$ROOT/scripts/common.sh"); do
+  for tags in $(IMAGE_FLAVOR=testnet bash -c '. "$1"; for n in "${RUNNER_BINS[@]}"; do runner_tags "$n"; done' _ "$ROOT/scripts/common.sh"); do
     go vet -tags "$tags" ./... || return 1
   done
   go vet -tags "$ALL_TAGS" ./... && go vet -tags "$ALL_TAGS,debugimport" ./...
@@ -40,16 +39,17 @@ checks() {
       go vet -tags platform_aws ./... && go test $RACE -count=1 -v -tags platform_aws ./transport || return 1 ;;
     governance)
       go test $RACE -count=1 -v ./... || return 1
-      go vet -tags testnet ./... && go test $RACE -count=1 -v -tags testnet ./setupwire ./flavor ./dkgorder || return 1 ;;
+      go vet -tags testnet ./... && go test $RACE -count=1 -v -tags testnet ./setupwire ./flavor ./handoverorder || return 1 ;;
     tee-signer)
       vet_builds || return 1
       local tags
       for tags in "" platform_dev platform_aws platform_azure platform_gcp; do go test $RACE -count=1 -tags "$tags" . || return 1; done
       go test $RACE -count=1 -tags platform_dev,platform_azure,platform_gcp ./record ./attls || return 1
       go test $RACE -count=1 -v -tags "$ALL_TAGS" ./... || return 1
-      go test $RACE -count=1 -v -tags "$DKG_TAGS" ./server || return 1
       go test $RACE -count=1 -v -tags platform_dev,testnet . ./attls || return 1
-      go test $RACE -count=1 -v -tags testnet -run 'Flavor|ImageCheck' ./server || return 1 ;;
+      go test $RACE -count=1 -v -tags testnet -run 'Flavor|ImageCheck' ./server || return 1
+      # The tags a release runner is built with (scripts/common.sh runner_tags).
+      go test $RACE -count=1 -tags "$(runner_tags runner-dev)" ./server . || return 1 ;;
     platform|slashing-log|platform-aws|platform-azure|platform-gcp|trusted-time|signer-admin)
       # The operator tools and the clock build without the runner tags.
       case "$1" in trusted-time|signer-admin) ;; *) vet_builds || return 1 ;; esac
@@ -62,7 +62,7 @@ checks() {
       b="$BUILD/$HOST_ARCH/bin/runner-aws-debugimport"; [ -x "$b" ] && dbg+=(RUNNER_AWS_DEBUG_BIN="$b")
       env "${dbg[@]}" go test $RACE -count=1 -v ./... || return 1
       local p
-      for p in azure aws gcp dev; do go test $RACE -count=1 -tags "peerselect,peer_$p" ./runnerclient || return 1; done ;;
+      for p in azure aws gcp dev; do go test $RACE -count=1 -tags "verifierselect,platform_$p" ./runnerclient || return 1; done ;;
     tests)
       go vet -tags platform_aws ./... || return 1 ;;
     *)

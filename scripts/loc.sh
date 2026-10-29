@@ -63,7 +63,7 @@ case "${1:-modules}" in
   builds)
     files signer-core | grep -E '\.(c|h)$' >"$tmp/core.list"
     files trusted-time | grep -E '\.(rs|h)$' >"$tmp/rust.list"
-    for name in "${RUNNER_BINS[@]}" "${RUNNER_DKG_BINS[@]}"; do
+    for name in "${RUNNER_BINS[@]}"; do
       tags="netgo,osusergo,$(runner_tags "$name")"
       (cd tee-signer && GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go list -deps -tags "$tags" \
         -f '{{if .Module}}{{range .GoFiles}}{{println $.Module.Path $.Dir .}}{{end}}{{range .CgoFiles}}{{println $.Module.Path $.Dir .}}{{end}}{{range .CFiles}}{{println $.Module.Path $.Dir .}}{{end}}{{end}}' .) |

@@ -14,16 +14,16 @@ import (
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
 	"github.com/lidofinance/tee-signer/governance/flavor"
+	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	adminapprover "github.com/lidofinance/tee-signer/signer-admin/approver"
 	remoteadmin "github.com/lidofinance/tee-signer/signer-admin/remote/admin"
-	"github.com/lidofinance/tee-signer/tee-signer/handoverorder"
 )
 
 // Handover orders (signer-protocol docs/protocol.md, "Handover"): k
 // approvers in force sign one order per source signer, which names the one
 // target it may hand its shares to.
-// The flow is the DKG order's:
+// The flow is the config update's:
 //
 //	signer-admin handover-draft -cluster cluster.json -signer NAME -target-cloud target/cloud.json [-out handover.bin]
 //	signer-admin show handover.bin                      each approver, offline
@@ -195,7 +195,7 @@ func cmdHandoverDraft(args []string, out io.Writer) error {
 		return fmt.Errorf("%s pins no setup_sha256; pin the target first (signer-admin pin of its build) or pass -target-setup-sha256", *targetCloud)
 	}
 	tname := cmpOr(*targetName, m.name+"b")
-	target, err := tconn.Attestation.OrderParticipant(tname, th, [32]byte{})
+	target, err := tconn.Attestation.OrderRunner(tname, th)
 	if err != nil {
 		return fmt.Errorf("target %s: %w", *targetCloud, err)
 	}
@@ -212,7 +212,7 @@ func cmdHandoverDraft(args []string, out io.Writer) error {
 		return fmt.Errorf("%s: %w", m.name, err)
 	}
 	cl.Close()
-	src, err := conn.Attestation.OrderParticipant(m.name, m.setupHash, [32]byte{})
+	src, err := conn.Attestation.OrderRunner(m.name, m.setupHash)
 	if err != nil {
 		return fmt.Errorf("%s (%s): %w", m.name, m.cloudPath, err)
 	}

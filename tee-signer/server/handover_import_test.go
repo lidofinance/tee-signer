@@ -1,4 +1,4 @@
-//go:build (peer_azure || peer_aws || peer_gcp || peer_dev) && !debugimport
+//go:build !debugimport
 
 package server
 
@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
-	"github.com/lidofinance/tee-signer/governance/dkgorder"
+	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/platform/dev"
@@ -30,7 +30,6 @@ import (
 	wireadmin "github.com/lidofinance/tee-signer/signer-protocol/wire/admin"
 	"github.com/lidofinance/tee-signer/slashing-log"
 	"github.com/lidofinance/tee-signer/tee-signer/handover"
-	"github.com/lidofinance/tee-signer/tee-signer/handoverorder"
 	"github.com/lidofinance/tee-signer/tee-signer/state"
 )
 
@@ -79,7 +78,7 @@ type tgtEnv struct {
 func newTgtEnv(t *testing.T, platName string, change func(s *setupwire.Setup)) *tgtEnv {
 	t.Helper()
 	if !runnerclient.Available(runnerclient.VerifierDev) {
-		t.Skip("the made-up source has a dev document: build with peer_dev (the dev key generation runner's tags)")
+		t.Skip("the made-up source has a dev document: build with platform_dev and verifierselect, or without verifierselect")
 	}
 	raw, err := os.ReadFile(filepath.Join("..", "..", "governance", "setupwire", "testdata", "setup-dev.bin"))
 	if err != nil {
@@ -186,8 +185,8 @@ func (e *tgtEnv) sealTo() *backend.Identity {
 func (e *tgtEnv) order(ids []byte, change func(b *handoverorder.Body)) ([]byte, [32]byte) {
 	e.t.Helper()
 	b := handoverorder.Body{ClusterID: e.setup.ClusterID, ChainHash: e.setup.Chain.Hash(), NotAfter: e.now() + 12*3600,
-		Source: handoverorder.Runner{Name: "signer-1", SetupHash: [32]byte{0x5e}, Verifier: dkgorder.VerifierDev},
-		Target: handoverorder.Runner{Name: "signer-1b", SetupHash: e.hash, Verifier: dkgorder.VerifierDev}}
+		Source: handoverorder.Runner{Name: "signer-1", SetupHash: [32]byte{0x5e}, Verifier: handoverorder.VerifierDev},
+		Target: handoverorder.Runner{Name: "signer-1b", SetupHash: e.hash, Verifier: handoverorder.VerifierDev}}
 	if change != nil {
 		change(&b)
 	}
@@ -713,7 +712,7 @@ func TestHandoverImportEmptyMark(t *testing.T) {
 }
 
 // Mid-import the runner takes the shares of its import only: no other
-// order, no other mark, no plain sealed import, no key generation.
+// order, no other mark, no plain sealed import.
 func TestHandoverImportMidway(t *testing.T) {
 	e := newTgtEnv(t, "dev", nil)
 	src := newSource(t, 8, 0, [][32]byte{{0xd1}}, testMark)
@@ -743,8 +742,6 @@ func TestHandoverImportMidway(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = e.srv.dispatch(ctx, wire.Frame{Type: wireadmin.TypeImportSealed, Payload: p})
-	refusedImport(t, err, backend.StatusNotReady, "handover import")
-	_, err = e.srv.AddGeneratedShares(nil, nil)
 	refusedImport(t, err, backend.StatusNotReady, "handover import")
 
 	if r := e.mustImp(order, pages[1], 0); !r.Done || r.Held != 8 {

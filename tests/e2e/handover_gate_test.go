@@ -11,20 +11,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lidofinance/tee-signer/governance/dkgorder"
 	"github.com/lidofinance/tee-signer/governance/flavor"
+	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/sealedimport"
-	"github.com/lidofinance/tee-signer/tee-signer/handoverorder"
 )
 
 // TestE2EHandoverGate is the release gate of the handover (docs/protocol.md,
 // "Handover"): every image of this branch must hand its shares to the next
-// one. Image N, a dev key generation runner (the build the cloud images
-// take, with the dev peer), holds keys and signs; it hands over to image
+// one. Image N, a dev release runner, holds keys and signs; it hands over to image
 // N+1 of the same branch through the two tools, under an approvers' order
 // that waits its delay; N+1 signs above the mark; then N+1 hands over to
 // N+2 the same way, and N+2 signs above its mark. After each step the
@@ -35,19 +33,19 @@ import (
 // writes the stamp the image builds check (scripts/common.sh
 // require_handover_gate). It must never skip: it needs only this tree.
 //
-// HANDOVER_GATE_FROM_BIN, if set, names the runner of image N: a dev key
-// generation build of an older tree (a running image's code). Images N+1
+// HANDOVER_GATE_FROM_BIN, if set, names the runner of image N: a dev
+// release build of an older tree (a running image's code). Images N+1
 // and N+2 are this tree's. It shows that an image of that tree can hand
 // over to this one.
 //
-// Built with -tags testnet, the test runs the testnet flavour's dev key
-// generation build (RUNNER_TESTNET_DKG_BIN) instead, and the tools connect
+// Built with -tags testnet, the test runs the testnet flavour's dev
+// release build (RUNNER_TESTNET_BIN) instead, and the tools connect
 // with allow_testnet_build. scripts/handover-gate.sh runs both flavours.
 func TestE2EHandoverGate(t *testing.T) {
 	testnet := flavor.Build == flavor.Testnet
-	binKey := "dev-dkg"
+	binKey := "dev"
 	if testnet {
-		binKey = "dev-testnet-dkg"
+		binKey = "dev-testnet"
 	}
 	bin := runnerBinary(t, binKey)
 	fromBin := os.Getenv("HANDOVER_GATE_FROM_BIN")
@@ -58,7 +56,7 @@ func TestE2EHandoverGate(t *testing.T) {
 		}
 	}
 	const nKeys = 8
-	c := dkgChain(t)
+	c := hoodiChain(t)
 	if testnet {
 		// A testnet build takes Hoodi's fork version with Hoodi's root
 		// only: a devnet here.
@@ -194,8 +192,8 @@ func TestE2EHandoverGate(t *testing.T) {
 		}
 
 		hb := handoverorder.Body{ClusterID: cluster, ChainHash: s.Chain.Hash(), NotAfter: uint64(time.Now().Add(12 * time.Hour).Unix()),
-			Source: handoverorder.Runner{Name: cur.name, SetupHash: cur.hash, Verifier: dkgorder.VerifierDev},
-			Target: handoverorder.Runner{Name: next.name, SetupHash: next.hash, Verifier: dkgorder.VerifierDev}}
+			Source: handoverorder.Runner{Name: cur.name, SetupHash: cur.hash, Verifier: handoverorder.VerifierDev},
+			Target: handoverorder.Runner{Name: next.name, SetupHash: next.hash, Verifier: handoverorder.VerifierDev}}
 		orderFile := filepath.Join(dir, next.name+".order")
 		if err := os.WriteFile(orderFile, signHandoverOrder(t, hb), 0o600); err != nil {
 			t.Fatal(err)

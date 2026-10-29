@@ -90,10 +90,12 @@ type Server struct {
 	Image *ImageGate
 
 	// handoverSrc serves HANDOVER_ORDER and HANDOVER as a source
-	// (handover_source.go, key generation builds only); nil: UNSUPPORTED.
+	// (handover_source.go, release builds with a setup and the mark log);
+	// nil: UNSUPPORTED.
 	handoverSrc handoverSource
 	// imp serves IMPORT_HANDOVER, the target's side of HANDOVER
-	// (handover_import.go, key generation builds only); nil: UNSUPPORTED.
+	// (handover_import.go, release builds with a setup and the mark log);
+	// nil: UNSUPPORTED.
 	imp handoverImporter
 
 	started time.Time
@@ -425,7 +427,7 @@ func (s *Server) dispatch(ctx context.Context, f wire.Frame) ([]byte, error) {
 	case handover.Type, handover.TypeOrder:
 		if s.handoverSrc == nil {
 			return nil, backend.Refused(backend.StatusUnsupported,
-				"this runner hands over to no one: HANDOVER needs a runner with a setup and the mark log, built with key generation (peer_* tags), whose verifiers check the target's attestation")
+				"this runner hands over to no one: HANDOVER needs a release build with a setup and the mark log, whose verifier checks the target's attestation")
 		}
 		if f.Type == handover.TypeOrder {
 			return s.handoverSrc.order(ctx, f.Payload)
@@ -434,7 +436,7 @@ func (s *Server) dispatch(ctx context.Context, f wire.Frame) ([]byte, error) {
 	case handover.TypeImport:
 		if s.imp == nil {
 			return nil, backend.Refused(backend.StatusUnsupported,
-				"this runner takes no handed-over shares: IMPORT_HANDOVER needs a runner with a setup and the mark log, built with key generation (peer_* tags), whose verifiers check the source's origin proof")
+				"this runner takes no handed-over shares: IMPORT_HANDOVER needs a release build with a setup and the mark log, whose verifier checks the source's origin proof")
 		}
 		return s.imp.importShares(ctx, f.Payload)
 	case wire.TypeHealth:

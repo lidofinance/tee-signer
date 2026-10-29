@@ -1,4 +1,4 @@
-//go:build !peerselect
+//go:build !verifierselect
 
 package runnerclient
 
@@ -304,7 +304,7 @@ func TestSetupStateHelpers(t *testing.T) {
 	if UnixTime(effectiveAt) != "2027-01-15T08:00:00Z" || UnixTime(math.MaxUint64) != "unix 18446744073709551615" {
 		t.Fatalf("UnixTime %s %s", UnixTime(effectiveAt), UnixTime(math.MaxUint64))
 	}
-	if OrderKind(2) != "dkg" || OrderKind(7) != "kind 7" {
+	if OrderKind(1) != "handover" || OrderKind(2) != "kind 2" || OrderKind(7) != "kind 7" {
 		t.Fatal("OrderKind")
 	}
 

@@ -19,7 +19,6 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,13 +27,11 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
-	"github.com/lidofinance/tee-signer/governance/dkgorder"
 	"github.com/lidofinance/tee-signer/governance/flavor"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/platform/setup"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/buildflavor"
-	"github.com/lidofinance/tee-signer/signer-protocol/dkgmsg"
 	"github.com/lidofinance/tee-signer/signer-protocol/remote"
 	wireadmin "github.com/lidofinance/tee-signer/signer-protocol/wire/admin"
 )
@@ -187,15 +184,16 @@ func checkRunnerclientFlavor(t *testing.T, dir, addr string, cliCfg *tls.Config,
 	t.Logf("runnerclient: refused the testnet runner without allow_testnet_build, took it with the setting (version %s)", h.Version)
 }
 
-// TestE2ETestnetWaits: three testnet key generation runners on a devnet,
-// with setups that name no time lock, so the image default holds: 2
-// minutes in a testnet build, 48 hours in the default build. An
-// allowed-images update waits the images minimum, 7 minutes (7 days in the
-// default build); a DKG order on the dev platform waits the time lock, 2
-// minutes (48 hours; on a cloud the images minimum, 7 days). Both are sent
-// at the start; the order acts and makes a key after its 2 minutes, while
-// the update is still pending; the update comes into force after its 7.
-func TestE2ETestnetWaits(t *testing.T) {
+// TestE2ETestnetImagesUpdateWaits: a testnet runner on a devnet, with a
+// setup that names no time lock, so the image default holds: 2 minutes in
+// a testnet build, 48 hours in the default build. An allowed-images update
+// waits the images minimum instead, 7 minutes (7 days in the default
+// build): that wait is what keeps a new image from being trusted the
+// moment its update arrives. The update is sent at the start; it stays
+// pending across a restart and past the time lock, and comes into force
+// after its 7 minutes. attest/runnerclient refuses the runner without
+// allow_testnet_build and takes it with the setting.
+func TestE2ETestnetImagesUpdateWaits(t *testing.T) {
 	if flavor.Build != flavor.Testnet {
 		t.Fatal("run with -tags testnet")
 	}
@@ -203,117 +201,78 @@ func TestE2ETestnetWaits(t *testing.T) {
 		t.Fatal("this test binary does not have the testnet constants")
 	}
 	c := newChain(t) // a devnet: software.DevConfig's fork version and root
-	k := newOrderClusterWith(t, c, orderOpts{bin: "dev-testnet-dkg", testnet: true})
-	for i, cl := range k.clients {
-		h, err := cl.Health(ctx)
-		if err != nil || flavor.FromVersion(h.Version) != flavor.Testnet {
-			t.Fatalf("runner %d HEALTH: %v %+v", i+1, err, h)
-		}
-	}
-	// The coordinator, through attest/runnerclient, refuses these runners
-	// without allow_testnet_build.
-	conns := make([]coordConn, len(k.conns))
-	copy(conns, k.conns)
-	for i := range conns {
-		conns[i].AllowTestnet = false
-		conns[i].Attestation = json.RawMessage(fmt.Sprintf(`{"verifier":"dev","setup_sha256":"%s"}`, hex.EncodeToString(k.setupHashes[i][:])))
-	}
-	pre := filepath.Join(k.dir, "operator-keys-no-allow.json")
-	b, _ := json.Marshal(map[string]any{"runners": conns})
-	if err := os.WriteFile(pre, b, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, log, err := k.coord(t, "operator-keys", "-config", pre); err == nil || !strings.Contains(log, "the runner is a testnet build") {
-		t.Fatalf("operator-keys without allow_testnet_build: %v\n%s", err, log)
-	}
-
-	raw, _ := os.ReadFile(k.setups[0])
+	dir := t.TempDir()
+	caFile, cliCfg := testPKI(t, dir, "waits")
+	var cluster [32]byte
+	rand.Read(cluster[:])
+	raw := orderSetupFor(t, c, filepath.Join(dir, "signer-1"), caFile, "signer-1", cluster, nil)
 	s, err := setupwire.DecodeSetup(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if s.Locked.ChangeDelaySeconds != nil {
-		t.Fatal("the setups name a time lock")
+		t.Fatal("the setup names a time lock")
 	}
-	timeLock, imagesMin := uint64(setupwire.DefaultTimeLock), uint64(setupwire.ImagesMinTimeLock)
+	setupFile := filepath.Join(dir, "signer-1.setup")
+	if err := os.WriteFile(setupFile, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	addr := fmt.Sprintf("tcp:127.0.0.1:%d", freePort(t))
+	p := startPeerAt(t, runnerBinary(t, "dev-testnet"), "signer-1", filepath.Join(dir, "signer-1"), setupFile, addr)
+	if h, err := p.cl.Health(ctx); err != nil || flavor.FromVersion(h.Version) != flavor.Testnet {
+		t.Fatalf("HEALTH: %v %+v, want the testnet flavour", err, h)
+	}
+	checkRunnerclientFlavor(t, dir, addr, cliCfg, mustSetupHash(t, raw))
 
 	// The allowed-images update: the locked group gains a GCP image.
+	timeLock, imagesMin := uint64(setupwire.DefaultTimeLock), uint64(setupwire.ImagesMinTimeLock)
 	lh, _ := s.GroupHash(setupwire.GroupLocked)
 	next := s.Locked
 	img := make([]byte, 32)
-	_, _ = rand.Read(img)
+	rand.Read(img)
 	next.AllowedImageMeasurements = []setupwire.Image{{Kind: setupwire.ImageGCP, Measurement: img}}
 	ub := &setupwire.UpdateBody{ClusterID: s.ClusterID, ChainHash: s.Chain.Hash(), Group: setupwire.GroupLocked, Version: 1,
 		PrevHash: lh, ActivateAt: uint64(time.Now().Unix()), Locked: &next, Salts: e2eSalts(t, setupwire.NumLockedLeaves)}
 	updHash, _ := ub.Hash()
-	signedUpdate := signConfigUpdate(t, ub, 1, 2)
-	// The DKG order of the Dirk lane.
-	body := k.orderBody(t, "testnet-waits", dkgorder.PathDirk, nil)
-	signedOrder := signOrderBody(t, body, 1, 3)
-	enc, _ := body.Encode()
-	orderHash := dkgorder.Hash(enc)
-
 	sent := time.Now()
-	var effective, actAt uint64
-	for i, addr := range k.addrs {
-		before := uint64(time.Now().Unix())
-		outcome, st, err := sendConfigUpdate(t, addr, k.cliCfg, signedUpdate)
-		if err != nil || outcome != wireadmin.ConfigAccepted {
-			t.Fatalf("runner %d: allowed-images update: %d %v", i+1, outcome, err)
-		}
-		p := st.Locked.Pending
-		if p.Version != 1 || p.Hash != updHash || p.EffectiveAt < before+imagesMin || p.EffectiveAt > before+imagesMin+2 {
-			t.Fatalf("runner %d: update pending %+v, sent at %d, want effective %d s later", i+1, p, before, imagesMin)
-		}
-		effective = max(effective, p.EffectiveAt)
-		before = uint64(time.Now().Unix())
-		ost, err := adminOf(k.clients[i]).DKGOrder(ctx, signedOrder)
-		if err != nil || ost.Status != dkgmsg.OrderPending || ost.ActAt < before+timeLock || ost.ActAt > before+timeLock+2 {
-			t.Fatalf("runner %d: order %+v %v, sent at %d, want it to act %d s later", i+1, ost, err, before, timeLock)
-		}
-		actAt = max(actAt, ost.ActAt)
+	before := uint64(sent.Unix())
+	outcome, st, err := sendConfigUpdate(t, addr, cliCfg, signConfigUpdate(t, ub, 1, 2))
+	if err != nil || outcome != wireadmin.ConfigAccepted {
+		t.Fatalf("allowed-images update: %d %v", outcome, err)
 	}
-	t.Logf("sent the allowed-images update (effective in %d s; 7 days in the default build) and the DKG order (acts in %d s; 48 h in the default build) to 3 runners",
-		effective-uint64(sent.Unix()), actAt-uint64(sent.Unix()))
+	pend := st.Locked.Pending
+	if pend.Version != 1 || pend.Hash != updHash || pend.EffectiveAt < before+imagesMin || pend.EffectiveAt > before+imagesMin+2 {
+		t.Fatalf("update pending %+v, sent at %d, want effective %d s later", pend, before, imagesMin)
+	}
+	effective := pend.EffectiveAt
+	t.Logf("sent the allowed-images update: effective in %d s (7 days in the default build), past the setup's %d s time lock", effective-before, timeLock)
 
-	// Before its time the order makes nothing.
-	_, err = adminOf(k.clients[0]).InOrder(orderHash).DKGHello(ctx, &dkgmsg.HelloRequest{Nonce: bytes.Repeat([]byte{1}, 32), Count: 1})
-	if r := wantRefused(t, err, backend.StatusNotReady); !strings.Contains(r.Detail, "waits until") {
-		t.Fatalf("hello while the order waits: %v", r)
-	}
-	sleepUntil(t, actAt+1)
-	cfg := k.useOrder(t, "testnet-waits", signedOrder)
-	out := k.keygenWith(t, cfg, 1, filepath.Join(k.dir, "testnet-result.json"))
-	if len(out.Validators) != 1 {
-		t.Fatalf("keygen: %+v", out)
-	}
-	orderDone := time.Since(sent)
-	// The update is still pending: its wait is longer.
-	for i, cl := range k.clients {
-		st := devIdentity(t, cl).State.Locked
-		if st.Version != 0 || st.Pending.Version != 1 {
-			t.Fatalf("runner %d: locked group %+v %v after sending, want the update still pending", i+1, st, time.Since(sent))
+	// Still pending, with the same time, after a restart: the wait is in
+	// the mark log, not in memory.
+	p.restart(t)
+	stillPending := func(when string) {
+		t.Helper()
+		st := devIdentity(t, p.cl).State.Locked
+		if st.Version != 0 || st.Pending.Version != 1 || st.Pending.Hash != updHash || st.Pending.EffectiveAt != effective {
+			t.Fatalf("locked group %+v %s, want version 0 with the update pending as sent (effective at %d)", st, when, effective)
 		}
 	}
-	t.Logf("the order acted: 1 key made %v after sending; the allowed-images update still pending", orderDone.Round(time.Second))
-
+	stillPending("after a restart")
+	// Past the time lock the update still waits: the images minimum is
+	// the longer wait.
+	sleepUntil(t, before+timeLock+1)
+	stillPending("past the time lock")
 	sleepUntil(t, effective-5)
-	for i, cl := range k.clients {
-		if st := devIdentity(t, cl).State.Locked; st.Version != 0 {
-			t.Fatalf("runner %d: locked version %d 5 s before the update's time", i+1, st.Version)
-		}
-	}
+	stillPending("5 s before its time")
 	deadline := time.Unix(int64(effective)+30, 0)
-	for i, cl := range k.clients {
-		for devIdentity(t, cl).State.Locked != (backend.ConfigGroup{Version: 1, Hash: updHash}) {
-			if time.Now().After(deadline) {
-				t.Fatalf("runner %d: the allowed-images update did not come into force", i+1)
-			}
-			time.Sleep(500 * time.Millisecond)
+	for devIdentity(t, p.cl).State.Locked != (backend.ConfigGroup{Version: 1, Hash: updHash}) {
+		if time.Now().After(deadline) {
+			t.Fatal("the allowed-images update did not come into force")
 		}
+		time.Sleep(500 * time.Millisecond)
 	}
-	t.Logf("the allowed-images update came into force on 3 runners %v after sending (images minimum %d s)",
-		time.Since(sent).Round(time.Second), imagesMin)
+	t.Logf("the allowed-images update came into force %v after sending (images minimum %d s), having waited past the %d s time lock and a restart",
+		time.Since(sent).Round(time.Second), imagesMin, timeLock)
 }
 
 // sleepUntil waits until the Unix second at, logging the wait.
