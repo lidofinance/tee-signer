@@ -766,8 +766,13 @@ func (s *Server) addShareOf(pk backend.Pubkey, secret *[32]byte, index uint64, i
 	}
 	// Interchange maxima (an EIP-3076 import, or the handover's mark) raise
 	// the mark log first: once the share is stored, a restart must read
-	// them from the log.
+	// them from the log. A repeat root stored for this validator earlier
+	// goes first: with the raised marks it could sign a vote the history
+	// conflicts with.
 	if interchange != nil && s.Hooks != nil {
+		if err := s.Hooks.DropRepeatRoots(pk); err != nil {
+			return backend.ValidatorKey{}, backend.Refused(backend.StatusStorage, "drop the stored repeat roots: %v", err)
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		err := s.Hooks.RaiseMark(ctx, *interchange)
 		cancel()

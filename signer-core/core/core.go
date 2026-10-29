@@ -878,5 +878,14 @@ func fromC(c C.sc_watermark) backend.Watermark {
 	}
 }
 
+// NoRepeatRoots is the RepeatRootHooks record of a validator with no
+// repeat roots: an exact repeat of nothing signs.
+func NoRepeatRoots() []byte {
+	var r C.sc_repeat_roots
+	out := make([]byte, C.SC_REPEAT_ROOTS_ENCODED_LEN)
+	C.sc_repeat_roots_encode(&r, u8(out))
+	return out
+}
+
 // StatusName returns the core's name for a status code (sc_status_name).
 func StatusName(code int) string { return C.GoString(C.sc_status_name(C.int(code))) }

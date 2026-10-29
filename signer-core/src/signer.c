@@ -358,6 +358,27 @@ static void gloas_raise(sc_validator *v, const sc_watermark *imported)
     v->gloas |= G_PTC | G_ENVELOPE;
 }
 
+/*
+ * Forgets the validator's repeat roots of every kind, in RAM and, with
+ * persist_repeat_root, in storage. An import brings history signed
+ * elsewhere: the last root may be a vote that history conflicts with (a
+ * signature lost before release, then a vote inside it signed by another
+ * signer), and a repeat skips the slashing check. If the empty record is
+ * not stored the import is refused, so the old root cannot come back with
+ * the raised marks after a restart.
+ */
+static int drop_repeat(sc_signer *s, sc_validator *v, const uint8_t pubkey[SC_PUBKEY_LEN])
+{
+    memset(&v->repeat, 0, sizeof v->repeat);
+    v->gloas &= ~(G_PTC_ROOT | G_ENVELOPE_ROOT);
+    if (!s->cfg.persist_repeat_root)
+        return SC_OK;
+    if (s->ops.store_repeat_roots(s->ops.ctx, pubkey, &v->repeat) != SC_OK)
+        return SC_ERR_STORAGE;
+    s->stats.repeat_root_writes++;
+    return SC_OK;
+}
+
 int sc_signer_import(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
                      const uint8_t genesis_validators_root[SC_ROOT_LEN],
                      const sc_watermark *imported)
@@ -371,6 +392,8 @@ int sc_signer_import(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
     if (!genesis_validators_root ||
         memcmp(genesis_validators_root, s->cfg.genesis_validators_root, SC_ROOT_LEN) != 0)
         return SC_ERR_ARG;
+    if ((rc = drop_repeat(s, v, pubkey)) != SC_OK)
+        return rc;
     if (s->cfg.mark_scope == SC_MARKS_PER_VALIDATOR) {
         rc = sc_slashing_import(&v->slash, imported, counted_store, s, pubkey);
         if (rc == SC_OK)

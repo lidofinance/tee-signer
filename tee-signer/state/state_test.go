@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -322,6 +323,32 @@ func TestFloorOnlyWritesNothing(t *testing.T) {
 	if keys, _ := n.store.List(""); len(keys) != 0 {
 		t.Fatalf("floor-only mode wrote %v", keys)
 	}
+}
+
+// DropRepeatRoots leaves the empty record: after a restart the last vote no
+// longer signs as a repeat.
+func TestDropRepeatRoots(t *testing.T) {
+	n := newNode(t, Mode{Floor: true, FloorMargin: 2, RepeatRoots: true})
+	n.cfg.PersistRepeatRoot = true
+	n.clk.set(at(10, 5))
+	if err := n.start(t); err != nil {
+		t.Fatal(err)
+	}
+	n.clk.set(at(15, 5))
+	if err := n.attest(14, 15, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.hooks.DropRepeatRoots(n.pk); err != nil {
+		t.Fatal(err)
+	}
+	if rec, found, err := n.hooks.LoadRepeatRoots(n.pk); err != nil || !found || !bytes.Equal(rec, core.NoRepeatRoots()) {
+		t.Fatalf("stored roots after the drop: %x %v %v", rec, found, err)
+	}
+	n.clk.set(at(15, 300))
+	if err := n.start(t); err != nil {
+		t.Fatal(err)
+	}
+	wantSlashing(t, n.attest(14, 15, 1))
 }
 
 // The runner's default: floor only, repeat roots persisted. One sealed write

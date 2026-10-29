@@ -626,6 +626,17 @@ func (h *Hooks) StoreRepeatRoots(pk backend.Pubkey, rec []byte) error {
 	return err
 }
 
+// DropRepeatRoots overwrites pk's stored repeat roots with an empty record
+// (no-op without Mode.RepeatRoots). The runner calls it before it stores a
+// share with interchange maxima: if it stops before the core takes them, the
+// restart must not load a root that the imported history conflicts with.
+func (h *Hooks) DropRepeatRoots(pk backend.Pubkey) error {
+	if !h.mode.RepeatRoots {
+		return nil
+	}
+	return h.StoreRepeatRoots(pk, core.NoRepeatRoots())
+}
+
 func (h *Hooks) Now() (uint64, error) {
 	t, err := h.clock.Now()
 	if err != nil {

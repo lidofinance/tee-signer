@@ -628,7 +628,10 @@ int sc_signer_add_validator(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
  * must equal the configured one (else SC_ERR_ARG), and the per-validator
  * maxima: highest block slot, source epoch and target epoch. A block slot
  * also raises the validator's Gloas slot bounds: no PTC vote or envelope at
- * or below it signs afterwards.
+ * or below it signs afterwards. Every import first drops the validator's
+ * repeat roots (attestation, block, PTC vote, envelope), and with
+ * persist_repeat_root stores the empty record: no exact repeat signs until
+ * the next new signature of that kind. SC_ERR_STORAGE if that store fails.
  */
 int sc_signer_import(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
                      const uint8_t genesis_validators_root[SC_ROOT_LEN],
