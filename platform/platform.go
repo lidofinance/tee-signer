@@ -240,8 +240,8 @@ func (o Options) CheckKeyRule(r *KeyRule) error {
 // so a GCP runner starts on mainnet only when its setup accepts that
 // (sealing_key_release.no_lock_accepted, Options.NoLockAccepted). The dev
 // platform (no key release service, NoService) has no real attestation
-// either: it never starts on mainnet, whatever the setup accepts. Single-node GCP signers are refused apart from
-// this (setupwire.CheckThresholdOn).
+// either: it never starts on mainnet, whatever the setup accepts. Single-node
+// GCP signers are refused apart from this (setupwire.CheckThresholdOn).
 func (o Options) CheckNoLock(r *KeyRule) error {
 	if r.NoService {
 		return fmt.Errorf("mainnet: the dev platform has no real attestation and no key release service, so a mainnet runner does not start on it; run aws, azure or gcp (%s)", r.Why)

@@ -131,7 +131,7 @@ func (a Attester) Attest(_ context.Context, nonce, userData []byte) (*backend.At
 // New builds the dev platform. Params: clock_offset (Go duration, e.g.
 // "-30m"; simulates a host that moves the system clock), measurement (a
 // stand-in for the image measurement in the key release, see NewDevKeys),
-// egress (host:port list, from a setup's keygen_peer_attestation_hosts: the HTTP client
+// egress (host:port list, from a setup's peer_attestation_hosts: the HTTP client
 // reaches only these, see EgressClient).
 // The sealer and the key release take o.SetupHash (NewSetupSealer,
 // NewSetupKeys).

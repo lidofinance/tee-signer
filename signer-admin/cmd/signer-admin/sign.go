@@ -15,10 +15,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/lidofinance/tee-signer/governance/dkgorder"
 	"github.com/lidofinance/tee-signer/governance/flavor"
+	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
-	"github.com/lidofinance/tee-signer/tee-signer/handoverorder"
 )
 
 // testnetWait is what an offline view adds when a testnet build waits
@@ -90,8 +89,6 @@ func cmdShow(args []string, out io.Writer) error {
 		return showExit(out, fs.Arg(0), head, *activePath)
 	case isImportFile(head):
 		return showImport(out, fs.Arg(0), head, *activePath)
-	case dkgorder.IsBody(head) || dkgorder.IsOrder(head):
-		return showOrder(out, fs.Arg(0), head, *activePath)
 	case handoverorder.IsBody(head) || handoverorder.IsOrder(head):
 		return showHandover(out, fs.Arg(0), head, *activePath)
 	}
@@ -161,8 +158,6 @@ func cmdShow(args []string, out io.Writer) error {
 //	public_key = 0x...    the approver's Ed25519 key
 //	signature = 0x...     over signer-config-update-v1 and the body
 //
-// A DKG order's signature file has the same fields: body_sha256 is the
-// order's hash (dkgorder.Hash), the signature is over signer-dkg-order-v1;
 // a handover order's likewise, over signer-handover-order-v1.
 type sigFile struct {
 	bodyHash [32]byte
@@ -261,11 +256,11 @@ func cmdSign(args []string, out io.Writer) error {
 			return fmt.Errorf("%s: %w", fs.Arg(0), err)
 		}
 	}
-	if len(raw) > 0 && (raw[0] == 'U' || raw[0] == 'J' || dkgorder.IsOrder(raw) || handoverorder.IsOrder(raw) || isExitFile(raw) && len(raw) > exitapproval.Len) {
-		return fmt.Errorf("%s is signed already; sign the body that draft, dkg-draft, handover-draft, import-draft or exit-draft wrote", fs.Arg(0))
+	if len(raw) > 0 && (raw[0] == 'U' || raw[0] == 'J' || handoverorder.IsOrder(raw) || isExitFile(raw) && len(raw) > exitapproval.Len) {
+		return fmt.Errorf("%s is signed already; sign the body that draft, handover-draft, import-draft or exit-draft wrote", fs.Arg(0))
 	}
 	var body *setupwire.UpdateBody
-	if !isExitFile(raw) && !isImportFile(raw) && !dkgorder.IsBody(raw) && !handoverorder.IsBody(raw) {
+	if !isExitFile(raw) && !isImportFile(raw) && !handoverorder.IsBody(raw) {
 		if body, err = setupwire.DecodeUpdateBody(raw); err != nil {
 			return fmt.Errorf("%s: %w", fs.Arg(0), err)
 		}
@@ -283,8 +278,6 @@ func cmdSign(args []string, out io.Writer) error {
 		return signKind(out, fs.Arg(0), raw, key, *hashed, *outPath)
 	case handoverorder.IsBody(raw):
 		return signHandover(out, fs.Arg(0), raw, key, *hashed, *outPath)
-	case dkgorder.IsBody(raw):
-		return signOrder(out, fs.Arg(0), raw, key, *hashed, *outPath)
 	}
 	h, err := body.Hash()
 	if err != nil {
@@ -323,7 +316,7 @@ func cmdSign(args []string, out io.Writer) error {
 func cmdAssemble(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("assemble", flag.ContinueOnError)
 	activePath := fs.String("active", "", "the active values (default: BODY.active)")
-	outPath := fs.String("out", "", "the signed update (default update.signed, order.signed for a DKG order, handover.signed for a handover order)")
+	outPath := fs.String("out", "", "the signed update (default update.signed, handover.signed for a handover order)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -336,9 +329,6 @@ func cmdAssemble(args []string, out io.Writer) error {
 	}
 	if *activePath == "" {
 		*activePath = fs.Arg(0) + ".active"
-	}
-	if dkgorder.IsBody(raw) {
-		return assembleOrder(out, fs.Arg(0), raw, *activePath, fs.Args()[1:], cmpOr(*outPath, "order.signed"))
 	}
 	if handoverorder.IsBody(raw) {
 		return assembleHandover(out, fs.Arg(0), raw, *activePath, fs.Args()[1:], cmpOr(*outPath, "handover.signed"))

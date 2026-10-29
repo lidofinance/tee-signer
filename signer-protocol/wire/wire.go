@@ -34,7 +34,7 @@ type MsgType uint8
 
 // The signing and attestation message types. The admin types (imports,
 // config updates, exit approvals) are in package wire/admin, the key
-// generation and handover types in dkgmsg and handover.
+// handover types in tee-signer/handover.
 const (
 	TypeHealth     MsgType = 0x01
 	TypePublicKeys MsgType = 0x02
@@ -43,13 +43,11 @@ const (
 	TypeIdentity   MsgType = 0x06
 )
 
-// typeNames names every message type of the protocol, those of wire/admin,
-// dkgmsg and handover too, so logs stay readable without those packages.
+// typeNames names every message type of the protocol, those of wire/admin
+// and handover too, so logs stay readable without those packages.
 var typeNames = map[MsgType]string{
 	0x01: "HEALTH", 0x02: "PUBLIC_KEYS", 0x03: "SIGN", 0x04: "ATTEST", 0x05: "IMPORT_SHARE",
 	0x06: "IDENTITY", 0x07: "IMPORT_SHARE_SEALED", 0x08: "CONFIG_UPDATE", 0x09: "APPROVE_EXIT",
-	0x20: "DKG_HELLO", 0x21: "DKG_DEAL", 0x22: "DKG_FINISH", 0x23: "DKG_COMMIT", 0x24: "DKG_ABORT",
-	0x25: "DKG_OPERATOR", 0x26: "DKG_SETUP_SIGN", 0x27: "DKG_ORDER", 0x28: "DKG_IN_ORDER",
 	0x31: "HANDOVER_ORDER", 0x32: "HANDOVER", 0x33: "IMPORT_HANDOVER",
 }
 

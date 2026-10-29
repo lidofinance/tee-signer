@@ -1,7 +1,6 @@
 signer-setup-v1
 signer-config-update-v1
 signer-handover-order-v1
-signer-dkg-order-v1
 signer-pause-v1
 signer-runner-identity-v1
 signer-mark-v1
@@ -33,10 +32,7 @@ signer-handover-origin-key-v1
 signer-import-order-v1
 signer-import-commitments-v1
 signer-config-update-hash-v1
-signer-dkg-order-hash-v1
 signer-handover-order-hash-v1
 signer-import-order-hash-v1
 signer-ta-exit-approval-hash-v1
 signer-handover-carry-v1
-signer-dkg-hello-v1
-signer-dkg-operator-v1

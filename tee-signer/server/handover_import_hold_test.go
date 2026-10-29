@@ -1,4 +1,4 @@
-//go:build (peer_azure || peer_aws || peer_gcp || peer_dev) && !debugimport
+//go:build !debugimport
 
 package server
 
@@ -9,15 +9,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-protocol"
-	"github.com/lidofinance/tee-signer/signer-protocol/dkgmsg"
-	"github.com/lidofinance/tee-signer/signer-protocol/wire"
 	wireadmin "github.com/lidofinance/tee-signer/signer-protocol/wire/admin"
 	"github.com/lidofinance/tee-signer/slashing-log"
-	"github.com/lidofinance/tee-signer/tee-signer/handoverorder"
-	"github.com/lidofinance/tee-signer/tee-signer/keygen"
 )
 
 // Tests that the order slot of a handover import holds until every share
@@ -223,17 +220,6 @@ func TestHandoverImportStartChecks(t *testing.T) {
 	pk, _ = core.PubkeyOf(sk)
 	_, err := e.srv.addShare(pk, &sk, 1, nil, "sealed")
 	refusedImport(t, err, backend.StatusNotReady, "handover import")
-	was := dkgOrders
-	dkgOrders = &keygen.Orders{} // never reached: the refusal comes first
-	defer func() { dkgOrders = was }()
-	_, err = e.srv.dispatch(ctx, wire.Frame{Type: dkgmsg.TypeOrder, Payload: []byte{1}})
-	refusedImport(t, err, backend.StatusNotReady, "no DKG order")
-	hello, err := (&dkgmsg.InOrder{Order: [32]byte{1}, Type: dkgmsg.TypeHello, Payload: []byte{1}}).Encode()
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = e.srv.dispatch(ctx, wire.Frame{Type: dkgmsg.TypeInOrder, Payload: hello})
-	refusedImport(t, err, backend.StatusNotReady, "no key generation session")
 }
 
 // newSetHash is the hash of the set the rotation of importUpdates brings.

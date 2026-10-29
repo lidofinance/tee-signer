@@ -1,4 +1,4 @@
-//go:build !peerselect
+//go:build !verifierselect
 
 package runnerclient
 
@@ -10,18 +10,18 @@ import (
 	"strings"
 
 	"github.com/lidofinance/tee-signer/attestation-verify"
-	"github.com/lidofinance/tee-signer/governance/dkgorder"
+	"github.com/lidofinance/tee-signer/governance/handoverorder"
 )
 
-// OrderParticipant is the DKG order entry of a runner with these settings,
-// setup_hash and operator key: the reverse of OrderAttestation. It fills in
-// the defaults the verifier would use (compliance status, issuer) and
-// refuses what an order cannot carry: a pinned key set file, another Nitro
-// root, PCRs besides 0 to 3 and 8, the test switch allow_unpinned_setup.
-// The minimum versions stay with the verifier's own settings; an order pins
+// OrderRunner is the handover order entry of a runner with these settings
+// and setup_hash: the reverse of RunnerAttestation. It fills in the
+// defaults the verifier would use (compliance status, issuer) and refuses
+// what an order cannot carry: a pinned key set file, another Nitro root,
+// PCRs besides 0 to 3 and 8, the test switch allow_unpinned_setup. The
+// minimum versions stay with the verifier's own settings; an order pins
 // the setup only.
-func (a *Attestation) OrderParticipant(name string, setupHash, operatorKey [32]byte) (dkgorder.Participant, error) {
-	p := dkgorder.Participant{Name: name, SetupHash: setupHash, OperatorKey: operatorKey}
+func (a *Attestation) OrderRunner(name string, setupHash [32]byte) (handoverorder.Runner, error) {
+	p := handoverorder.Runner{Name: name, SetupHash: setupHash}
 	if err := a.foreign(); err != nil {
 		return p, err
 	}
@@ -34,18 +34,18 @@ func (a *Attestation) OrderParticipant(name string, setupHash, operatorKey [32]b
 	}
 	switch {
 	case a.AllowUnpinnedSetup:
-		return p, errors.New("attestation.allow_unpinned_setup: a DKG order always pins the setup")
+		return p, errors.New("attestation.allow_unpinned_setup: a handover order always pins the setup")
 	case a.GCPJWKSFile != "":
-		return p, errors.New("attestation.gcp_jwks_file: a key set file on the operator's disk cannot go into a DKG order")
+		return p, errors.New("attestation.gcp_jwks_file: a key set file on the operator's disk cannot go into a handover order")
 	case a.NitroRootSHA256 != "" && !strings.EqualFold(a.NitroRootSHA256, attest.NitroRootSHA256):
-		return p, errors.New("attestation.nitro_root_sha256: a DKG order checks AWS's root only")
+		return p, errors.New("attestation.nitro_root_sha256: a handover order checks AWS's root only")
 	}
 	switch a.Verifier {
 	case VerifierAWSNitro:
-		p.Verifier = dkgorder.VerifierNitro
+		p.Verifier = handoverorder.VerifierNitro
 		for k := range a.NitroPCRs {
 			if !slices.Contains([]string{"0", "1", "2", "3", "8"}, k) {
-				return p, fmt.Errorf("attestation.nitro_pcrs: PCR%s cannot go into a DKG order (PCR0 to PCR3 and PCR8 can)", k)
+				return p, fmt.Errorf("attestation.nitro_pcrs: PCR%s cannot go into a handover order (PCR0 to PCR3 and PCR8 can)", k)
 			}
 		}
 		for i := range 3 {
@@ -69,7 +69,7 @@ func (a *Attestation) OrderParticipant(name string, setupHash, operatorKey [32]b
 			p.NitroPCR8 = &pcr8
 		}
 	case VerifierAzureMAA:
-		p.Verifier = dkgorder.VerifierAzure
+		p.Verifier = handoverorder.VerifierAzure
 		s, err := a.maa()
 		if err != nil {
 			return p, err
@@ -78,17 +78,17 @@ func (a *Attestation) OrderParticipant(name string, setupHash, operatorKey [32]b
 			return p, err
 		}
 		p.MAAHost = strings.TrimPrefix(s.issuer, "https://")
-		if p.Compliance, err = dkgorder.ParseCompliance(s.compliance); err != nil {
+		if p.Compliance, err = handoverorder.ParseCompliance(s.compliance); err != nil {
 			return p, err
 		}
 	case VerifierGCPCS:
-		p.Verifier = dkgorder.VerifierGCP
+		p.Verifier = handoverorder.VerifierGCP
 		var err error
 		if p.Image, err = hexN("gcp_image_digest", strings.TrimPrefix(strings.ToLower(a.GCPImageDigest), "sha256:"), 32); err != nil {
 			return p, err
 		}
 		if a.GCPServiceAccount == "" || a.GCPProjectID == "" {
-			return p, errors.New("attestation: gcp-cs in a DKG order needs gcp_project_id and gcp_service_account, so the position is bound to the operator's project")
+			return p, errors.New("attestation: gcp-cs in a handover order needs gcp_project_id and gcp_service_account, so the position is bound to the operator's project")
 		}
 		p.GCPAudience, p.GCPServiceAccount, p.GCPProjectID = a.GCPAudience, a.GCPServiceAccount, a.GCPProjectID
 		p.GCPHWModels = slices.Sorted(slices.Values(a.GCPHWModels))
@@ -97,7 +97,7 @@ func (a *Attestation) OrderParticipant(name string, setupHash, operatorKey [32]b
 			p.GCPIssuer = attest.ConfidentialSpaceIssuer
 		}
 	case VerifierDev:
-		p.Verifier = dkgorder.VerifierDev
+		p.Verifier = handoverorder.VerifierDev
 	default:
 		return p, fmt.Errorf("attestation.verifier: %q, want %s", a.Verifier, verifierList)
 	}

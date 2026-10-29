@@ -1,4 +1,4 @@
-//go:build !peerselect
+//go:build !verifierselect
 
 // Command identity-check connects to one runner the way the Dirk fork's cloud
 // adapter does and checks its attestation, several times, each time on a new

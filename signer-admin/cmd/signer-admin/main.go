@@ -43,18 +43,11 @@
 //	    rotation, every new key) and write the signed update.
 //	signer-admin push -cluster cluster.json [-raise-min] update.signed
 //	    Send the signed update to every signer and print what each one says.
-//	signer-admin dkg-draft -cluster cluster.json -path dirk|charon [-label NAME] [-threshold K]
-//	                        [-not-after 90d] [-enrs FILE] [-out order.bin]
-//	    Draft a DKG order (order.go): one participant per signer, in
-//	    cluster.json order, each with its setup_sha256, its operator key read
-//	    over the attested connection and the attestation settings of its
-//	    cloud.json. show, sign, assemble and push take orders as they take
-//	    updates.
 //	signer-admin handover-draft -cluster cluster.json -signer NAME -target-cloud FILE
 //	                             [-target-setup-sha256 HEX] [-target-name NAME] [-not-after 12h] [-out handover.bin]
 //	    Draft a handover order (handoverdraft.go): the source signer NAME hands
 //	    its shares to the one target of FILE's settings and setup_sha256.
-//	    show, sign, assemble and push take it as they take a DKG order;
+//	    show, sign, assemble and push take it as they take an update;
 //	    push sends it to the source only.
 //
 //	signer-admin probe -cluster cluster.json [-signers NAME,...]
@@ -86,7 +79,7 @@
 // and the runners take either form per signature.
 //
 // pin, status, draft and push take -signers NAME,... to work on part of the
-// cluster, and -timeout for each signer (default 30 s). dkg-draft takes
+// cluster, and -timeout for each signer (default 30 s). handover-draft takes
 // -timeout; -signers there drafts an order of part of the cluster.
 //
 // cluster.json lists the signers of one cluster, with paths relative to it:
@@ -111,7 +104,7 @@
 // 2-minute default time lock, a 7-minute images minimum. The connection
 // refuses one unless its cloud.json sets "allow_testnet_build": true. status
 // and pin print each signer's build (build=default or build=testnet), draft
-// and dkg-draft compute the waits with the signers' build and refuse signers
+// and handover-draft compute the waits with the signers' build and refuse signers
 // of two builds, and show and sign, which see no runner, name the testnet
 // wait when it differs.
 package main
@@ -150,11 +143,10 @@ const usage = `usage:
   signer-admin status -cluster cluster.json [-signers NAME,...]
   signer-admin draft -cluster cluster.json -group locked|open [-margin 10m] [-out update.bin] FILE
   signer-admin show [-active FILE] FILE
-  signer-admin sign -key FILE|openpgp:KEYGRIP [-hashed] [-expect-sha256 HEX] [-out FILE] update.bin|order.bin|handover.bin|import.bin|exit.bin
+  signer-admin sign -key FILE|openpgp:KEYGRIP [-hashed] [-expect-sha256 HEX] [-out FILE] update.bin|handover.bin|import.bin|exit.bin
   signer-admin approver-key -key FILE|openpgp:KEYGRIP | -openpgp FILE [-fingerprint HEX]
   signer-admin assemble [-active FILE] [-out update.signed] update.bin SIG...
-  signer-admin push -cluster cluster.json [-raise-min] [-signers NAME,...] update.signed|order.signed|handover.signed
-  signer-admin dkg-draft -cluster cluster.json -path dirk|charon [-label NAME] [-threshold K] [-not-after 90d] [-enrs FILE] [-out order.bin]
+  signer-admin push -cluster cluster.json [-raise-min] [-signers NAME,...] update.signed|handover.signed
   signer-admin handover-draft -cluster cluster.json -signer NAME -target-cloud FILE [-target-setup-sha256 HEX] [-target-name NAME] [-not-after 12h] [-out handover.bin]
   signer-admin probe -cluster cluster.json [-signers NAME,...]
   signer-admin import-draft -cluster cluster.json -signer NAME -split FILE [-not-after 12h] [-out import.bin]
@@ -168,7 +160,7 @@ func run(args []string, out io.Writer) error {
 	}
 	cmds := map[string]func([]string, io.Writer) error{
 		"setup": cmdSetup, "pin": cmdPin, "status": cmdStatus, "draft": cmdDraft,
-		"show": cmdShow, "sign": cmdSign, "assemble": cmdAssemble, "push": cmdPush, "dkg-draft": cmdDKGDraft,
+		"show": cmdShow, "sign": cmdSign, "assemble": cmdAssemble, "push": cmdPush,
 		"handover-draft": cmdHandoverDraft,
 		"probe":          cmdProbe, "import-draft": cmdImportDraft, "import": cmdImport, "exit-draft": cmdExitDraft,
 		"issue-client-cert": cmdIssueClientCert, "approver-key": cmdApproverKey,

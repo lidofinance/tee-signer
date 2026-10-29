@@ -1,4 +1,4 @@
-//go:build !peerselect
+//go:build !verifierselect
 
 // Command share-import is the dealer side of the sealed share import: it
 // asks a runner for its attested identity, checks it, encrypts one share to

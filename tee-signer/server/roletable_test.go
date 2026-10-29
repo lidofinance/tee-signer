@@ -8,7 +8,6 @@ import (
 
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/buildflavor"
-	"github.com/lidofinance/tee-signer/signer-protocol/dkgmsg"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
 	wireadmin "github.com/lidofinance/tee-signer/signer-protocol/wire/admin"
 	"github.com/lidofinance/tee-signer/tee-signer/attls"
@@ -29,7 +28,7 @@ func pipeCall(t *testing.T, c net.Conn, id uint32, typ wire.MsgType, payload []b
 	return wire.DecodeResponse(f.Payload)
 }
 
-// Every message type of wire, dkgmsg and handover, and some unknown ones,
+// Every message type of wire, wire/admin and handover, and some unknown ones,
 // against each client role: FORBIDDEN exactly where the role table of
 // docs/protocol.md says no.
 func TestRoleTable(t *testing.T) {
@@ -42,8 +41,6 @@ func TestRoleTable(t *testing.T) {
 	types := []wire.MsgType{
 		wire.TypeHealth, wire.TypePublicKeys, wire.TypeSign, wire.TypeAttest, wireadmin.TypeImportShare, wire.TypeIdentity,
 		wireadmin.TypeImportSealed, wireadmin.TypeConfigUpdate, wireadmin.TypeApproveExit,
-		dkgmsg.TypeHello, dkgmsg.TypeDeal, dkgmsg.TypeFinish, dkgmsg.TypeCommit, dkgmsg.TypeAbort, dkgmsg.TypeOperator,
-		dkgmsg.TypeSetupSign, dkgmsg.TypeOrder, dkgmsg.TypeInOrder,
 		handover.TypeOrder, handover.Type, handover.TypeImport,
 		0x00, 0x0a, 0x1f, 0x29, 0x30, 0x34, 0x7f,
 	}
@@ -52,7 +49,7 @@ func TestRoleTable(t *testing.T) {
 	attest := map[wire.MsgType]bool{wire.TypeHealth: true, wire.TypePublicKeys: true, wire.TypeAttest: true, wire.TypeIdentity: true}
 	adminOK := map[wire.MsgType]bool{}
 	for _, typ := range types {
-		adminOK[typ] = typ != wire.TypeSign && (typ < 0x0a || typ >= 0x20 && typ <= 0x28 || typ >= 0x31 && typ <= 0x33) && typ != 0
+		adminOK[typ] = typ != wire.TypeSign && (typ < 0x0a || typ >= 0x31 && typ <= 0x33) && typ != 0
 	}
 
 	// An admin leaf straight under the root: admin rights in a testnet build
@@ -138,20 +135,6 @@ func TestRefusedImportPayloadCleared(t *testing.T) {
 		}
 		if p[0]|p[1]|p[2]|p[3] != 0 {
 			t.Errorf("client %+v: payload %x not cleared", cl, p)
-		}
-	}
-}
-
-// dkgTypes, written as numbers in roles.go, are dkgmsg's types.
-func TestDKGTypesMatchDKGMsg(t *testing.T) {
-	want := []wire.MsgType{dkgmsg.TypeHello, dkgmsg.TypeDeal, dkgmsg.TypeFinish, dkgmsg.TypeCommit, dkgmsg.TypeAbort,
-		dkgmsg.TypeOperator, dkgmsg.TypeSetupSign, dkgmsg.TypeOrder, dkgmsg.TypeInOrder}
-	if len(dkgTypes) != len(want) {
-		t.Fatalf("dkgTypes %x, dkgmsg %x", dkgTypes, want)
-	}
-	for i := range want {
-		if dkgTypes[i] != want[i] {
-			t.Fatalf("dkgTypes %x, dkgmsg %x", dkgTypes, want)
 		}
 	}
 }

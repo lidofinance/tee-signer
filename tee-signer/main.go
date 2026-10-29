@@ -352,6 +352,9 @@ func run() (err error) {
 		srv.KeyReleaseHash, srv.KeyLock, srv.KeyLockWhy = rule.Hash, rule.Lock, rule.Why
 	}
 	applyPlainImport(srv)
+	if err := enableHandover(srv); err != nil {
+		return err
+	}
 	if *sealedImport {
 		if srv.ImportKey, err = sealedimport.Generate(); err != nil {
 			return err

@@ -11,9 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lidofinance/tee-signer/governance/dkgorder"
+	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
-	"github.com/lidofinance/tee-signer/tee-signer/handoverorder"
 )
 
 // show, sign and assemble take a handover order offline, as they take a
@@ -38,8 +37,8 @@ func TestHandoverOrderOffline(t *testing.T) {
 	var target [32]byte
 	rand.Read(target[:])
 	b := &handoverorder.Body{ClusterID: s.ClusterID, ChainHash: s.Chain.Hash(), NotAfter: uint64(time.Now().Unix()) + 12*3600,
-		Source: handoverorder.Runner{Name: "s1", SetupHash: sh, Verifier: dkgorder.VerifierDev},
-		Target: handoverorder.Runner{Name: "s1b", SetupHash: target, Verifier: dkgorder.VerifierDev}}
+		Source: handoverorder.Runner{Name: "s1", SetupHash: sh, Verifier: handoverorder.VerifierDev},
+		Target: handoverorder.Runner{Name: "s1b", SetupHash: target, Verifier: handoverorder.VerifierDev}}
 	enc, err := b.Encode()
 	if err != nil {
 		t.Fatal(err)
@@ -66,9 +65,9 @@ func TestHandoverOrderOffline(t *testing.T) {
 	wantIn(t, out, "signatures: complete and valid against the approver set", "approver_signature position 2")
 	out = failTool(t, "sign", "-key", keys[1].file, signed)
 	wantIn(t, out, "signed already")
-	// A DKG order's signature is not a handover order's.
+	// Another order kind's signature is not a handover order's.
 	dkgSig := writeFile(t, filepath.Join(dir, "dkg.sig"), string((&sigFile{bodyHash: handoverorder.Hash(enc), key: [32]byte(mustKey(t, keys[1].pub)),
-		sig: dkgorder.SignBody(readKeyT(t, keys[1].file), enc)}).format()))
+		sig: setupwire.SignApproval(readKeyT(t, keys[1].file), setupwire.CtxImportOrder, false, enc)}).format()))
 	out = failTool(t, "assemble", "-out", filepath.Join(dir, "x.signed"), body, sigs[0], dkgSig)
 	wantIn(t, out, "does not verify")
 	// The active values of another signer are not the order's source.
@@ -95,20 +94,20 @@ func readKeyT(t *testing.T, path string) []byte {
 	return k
 }
 
-// The whole approval track against key generation runners with a handover
+// The whole approval track against a release runner with a handover
 // source side on the dev platform: handover-draft reads the
 // source's attested state and the target's cloud.json, the approvers sign,
 // push sends the order to the source only, the source holds it pending for
 // the time lock, then active. A draft whose not_after comes before the
 // source would act is refused, and so is a target image off the list.
 //
-// SIGNER_ADMIN_HANDOVER_RUNNER names a runner-dev-dkg-dev, which serves
+// SIGNER_ADMIN_HANDOVER_RUNNER names a runner-dev (a dev release build), which serves
 // HANDOVER_ORDER as a source (runner/server/handover_source.go). This
 // module does not build runners, so the test is skipped without it.
 func TestHandoverFlowDevRunner(t *testing.T) {
 	bin := os.Getenv("SIGNER_ADMIN_HANDOVER_RUNNER")
 	if bin == "" {
-		t.Skip("SIGNER_ADMIN_HANDOVER_RUNNER is not set (a dev key generation runner, runner-dev-dkg-dev)")
+		t.Skip("SIGNER_ADMIN_HANDOVER_RUNNER is not set (a dev release runner, runner-dev)")
 	}
 	dir := t.TempDir()
 	ca, cert, key := clientPKI(t, dir)

@@ -14,24 +14,14 @@
 #                                           with FILE (default cloud/generic-images.txt,
 #                                           the recorded values)
 #
-# With IMAGE_PEERS (for example "azure aws gcp") both work on the images
-# with key generation (research/setup-phase.md, section 10, phase 2): each
-# image holds runner-<cloud>-dkg-<peers>, which takes DKG orders, in place
-# of runner-<cloud>. Their build folders and local names carry the peer set
-# (build/nitro-dkg-aws-azure-gcp, build/azure-dkg-aws-azure-gcp,
-# build/gcp-dkg-aws-azure-gcp), the defaults are build/generic-dkg-<peers>
-# and cloud/generic-images-dkg-<peers>.txt, and the images without key
-# generation stay as they are.
-#
-# With IMAGE_FLAVOR=testnet (with or without IMAGE_PEERS) both work on the
+# With IMAGE_FLAVOR=testnet both work on the
 # testnet images (signer-protocol/buildflavor): the same code built with -tags
 # testnet, whose governance times run in minutes and which start on devnets,
 # Hoodi, Sepolia and Chiado only. For research, never for real keys. Their
-# runners, folders, local names, registry tags and records carry "-testnet"
-# before the peer set: runner-<cloud>-testnet-dkg-<peers>,
-# build/nitro-testnet-dkg-..., signer-cloud/azure-runner-testnet-dkg-...,
+# runners, folders, local names, registry tags and records carry "-testnet":
+# runner-<cloud>-testnet, build/nitro-testnet, signer-cloud/azure-runner-testnet,
 # tags generic-testnet (GCP) and generic-testnet-ts (Azure),
-# cloud/generic-images-testnet-dkg-<peers>.txt.
+# cloud/generic-images-testnet.txt.
 #
 # What build runs, with the settings fixed here:
 #   Nitro  scripts/nitro-eif.sh aarch64 (the EIF for Graviton, built twice by
@@ -48,11 +38,8 @@
 # overlay there is no Azure CCE policy (azure.cce_policy none). With
 # SIGNER_BUILD_OVERLAY_DIR (testnet images only) the overlay sets the
 # network entries of the devnet images (devnet_generic_images_env).
-# Every image build needs IMAGE_PEERS and a passed handover gate
-# (scripts/handover-gate.sh; common.sh require_handover_gate): a runner
-# without key generation has no handover source side, so no image takes it.
-# Without IMAGE_PEERS no key generation peers (PEERS empty): phase 1 images
-# have none. The EIF file's own sha256 changes with every build (its
+# Every image build needs a passed handover gate (scripts/handover-gate.sh;
+# common.sh require_handover_gate). The EIF file's own sha256 changes with every build (its
 # metadata has the build time); PCR0 to PCR2, which KMS checks, do not. It is
 # printed, not compared.
 #
@@ -69,14 +56,7 @@ set -euo pipefail
 die() { echo "generic-images: $*" >&2; exit 1; }
 
 export GOPROXY=off GOTOOLCHAIN=local NITRO_CLI_REUSE=1
-# The key generation images: IMAGE_PEERS names the peer set, PEERS follows.
-if [ -n "${IMAGE_PEERS:-}" ]; then
-  export IMAGE_PEERS PEERS="$IMAGE_PEERS"
-else
-  unset IMAGE_PEERS
-  export PEERS=""
-fi
-# The flavour, then the peer set: -testnet-dkg-aws-azure-gcp.
+# The flavour: -testnet or nothing.
 export IMAGE_FLAVOR
 SUFFIX="$(image_suffix)"
 export IMAGE_TAG=generic STDIO=enable
@@ -138,7 +118,7 @@ cmd_build() {
   log "GCP image, ${GCP_ENV[*]} (log $dir/gcp.log)"
   env "${GCP_ENV[@]}" bash "$ROOT/platform-gcp/deploy/build-image.sh" >"$dir/gcp.log" 2>&1 || { tail -n 30 "$dir/gcp.log"; die "gcp build-image.sh failed"; }
   {
-    echo "# generic $([ "$IMAGE_FLAVOR" = default ] || echo "$IMAGE_FLAVOR ")images${IMAGE_PEERS:+ with key generation (peers $(peers_sorted "$IMAGE_PEERS"))}, built $(date -u +%Y-%m-%dT%H:%M:%SZ) from $(git -C "$ROOT" rev-parse --short HEAD)$([ -z "$(git -C "$ROOT" status --porcelain -- . ':!build' ':!logs')" ] || echo ' with local changes')"
+    echo "# generic $([ "$IMAGE_FLAVOR" = default ] || echo "$IMAGE_FLAVOR ")images, built $(date -u +%Y-%m-%dT%H:%M:%SZ) from $(git -C "$ROOT" rev-parse --short HEAD)$([ -z "$(git -C "$ROOT" status --porcelain -- . ':!build' ':!logs')" ] || echo ' with local changes')"
     echo "# $(head -n 1 "$BUILD/core-src/SOURCE.txt")"
     echo "# go $(go env GOVERSION), nitro-cli $NITRO_CLI_TAG image $(docker image inspect "signer-cloud/nitro-cli:$NITRO_CLI_TAG-$HOST_ARCH" --format '{{.Id}}')$(devnet_hook generic_images_note)"
     fingerprints

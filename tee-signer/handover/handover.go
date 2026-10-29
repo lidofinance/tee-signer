@@ -12,10 +12,9 @@ import (
 )
 
 // TypeOrder is the message type of HANDOVER_ORDER, whose codec is
-// package handoverorder (handoverorder.TypeOrder). It is here so a runner
-// built without key generation can name it, and refuse it, without
-// linking that package, which imports the DKG order codec
-// (scripts/check-deps.sh).
+// governance/handoverorder (handoverorder.TypeOrder names the same value;
+// that package does not import this one, and
+// TestTypeOrderMatchesHandoverOrder keeps the two equal).
 const TypeOrder wire.MsgType = 0x31
 
 // MaxPerResponse bounds the shares of one response (about 1.3 KB each).

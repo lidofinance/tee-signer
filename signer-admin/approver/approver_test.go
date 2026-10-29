@@ -76,8 +76,8 @@ func TestSignForms(t *testing.T) {
 	if ok, h := Verify(k, setupwire.CtxImportOrder, hashed, body); !ok || !h {
 		t.Fatalf("hashed: %v %v", ok, h)
 	}
-	if ok, _ := Verify(k, setupwire.CtxDKGOrder, hashed, body); ok {
-		t.Fatal("an import order signature verified as a DKG order")
+	if ok, _ := Verify(k, setupwire.CtxHandoverOrder, hashed, body); ok {
+		t.Fatal("an import order signature verified as a handover order")
 	}
 	d := sha256.Sum256(setupwire.CtxImportOrder.Message(body))
 	m := setupwire.CtxImportOrderHash.Hash(d[:])

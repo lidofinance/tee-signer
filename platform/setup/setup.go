@@ -82,19 +82,19 @@ func Load(raw []byte, image string) (*Setup, error) {
 	return &Setup{Raw: bytes.Clone(raw), SHA256: h, Wire: s}, nil
 }
 
-// PeerEgress says which hosts the runner's HTTP client reaches when its
-// egress is limited: on Nitro always, the setup's keygen_peer_attestation_hosts over the
+// AttestationEgress says which hosts the runner's HTTP client reaches when its
+// egress is limited: on Nitro always, the setup's peer_attestation_hosts over the
 // peer block of the port map (maybe none); on dev when the setup lists
 // any, the same hosts dialled directly (dev.New, option egress). limited
 // is false where the runner reaches any host: Azure, GCP, and dev without
-// a list. The DKG orders refuse a peer whose verifier fetches a key set
-// from a host outside a limited list.
-func PeerEgress(s *setupwire.Setup) (endpoints []string, limited bool) {
+// a list. The handover orders refuse an image whose verifier fetches a
+// key set from a host outside a limited list.
+func AttestationEgress(s *setupwire.Setup) (endpoints []string, limited bool) {
 	switch p := &s.Platform; p.Platform {
 	case setupwire.PlatformNitro:
-		return p.KeygenPeerAttestationHosts, true
+		return p.PeerAttestationHosts, true
 	case setupwire.PlatformDev:
-		return p.KeygenPeerAttestationHosts, len(p.KeygenPeerAttestationHosts) > 0
+		return p.PeerAttestationHosts, len(p.PeerAttestationHosts) > 0
 	}
 	return nil, false
 }
@@ -156,7 +156,7 @@ func (s *Setup) ClientCAPEM() []byte {
 // path) that follow from the setup. On Nitro they add the values fixed in
 // the image: the host agent's address, the UDP relay, the store key of the
 // record credentials and the proxy routes over the fixed port map, the
-// setup's peer endpoints included. On dev a setup with keygen_peer_attestation_hosts
+// setup's peer endpoints included. On dev a setup with peer_attestation_hosts
 // limits the runner's HTTP client to them (option egress).
 func (s *Setup) Options() map[string]string {
 	k := &s.Wire.Platform.SealingKeyRelease
@@ -173,7 +173,7 @@ func (s *Setup) Options() map[string]string {
 			"record_creds": NitroRecordCreds,
 		}
 	case setupwire.PlatformDev:
-		if e := s.Wire.Platform.KeygenPeerAttestationHosts; len(e) > 0 {
+		if e := s.Wire.Platform.PeerAttestationHosts; len(e) > 0 {
 			return map[string]string{"egress": strings.Join(e, ",")}
 		}
 	case setupwire.PlatformAzure:

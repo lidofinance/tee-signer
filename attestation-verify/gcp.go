@@ -1,4 +1,4 @@
-//go:build !peerselect || peer_gcp
+//go:build !verifierselect || platform_gcp
 
 package attest
 

@@ -305,7 +305,7 @@ func TestUpdateHashedSignature(t *testing.T) {
 		t.Fatalf("direct and hashed: %v", err)
 	}
 	header, _ := u.Body.Header()
-	u.Approvals[1].Signature = SignApproval(approverKey(3), CtxDKGOrder, true, header)
+	u.Approvals[1].Signature = SignApproval(approverKey(3), CtxImportOrder, true, header)
 	if err := u.Verify(&s.Locked.Approvers); err == nil {
 		t.Fatal("a signature under the DKG order's hashed context verified")
 	}

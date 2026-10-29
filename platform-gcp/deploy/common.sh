@@ -170,15 +170,7 @@ WIF_PROVIDER_RESOURCE="//iam.googleapis.com/$WIF_POOL_RESOURCE/providers/$WIF_PR
 WIF_PRINCIPAL_SET="principalSet://iam.googleapis.com/$WIF_POOL_RESOURCE/*"
 REGISTRY="$REGION-docker.pkg.dev"
 IMAGE_REPO="$REGISTRY/$PROJECT_ID/$AR_REPO/$IMAGE_NAME"
-# IMAGE_PEERS (for example "azure aws gcp"): the image with the key
-# generation build of those DKG peers (runner-gcp-dkg-<peers>), in its own
-# build folder and under its own local name, so the image without key
-# generation stays as it is. IMAGE_FLAVOR=testnet puts "-testnet" before the
-# peer set: build/gcp-testnet-dkg-aws-azure-gcp, gcp-runner-testnet-dkg-....
-PEER_SUFFIX=""
-if [ -n "${IMAGE_PEERS:-}" ]; then
-  PEER_SUFFIX="$(peer_suffix "$IMAGE_PEERS")"
-fi
+# IMAGE_FLAVOR=testnet puts "-testnet" into the build folder and the image name.
 IMAGE_SUFFIX="$(image_suffix)"
 OUT="$OUT$IMAGE_SUFFIX"
 

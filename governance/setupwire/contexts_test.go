@@ -26,19 +26,13 @@ func TestContexts(t *testing.T) {
 		seen[name] = true
 	}
 	// The TA header lists the same names except the import order, the
-	// hash-then-sign, the handover carry and the DKG hello and operator
-	// contexts, which are the runner's only.
-	if len(Contexts) != 42 {
+	// hash-then-sign and the handover carry contexts, which are the
+	// runner's only.
+	if len(Contexts) != 38 {
 		t.Fatalf("%d contexts; add a new one to Contexts and to the TA header", len(Contexts))
 	}
 	// Package backend cannot import this one, so it holds the names of the
 	// user data, key origin and key release contexts itself.
-	if backend.DKGOperatorContext != CtxDKGOperator.String() {
-		t.Fatalf("backend's DKG operator context %q is not the registry's %q", backend.DKGOperatorContext, CtxDKGOperator)
-	}
-	if backend.DKGHelloContext != CtxDKGHello.String() {
-		t.Fatalf("backend's DKG hello context %q is not the registry's %q", backend.DKGHelloContext, CtxDKGHello)
-	}
 	if backend.IdentityContext != CtxRunnerIdentity.String() || backend.AttestContext != CtxRunnerAttest.String() {
 		t.Fatalf("backend's contexts %q and %q are not the registry's", backend.IdentityContext, backend.AttestContext)
 	}
@@ -64,11 +58,11 @@ func TestContexts(t *testing.T) {
 	}
 }
 
-// The five approver contexts have a hashed form: its message is the 32
+// The four approver contexts have a hashed form: its message is the 32
 // bytes SHA-256 of the hashed context and SHA-256 of the direct message.
 // No other context has one.
 func TestHashedContexts(t *testing.T) {
-	approverCtx := []Context{CtxConfigUpdate, CtxDKGOrder, CtxHandoverOrder, CtxImportOrder, CtxTAExitApproval}
+	approverCtx := []Context{CtxConfigUpdate, CtxHandoverOrder, CtxImportOrder, CtxTAExitApproval}
 	for _, c := range approverCtx {
 		h, ok := HashedContext(c)
 		name := c.String()

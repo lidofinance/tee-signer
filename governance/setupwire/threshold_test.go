@@ -16,7 +16,7 @@ func TestCheckThreshold(t *testing.T) {
 	}{
 		{dev, 2, 3, true}, {dev, 3, 5, true}, {dev, 2, 4, false}, {dev, 1, 2, false}, {dev, 1, 1, true}, {dev, 4, 3, false},
 		{MainnetForkVersion, 2, 3, false}, {MainnetForkVersion, 3, 5, false}, {MainnetForkVersion, 3, 4, true},
-		{MainnetForkVersion, 4, 5, true}, {MainnetForkVersion, 1, 1, false}, {MainnetForkVersion, 2, 2, true},
+		{MainnetForkVersion, 4, 5, true}, {MainnetForkVersion, 1, 1, true}, {MainnetForkVersion, 2, 2, true},
 	} {
 		if err := CheckThreshold(c.fork, c.t, c.n); (err == nil) != c.ok {
 			t.Errorf("fork %x, %d of %d: %v, want ok %v", c.fork, c.t, c.n, err, c.ok)
@@ -24,8 +24,10 @@ func TestCheckThreshold(t *testing.T) {
 	}
 }
 
-// A single-node signer (t = n = 1) on GCP is refused on every chain; on
-// other platforms the threshold rule alone decides.
+// A single-node signer (t = n = 1) is refused on GCP on every chain; on
+// the other platforms it passes on every chain, mainnet included, and the
+// threshold rule alone decides. The mainnet overlap rule still applies to
+// every real split.
 func TestThresholdOnGCP(t *testing.T) {
 	testnet, mainnet := backend.Version{0x10, 0, 0, 0x38}, MainnetForkVersion
 	for _, c := range []struct {
@@ -40,8 +42,10 @@ func TestThresholdOnGCP(t *testing.T) {
 		{PlatformGCP, mainnet, 3, 4, ""},
 		{PlatformGCP, mainnet, 2, 3, "2t - n >= 2"},
 		{PlatformNitro, testnet, 1, 1, ""},
+		{PlatformNitro, mainnet, 1, 1, ""},
+		{PlatformAzure, mainnet, 1, 1, ""},
+		{PlatformAzure, mainnet, 2, 3, "2t - n >= 2"},
 		{PlatformDev, testnet, 1, 1, ""},
-		{PlatformAzure, mainnet, 1, 1, "2t - n >= 2"},
 	} {
 		err := CheckThresholdOn(c.p, c.fork, c.t, c.n)
 		if (c.refuse == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), c.refuse)) {

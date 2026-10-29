@@ -44,7 +44,7 @@ func setupFile(t *testing.T, name string, peers ...string) string {
 		if err != nil {
 			t.Fatal(err)
 		}
-		s.Platform.KeygenPeerAttestationHosts = peers
+		s.Platform.PeerAttestationHosts = peers
 		if raw, err = s.Encode(); err != nil {
 			t.Fatal(err)
 		}

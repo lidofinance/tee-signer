@@ -57,11 +57,11 @@ func TestParseSetupRefusals(t *testing.T) {
 		{"old format key", nitro + "format = 2\n", `unknown key "format"`},
 		{"old safety key", nitro + "max_epochs_ahead = 2\n", `unknown key "max_epochs_ahead"`},
 		{"old locked key", nitro + "k = 2\n", `unknown key "k"`},
-		{"peer hosts on azure", azure + "keygen_peer_attestation_hosts = a.example:443\n", "keygen_peer_attestation_hosts is for nitro and dev"},
-		{"peer host without port", nitro + "keygen_peer_attestation_hosts = sharedneu.neu.attest.azure.net\n", "want host:port"},
-		{"peer host as URL", nitro + "keygen_peer_attestation_hosts = https://sharedneu.neu.attest.azure.net\n", "want host:port"},
-		{"peer host twice", nitro + "keygen_peer_attestation_hosts = a.example:443\nkeygen_peer_attestation_hosts = a.example:443\n",
-			"keygen_peer_attestation_hosts: repeats the entry of line"},
+		{"peer hosts on azure", azure + "peer_attestation_hosts = a.example:443\n", "peer_attestation_hosts is for nitro and dev"},
+		{"peer host without port", nitro + "peer_attestation_hosts = sharedneu.neu.attest.azure.net\n", "want host:port"},
+		{"peer host as URL", nitro + "peer_attestation_hosts = https://sharedneu.neu.attest.azure.net\n", "want host:port"},
+		{"peer host twice", nitro + "peer_attestation_hosts = a.example:443\npeer_attestation_hosts = a.example:443\n",
+			"peer_attestation_hosts: repeats the entry of line"},
 		{"no equals sign", nitro + "just text\n", "want key = value"},
 		{"no value", nitro + "builder_gas_limit_min =\n", "builder_gas_limit_min: no value"},
 		{"not ASCII", nitro + "signer_name = sígner\n", "printable ASCII"},
@@ -278,13 +278,13 @@ func TestAmounts(t *testing.T) {
 	}
 }
 
-// keygen_peer_attestation_hosts may come in any order; the parser sorts
+// peer_attestation_hosts may come in any order; the parser sorts
 // them.
 func TestParsePeerHosts(t *testing.T) {
 	ss := samples(t)
 	nitro := string(must(ss["setup-nitro"].Format()))
-	text := nitro + "keygen_peer_attestation_hosts = www.googleapis.com:443\nkeygen_peer_attestation_hosts = sharedneu.neu.attest.azure.net:443\n" +
-		"keygen_peer_attestation_hosts = confidentialcomputing.googleapis.com:443\n"
+	text := nitro + "peer_attestation_hosts = www.googleapis.com:443\npeer_attestation_hosts = sharedneu.neu.attest.azure.net:443\n" +
+		"peer_attestation_hosts = confidentialcomputing.googleapis.com:443\n"
 	got, err := ParseSetup("peers.conf", []byte(text))
 	if err != nil {
 		t.Fatal(err)
@@ -294,10 +294,10 @@ func TestParsePeerHosts(t *testing.T) {
 		t.Fatalf("parsed\n%+v\nwant\n%+v", got.Platform, want.Platform)
 	}
 	out := string(must(want.Format()))
-	if !strings.Contains(out, "\nkeygen_peer_attestation_hosts = sharedneu.neu.attest.azure.net:443\n") {
+	if !strings.Contains(out, "\npeer_attestation_hosts = sharedneu.neu.attest.azure.net:443\n") {
 		t.Fatalf("human form:\n%s", out)
 	}
-	if strings.Contains(nitro, "keygen_peer_attestation_hosts") || !strings.Contains(nitro, "\nsetup_format_version = 1\n") {
+	if strings.Contains(nitro, "peer_attestation_hosts") || !strings.Contains(nitro, "\nsetup_format_version = 1\n") {
 		t.Fatal("a setup without hosts names them, or another format")
 	}
 }

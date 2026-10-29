@@ -58,30 +58,6 @@ These are test images. Production images differ in two settings, so they
 get their own measurements: Azure `STDIO=disable`, GCP `log_redirect`
 never.
 
-### Images with key generation
-
-The same three images with the key generation runner in place of the
-default one: `runner-<cloud>-dkg-aws-azure-gcp`, built with the peer
-verifiers of the three-cloud cluster (`peerselect,peer_aws,peer_azure,
-peer_gcp`). Such a runner takes approver-signed DKG orders (`tee-signer/docs/dkg.md`,
-"DKG orders"); everything else in the image is as above. Build them with
-`IMAGE_PEERS="azure aws gcp" scripts/generic-images.sh build`. Their folders
-and local names carry the peer set (`build/nitro-dkg-aws-azure-gcp`,
-`build/azure-dkg-aws-azure-gcp`, `build/gcp-dkg-aws-azure-gcp`), so the
-images without key generation and their records stay as they are.
-
-To use them on the clouds: the new measurement in each key-release policy
-(the KMS key policy's PCR0 to PCR2, the Key Vault release policy's CCE
-policy hash, the WIF condition's image digest), setups whose
-`allowed_image_measurements` list all three images (an order names each
-participant's image, and a runner takes only an order whose images it
-allows), the deploys, `signer-config pin`, then the orders, which act 7
-days after they arrive (the images minimum time lock, an image constant;
-the testnet images below wait 7 minutes). The Azure and GCP signers keep
-their state copy (`slashing-log/docs/durable-state.md`): one
-commit per change, each session's shares and key records whole or not at
-all, with no 1 MiB limit on the state.
-
 ### Testnet images (research only)
 
 The testnet build is the same code built with `-tags testnet`
@@ -93,9 +69,9 @@ constant runs one minute for each day of the default build:
 | Default time lock (the setup names none) | 48 hours | 2 minutes |
 | Time lock cap (`change_delay_seconds` at most) | 30 days | 30 minutes |
 | Activation horizon, past the required wait | 30 days | 30 minutes |
-| Images minimum: allowed-images updates, DKG orders on a cloud | 7 days | 7 minutes |
+| Images minimum: allowed-images updates, handover orders on a cloud | 7 days | 7 minutes |
 
-Use them while research changes images and runs DKG orders, when a week
+Use them while research changes images and runs handover orders, when a week
 per step would stall the work. They never hold real keys: production, and
 every signer whose keys matter, runs the default build. What keeps the two
 apart:
@@ -111,7 +87,8 @@ apart:
   `signer-runner testnet`.
 - Every client refuses it in the TLS handshake unless the connection sets
   `"allow_testnet_build": true`: cloud.json of the Dirk fork and
-  signer-config, dkg-coordinator's runner entries, identity-check;
+  signer-admin's runner entries, identity-check, handover-source and
+  handover-target;
   `-allow-testnet-build` for cloud-import and share-import.
   `platform-gcp/deploy/deploy.sh verifier-config` writes it for a testnet image.
 - Its measurements are its own, so key-release policies, `allowed_image_measurements`
@@ -122,66 +99,42 @@ apart:
   testnet` refuses more. signer-config reads each signer's build from
   HEALTH and drafts with that build's waits.
 
-Build, offline: `IMAGE_FLAVOR=testnet IMAGE_PEERS="azure aws gcp"
-scripts/generic-images.sh build`. The flavour goes before the peer set in
-every name: runners `runner-<cloud>-testnet-dkg-aws-azure-gcp`, folders
-`build/nitro-testnet-dkg-aws-azure-gcp`, `build/azure-testnet-dkg-...`,
-`build/gcp-testnet-dkg-...`, local images
-`signer-cloud/{azure,gcp}-runner-testnet-dkg-...`, registry tags
-`generic-testnet-ts` (Azure) and `generic-testnet` (GCP), record
-`cloud/generic-images-testnet-dkg-aws-azure-gcp.txt`. Without IMAGE_PEERS the
-same names lack `-dkg-...`.
+Build, offline: `IMAGE_FLAVOR=testnet scripts/generic-images.sh build`. The
+flavour goes into every name: runners `runner-<cloud>-testnet`, folders
+`build/nitro-testnet` and `build/gcp-testnet`, local images
+`signer-cloud/{azure,gcp}-runner-testnet`, registry tags `generic-testnet-ts`
+(Azure) and `generic-testnet` (GCP), record `cloud/generic-images-testnet.txt`.
 
-`make testnet-test` builds the testnet runners and runs their units, the
-chain refusals, and three testnet dev runners whose allowed-images update
-comes into force 7 minutes after it is sent and whose DKG order makes keys
-after 2 (about 7 minutes in all). Deploying them follows the steps of the
-images with key generation above, with the testnet values and
-`allow_testnet_build` in every connection.
+The testnet tests: `scripts/handover-gate.sh` runs the handover gate on
+`runner-dev-testnet` too, and `tests/e2e` built with `-tags testnet` (from
+`tests/`: `go test -tags testnet -timeout 20m -run TestE2ETestnet -v ./e2e`)
+runs the chain refusals and a testnet dev runner whose allowed-images update
+stays pending past its 2-minute time lock and comes into force 7 minutes
+after it is sent. Deploying testnet images follows the steps below, with the
+testnet values and `allow_testnet_build` in every connection.
 
-### Nitro peer endpoints (images with key generation)
+### Nitro peer endpoints (handover)
 
-A Nitro signer's verifier of an Azure peer fetches the MAA key set over
-HTTPS, and the enclave reaches only the routes of its setup. Without a
-route, key generation stops at the first deal (`nitro: no vsock-proxy
-route for sharedneu.neu.attest.azure.net:443`). Azure and GCP signers have
-egress of their own.
+A runner checks the other image of a handover with the attestation
+verifier of its own platform (`attestation-verify/runnerclient`, build tag
+`verifierselect`, which `scripts/common.sh` sets for every runner build). A
+Nitro signer hands over to a Nitro signer and checks it with `aws-nitro`,
+whose root certificate is in the binary, so it fetches no key set. The
+Azure and GCP verifiers (`azure-maa`, `gcp-cs`) fetch their key sets over
+HTTPS, and the Azure and GCP signers have egress of their own; a Nitro
+enclave reaches only the routes of its setup.
 
-A Nitro signer's setup lists those hosts in `keygen_peer_attestation_hosts`.
-The parent starts a vsock-proxy for each on ports 8010 to 8025
-(at most 16), in the setup's order, and the enclave maps those names to
-them; nothing else gets a route. The runner refuses a DKG order, when it
-arrives and at each use, if a peer's verifier needs a host the setup does
-not list, and names the host. The list is part of the setup, so a signer
-whose setup lacks a host needs a new setup: a new signer, new keys, an
-empty store.
-
-What a Nitro signer lists, per peer:
-
-| Peer | Verifier | `keygen_peer_attestation_hosts` |
-| --- | --- | --- |
-| Azure signer | `azure-maa`, `maa_host` = the peer's `sealing_key_release.maa_endpoint` | that host, port 443: `sharedneu.neu.attest.azure.net:443` for `signer-1` |
-| GCP signer | `gcp-cs`, Google's issuer (the default) | `confidentialcomputing.googleapis.com:443` (openid-configuration) and `www.googleapis.com:443` (its key set) |
-| Nitro signer | `aws-nitro` | none: the AWS root is in the binary |
-
-A cluster with an Azure peer on `sharedneu` and a GCP peer therefore puts
-these three lines in the Nitro signer's section:
-
-```
-keygen_peer_attestation_hosts = confidentialcomputing.googleapis.com:443
-keygen_peer_attestation_hosts = sharedneu.neu.attest.azure.net:443
-keygen_peer_attestation_hosts = www.googleapis.com:443
-```
-
-`signer-config setup` prints each Nitro signer's list and a warning with the
-missing lines; `signer-config dkg-draft` warns when an order's participant
-needs a host a Nitro signer's setup lacks; `setup-tool check` prints the
-list (`keygen_peer_attestation_hosts none` for a Nitro setup without one);
-`hostagent -proxy-routes` prints the routes, 8010 and up last. Not checked:
-the JWKS host of `sharedneu` (the `sharedweu` configuration names `/certs`
-on its own host, `attestation-verify/testdata/jwks`), and the parent's security group,
-which allows TCP 443 out (`main.tf`), so a peer endpoint on another port
-needs a rule.
+A Nitro signer's setup may list hosts in `peer_attestation_hosts`. The
+parent starts a vsock-proxy for each on ports 8010 to 8025 (at most 16),
+in the setup's order, and the enclave maps those names to them; nothing
+else gets a route. On a runner with limited egress a handover order whose
+verifier would fetch a key set from a host outside that list is refused,
+and the refusal names the host; with the own-platform verifier a Nitro
+signer never needs one, so the sample setup below lists none. `setup-tool check` prints the list
+(`peer_attestation_hosts none` for a Nitro setup without one);
+`hostagent -proxy-routes` prints the routes, 8010 and up last. The
+parent's security group allows TCP 443 out (`main.tf`), so a listed host
+on another port needs a rule.
 
 ## Rules for this test
 
@@ -267,11 +220,6 @@ Set these once per shell, from the deploy settings of each cloud.
    slashing_log_store.region = eu-central-1
    sealing_key_release.region = eu-central-1
    sealing_key_release.kms_key_id = <AWS_KMS_KEY_ARN>
-   # Images with key generation only ("Nitro peer endpoints" above): the
-   # hosts of its peers' key sets. Without key generation they do no harm.
-   keygen_peer_attestation_hosts = confidentialcomputing.googleapis.com:443
-   keygen_peer_attestation_hosts = sharedneu.neu.attest.azure.net:443
-   keygen_peer_attestation_hosts = www.googleapis.com:443
 
    [signer signer-3]
    platform = gcp
@@ -283,17 +231,14 @@ Set these once per shell, from the deploy settings of each cloud.
    ```
 
 6. `signer-config setup -out setups setup.conf` writes `setups/signer-N.setup`
-   and prints `cluster_id`, each `setup_sha256` and `signer-2
-   keygen_peer_attestation_hosts ...`. Keep the output. A `warning:` line means the Nitro
-   setup lacks a host its key generation needs; fix the file and run again.
+   and prints `cluster_id` and each `setup_sha256`. Keep the output.
 7. Each setup against its deploy: `setup-tool check -platform azure -chain $CHAIN_JSON setups/signer-1.setup`,
    the same for nitro and gcp. Dry runs: `platform-azure/deploy/deploy.sh plan`,
    `platform-gcp/deploy/deploy.sh plan`, and
    `build/x86_64/bin/hostagent -setup setups/signer-2.setup -proxy-routes`,
    which prints the parent's routes as `parent-run.sh` will start them:
-   8000 to 8008, then `8010 confidentialcomputing.googleapis.com
-   443`, `8011 sharedneu.neu.attest.azure.net 443` and `8012
-   www.googleapis.com 443`.
+   8000 to 8008, and nothing from 8010 up, as the setup lists no peer
+   host.
 8. Negative setups for the lock check (C3): the same file with
    `slashing_log_min_lock_days = 2` and the names `lockneg-N`, written to
    `setups-neg/`.

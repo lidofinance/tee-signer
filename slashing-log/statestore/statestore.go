@@ -1,9 +1,9 @@
 // Package statestore keeps a durable copy of the runner's local state in an
-// object store outside the host: the wrapped sealing key, the sealed shares,
-// key generation state and the operator key (Prefixes). On Azure ACI and in
-// a Confidential Space VM that local state lives on the container's or the
-// VM's own disk and is gone after a restart; with key generation inside the
-// runner (runner/keygen) there is no other copy of the share.
+// object store outside the host: the wrapped sealing key, the sealed shares
+// and the handover order bodies (Prefixes). On Azure ACI and in a
+// Confidential Space VM that local state lives on the container's or the
+// VM's own disk and is gone after a restart, and a sealed share has no
+// other copy.
 //
 // The copy is a log of commits (docs/durable-state.md). Each
 // change of that state is one commit, one object:
@@ -68,7 +68,7 @@ import (
 // refused exact repeat), wm/ (persisted marks, not used with the mark log)
 // and mark-hint/ (written on every mark record; without it the claim
 // compares nothing, as on any restart with lost state).
-var Prefixes = []string{"sealing/", "shares/", "dkg/", "operator/", "handover/"}
+var Prefixes = []string{"sealing/", "shares/", "handover/"}
 
 // Durable reports whether key belongs in the copy.
 func Durable(key string) bool {
