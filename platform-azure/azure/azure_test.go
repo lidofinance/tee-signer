@@ -15,7 +15,6 @@ import (
 	"testing"
 
 	"github.com/lidofinance/tee-signer/platform"
-	"github.com/lidofinance/tee-signer/platform/dev"
 	"github.com/lidofinance/tee-signer/platform/filestore"
 )
 
@@ -78,8 +77,8 @@ func TestAnotherSetupOpensNothing(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		s, _ := dev.NewGCMSealer(dek)
-		w, _ := dev.NewGCMSealer(wrap)
+		s, _ := platform.NewGCMSealer(dek)
+		w, _ := platform.NewGCMSealer(wrap)
 		return s, platform.SealerKeys{Sealer: w}
 	}
 	sealA, keysA := sealerOf(setupA)
@@ -130,8 +129,8 @@ func TestPlantedDataKeyIsNotUsed(t *testing.T) {
 	}
 	// What the host can seal with the planted key does not open under the
 	// runner's sealer, so the host cannot feed it data either.
-	hostSealer, _ := dev.NewGCMSealer(planted)
-	runner, _ := dev.NewGCMSealer(dek)
+	hostSealer, _ := platform.NewGCMSealer(planted)
+	runner, _ := platform.NewGCMSealer(dek)
 	forged, _ := hostSealer.Seal([]byte("forged share"), []byte("aad"))
 	if _, err := runner.Unseal(forged, []byte("aad")); err == nil {
 		t.Fatal("the runner opened data sealed under the planted key")
@@ -150,7 +149,7 @@ func TestKeysSurviveALostStore(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		s, _ := dev.NewGCMSealer(wrap)
+		s, _ := platform.NewGCMSealer(wrap)
 		return platform.SealerKeys{Sealer: s}
 	}
 	aad := []byte("signer-mark-key-v1|signer-1")

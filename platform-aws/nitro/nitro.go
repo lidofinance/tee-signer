@@ -52,7 +52,6 @@ import (
 	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/platform-aws/hostagent"
 	"github.com/lidofinance/tee-signer/platform-aws/udprelay"
-	"github.com/lidofinance/tee-signer/platform/dev"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/transport"
 	"github.com/lidofinance/tee-signer/trusted-time/clock"
@@ -457,7 +456,7 @@ func New(o platform.Options) (*platform.Platform, error) {
 	if err != nil {
 		return fail(err)
 	}
-	sealer, err := dev.NewGCMSealer(key)
+	sealer, err := platform.NewGCMSealer(key)
 	clear(key)
 	if err != nil {
 		return fail(err)

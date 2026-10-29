@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Dependency check: each runner binary links the code of its own cloud and
-# none of the others' (tee-signer/platforms.go). It exits non-zero on a leak, so
-# a build that breaks the split fails.
+# Dependency check: each runner uses only its selected clouds and peers,
+# keeps operator tools out, and preserves the inner audit layers. It exits
+# non-zero when a dependency crosses one of these boundaries.
 #
 #   scripts/check-deps.sh            from the sources: go list -deps, no build needed
 #   scripts/check-deps.sh ARCH...    also the binaries in build/ARCH/bin (go version -m)
@@ -26,6 +26,9 @@
 #      working does not pass as a clean build.
 #   4. The NTS clock (github.com/lidofinance/tee-signer/trusted-time/nts, tag nts) is in the cloud builds
 #      and not in the dev builds; the UDP relay's package only in AWS builds.
+#   5. Development and operator packages stay out of runners. The dev platform
+#      requires platform_dev. Protocol, core and time packages stay independent
+#      of the runner and cloud integrations.
 #
 # With a binary, also: its -tags setting is the expected one, and the modules
 # it links (go version -m) are on the same lists as in 1.
@@ -91,6 +94,9 @@ peer_package_ok() {
 # nothing. jwtclaims is shared by azure and gcp.
 package_cloud() {
   case "$1" in
+    github.com/lidofinance/tee-signer/platform/dev) echo dev ;;
+    # Operator tools, adapters and development helpers are never runner dependencies.
+    github.com/lidofinance/tee-signer/devkit|github.com/lidofinance/tee-signer/devkit/*|github.com/lidofinance/tee-signer/tests|github.com/lidofinance/tee-signer/tests/*|github.com/lidofinance/tee-signer/signer-admin|github.com/lidofinance/tee-signer/signer-admin/*|github.com/lidofinance/tee-signer/web3signer-api|github.com/lidofinance/tee-signer/web3signer-api/*|github.com/lidofinance/tee-signer/signer-core/software) echo none ;;
     # The UDP relay: its client is the Nitro enclave's NTP path.
     github.com/lidofinance/tee-signer/platform-aws/nitro|github.com/lidofinance/tee-signer/platform-aws/nitro/*|github.com/lidofinance/tee-signer/platform-aws/hostagent|github.com/lidofinance/tee-signer/platform-aws/hostagent/*|github.com/lidofinance/tee-signer/platform-aws/udprelay) echo aws ;;
     # NTS test servers never belong in a binary.
@@ -107,12 +113,28 @@ package_cloud() {
   esac
 }
 
+# audit_layer_ok <package> <import>: first-party dependencies of the inner layers.
+audit_layer_ok() {
+  local root=github.com/lidofinance/tee-signer
+  case "$2" in "$root"/*) ;; *) return 0 ;; esac
+  case "$1" in
+    "$root"/signer-protocol|"$root"/signer-protocol/*)
+      case "$2" in "$root"/signer-protocol|"$root"/signer-protocol/*) return 0 ;; esac ;;
+    "$root"/signer-core/core)
+      [ "$2" = "$root/signer-protocol" ] && return 0 ;;
+    "$root"/trusted-time/*)
+      case "$2" in "$root"/trusted-time/*) return 0 ;; esac ;;
+    *) return 0 ;;
+  esac
+  return 1
+}
+
 # linked <file of "package module imports..." lines> <package>
 linked() { awk -v w="$2" '$1 == w { found = 1 } END { exit !found }' "$1"; }
 
 # check_source <name> <goarch>
 check_source() {
-  local name="$1" goarch="$2" tags clouds peers list viol pkg mod cloud c want n
+  local name="$1" goarch="$2" tags clouds peers list viol pkg mod imports dep cloud c want n
   tags="netgo,osusergo,$(runner_tags "$name")"
   clouds="$(clouds_of "$tags")"
   peers="$(peers_of "$tags")"
@@ -122,7 +144,7 @@ check_source() {
   (cd "$ROOT/tee-signer" && GOOS=linux GOARCH="$goarch" CGO_ENABLED=1 \
     go list -deps -tags "$tags" -f '{{if not .Standard}}{{.ImportPath}} {{with .Module}}{{.Path}}{{else}}-{{end}} {{join .Imports " "}}{{end}}' .) >"$list"
   # viol: the packages this build must not link, with the reason.
-  while read -r pkg mod _; do
+  while read -r pkg mod imports; do
     [ -n "$pkg" ] || continue
     cloud="$(package_cloud "$pkg")"
     if ! module_ok "$clouds" "$mod" "$peers"; then
@@ -132,6 +154,11 @@ check_source() {
     elif [ -n "$cloud" ] && ! cloud_in "$clouds" "$cloud"; then
       echo "$pkg code-of-$cloud" >>"$viol"
     fi
+    for dep in $imports; do
+      if ! audit_layer_ok "$pkg" "$dep"; then
+        echo "$pkg audit-layer-imports-$dep" >>"$viol"
+      fi
+    done
   done <"$list"
   # The CBOR modules off the AWS platform: only github.com/lidofinance/tee-signer/attestation-verify (and
   # those modules' own packages) may import them.
@@ -200,7 +227,7 @@ for arch in "$@"; do
 done
 
 if [ "$fail" != 0 ]; then
-  echo "check-deps: FAILED: a runner build holds code of a cloud it does not run on" >&2
+  echo "check-deps: FAILED: a runner build crosses a dependency boundary" >&2
   exit 1
 fi
-log "check-deps: the $((${#RUNNER_BINS[@]} + ${#RUNNER_DKG_BINS[@]})) runner builds hold only the code of their own cloud and of their key generation peers (PEERS=$PEERS)"
+log "check-deps: $((${#RUNNER_BINS[@]} + ${#RUNNER_DKG_BINS[@]})) runner builds preserve cloud, peer and audit layer boundaries (PEERS=$PEERS)"
