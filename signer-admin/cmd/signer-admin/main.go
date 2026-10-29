@@ -15,10 +15,16 @@
 //	    draw one random cluster_id, write DIR/NAME.setup for each signer and
 //	    print each setup_sha256. -build testnet: the runners are testnet
 //	    builds, so a time lock above their cap (1800 s) is refused.
-//	    -allow-gcp-unsafe-single-key: every GCP signer's setup accepts
-//	    that the signer holds keys alone (1 of 1), which is unsafe there
-//	    (setupwire.UnsafeSingleKeyWarning); without it a file with one GCP
-//	    signer is refused, and a setup with the acceptance gets a WARNING line.
+//	    -allow-gcp-unsafe-single-key: the setup of a one-signer GCP
+//	    cluster accepts that its signer holds keys alone (1 of 1), which is
+//	    unsafe there (setupwire.UnsafeSingleKeyWarning); without it a file
+//	    with one GCP signer is refused. The flag is refused for a file with
+//	    more signers or whose one signer is not on GCP (the key
+//	    sealing_key_release.unsafe_single_key_accepted in a signer's
+//	    section accepts it there). A setup with an acceptance gets a
+//	    WARNING line; on mainnet one with unsafe_single_key_accepted also
+//	    needs sealing_key_release.no_lock_accepted, or its runner does not
+//	    start, so it is refused without it.
 //	signer-admin pin -cluster cluster.json
 //	    Read each signer's IDENTITY, check that it shows the setup built for
 //	    it, and write setup_sha256 into its cloud.json.
@@ -60,10 +66,15 @@
 //	    type no runner serves tells a role-checking image from an older
 //	    one, an empty CONFIG_UPDATE tells the admin role from the others.
 //	    Changes nothing. Run it before every order, handover or import.
-//	signer-admin import-draft -cluster cluster.json -signer NAME -split FILE [-not-after 12h] [-out import.bin]
+//	signer-admin import-draft -cluster cluster.json -signer NAME -split FILE [-not-after 12h] [-allow-gcp-unsafe-single-key] [-out import.bin]
 //	    Draft an import order for one target signer: its setup_sha256, t, n,
 //	    its share index and, per validator, the hash of the t commitments.
-//	    show, sign and assemble take it as they take an order.
+//	    The split must pass the target's threshold rule
+//	    (setupwire.CheckThresholdOn). A 1 of 1 order to a GCP signer is
+//	    drafted only with -allow-gcp-unsafe-single-key, and prints a
+//	    WARNING line (setupwire.UnsafeSingleKeyWarning); show prints the
+//	    same line to each approver. show, sign and assemble take it as
+//	    they take an order.
 //	signer-admin import -cluster cluster.json -signer NAME -order import.signed -shares FILE -commitments FILE
 //	    Probe the role, check the runner's attestation, seal each share of
 //	    FILE (mode 0600) to the attested import key and send
@@ -153,7 +164,7 @@ const usage = `usage:
   signer-admin push -cluster cluster.json [-raise-min] [-signers NAME,...] update.signed|handover.signed
   signer-admin handover-draft -cluster cluster.json -signer NAME -target-cloud FILE [-target-setup-sha256 HEX] [-target-name NAME] [-not-after 12h] [-out handover.bin]
   signer-admin probe -cluster cluster.json [-signers NAME,...]
-  signer-admin import-draft -cluster cluster.json -signer NAME -split FILE [-not-after 12h] [-out import.bin]
+  signer-admin import-draft -cluster cluster.json -signer NAME -split FILE [-not-after 12h] [-allow-gcp-unsafe-single-key] [-out import.bin]
   signer-admin import -cluster cluster.json -signer NAME -order import.signed -shares FILE -commitments FILE
   signer-admin exit-draft -cluster cluster.json -pubkey 0x.. -index N -epoch E -balance GWEI [-not-after 24h] [-out exit.bin]
   signer-admin issue-client-cert -ca-cert FILE -ca-key FILE -role admin|attest|signing|-make-intermediate ROLE -name CN -out DIR`

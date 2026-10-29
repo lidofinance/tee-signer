@@ -18,10 +18,13 @@ makes the binary setup from a human `key = value` file
 > **A single-node (1 of 1) signer on GCP is unsafe, and the runner refuses
 > it unless the setup accepts the risk.** Cloud KMS has no lock on the rule
 > that releases the sealing key: the rule is the IAM bindings of the WIF
-> pool and the KMS key, the project's owners can change them at any time
-> with no attestation in the way, and a changed binding releases the
-> sealing key, and with it the whole validator key, to any image they
-> start. AWS and Azure can lock their rule, and the runner checks the lock
+> pool and the KMS key, and anyone with IAM or KMS admin rights on the
+> project, the pool or the key (folder and organization admins included)
+> can change them at any time, with no attestation in the way. The
+> attacker need not start an image: a changed binding lets any principal,
+> the admin's own account included, decrypt the sealing key outside any
+> TEE, open the sealed key from the state bucket and sign a slashable
+> pair. AWS and Azure can lock their rule, and the runner checks the lock
 > (`signer-protocol/docs/protocol.md`, "Key rule lock"); GCP cannot, so a
 > GCP runner refuses an import order with t = n = 1. In a t-of-n split the
 > same change yields one share; with 1 of 1 it yields the key.
@@ -29,13 +32,23 @@ makes the binary setup from a human `key = value` file
 > To accept the risk, put
 > `sealing_key_release.unsafe_single_key_accepted = true` in the signer's
 > setup file (with `signer-admin setup`, the flag
-> `-allow-gcp-unsafe-single-key` sets it in every GCP signer's setup).
-> setup_hash covers the acceptance, `setup-tool encode` and `signer-admin
-> setup` print a WARNING line for it, the human form of the setup carries
-> the warning above the key, and the runner logs it at start and at every
-> 1 of 1 import. The protection is then the project's IAM governance (who
-> holds Owner or IAM admin on the project, the pool and the key) and the
-> watchdog, not the TEE.
+> `-allow-gcp-unsafe-single-key` sets it for a one-signer GCP cluster; a
+> file with more signers, or whose one signer is not on GCP, refuses the
+> flag and takes the key in the signer's section). On mainnet the same
+> setup also needs `sealing_key_release.no_lock_accepted = true`, the
+> separate acceptance without which a GCP runner does not start there;
+> `signer-admin setup` refuses a mainnet setup that has the one without
+> the other, and the flag never sets `no_lock_accepted`. setup_hash covers
+> the acceptance, `setup-tool encode` and `signer-admin setup` print a
+> WARNING line for it, the human form of the setup carries the warning
+> above the key, the runner logs it at start and at every 1 of 1 import,
+> and HEALTH says `single_key: accepted`. `signer-admin import-draft`
+> drafts a 1 of 1 order to the signer only with
+> `-allow-gcp-unsafe-single-key` and prints the WARNING line; `show` of
+> the order prints it to each approver before `sign`. The protection is
+> then the project's IAM governance (who holds IAM or KMS admin rights on
+> the project, the pool and the key, up to the folder and the
+> organization) and the watchdog, not the TEE.
 
 ```sh
 platform-gcp/deploy/build-image.sh                           # the generic image

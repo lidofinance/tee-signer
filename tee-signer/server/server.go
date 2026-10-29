@@ -970,6 +970,9 @@ func (s *Server) health() (*backend.Health, error) {
 	if s.SetupHash != ([32]byte{}) {
 		h.KeyLock, h.KeyLockWhy = s.KeyLock.String(), s.KeyLockWhy
 	}
+	if s.Updates != nil {
+		h.SingleKey = singleKey(&s.Updates.SetupWire().Platform)
+	}
 	st := s.Signer.Stats()
 	h.Stats = &backend.SignerStats{
 		Signatures: st.Signatures, HashCacheHits: st.HashCacheHits, HashCacheMisses: st.HashCacheMisses,

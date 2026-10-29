@@ -1292,10 +1292,10 @@ func (k *KeyRelease) check(p Platform) error {
 		only()
 	}
 	if k.NoLockAccepted && p != PlatformGCP {
-		errs = append(errs, fmt.Errorf("sealing_key_release.no_lock_accepted does not apply to %s, whose key rule has a lock", p))
+		errs = append(errs, fmt.Errorf("sealing_key_release.no_lock_accepted does not apply to %s: only GCP has a key rule without a lock", p))
 	}
 	if k.UnsafeSingleKeyAccepted && p != PlatformGCP {
-		errs = append(errs, fmt.Errorf("sealing_key_release.unsafe_single_key_accepted does not apply to %s, whose key rule has a lock", p))
+		errs = append(errs, fmt.Errorf("sealing_key_release.unsafe_single_key_accepted does not apply to %s: only GCP has a key rule without a lock", p))
 	}
 	return firstErr("platform", errs)
 }

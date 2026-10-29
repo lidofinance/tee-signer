@@ -3,6 +3,7 @@
 package server
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -171,6 +172,52 @@ func TestImportSingleNode(t *testing.T) {
 				t.Fatalf("1 of 1 on %s: the key did not load", g.Platform.Platform)
 			}
 		})
+	}
+}
+
+// HEALTH says, next to key_lock, whether the signer holds a key alone
+// where that is unsafe (single_key): "accepted" or "refused" on GCP by
+// the setup's sealing_key_release.unsafe_single_key_accepted, "n/a" on
+// the other platforms. The acceptance is in the private part of the
+// setup, so this is where a verifier reads it.
+func TestHealthSingleKey(t *testing.T) {
+	for _, c := range []struct {
+		setup    string
+		accepted bool
+		want     string
+	}{
+		{"setup-dev", false, "n/a"},
+		{"setup-nitro", false, "n/a"},
+		{"setup-azure", false, "n/a"},
+		{"setup-gcp", false, "refused"},
+		{"setup-gcp", true, "accepted"},
+	} {
+		raw, err := os.ReadFile(filepath.Join("..", "..", "governance", "setupwire", "testdata", c.setup+".bin"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		g, err := setupwire.DecodeSetup(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e := newTgtEnv(t, "dev", func(s *setupwire.Setup) {
+			s.Platform = g.Platform
+			s.Platform.SealingKeyRelease.UnsafeSingleKeyAccepted = c.accepted
+		})
+		h, err := e.srv.health()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if h.SingleKey != c.want {
+			t.Errorf("%s (accepted %v): single_key %q, want %q", c.setup, c.accepted, h.SingleKey, c.want)
+		}
+		js, err := json.Marshal(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(js), `"single_key":"`+c.want+`"`) {
+			t.Errorf("%s (accepted %v): HEALTH JSON lacks single_key %q: %s", c.setup, c.accepted, c.want, js)
+		}
 	}
 }
 

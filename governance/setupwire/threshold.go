@@ -49,9 +49,9 @@ func CheckThreshold(genesisForkVersion backend.Version, t, n int) error {
 // unsafe. signer-admin setup prints it, the human setup form carries it
 // above sealing_key_release.unsafe_single_key_accepted, and a GCP runner
 // logs it at start and at every import of a 1 of 1 share.
-const UnsafeSingleKeyWarning = "a single-node (1 of 1) signer on GCP holds the whole validator key, and Cloud KMS has no lock on the rule of the key that releases the sealing key: " +
-	"the IAM bindings of the Workload Identity pool and the KMS key are the rule, the project's owners can change them at any time, with no attestation in the way, " +
-	"and a changed binding releases the sealing key to any image, which then opens the shares and can sign a slashable pair; " +
+const UnsafeSingleKeyWarning = "a single-node (1 of 1) signer on GCP holds the whole validator key, and Cloud KMS has no lock on the rule that releases the sealing key: " +
+	"the rule is the IAM bindings of the Workload Identity pool and the KMS key, and anyone with IAM or KMS admin rights on the project, the pool or the key (folder and organization admins included) can change them at any time, with no attestation in the way; " +
+	"a changed binding lets any principal, the admin's own account included, decrypt the sealing key outside any TEE, open the sealed key from the state bucket and sign a slashable pair; " +
 	"the protection is the project's IAM governance and the watchdog, not the TEE"
 
 // CheckThresholdOn is CheckThreshold for a signer with the platform part
