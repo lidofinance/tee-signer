@@ -880,25 +880,5 @@ func fromC(c C.sc_watermark) backend.Watermark {
 	}
 }
 
-// EncodeWatermark is the core's fixed 32-byte storage record.
-func EncodeWatermark(w backend.Watermark) []byte {
-	cw := toC(w)
-	out := make([]byte, C.SC_WATERMARK_ENCODED_LEN)
-	C.sc_watermark_encode(&cw, u8(out))
-	return out
-}
-
-// DecodeWatermark parses a record from EncodeWatermark.
-func DecodeWatermark(b []byte) (backend.Watermark, error) {
-	if len(b) == 0 {
-		return backend.Watermark{}, errors.New("core: empty watermark record")
-	}
-	var cw C.sc_watermark
-	if rc := C.sc_watermark_decode(u8(b), C.size_t(len(b)), &cw); rc != C.SC_OK {
-		return backend.Watermark{}, fmt.Errorf("core: watermark record: %v", backend.Status(rc))
-	}
-	return fromC(cw), nil
-}
-
 // StatusName returns the core's name for a status code (sc_status_name).
 func StatusName(code int) string { return C.GoString(C.sc_status_name(C.int(code))) }

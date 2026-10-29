@@ -419,22 +419,6 @@ func TestInterchangeImportOnAdd(t *testing.T) {
 	}
 }
 
-func TestWatermarkRecord(t *testing.T) {
-	in := backend.Watermark{BlockSlot: 1, SourceEpoch: 2, TargetEpoch: 3, HasBlock: true, HasAttestation: true}
-	rec := EncodeWatermark(in)
-	if len(rec) != 32 {
-		t.Fatal(len(rec))
-	}
-	out, err := DecodeWatermark(rec)
-	if err != nil || out != in {
-		t.Fatalf("%+v %v", out, err)
-	}
-	rec[0] ^= 1
-	if _, err := DecodeWatermark(rec); err == nil {
-		t.Fatal("corrupt record accepted")
-	}
-}
-
 // 3-of-5: every 3-subset of partial signatures recovers a signature that
 // verifies under the full public key.
 func TestThresholdRecover(t *testing.T) {

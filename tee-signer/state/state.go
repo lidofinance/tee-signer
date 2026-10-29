@@ -446,7 +446,7 @@ func (h *Hooks) LoadWatermark(pk backend.Pubkey) (backend.Watermark, bool, error
 			if err != nil {
 				return wm, false, fmt.Errorf("unseal watermark: %w", err)
 			}
-			if wm, err = core.DecodeWatermark(rec); err != nil {
+			if wm, err = backend.DecodeWatermark(rec); err != nil {
 				return wm, false, err
 			}
 			found = true
@@ -574,7 +574,7 @@ func (h *Hooks) StoreWatermark(pk backend.Pubkey, wm backend.Watermark) error {
 	if !h.mode.Persist {
 		return nil
 	}
-	blob, err := h.sealer.Seal(core.EncodeWatermark(wm), wmAAD(pk))
+	blob, err := h.sealer.Seal(backend.EncodeWatermark(wm), wmAAD(pk))
 	if err != nil {
 		return err
 	}

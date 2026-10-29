@@ -41,6 +41,11 @@ for m in "${mods[@]}"; do
     case "$f" in
       *_test.go) ;;
       *)
+        if [ "$m" = slashing-log ]; then
+          case "$rest" in
+            signer-core|signer-core/*) bad "$f imports $imp (the log must not depend on signing bindings)" ;;
+          esac
+        fi
         case "$rest" in
           devkit|devkit/*) bad "$f imports $imp outside a test (devkit is for tests)" ;;
           tests|tests/*) bad "$f imports $imp outside a test" ;;
