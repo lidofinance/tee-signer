@@ -39,7 +39,7 @@ every module builds and tests on its own.
 | [trusted-time](trusted-time) | The runner clock and the NTS client (Rust, vendored crates, Go binding) |
 | [signer-admin](signer-admin) | Operator tools: setup updates and orders, key generation, share import, handover |
 | [web3signer-api](web3signer-api) | Parsing and checks of Web3Signer signing requests |
-| [devkit](devkit) | Test helpers: fuzz oracles, goroutine leak check, lock order check |
+| [devkit](devkit) | Test helpers: fuzz oracles and goroutine leak check |
 | [tests](tests) | End-to-end tests across modules, against the built runners |
 
 ## Build

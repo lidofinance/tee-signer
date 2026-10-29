@@ -91,7 +91,6 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
-	"github.com/lidofinance/tee-signer/devkit/lockorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-protocol"
@@ -142,7 +141,7 @@ type sourceHandover struct {
 	opt HandoverSourceOptions
 
 	// mu runs one HANDOVER_ORDER or HANDOVER at a time.
-	mu lockorder.Mutex[sourceMuName]
+	mu sync.Mutex
 	// shares are the shares read once for the handover, in pubkey order;
 	// nil until the first HANDOVER that passed every check.
 	shares []handedShare

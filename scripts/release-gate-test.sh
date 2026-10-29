@@ -59,7 +59,8 @@ done < <(bash "$GATE" list release)
 # deps: a main package that imports a test-only package, and one that
 # imports testing, fail; the stdlib alone passes.
 mkdir -p "$tmp/mod/wormfake" "$tmp/mod/okcmd" "$tmp/mod/fakecmd" "$tmp/mod/testingcmd" \
-  "$tmp/mod/fuzzcheck" "$tmp/mod/leakcheck" "$tmp/mod/fuzzcmd" "$tmp/mod/leakcmd"
+  "$tmp/mod/fuzzcheck" "$tmp/mod/leakcheck" "$tmp/mod/fuzzcmd" "$tmp/mod/leakcmd" \
+  "$tmp/mod/devkit/helper" "$tmp/mod/devkitcmd"
 printf 'module gatemod\n\ngo 1.22\n' >"$tmp/mod/go.mod"
 printf 'package wormfake\n\nfunc F() int { return 1 }\n' >"$tmp/mod/wormfake/f.go"
 printf 'package main\n\nimport "fmt"\n\nfunc main() { fmt.Println(1) }\n' >"$tmp/mod/okcmd/main.go"
@@ -68,16 +69,19 @@ printf 'package main\n\nimport "testing"\n\nfunc main() { println(testing.Short(
 expect pass "deps: stdlib only" bash "$GATE" deps "$tmp/mod" "" ./okcmd
 expect fail "deps: a fake package" bash "$GATE" deps "$tmp/mod" "" ./fakecmd
 expect fail "deps: package testing" bash "$GATE" deps "$tmp/mod" "" ./testingcmd
-# The fuzz oracles and the goroutine leak check are test-only packages,
-# and the lock order check's tag is for tests only.
+# The fuzz oracles and the goroutine leak check are test-only packages.
 printf 'package fuzzcheck\n\nfunc F() int { return 2 }\n' >"$tmp/mod/fuzzcheck/f.go"
 printf 'package leakcheck\n\nfunc F() int { return 3 }\n' >"$tmp/mod/leakcheck/f.go"
 printf 'package main\n\nimport "gatemod/fuzzcheck"\n\nfunc main() { println(fuzzcheck.F()) }\n' >"$tmp/mod/fuzzcmd/main.go"
 printf 'package main\n\nimport "gatemod/leakcheck"\n\nfunc main() { println(leakcheck.F()) }\n' >"$tmp/mod/leakcmd/main.go"
 expect fail "deps: package fuzzcheck" bash "$GATE" deps "$tmp/mod" "" ./fuzzcmd
 expect fail "deps: package leakcheck" bash "$GATE" deps "$tmp/mod" "" ./leakcmd
-expect fail "deps: tag lockcheck" bash "$GATE" deps "$tmp/mod" "netgo,lockcheck" ./okcmd
 expect pass "deps: other tags" bash "$GATE" deps "$tmp/mod" "netgo,osusergo" ./okcmd
+
+# No devkit package belongs in release builds.
+printf 'package helper\n\nfunc F() int { return 4 }\n' >"$tmp/mod/devkit/helper/f.go"
+printf 'package main\n\nimport "gatemod/devkit/helper"\n\nfunc main() { println(helper.F()) }\n' >"$tmp/mod/devkitcmd/main.go"
+expect fail "deps: devkit helper" bash "$GATE" deps "$tmp/mod" "" ./devkitcmd
 
 # tree: a history with a forbidden commit fails, one without passes.
 git -c init.defaultBranch=main init -q "$tmp/repo"

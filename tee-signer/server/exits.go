@@ -2,9 +2,9 @@ package server
 
 import (
 	"context"
+	"sync"
 	"time"
 
-	"github.com/lidofinance/tee-signer/devkit/lockorder"
 	"github.com/lidofinance/tee-signer/governance/exitapproval"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-protocol"
@@ -32,7 +32,7 @@ const (
 )
 
 type exitState struct {
-	mu      lockorder.Mutex[exitsMuName]
+	mu      sync.Mutex
 	pending []heldExit
 }
 

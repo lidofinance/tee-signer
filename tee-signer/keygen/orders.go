@@ -9,10 +9,10 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
-	"github.com/lidofinance/tee-signer/devkit/lockorder"
 	"github.com/lidofinance/tee-signer/governance/dkgorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-protocol"
@@ -91,7 +91,7 @@ type OrdersEnv struct {
 // Orders holds a runner's DKG orders.
 type Orders struct {
 	env   OrdersEnv
-	mu    lockorder.Mutex[ordersMuName]
+	mu    sync.Mutex
 	known map[[32]byte]*orderEntry
 }
 

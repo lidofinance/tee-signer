@@ -60,7 +60,6 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
-	"github.com/lidofinance/tee-signer/devkit/lockorder"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/slashing-log"
@@ -104,9 +103,9 @@ type importer struct {
 
 	// slotMu orders the writes of the order slot: the start and the end of
 	// an import.
-	slotMu lockorder.Mutex[importSlotMuName]
+	slotMu sync.Mutex
 
-	mu lockorder.Mutex[importMuName]
+	mu sync.Mutex
 	// mark is the handed-over mark of this process's import; every request
 	// carries it.
 	mark *backend.Watermark

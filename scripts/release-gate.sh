@@ -12,7 +12,7 @@
 #   release-gate.sh deps <module dir> <tags> <package>
 #       fail if the package links "testing", net/http/httptest or a
 #       test-only package (fakes, test helpers, fuzz oracles, the goroutine
-#       leak check), or if the tags hold lockcheck
+#       leak check)
 #   release-gate.sh tree [dir]
 #       fail unless dir (default: this repo) is a git tree whose HEAD has
 #       none of the forbidden commits or branch tips in its history
@@ -58,8 +58,6 @@ L
 
 # Strings no release runner may hold: the plaintext import and the fake
 # hardware of the debug builds, and the test-only packages.
-# lockorder/check.go is the lock order check that -tags lockcheck
-# builds in place of lockorder/off.go; it panics on an inversion.
 release_list() {
   cat <<'L'
 allow-import
@@ -71,9 +69,7 @@ RUNNER_NTS_TEST_SERVERS
 slashing-log/wormfake
 slashing-log/logtest
 nts/ntstest
-lockorder/check.go
-devkit/leakcheck
-devkit/fuzzcheck
+github.com/lidofinance/tee-signer/devkit
 L
   extra release
 }
@@ -110,11 +106,6 @@ check_binary() {
 
 check_deps() {
   local dir="$1" tags="$2" pkg="$3" deps bad
-  # The lock order check (devkit/lockorder) panics on an inversion; it is
-  # for tests only.
-  case ",$tags," in
-    *,lockcheck,*) echo "release gate: $pkg is built with tag lockcheck (tests only)" >&2; return 1 ;;
-  esac
   # Standard packages as "std <path>", the others as "mod <path>".
   deps="$(cd "$dir" && go list -deps -tags "$tags" -f '{{if .Standard}}std{{else}}mod{{end}} {{.ImportPath}}' "$pkg")"
   # A module package is test-only when one of its path elements names a
@@ -125,10 +116,6 @@ check_deps() {
     $1 == "std" && ($2 == "testing" || $2 ~ /^testing\// || $2 == "net/http/httptest") { print; next }
     $1 == "mod" {
       n = split($2, e, "/")
-      # devkit/lockorder is linked in every build: without the tag lockcheck
-      # it is a plain mutex (lockorder/off.go); the binary check forbids its
-      # check.go and the tag check above forbids lockcheck.
-      if (index($2, "/devkit/lockorder") && $2 ~ /lockorder$/) next
       for (i = 1; i <= n; i++)
         if (e[i] != "attest" && e[i] ~ /(^test|test$|fake|mock|^lockrank$|^leakcheck$|^fuzzcheck$|^devkit$)/) { print; next }
     }' <<<"$deps")"

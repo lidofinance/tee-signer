@@ -8,8 +8,8 @@
 #
 # Tags: the runner modules test with all four platform tags at once, as the
 # platform packages need; tee-signer also with each tag alone (package main),
-# with the tags of the key generation build, with lockcheck (devkit/lockorder)
-# and with testnet. Logs: logs/test-<module>.log.
+# with the tags of the key generation build and with testnet.
+# Logs: logs/test-<module>.log.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 mkdir -p "$LOGS"
@@ -41,8 +41,6 @@ checks() {
     governance)
       go test $RACE -count=1 -v ./... || return 1
       go vet -tags testnet ./... && go test $RACE -count=1 -v -tags testnet ./setupwire ./flavor ./dkgorder || return 1 ;;
-    devkit)
-      go test $RACE -count=1 -v ./... && go test $RACE -count=1 -tags lockcheck ./lockorder || return 1 ;;
     tee-signer)
       vet_builds || return 1
       local tags
@@ -50,8 +48,6 @@ checks() {
       go test $RACE -count=1 -tags platform_dev,platform_azure,platform_gcp ./record ./attls || return 1
       go test $RACE -count=1 -v -tags "$ALL_TAGS" ./... || return 1
       go test $RACE -count=1 -v -tags "$DKG_TAGS" ./server || return 1
-      go test $RACE -count=1 -tags "$ALL_TAGS,lockcheck" ./keygen ./server || return 1
-      go test $RACE -count=1 -tags "$DKG_TAGS,lockcheck" ./server || return 1
       go test $RACE -count=1 -v -tags platform_dev,testnet . ./attls || return 1
       go test $RACE -count=1 -v -tags testnet -run 'Flavor|ImageCheck' ./server || return 1 ;;
     platform|slashing-log|platform-aws|platform-azure|platform-gcp|trusted-time|signer-admin)

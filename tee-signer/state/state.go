@@ -43,9 +43,9 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"sync"
 	"time"
 
-	"github.com/lidofinance/tee-signer/devkit/lockorder"
 	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-protocol"
@@ -124,7 +124,7 @@ type Hooks struct {
 	mark      backend.Watermark
 	markFound bool
 
-	mu     lockorder.Mutex[hooksMuName]
+	mu     sync.Mutex
 	floors map[backend.Pubkey]uint64
 	expect map[backend.Pubkey]bool
 	// The source gate (SourceFloor, decideGate): while on, a validator

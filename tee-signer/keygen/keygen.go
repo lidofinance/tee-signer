@@ -33,9 +33,9 @@ import (
 	"math/big"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/lidofinance/tee-signer/devkit/lockorder"
 	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-core/dkgmath"
@@ -103,7 +103,7 @@ type NewShare struct {
 
 // Manager runs at most one session at a time.
 type Manager struct {
-	mu         lockorder.Mutex[managerMuName]
+	mu         sync.Mutex
 	env        Env
 	policy     *Policy
 	policyHash [32]byte
