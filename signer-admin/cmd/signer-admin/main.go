@@ -10,11 +10,15 @@
 // (docs/protocol.md, "Client roles"), so each connection file names an
 // admin certificate.
 //
-//	signer-admin setup [-build default|testnet] -out DIR FILE
+//	signer-admin setup [-build default|testnet] [-allow-gcp-unsafe-single-key] -out DIR FILE
 //	    Read a human setup file with one [signer NAME] section per signer,
 //	    draw one random cluster_id, write DIR/NAME.setup for each signer and
 //	    print each setup_sha256. -build testnet: the runners are testnet
 //	    builds, so a time lock above their cap (1800 s) is refused.
+//	    -allow-gcp-unsafe-single-key: every GCP signer's setup accepts
+//	    that the signer holds keys alone (1 of 1), which is unsafe there
+//	    (setupwire.UnsafeSingleKeyWarning); without it a file with one GCP
+//	    signer is refused, and a setup with the acceptance gets a WARNING line.
 //	signer-admin pin -cluster cluster.json
 //	    Read each signer's IDENTITY, check that it shows the setup built for
 //	    it, and write setup_sha256 into its cloud.json.
@@ -138,7 +142,7 @@ var now = time.Now
 var toolRand io.Reader = rand.Reader
 
 const usage = `usage:
-  signer-admin setup [-build default|testnet] -out DIR FILE
+  signer-admin setup [-build default|testnet] [-allow-gcp-unsafe-single-key] -out DIR FILE
   signer-admin pin -cluster cluster.json [-signers NAME,...]
   signer-admin status -cluster cluster.json [-signers NAME,...]
   signer-admin draft -cluster cluster.json -group locked|open [-margin 10m] [-out update.bin] FILE

@@ -182,6 +182,9 @@ func fromSetup(ctx context.Context, a *startArgs, log *slog.Logger) (_ *start, e
 	log.Info("setup", "channel", ch.String(), "setup_sha256", st.HashHex(), "signer", st.SignerID(),
 		"handover_generation", st.Wire.HandoverGeneration, "slashing_log_store", st.SlashingLogStore(),
 		"encrypted_state_store", st.EncryptedStateStore())
+	if st.Wire.Platform.SealingKeyRelease.UnsafeSingleKeyAccepted {
+		log.Warn("UNSAFE: the setup accepts a key held alone on GCP (sealing_key_release.unsafe_single_key_accepted); a 1 of 1 import order is taken", "why", setupwire.UnsafeSingleKeyWarning)
+	}
 	return &start{setup: st, cfg: cfg, params: params, caPEM: st.ClientCAPEM(), mainnet: setupwire.IsMainnet(cfg.GenesisForkVersion), recordSpec: "none",
 		noLockAccepted: st.Wire.Platform.SealingKeyRelease.NoLockAccepted,
 		markSpec:       st.SlashingLogStore(), stateSpec: st.EncryptedStateStore(), signerID: st.SignerID(),

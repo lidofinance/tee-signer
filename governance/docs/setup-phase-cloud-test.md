@@ -230,6 +230,16 @@ Set these once per shell, from the deploy settings of each cloud.
    sealing_key_release.attest_audience = signer-runner-identity
    ```
 
+   A file with one GCP signer and nothing else is refused: that signer
+   would hold keys alone (1 of 1), and on GCP the key release rests on IAM
+   bindings the project's owners can change at any time, so a changed
+   binding hands the sealing key, and with it the whole validator key, to
+   any image (`setupwire.UnsafeSingleKeyWarning`). To accept that risk,
+   run `signer-admin setup -allow-gcp-unsafe-single-key` or put
+   `sealing_key_release.unsafe_single_key_accepted = true` in the signer's
+   section; the tool prints a WARNING line for the setup, and the runner
+   logs the warning at start and at every 1 of 1 import.
+
 6. `signer-config setup -out setups setup.conf` writes `setups/signer-N.setup`
    and prints `cluster_id` and each `setup_sha256`. Keep the output.
 7. Each setup against its deploy: `setup-tool check -platform azure -chain $CHAIN_JSON setups/signer-1.setup`,

@@ -353,14 +353,31 @@ platform has no real attestation`, and on other chains HEALTH's
 chains the runner starts; a failed read leaves
 `key_release_hash` zero and logs a warning.
 
-A GCP signer never holds a key alone: an import order with t = n = 1 is
-refused on GCP on every chain, with or without `no_lock_accepted`
-(`setupwire.CheckThresholdOn`). The setup has no single-node mode of its
-own; t = n = 1 in an import order is the single-node trigger. On the
-other platforms a single-node signer is not a split, so the mainnet
-overlap rule (2t - n >= 2) does not apply to it; it applies to every real
-split. Tests: TestThresholdOnGCP (setupwire), TestImportSingleNode
-(tee-signer/server), TestSetupSingleSignerOnEveryPlatform (signer-admin).
+A GCP signer holds a key alone only with a second, separate acceptance:
+an import order with t = n = 1 is refused on GCP on every chain, with or
+without `no_lock_accepted`, unless the setup says
+`sealing_key_release.unsafe_single_key_accepted = true`
+(`setupwire.CheckThresholdOn`). The refusal says why and how to accept.
+Why it is unsafe (`setupwire.UnsafeSingleKeyWarning`): a 1 of 1 signer
+holds the whole validator key, and on GCP the rule that releases the
+sealing key is the IAM bindings of the Workload Identity pool and the KMS
+key, which the project's owners can change at any time with no
+attestation in the way; a changed binding releases the sealing key to any
+image, which then opens the shares and can sign a slashable pair. In a
+t-of-n split the same change yields one share; with 1 of 1 it yields the
+key. The protection is the project's IAM governance and the watchdog, not
+the TEE. `signer-admin setup -allow-gcp-unsafe-single-key` writes the
+acceptance into every GCP signer's setup (the key in the signer's section
+does the same), refuses a file with one GCP signer without it, and prints
+a WARNING line for every setup that carries it; the human form carries the
+warning above the key; a GCP runner logs it at start and at every 1 of 1
+import. The setup has no single-node mode of its own; t = n = 1 in an
+import order is the single-node trigger. On the other platforms a
+single-node signer is not a split, so the mainnet overlap rule
+(2t - n >= 2) does not apply to it; it applies to every real split.
+Tests: TestThresholdOnGCP, TestUnsafeSingleKeyAccepted (setupwire),
+TestImportSingleNode (tee-signer/server),
+TestSetupSingleSignerOnEveryPlatform (signer-admin).
 
 HEALTH reports the result as `key_lock`: `locked`, `not_locked`, `none`
 (GCP, dev) or `unread`, and the reason as `key_lock_why`. Runners without

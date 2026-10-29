@@ -133,10 +133,11 @@ store    = nitro: bucket:str region:str
 sealing_key_release = nitro: region:str kms_key_id:str
          | azure: maa_endpoint:str akv_endpoint:str kid:str
          | gcp:   wif_provider:str kms_key:str attest_audience:str no_lock_accepted:u8
+                 unsafe_single_key_accepted:u8
          | dev:   (nothing)
 ```
 
-`platform` is 1 nitro, 2 azure, 3 gcp, 4 dev. `ca_count` is 1 to 4 DER CA certificates (`allowed_client_ca`), sorted by their bytes. `host_count` is 0 to 16 (`peer_attestation_hosts`, Nitro and dev only), sorted. `no_lock_accepted` (`sealing_key_release.no_lock_accepted`) is GCP only, 0 or 1.
+`platform` is 1 nitro, 2 azure, 3 gcp, 4 dev. `ca_count` is 1 to 4 DER CA certificates (`allowed_client_ca`), sorted by their bytes. `host_count` is 0 to 16 (`peer_attestation_hosts`, Nitro and dev only), sorted. `no_lock_accepted` (`sealing_key_release.no_lock_accepted`) and `unsafe_single_key_accepted` (`sealing_key_release.unsafe_single_key_accepted`, the setup accepts that the signer holds keys alone, 1 of 1) are GCP only, 0 or 1.
 
 The private part is at most 2560 bytes (`MaxPlatformPrivate`). The attestation circuits hash it with that fixed bound (`MAX_PRIVATE` in `circuits/lib/src/platform.nr`), so a longer one could never be proven, and `signer-config setup` and the decoder refuse it. Four P-256 CA certificates take about 2.07 KB of it.
 

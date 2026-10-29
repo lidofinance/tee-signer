@@ -8,7 +8,8 @@ import (
 
 // sealing_key_release.no_lock_accepted (T-124): a GCP setup may say that it
 // accepts a key rule without a lock. It is a flag byte at the end of the
-// GCP sealing_key_release, before the peer hosts.
+// GCP sealing_key_release, before unsafe_single_key_accepted and the peer
+// hosts.
 func TestNoLockAccepted(t *testing.T) {
 	plain := samples(t)["setup-gcp"]
 	before, err := plain.Encode()
@@ -21,7 +22,7 @@ func TestNoLockAccepted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	at := len(before) - 2 // the flag, then host_count 0
+	at := len(before) - 3 // the flag, then unsafe_single_key_accepted 0 and host_count 0
 	if len(b) != len(before) || before[at] != 0 || b[at] != 1 || !bytes.Equal(b[:at], before[:at]) || !bytes.Equal(b[at+1:], before[at+1:]) {
 		t.Fatalf("encoding: want the setup without it with the flag byte 1")
 	}

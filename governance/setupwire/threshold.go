@@ -27,7 +27,8 @@ func IsMainnet(genesisForkVersion backend.Version) bool {
 // networks, the only chains a testnet build runs on, keep 2-of-3.
 //
 // A single-node signer (t = n = 1) passes on every chain, mainnet
-// included, and on every platform but GCP (CheckThresholdOn). That is the
+// included, and on every platform; on GCP only with the setup's acceptance
+// of the risk (CheckThresholdOn). That is the
 // decision of the scope cut to single-node signers (the removal of key
 // generation among runners), not a consequence of the rule: with one
 // signing set there is nothing to overlap, and the cut accepts that one
@@ -44,17 +45,26 @@ func CheckThreshold(genesisForkVersion backend.Version, t, n int) error {
 	return nil
 }
 
-// CheckThresholdOn is CheckThreshold for a signer on platform p. A GCP
-// signer never holds a key alone: a single-node split (t = n = 1) on GCP is
-// refused on every chain, also with sealing_key_release.no_lock_accepted.
-// Cloud KMS has no lock on the rule of the key that releases the sealing
-// key, so a key held only by a GCP signer would rest on IAM bindings the
-// project's owners can change. The setup has no single-node mode of its
-// own: a split of t = n = 1 in an import order is the single-node trigger,
-// so this check sits where that order's t and n are read.
-func CheckThresholdOn(p Platform, genesisForkVersion backend.Version, t, n int) error {
-	if p == PlatformGCP && t == 1 && n == 1 {
-		return fmt.Errorf("threshold 1 of 1 on gcp: a single-node signer on GCP is refused on every chain, because Cloud KMS has no key-rule lock")
+// UnsafeSingleKeyWarning says why a key held alone by a GCP signer is
+// unsafe. signer-admin setup prints it, the human setup form carries it
+// above sealing_key_release.unsafe_single_key_accepted, and a GCP runner
+// logs it at start and at every import of a 1 of 1 share.
+const UnsafeSingleKeyWarning = "a single-node (1 of 1) signer on GCP holds the whole validator key, and Cloud KMS has no lock on the rule of the key that releases the sealing key: " +
+	"the IAM bindings of the Workload Identity pool and the KMS key are the rule, the project's owners can change them at any time, with no attestation in the way, " +
+	"and a changed binding releases the sealing key to any image, which then opens the shares and can sign a slashable pair; " +
+	"the protection is the project's IAM governance and the watchdog, not the TEE"
+
+// CheckThresholdOn is CheckThreshold for a signer with the platform part
+// p of its setup. A GCP signer holds a key alone (a single-node split,
+// t = n = 1) only when its setup accepts that
+// (sealing_key_release.unsafe_single_key_accepted, UnsafeSingleKeyWarning);
+// without the acceptance the split is refused on every chain, also with
+// sealing_key_release.no_lock_accepted. The setup has no single-node mode
+// of its own: a split of t = n = 1 in an import order is the single-node
+// trigger, so this check sits where that order's t and n are read.
+func CheckThresholdOn(p *PlatformConfig, genesisForkVersion backend.Version, t, n int) error {
+	if p.Platform == PlatformGCP && t == 1 && n == 1 && !p.SealingKeyRelease.UnsafeSingleKeyAccepted {
+		return fmt.Errorf("threshold 1 of 1 on gcp: a single-node signer on GCP is refused unless its setup accepts the risk (sealing_key_release.unsafe_single_key_accepted = true, signer-admin setup -allow-gcp-unsafe-single-key): %s", UnsafeSingleKeyWarning)
 	}
 	return CheckThreshold(genesisForkVersion, t, n)
 }

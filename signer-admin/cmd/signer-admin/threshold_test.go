@@ -3,9 +3,12 @@ package main
 import (
 	"encoding/base64"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/lidofinance/tee-signer/governance/setupwire"
 )
 
 // cloudSetupText is the runbook's cluster file
@@ -67,9 +70,12 @@ sealing_key_release.attest_audience = signer-runner-identity
 // signer-admin setup makes a setup for a cluster of one Azure or Nitro
 // signer, and refuses a cluster in which no split passes the signers'
 // threshold rule (setupwire.CheckThresholdOn): one GCP signer can only
-// hold keys 1 of 1, which a GCP signer refuses on every chain. The refusal
-// comes when the setup is made, not at the first order. One dev signer on
-// a test chain still makes a setup.
+// hold keys 1 of 1, which a GCP signer refuses unless its setup accepts
+// the risk. The refusal comes when the setup is made, not at the first
+// order, and names the way to accept. With -allow-gcp-unsafe-single-key,
+// or the key sealing_key_release.unsafe_single_key_accepted in the
+// section, the setup is made with the acceptance and the run prints the
+// warning. One dev signer on a test chain still makes a setup.
 func TestSetupSingleSignerOnEveryPlatform(t *testing.T) {
 	full := cloudSetupText(t, 1, "", "")
 	shared, rest, ok := strings.Cut(full, "\n[signer gsigner-1]")
@@ -85,7 +91,18 @@ func TestSetupSingleSignerOnEveryPlatform(t *testing.T) {
 		dir := t.TempDir()
 		file := writeFile(t, filepath.Join(dir, "setup.conf"), shared+"\n[signer "+name+"]"+section)
 		if strings.Contains(section, "platform = gcp") {
-			wantIn(t, failTool(t, "setup", "-out", filepath.Join(dir, "setups"), file), name, "single-node signer on GCP")
+			wantIn(t, failTool(t, "setup", "-out", filepath.Join(dir, "setups"), file), name, "single-node signer on GCP", "-allow-gcp-unsafe-single-key", "no lock")
+			out := mustTool(t, "setup", "-allow-gcp-unsafe-single-key", "-out", filepath.Join(dir, "setups"), file)
+			wantIn(t, out, name+" setup_sha256", "WARNING signer "+name, "unsafe_single_key_accepted", "IAM bindings")
+			if !setupAccepts(t, filepath.Join(dir, "setups", name+".setup")) {
+				t.Fatal("the flag did not set unsafe_single_key_accepted in the setup")
+			}
+			keyed := writeFile(t, filepath.Join(dir, "keyed.conf"), shared+"\n[signer "+name+"]"+section+"sealing_key_release.unsafe_single_key_accepted = true\n")
+			out = mustTool(t, "setup", "-out", filepath.Join(dir, "keyed"), keyed)
+			wantIn(t, out, name+" setup_sha256", "WARNING signer "+name)
+			if !setupAccepts(t, filepath.Join(dir, "keyed", name+".setup")) {
+				t.Fatal("the key did not set unsafe_single_key_accepted in the setup")
+			}
 			continue
 		}
 		wantIn(t, mustTool(t, "setup", "-out", filepath.Join(dir, "setups"), file), name+" setup_sha256")
@@ -94,4 +111,19 @@ func TestSetupSingleSignerOnEveryPlatform(t *testing.T) {
 	dir := t.TempDir()
 	one := writeFile(t, filepath.Join(dir, "one.conf"), setupText(dir, caDER(t), genesisTime(), lockedText(approvers(t, dir, 3), 2, 0, fee1), "s1"))
 	mustTool(t, "setup", "-out", filepath.Join(dir, "setups"), one)
+}
+
+// setupAccepts reads a binary setup and reports its
+// sealing_key_release.unsafe_single_key_accepted.
+func setupAccepts(t *testing.T, path string) bool {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := setupwire.DecodeSetup(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s.Platform.SealingKeyRelease.UnsafeSingleKeyAccepted
 }
