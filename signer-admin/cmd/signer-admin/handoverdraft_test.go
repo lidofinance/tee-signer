@@ -94,20 +94,20 @@ func readKeyT(t *testing.T, path string) []byte {
 	return k
 }
 
-// The whole approval track against key generation runners with a handover
+// The whole approval track against a release runner with a handover
 // source side on the dev platform: handover-draft reads the
 // source's attested state and the target's cloud.json, the approvers sign,
 // push sends the order to the source only, the source holds it pending for
 // the time lock, then active. A draft whose not_after comes before the
 // source would act is refused, and so is a target image off the list.
 //
-// SIGNER_ADMIN_HANDOVER_RUNNER names a runner-dev-dkg-dev, which serves
+// SIGNER_ADMIN_HANDOVER_RUNNER names a runner-dev (a dev release build), which serves
 // HANDOVER_ORDER as a source (runner/server/handover_source.go). This
 // module does not build runners, so the test is skipped without it.
 func TestHandoverFlowDevRunner(t *testing.T) {
 	bin := os.Getenv("SIGNER_ADMIN_HANDOVER_RUNNER")
 	if bin == "" {
-		t.Skip("SIGNER_ADMIN_HANDOVER_RUNNER is not set (a dev key generation runner, runner-dev-dkg-dev)")
+		t.Skip("SIGNER_ADMIN_HANDOVER_RUNNER is not set (a dev release runner, runner-dev)")
 	}
 	dir := t.TempDir()
 	ca, cert, key := clientPKI(t, dir)

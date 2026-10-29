@@ -64,10 +64,12 @@ sealing_key_release.attest_audience = signer-runner-identity
 	return b.String()
 }
 
-// signer-admin setup makes a setup for a cluster of one signer on any
-// platform: a single-node signer passes the threshold rule
-// (setupwire.CheckThreshold) on every chain. One dev signer makes a setup
-// as well.
+// signer-admin setup makes a setup for a cluster of one Azure or Nitro
+// signer, and refuses a cluster in which no split passes the signers'
+// threshold rule (setupwire.CheckThresholdOn): one GCP signer can only
+// hold keys 1 of 1, which a GCP signer refuses on every chain. The refusal
+// comes when the setup is made, not at the first order. One dev signer on
+// a test chain still makes a setup.
 func TestSetupSingleSignerOnEveryPlatform(t *testing.T) {
 	full := cloudSetupText(t, 1, "", "")
 	shared, rest, ok := strings.Cut(full, "\n[signer gsigner-1]")
@@ -82,6 +84,10 @@ func TestSetupSingleSignerOnEveryPlatform(t *testing.T) {
 		section, _, _ = strings.Cut(section, "\n[signer ")
 		dir := t.TempDir()
 		file := writeFile(t, filepath.Join(dir, "setup.conf"), shared+"\n[signer "+name+"]"+section)
+		if strings.Contains(section, "platform = gcp") {
+			wantIn(t, failTool(t, "setup", "-out", filepath.Join(dir, "setups"), file), name, "single-node signer on GCP")
+			continue
+		}
 		wantIn(t, mustTool(t, "setup", "-out", filepath.Join(dir, "setups"), file), name+" setup_sha256")
 	}
 

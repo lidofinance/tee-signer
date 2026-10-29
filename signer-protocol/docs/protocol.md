@@ -12,7 +12,7 @@ no decoder panics and that what decodes encodes back to the same bytes.
 IDENTITY and ATTEST carry a version byte, 1: the request ends with it, and
 the answer starts with it and carries the setup state. A runner answers a
 request of another version with `UNSUPPORTED`. The identity inside the
-handover and key generation messages starts with the same version byte.
+handover messages starts with the same version byte.
 
 ## Framing
 
@@ -304,16 +304,18 @@ key_origin: generated_keys:u32 imported_keys:u32 keygen_orders_hash[32]
 - The pending order (kind 1 handover), its hash and act time, or
   zeros. Kind 1 is a source's handover order (from its arrival on, also
   after the tombstone) or a target's handover import in progress (act
-  time: the import's start). Otherwise the DKG order that waits out its
-  time lock and acts last.
+  time: the import's start). Kind 2 was the DKG order of earlier builds;
+  this build takes none, so it does not occur.
 - `key_release_hash` (context `signer-key-release-v1`): the AWS runner's
   KMS key metadata and key policy, or the Azure runner's Key Vault release
   policy and flags, read once at start. Zero on GCP and dev, and when the
   read failed (the runner logs why).
-- The key origin: of the loaded keys, how many the runner made in key
-  generation and how many it imported, and the hash of the DKG orders of
-  the generated ones (context `signer-keygen-orders-v1`; zero without a
-  generated key). Each share's sealed record says where it came from.
+- The key origin: of the loaded keys, how many were made in the key
+  generation of an earlier build (this build makes none; a handed-over
+  share keeps its origin) and how many were imported, and the hash of the
+  DKG orders of the generated ones (context `signer-keygen-orders-v1`;
+  zero without a generated key). Each share's sealed record says where it
+  came from.
 
 HEALTH carries the same values as JSON (`setup`), unattested, and
 `config_hash`, equal to `setup.setup_hash`.
@@ -351,13 +353,13 @@ platform has no real attestation`, and on other chains HEALTH's
 chains the runner starts; a failed read leaves
 `key_release_hash` zero and logs a warning.
 
-The threshold rule of an import order (`setupwire.CheckThreshold`) is the
-same on every platform: a single-node signer (t = n = 1) is taken on GCP
-as on the others, with or without `no_lock_accepted`; a GCP signer's
-protection against a changed key rule is the warning above and the
-watchdog. A single-node signer is not a split, so the mainnet overlap rule
-(2t - n >= 2) does not apply to it; it applies to every real split.
-Tests: TestSingleNodeOnEveryPlatform (setupwire), TestImportSingleNode
+A GCP signer never holds a key alone: an import order with t = n = 1 is
+refused on GCP on every chain, with or without `no_lock_accepted`
+(`setupwire.CheckThresholdOn`). The setup has no single-node mode of its
+own; t = n = 1 in an import order is the single-node trigger. On the
+other platforms a single-node signer is not a split, so the mainnet
+overlap rule (2t - n >= 2) does not apply to it; it applies to every real
+split. Tests: TestThresholdOnGCP (setupwire), TestImportSingleNode
 (tee-signer/server), TestSetupSingleSignerOnEveryPlatform (signer-admin).
 
 HEALTH reports the result as `key_lock`: `locked`, `not_locked`, `none`
@@ -398,7 +400,7 @@ or two key release calls that name two images, leave the image unknown.
 
 The list it compares with is the one in force: the newest mark log
 record's locked group, with every pending update past its effective time
-active (the `Updates` view that also feeds the core and DKG orders, with
+active (the `Updates` view that also feeds the core and the handover orders, with
 effective times from `setupwire.EffectiveActivation`). A pending update
 that adds the image counts only from its effective time, which is at least
 the images minimum (7 days, 7 minutes in a testnet build) after it
@@ -416,7 +418,7 @@ The start order:
    `restart_needed`).
 4. Every request but HEALTH, PUBLIC_KEYS, ATTEST, IDENTITY and
    CONFIG_UPDATE runs the check again: SIGN, APPROVE_EXIT, the imports,
-   the DKG messages and orders, and every handover message get
+   and every handover message get
    `NOT_READY` with `image check:` and the reason. A locked update that
    drops the image stops the runner at that update's effective time.
 
@@ -437,8 +439,6 @@ What "allowed" means on each path:
 - A handover target: its setup's version 0 is the source's config in
   force, which lists the target's image (the source checks the order's
   target image against it). So a target passes on the same list.
-- DKG: each participant's own check uses its list in force, the same list
-  its DKG order check reads for every participant's image.
 - The in-place swap: the new image must be on the list in force before it
   starts, so the allowed-images update goes first and waits out the images
   minimum.
@@ -557,7 +557,7 @@ without an order. With the order the request carries the split: `t`,
 commitment 0 the validator key). The runner checks that they are the
 order's (the commitments by their hash), that `2t > n`, that commitment 0
 is `pubkey` and that `share_pubkey` is the commitments' value at the share
-index, the check key generation makes of its own share; otherwise
+index; otherwise
 `SC_ERR_BAD_KEY`. A share that is not a point of the validator's
 polynomial, or a share of a split without a majority threshold, is not
 stored. The order travels in the request; the runner keeps nothing of
@@ -813,8 +813,8 @@ different setups of one cluster: the setup puts the image's rules into
 `setup_hash`, so a new image needs a new setup, and a new setup starts with
 an empty mark log. The source side is `tee-signer/server/handover_source.go`,
 the target side `handover_import.go`; the encodings are in
-`tee-signer/handoverorder` and `tee-signer/handover` (`message.go`,
-`import.go`, `carry.go`). All four messages need the admin role. Every key generation
+`governance/handoverorder` and `tee-signer/handover` (`message.go`,
+`import.go`, `carry.go`). All four messages need the admin role. Every release
 build with a setup and the mark log has both sides, and no image may go
 out without them (release gate, below).
 
@@ -863,7 +863,7 @@ time. A second order is refused while one is pending or active; an
 expired or void one (approvals or image no longer in force) can be
 replaced. The same order again answers its state and keeps its time.
 At `not_after` the order leaves the slot by itself: IDENTITY no longer
-shows it, so it does not hide a DKG order that waits, and the next record
+shows it, and the next record
 (the config sync writes one) holds the empty slot. The same order is then
 refused as expired. After the tombstone the order stays in the slot.
 
@@ -901,10 +901,10 @@ attested import key:
 - the mark before the tombstone, as each share's interchange maxima. The
   target raises its own log to it before it stores a share, and a fresh
   target log takes its vote history from it;
-- each share's key origin (generated in key generation with its DKG order
-  hash, or imported), from the share's sealed record, signed with the
-  source's origin key, whose attestation over the order hash the page
-  carries;
+- each share's key origin (generated in the key generation of an earlier
+  build, with its DKG order hash, or imported), from the share's sealed
+  record, signed with the source's origin key, whose attestation over the
+  order hash the page carries;
 - the carry, which every page has: the key set the source hands over (how
   many shares, and `KeysHash` of their pubkey and share pubkey pairs) and
   the day's exits of the source's mark log (validator key, stake and
@@ -1194,8 +1194,6 @@ document describes the code as it is.
 6. IMPORT_SHARE and IMPORT_SHARE_SEALED take flags 0 with maxima that are
    not zero and drop the maxima. Only all-zero maxima should pass with
    flags 0.
-7. `dkgmsg.DecodeHello` takes a nonce of up to 255 bytes; `Hello.Encode`
-   and the HELLO request take 16 to 64.
-8. Status codes are overloaded (`SC_ERR_STORAGE`, `BAD_REQUEST` and
+7. Status codes are overloaded (`SC_ERR_STORAGE`, `BAD_REQUEST` and
    `UNSUPPORTED` each cover several causes, see the table), so a client
    can only tell causes apart by the `detail` text.

@@ -44,17 +44,17 @@ func keySetServer(t *testing.T) *httptest.Server {
 
 // A Nitro-like dev runner: its setup lists one peer endpoint, so the start
 // gives the dev platform option egress, and the platform's HTTP client
-// (the one the DKG peer verifiers get, dkg_hooks.go) fetches the key set
-// of the listed MAA host and reaches no other host. PeerEgress reports the
-// limit that the DKG orders check (keygen TestOrderPeerEgress).
-func TestDevRunnerPeerEgress(t *testing.T) {
+// (the one the handover verifier gets, handover_wire.go) fetches the key
+// set of the listed MAA host and reaches no other host. AttestationEgress
+// reports the limit that the handover orders check.
+func TestDevRunnerAttestationEgress(t *testing.T) {
 	listed, other := keySetServer(t), keySetServer(t)
 	s, err := setupwire.DecodeSetup(sampleSetup(t, "dev"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.Platform.EncryptedStateStore = nil
-	s.Platform.KeygenPeerAttestationHosts = []string{strings.TrimPrefix(listed.URL, "https://")}
+	s.Platform.PeerAttestationHosts = []string{strings.TrimPrefix(listed.URL, "https://")}
 	raw, err := s.Encode()
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func TestDevRunnerPeerEgress(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if e, limited := setup.PeerEgress(st.setup.Wire); !limited || len(e) != 1 {
+		if e, limited := setup.AttestationEgress(st.setup.Wire); !limited || len(e) != 1 {
 			t.Fatalf("peer egress %v %v", e, limited)
 		}
 		if plat.HTTPClient == nil {

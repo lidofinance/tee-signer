@@ -78,7 +78,7 @@ func TestOrderRunnerRefusals(t *testing.T) {
 }
 
 // The hosts each verifier fetches its key set from: what a Nitro runner's
-// setup must list in keygen_peer_attestation_hosts for that runner.
+// setup must list in peer_attestation_hosts for that runner.
 func TestEndpoints(t *testing.T) {
 	cs := []string{"confidentialcomputing.googleapis.com:443", "www.googleapis.com:443"}
 	for _, c := range []struct {

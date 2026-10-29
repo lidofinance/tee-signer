@@ -136,7 +136,7 @@ sealing_key_release = nitro: region:str kms_key_id:str
          | dev:   (nothing)
 ```
 
-`platform` is 1 nitro, 2 azure, 3 gcp, 4 dev. `ca_count` is 1 to 4 DER CA certificates (`allowed_client_ca`), sorted by their bytes. `host_count` is 0 to 16 (`keygen_peer_attestation_hosts`, Nitro and dev only), sorted. `no_lock_accepted` (`sealing_key_release.no_lock_accepted`) is GCP only, 0 or 1.
+`platform` is 1 nitro, 2 azure, 3 gcp, 4 dev. `ca_count` is 1 to 4 DER CA certificates (`allowed_client_ca`), sorted by their bytes. `host_count` is 0 to 16 (`peer_attestation_hosts`, Nitro and dev only), sorted. `no_lock_accepted` (`sealing_key_release.no_lock_accepted`) is GCP only, 0 or 1.
 
 The private part is at most 2560 bytes (`MaxPlatformPrivate`). The attestation circuits hash it with that fixed bound (`MAX_PRIVATE` in `circuits/lib/src/platform.nr`), so a longer one could never be proven, and `signer-config setup` and the decoder refuse it. Four P-256 CA certificates take about 2.07 KB of it.
 
@@ -209,17 +209,17 @@ The setup state is 353 bytes:
 | 112 | 8 | locked pending `effective_at`, Unix seconds, 0 if none |
 | 120 | 88 | open: the same five fields |
 | 208 | 32 | `approver_set_hash = H(CTX_APPROVERS, approvals_needed:u8 || n:u8 || keys)` of the set in force |
-| 240 | 1 | pending order kind: 0 none, 1 handover, 2 key generation |
+| 240 | 1 | pending order kind: 0 none, 1 handover (2 was the DKG order of earlier builds and no longer occurs) |
 | 241 | 32 | pending order hash, zero if none |
 | 273 | 8 | pending order act time, Unix seconds, 0 if none |
 | 281 | 32 | `key_release_hash`: what the runner read at start about the key that releases its sealing key, zero if nothing |
-| 313 | 4 | `generated_keys`: loaded keys the runner made in key generation |
+| 313 | 4 | `generated_keys`: loaded keys made in the key generation of an earlier build (this build makes none) |
 | 317 | 4 | `imported_keys`: the other loaded keys |
 | 321 | 32 | `keygen_orders_hash`: hash of the DKG orders the generated keys came from, zero if none |
 
 A pending update has a version above the active one; an empty pending update or order is all zero.
 
-The pending order is a DKG order that waits out its time lock (`tee-signer/docs/dkg.md`): its hash `H(CTX_DKG_ORDER, order body)` with `CTX_DKG_ORDER = signer-dkg-order-v1`, and the time it may act. While several wait, the slot shows the one that acts last, so it stays set while any waits. Handover orders do not exist yet (a runner with a setup refuses HANDOVER), so kind 1 does not occur.
+The pending order is a handover order (kind 1, `signer-protocol/docs/protocol.md` "Handover"): on a source, the order from its arrival on, also after the tombstone; on a target, the handover import in progress, whose act time is the import's start. The slot holds the order's hash (`handoverorder.Hash`) and the time it may act. Kind 2 was the DKG order of earlier builds; this build takes none, so it does not occur.
 
 `key_release_hash` is what the runner read at start about the key that releases its sealing key, so a verifier sees whether that key's policy is locked:
 
@@ -234,13 +234,13 @@ key_release_hash = H(CTX_KEY_RELEASE, platform:u8 || {len(field):u32 || field} f
 
 The answers come over TLS from the cloud's API, so the host cannot change them. An absent Azure flag counts as 0. GCP and the dev platform have no such read, so their runners write zeros; for GCP the verifiers pin the project instead (research/setup-phase.md, section 4). A read that fails also leaves zeros, and the runner logs why; a verifier that pins `key_release_sha256` refuses such a runner. runnerclient (`key_release_sha256`, `-key-release-sha256`) and the watchdog (per signer) take the pin. On mainnet it is mandatory for Azure and Nitro signers: a runnerclient with `mainnet` set refuses an `azure-maa` or `aws-nitro` setting without it (and a runnerclient without `mainnet` refuses a runner whose TLS certificate names mainnet, signer-protocol/docs/protocol.md "Channel binding"), and the watchdog fails the `key_release_hash` check of an unpinned Azure or Nitro signer whose published policy names mainnet. On other chains it stays optional; GCP never takes one. The runner reads the policy once at start: a locked policy cannot change after it, and an unlocked one shows as unlocked.
 
-The last three fields are the key origin. They count the loaded keys, the ones `keys_hash` covers, so `generated_keys + imported_keys` is their number. `generated_keys` are the keys a key generation session made inside this runner (`tee-signer/docs/dkg.md`); every other key was imported (a sealed import, or a plaintext import in a debug build). Each stored share's sealed record says which, so the counts survive a restart. The host can hide or roll back a stored share, which takes the key out of both counts and out of keys_hash, but it cannot make an imported share count as generated.
+The last three fields are the key origin. They count the loaded keys, the ones `keys_hash` covers, so `generated_keys + imported_keys` is their number. `generated_keys` are the keys a key generation session of an earlier build made inside a runner; this build makes none, but a share handed over from such a runner keeps its origin, so the count survives a handover. Every other key was imported (a sealed import, or a plaintext import in a debug build). Each stored share's sealed record says which, so the counts survive a restart. The host can hide or roll back a stored share, which takes the key out of both counts and out of keys_hash, but it cannot make an imported share count as generated.
 
 ```
 keygen_orders_hash = H(CTX_KEYGEN_ORDERS, n:u32 || order_hash[32] x n)
 ```
 
-The n order hashes are the distinct DKG order hashes of the generated keys (`order_hash = H(CTX_DKG_ORDER, order body)` with `CTX_DKG_ORDER = signer-dkg-order-v1`, the hash the order slot above shows), in ascending byte order. With no generated key, `keygen_orders_hash` is 32 zero bytes. A watchdog that holds the approver-signed orders recomputes the hash over the orders it expects the signer to have acted on and compares. A runner without a setup (the flag path) leaves the key origin and `key_release_hash` zero.
+The n order hashes are the distinct DKG order hashes of the generated keys (`order_hash = H(CTX_DKG_ORDER, order body)` with `CTX_DKG_ORDER = signer-dkg-order-v1`, a context of the earlier builds that made keys, no longer in the registry, the hash the order slot above shows), in ascending byte order. With no generated key, `keygen_orders_hash` is 32 zero bytes. A watchdog that holds the approver-signed orders recomputes the hash over the orders it expects the signer to have acted on and compares. A runner without a setup (the flag path) leaves the key origin and `key_release_hash` zero.
 
 The ATTEST user data, which the prover uses:
 
@@ -277,7 +277,7 @@ Every byte of the setup state is public; only `keys_hash` stays a private input.
 | `config_state` | setup state bytes 32 to 312 (281 bytes) | both groups (version, hash, pending update), the approver set hash, the pending order (kind, hash, act time) and `key_release_hash` |
 | `key_origin` | setup state bytes 313 to 352 (40 bytes) | keys from key generation, imported keys, hash of the key generation orders |
 
-The pending order and `key_release_hash` are public because a pending handover or DKG order announces an image or key change, and `key_release_hash` shows whether the key policies are locked; the watchdog shows both. The sample in the vectors file sets every field so every byte is exercised. `format`, `platform`, `challenge_slot`, `measurement`, `hwmodel` and `vendor_key_set_root` come from the circuit and the attestation, not from the signer's bytes.
+The pending order and `key_release_hash` are public because a pending handover order announces an image change, and `key_release_hash` shows whether the key policies are locked; the watchdog shows both. The sample in the vectors file sets every field so every byte is exercised. `format`, `platform`, `challenge_slot`, `measurement`, `hwmodel` and `vendor_key_set_root` come from the circuit and the attestation, not from the signer's bytes.
 
 ### The measurement and hwmodel outputs
 
@@ -318,7 +318,7 @@ For GCP the audience is a private value (it is in the private part), and the tok
 - `contexts`: the context strings above.
 - `setup`: a sample GCP signer of a testnet cluster with one slot time change (6 s slots from epoch 200000): its human form, its bytes, every leaf (name, value, salt, hash) of the three groups, the three group roots, policy_root, the platform salt, the private part bytes, platform_commitment and setup_hash. Salts are SHA-256 of fixed strings, so the vectors never change by chance; real salts are random.
 - `update`: a locked update of that setup (version 1, `builder_gas_limit_max` to 300000000, signed by approvers 1 and 2 of the test keys): its human form, body, group root, header, update_hash and the signed update.
-- `setup_state`: a SetupState (locked version 1 in force with that update, an open update pending, a pending DKG order, a key_release_hash, a key origin of 3 generated keys) as JSON and as its 353 bytes. Its order hash, key_release_hash and keygen_orders_hash are placeholders (SHA-256 of fixed strings), not outputs of the formulas; the next two entries work them through.
+- `setup_state`: a SetupState (locked version 1 in force with that update, an open update pending, a pending order of kind 2 (the DKG order of earlier builds), a key_release_hash, a key origin of 3 generated keys) as JSON and as its 353 bytes. Its order hash, key_release_hash and keygen_orders_hash are placeholders (SHA-256 of fixed strings), not outputs of the formulas; the next two entries work them through.
 - `keygen_orders`: three generated keys' order hashes (two orders, one repeat, unsorted), the input of keygen_orders_hash and its value.
 - `key_release`: key_release_hash of a sample AWS key (a policy without `kms:PutKeyPolicy`) and a sample Azure key (an immutable release policy): the platform byte, the named fields, the input and the hash.
 - `attest`: the nonce (a sample beacon block root), two loaded keys, keys_hash, the exact input of attest_user_data, attest_user_data, the GCP `eat_nonce` string, the Azure runtime data and report data, and the Nitro nonce and user data.

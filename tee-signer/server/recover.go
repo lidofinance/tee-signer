@@ -132,5 +132,5 @@ func (s *Server) lockers() []sync.Locker {
 }
 
 // lockHolder is a part of the server with locks of its own: the handover
-// source and target of key generation builds.
+// source and target of release builds.
 type lockHolder interface{ lockers() []sync.Locker }

@@ -287,13 +287,14 @@ type PlatformConfig struct {
 	SlashingLogStore    Store
 	EncryptedStateStore *Store // Azure, GCP and dev only; nil: none
 	SealingKeyRelease   KeyRelease
-	// KeygenPeerAttestationHosts are the host:port names that the
-	// runner's DKG peer verifiers fetch key sets from over HTTPS: an Azure
-	// peer's MAA host, Google's Confidential Space issuer and key host.
+	// PeerAttestationHosts are the host:port names that the runner's
+	// attestation verifier fetches key sets from over HTTPS when it checks
+	// the other image of a handover: an Azure peer's MAA host, Google's
+	// Confidential Space issuer and key host.
 	// Nitro and dev only: a Nitro enclave reaches no host but the routes of
 	// its setup, and on dev the list limits the runner the same way, for
 	// tests. Sorted, without repeats.
-	KeygenPeerAttestationHosts []string
+	PeerAttestationHosts []string
 }
 
 // Store names a bucket. The platform decides the fields: Nitro (S3) Bucket
@@ -751,8 +752,8 @@ func writePlatform(w *writer, p *PlatformConfig) {
 		writeStore(w, p.Platform, p.EncryptedStateStore)
 	}
 	writeKeyRelease(w, p.Platform, &p.SealingKeyRelease)
-	w.u8(uint8(len(p.KeygenPeerAttestationHosts)))
-	for _, h := range p.KeygenPeerAttestationHosts {
+	w.u8(uint8(len(p.PeerAttestationHosts)))
+	for _, h := range p.PeerAttestationHosts {
 		w.str(h)
 	}
 }
@@ -772,8 +773,8 @@ func readPlatform(r *reader, p *PlatformConfig) {
 		readStore(r, p.Platform, p.EncryptedStateStore, "encrypted_state_store")
 	}
 	readKeyRelease(r, p.Platform, &p.SealingKeyRelease)
-	for range r.count("keygen_peer_attestation_hosts", MaxPeerHosts, false) {
-		p.KeygenPeerAttestationHosts = append(p.KeygenPeerAttestationHosts, r.str("keygen_peer_attestation_hosts"))
+	for range r.count("peer_attestation_hosts", MaxPeerHosts, false) {
+		p.PeerAttestationHosts = append(p.PeerAttestationHosts, r.str("peer_attestation_hosts"))
 	}
 }
 
@@ -1018,15 +1019,15 @@ var (
 	endpointRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]*[a-z0-9])?:[1-9][0-9]{0,4}$`)
 )
 
-// CheckEndpoint is the rule for one keygen peer attestation host:
+// CheckEndpoint is the rule for one peer attestation host:
 // host:port with a lower-case host name and a port from 1 to 65535 without
 // leading zeros.
 func CheckEndpoint(e string) error {
-	if err := checkRE("keygen_peer_attestation_hosts", e, endpointRE); err != nil {
+	if err := checkRE("peer_attestation_hosts", e, endpointRE); err != nil {
 		return fmt.Errorf("%w (want host:port, for example sharedneu.neu.attest.azure.net:443)", err)
 	}
 	if _, port, _ := strings.Cut(e, ":"); len(port) == 5 && port > "65535" {
-		return fmt.Errorf("keygen_peer_attestation_hosts: %q: port above 65535", e)
+		return fmt.Errorf("peer_attestation_hosts: %q: port above 65535", e)
 	}
 	return nil
 }
@@ -1206,19 +1207,19 @@ func (p *PlatformConfig) Check() error {
 	if err := p.SealingKeyRelease.check(p.Platform); err != nil {
 		return err
 	}
-	if n := len(p.KeygenPeerAttestationHosts); n > 0 {
+	if n := len(p.PeerAttestationHosts); n > 0 {
 		if p.Platform != PlatformNitro && p.Platform != PlatformDev {
-			return fmt.Errorf("platform: keygen_peer_attestation_hosts is for nitro and dev; a %s runner reaches its peers' key sets without routes", p.Platform)
+			return fmt.Errorf("platform: peer_attestation_hosts is for nitro and dev; a %s runner reaches its peers' key sets without routes", p.Platform)
 		}
 		if n > MaxPeerHosts {
-			return fmt.Errorf("platform: %d keygen_peer_attestation_hosts, at most %d", n, MaxPeerHosts)
+			return fmt.Errorf("platform: %d peer_attestation_hosts, at most %d", n, MaxPeerHosts)
 		}
-		for i, e := range p.KeygenPeerAttestationHosts {
+		for i, e := range p.PeerAttestationHosts {
 			if err := CheckEndpoint(e); err != nil {
 				return fmt.Errorf("platform: %w", err)
 			}
-			if i > 0 && p.KeygenPeerAttestationHosts[i-1] >= e {
-				return errors.New("platform: keygen_peer_attestation_hosts must be sorted, without repeats")
+			if i > 0 && p.PeerAttestationHosts[i-1] >= e {
+				return errors.New("platform: peer_attestation_hosts must be sorted, without repeats")
 			}
 		}
 	}

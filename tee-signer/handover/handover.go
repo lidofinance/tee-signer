@@ -13,7 +13,8 @@ import (
 
 // TypeOrder is the message type of HANDOVER_ORDER, whose codec is
 // governance/handoverorder (handoverorder.TypeOrder names the same value;
-// that package does not import this one).
+// that package does not import this one, and
+// TestTypeOrderMatchesHandoverOrder keeps the two equal).
 const TypeOrder wire.MsgType = 0x31
 
 // MaxPerResponse bounds the shares of one response (about 1.3 KB each).

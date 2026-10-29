@@ -60,7 +60,7 @@ SETUP=signer-2.bin platform-aws/deploy/parent-run.sh               # on the pare
 - The routes follow from the setup over a fixed port map: KMS and STS of
   the key release region on vsock 8000 and 8001, `www.cloudflare.com` on
   8002, the mark bucket on 8004, NTS-KE on 8005 to 8008, and the setup's
-  `keygen_peer_attestation_hosts` on 8010 to 8025 (at most 16): the hosts
+  `peer_attestation_hosts` on 8010 to 8025 (at most 16): the hosts
   that the runner's attestation verifier fetches key sets from when it
   checks a handover target, an Azure MAA host or Google's Confidential Space hosts
   (`governance/docs/setup-phase-cloud-test.md`, "Nitro peer endpoints").

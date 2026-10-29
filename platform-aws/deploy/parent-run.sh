@@ -19,7 +19,7 @@
 # this signer is its setup (research/setup-phase.md in the threshold-signer-poc repo,
 # section 3): the binary file signer-config setup (or signer-admin/cmd/setup-tool)
 # makes, with the chain, the client CA, the KMS key and region, the mark
-# bucket, the signer name and the key set hosts of the handover target's verifier (keygen_peer_attestation_hosts).
+# bucket, the signer name and the key set hosts of the handover target's verifier (peer_attestation_hosts).
 # The host agent checks it with the runner's decoder and hands it to the
 # enclave at every start, before any KMS call. The vsock proxies follow
 # from the same file over the fixed port map of platform-aws/deploy/enclave/Dockerfile
@@ -64,7 +64,7 @@ sudo systemctl enable --now nitro-enclaves-allocator.service
 # 2. vsock-proxy, one per route of the setup: KMS and STS of its region
 #    (8000, 8001), the third coarse-time host (8002), the mark bucket (8004),
 #    the NTS-KE servers of the NTS clock (8005 to 8008) and the setup's
-#    keygen_peer_attestation_hosts, the hosts the attestation verifier fetches key sets from
+#    peer_attestation_hosts, the hosts the attestation verifier fetches key sets from
 #    (8010 up to 8025, in the setup's order). TLS ends in the enclave. The
 #    allowlist holds these destinations only (platform-aws/deploy/vsock-proxy.yaml is
 #    an example of what it gets). A peer endpoint on another port than 443

@@ -24,10 +24,16 @@ func IsMainnet(genesisForkVersion backend.Version) bool {
 // hostile gateway, must not be enough for a slashable pair. The rule would
 // give way to a peer mark quorum (research/peer-mark-quorum.md in the PoC
 // repo), which is not built, so nothing turns it off. Devnets and the test
-// networks, the only chains a testnet build runs on, keep 2-of-3. A
-// single-node signer (t = n = 1) is not a split: there is one signing set
-// and nothing to overlap, so it passes on every chain and every platform;
-// its protection is the mark log, not a quorum.
+// networks, the only chains a testnet build runs on, keep 2-of-3.
+//
+// A single-node signer (t = n = 1) passes on every chain, mainnet
+// included, and on every platform but GCP (CheckThresholdOn). That is the
+// decision of the scope cut to single-node signers (the removal of key
+// generation among runners), not a consequence of the rule: with one
+// signing set there is nothing to overlap, and the cut accepts that one
+// signer whose mark fails, plus a hostile gateway, can sign a slashable
+// pair. Its protection is the mark log and the key rule lock, not a
+// quorum. Every real split (n > 1) keeps the mainnet rule.
 func CheckThreshold(genesisForkVersion backend.Version, t, n int) error {
 	if t < 1 || t > n || 2*t <= n {
 		return fmt.Errorf("threshold %d of %d: want more than half and at most all", t, n)
@@ -36,4 +42,19 @@ func CheckThreshold(genesisForkVersion backend.Version, t, n int) error {
 		return fmt.Errorf("threshold %d of %d on mainnet: two signing sets overlap in %d signer, want 2t - n >= 2 (3 of 4, 4 of 5)", t, n, 2*t-n)
 	}
 	return nil
+}
+
+// CheckThresholdOn is CheckThreshold for a signer on platform p. A GCP
+// signer never holds a key alone: a single-node split (t = n = 1) on GCP is
+// refused on every chain, also with sealing_key_release.no_lock_accepted.
+// Cloud KMS has no lock on the rule of the key that releases the sealing
+// key, so a key held only by a GCP signer would rest on IAM bindings the
+// project's owners can change. The setup has no single-node mode of its
+// own: a split of t = n = 1 in an import order is the single-node trigger,
+// so this check sits where that order's t and n are read.
+func CheckThresholdOn(p Platform, genesisForkVersion backend.Version, t, n int) error {
+	if p == PlatformGCP && t == 1 && n == 1 {
+		return fmt.Errorf("threshold 1 of 1 on gcp: a single-node signer on GCP is refused on every chain, because Cloud KMS has no key-rule lock")
+	}
+	return CheckThreshold(genesisForkVersion, t, n)
 }

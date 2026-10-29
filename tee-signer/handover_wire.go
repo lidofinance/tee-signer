@@ -21,7 +21,7 @@ import (
 // is this build's own platform verifier (attestation-verify/runnerclient,
 // tag verifierselect); on a runner that reaches only its setup's hosts (a
 // Nitro enclave), the hosts that verifier fetches key sets from must be
-// among them (setup.PeerEgress).
+// among them (setup.AttestationEgress).
 func enableHandover(srv *server.Server) error {
 	if srv.Updates == nil {
 		return nil
@@ -31,7 +31,7 @@ func enableHandover(srv *server.Server) error {
 	if plat.HTTPClient != nil {
 		opts = append(opts, runnerclient.WithHTTPClient(plat.HTTPClient))
 	}
-	endpoints, limited := setup.PeerEgress(u.SetupWire())
+	endpoints, limited := setup.AttestationEgress(u.SetupWire())
 	// The source side goes first: it tells its own pending order in the
 	// slot from an import.
 	if err := srv.EnableHandoverSource(server.HandoverSourceOptions{VerifierOptions: opts, LimitedEgress: limited, PeerEndpoints: endpoints}); err != nil {
@@ -41,6 +41,6 @@ func enableHandover(srv *server.Server) error {
 		return fmt.Errorf("handover import: %w", err)
 	}
 	srv.Log.Info("handover on: HANDOVER_ORDER and HANDOVER hand the shares to the target an approvers' order names, IMPORT_HANDOVER takes a source's shares",
-		"limited_egress", limited, "keygen_peer_attestation_hosts", strings.Join(endpoints, ","))
+		"limited_egress", limited, "peer_attestation_hosts", strings.Join(endpoints, ","))
 	return nil
 }

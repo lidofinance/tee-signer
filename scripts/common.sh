@@ -114,13 +114,18 @@ image_suffix() { echo "$FLAVOR_SUFFIX"; }
 
 # runner_tags <binary name>: its platform tags, then debugimport for a debug
 # build, then nts for a cloud build, then testnet for that flavour, then
-# verifierselect: a runner links the attestation verifier of its own
-# platform only (attestation-verify, the handover checks the other image
-# with it), where the tools and the tests link every verifier. The cloud
-# runners (azure, aws, gcp and their debug builds) link the Rust NTS
-# library (trusted-time, build/nts/<arch>/lib) and their images run the NTS
-# clock (-nts-clock). The dev builds stay without it.
-runner_tags() { echo "$(runner_base_tags "$1"),verifierselect"; }
+# verifierselect and runnerbuild. verifierselect: a runner links the
+# attestation verifier of its own platform only (attestation-verify, the
+# handover checks the other image with it), where the tools and the tests
+# link every verifier. runnerbuild marks a runner build as such: a cloud
+# platform tag with runnerbuild and without verifierselect does not
+# compile (tee-signer/verifier_guard.go), so no runner build links the dev
+# verifier by mistake, while the module tests, which carry no runnerbuild,
+# still build with the platform tags alone. The cloud runners (azure, aws,
+# gcp and their debug builds) link the Rust NTS library (trusted-time,
+# build/nts/<arch>/lib) and their images run the NTS clock (-nts-clock).
+# The dev builds stay without it.
+runner_tags() { echo "$(runner_base_tags "$1"),verifierselect,runnerbuild"; }
 runner_base_tags() {
   case "$1" in
     runner-*-testnet) echo "$(runner_base_tags "${1%-testnet}"),testnet" ;;

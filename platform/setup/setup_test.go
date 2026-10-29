@@ -261,7 +261,7 @@ func withPeers(t *testing.T, p string, e ...string) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.Platform.KeygenPeerAttestationHosts = e
+	s.Platform.PeerAttestationHosts = e
 	b, err := s.Encode()
 	if err != nil {
 		t.Fatal(err)
@@ -269,7 +269,7 @@ func withPeers(t *testing.T, p string, e ...string) []byte {
 	return b
 }
 
-// Nitro with keygen_peer_attestation_hosts: each endpoint gets a port of the peer block,
+// Nitro with peer_attestation_hosts: each endpoint gets a port of the peer block,
 // in the setup's order, in the runner's proxy option and in the parent's
 // route lines alike. Nothing else gets a route.
 func TestNitroPeerRoutes(t *testing.T) {
@@ -291,7 +291,7 @@ func TestNitroPeerRoutes(t *testing.T) {
 		"8011 sharedneu.neu.attest.azure.net 443\n8012 www.googleapis.com 443\n") || strings.Count(lines, "\n") != 11 {
 		t.Fatalf("proxy lines:\n%s", lines)
 	}
-	if e, limited := PeerEgress(n.Wire); !limited || len(e) != 3 {
+	if e, limited := AttestationEgress(n.Wire); !limited || len(e) != 3 {
 		t.Fatalf("peer egress %v %v", e, limited)
 	}
 
@@ -320,8 +320,8 @@ func TestNitroPeerRoutes(t *testing.T) {
 	// refuse the setup (the codec's cap is the same 16, so only a setup
 	// made past the codec gets here).
 	p := full.Wire.Platform
-	p.KeygenPeerAttestationHosts = append(slices.Clone(e), "h16.example:443")
-	if _, err := NitroRoutes(&p); err == nil || !strings.Contains(err.Error(), "17 keygen_peer_attestation_hosts, but the nitro port map has 16 ports for them (8010 to 8025)") {
+	p.PeerAttestationHosts = append(slices.Clone(e), "h16.example:443")
+	if _, err := NitroRoutes(&p); err == nil || !strings.Contains(err.Error(), "17 peer_attestation_hosts, but the nitro port map has 16 ports for them (8010 to 8025)") {
 		t.Fatalf("17 endpoints: %v", err)
 	}
 	// An endpoint that a fixed route serves is refused, not routed twice.
@@ -330,15 +330,15 @@ func TestNitroPeerRoutes(t *testing.T) {
 		t.Fatalf("fixed route as a peer endpoint: %v", err)
 	}
 	// A Nitro setup without the list: limited egress, no peer endpoint.
-	if e, limited := PeerEgress(load(t, "nitro").Wire); !limited || len(e) != 0 {
+	if e, limited := AttestationEgress(load(t, "nitro").Wire); !limited || len(e) != 0 {
 		t.Fatalf("nitro without peers: %v %v", e, limited)
 	}
 }
 
-// dev: a setup with keygen_peer_attestation_hosts limits the runner's HTTP client to them
+// dev: a setup with peer_attestation_hosts limits the runner's HTTP client to them
 // (option egress); without them, and on Azure and GCP, egress is not
 // limited.
-func TestDevPeerEgress(t *testing.T) {
+func TestDevAttestationEgress(t *testing.T) {
 	d, err := Load(withPeers(t, "dev", "127.0.0.1:8443", "maa.test:443"), "dev")
 	if err != nil {
 		t.Fatal(err)
@@ -346,11 +346,11 @@ func TestDevPeerEgress(t *testing.T) {
 	if o := d.Options(); len(o) != 1 || o["egress"] != "127.0.0.1:8443,maa.test:443" {
 		t.Fatalf("dev options %v", o)
 	}
-	if e, limited := PeerEgress(d.Wire); !limited || len(e) != 2 {
+	if e, limited := AttestationEgress(d.Wire); !limited || len(e) != 2 {
 		t.Fatalf("dev with peers: %v %v", e, limited)
 	}
 	for _, p := range []string{"dev", "azure", "gcp"} {
-		if e, limited := PeerEgress(load(t, p).Wire); limited || e != nil {
+		if e, limited := AttestationEgress(load(t, p).Wire); limited || e != nil {
 			t.Fatalf("%s: %v %v", p, e, limited)
 		}
 	}

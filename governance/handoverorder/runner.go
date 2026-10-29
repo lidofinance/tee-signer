@@ -2,7 +2,6 @@ package handoverorder
 
 import (
 	"bytes"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"regexp"
@@ -375,5 +374,3 @@ func FormatSettings(pre string, r *Runner) string {
 	}
 	return w.String()
 }
-
-var _ = hex.EncodeToString

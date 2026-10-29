@@ -24,20 +24,32 @@ func TestCheckThreshold(t *testing.T) {
 	}
 }
 
-// The threshold rule knows no platform and a single-node signer is not a
-// split: t = n = 1 passes on every chain, mainnet included, and
-// CheckThreshold is the only rule. The mainnet overlap rule still applies
-// to every real split.
-func TestSingleNodeOnEveryPlatform(t *testing.T) {
-	testnet := backend.Version{0x10, 0, 0, 0x38}
-	for _, p := range []Platform{PlatformNitro, PlatformAzure, PlatformGCP, PlatformDev} {
-		for _, fork := range []backend.Version{testnet, MainnetForkVersion} {
-			if err := CheckThreshold(fork, 1, 1); err != nil {
-				t.Errorf("%s: 1 of 1 on %x: %v", p, fork, err)
-			}
+// A single-node signer (t = n = 1) is refused on GCP on every chain; on
+// the other platforms it passes on every chain, mainnet included, and the
+// threshold rule alone decides. The mainnet overlap rule still applies to
+// every real split.
+func TestThresholdOnGCP(t *testing.T) {
+	testnet, mainnet := backend.Version{0x10, 0, 0, 0x38}, MainnetForkVersion
+	for _, c := range []struct {
+		p      Platform
+		fork   backend.Version
+		t, n   int
+		refuse string
+	}{
+		{PlatformGCP, testnet, 1, 1, "single-node"},
+		{PlatformGCP, mainnet, 1, 1, "single-node"},
+		{PlatformGCP, testnet, 2, 3, ""},
+		{PlatformGCP, mainnet, 3, 4, ""},
+		{PlatformGCP, mainnet, 2, 3, "2t - n >= 2"},
+		{PlatformNitro, testnet, 1, 1, ""},
+		{PlatformNitro, mainnet, 1, 1, ""},
+		{PlatformAzure, mainnet, 1, 1, ""},
+		{PlatformAzure, mainnet, 2, 3, "2t - n >= 2"},
+		{PlatformDev, testnet, 1, 1, ""},
+	} {
+		err := CheckThresholdOn(c.p, c.fork, c.t, c.n)
+		if (c.refuse == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), c.refuse)) {
+			t.Errorf("%s %d of %d on %x: %v, want %q", c.p, c.t, c.n, c.fork, err, c.refuse)
 		}
-	}
-	if err := CheckThreshold(MainnetForkVersion, 2, 3); err == nil || !strings.Contains(err.Error(), "2t - n >= 2") {
-		t.Errorf("2 of 3 on mainnet: %v, want the overlap rule's refusal", err)
 	}
 }

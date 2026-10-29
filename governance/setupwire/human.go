@@ -671,8 +671,8 @@ func (p *parser) platform(c *PlatformConfig) {
 	if a := optional(p, "sealing_key_release.no_lock_accepted", parseBool); a != nil {
 		c.SealingKeyRelease.NoLockAccepted = *a
 	}
-	c.KeygenPeerAttestationHosts = sortedSet(p, "keygen_peer_attestation_hosts",
-		listOf(p, "keygen_peer_attestation_hosts", parseEndpoint), strings.Compare)
+	c.PeerAttestationHosts = sortedSet(p, "peer_attestation_hosts",
+		listOf(p, "peer_attestation_hosts", parseEndpoint), strings.Compare)
 }
 
 func parseEndpoint(s string) (string, error) { return s, CheckEndpoint(s) }
@@ -838,11 +838,11 @@ func formatPlatform(w *printer, p *PlatformConfig) {
 		w.note("Cloud KMS has no lock on the key rule; this setup accepts that, and a mainnet runner starts anyway")
 		w.kv("sealing_key_release.no_lock_accepted", true)
 	}
-	if len(p.KeygenPeerAttestationHosts) > 0 {
-		w.note("hosts the DKG peer verifiers fetch key sets from; a nitro enclave reaches no other host besides its fixed routes")
+	if len(p.PeerAttestationHosts) > 0 {
+		w.note("hosts the handover verifier fetches key sets from; a nitro enclave reaches no other host besides its fixed routes")
 	}
-	for _, e := range p.KeygenPeerAttestationHosts {
-		w.kv("keygen_peer_attestation_hosts", e)
+	for _, e := range p.PeerAttestationHosts {
+		w.kv("peer_attestation_hosts", e)
 	}
 }
 

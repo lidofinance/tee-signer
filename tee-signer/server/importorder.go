@@ -52,8 +52,8 @@ func (s *Server) checkSplit(req *backend.SealedImportRequest, b *importorder.Bod
 			req.T, req.N, req.ShareIndex, b.T, b.N, b.ShareIndex)
 	case 2*int(req.T) <= int(req.N):
 		return backend.Refused(backend.StatusBadKey, "threshold %d of %d: two disjoint groups of signers could both sign", req.T, req.N)
-	case setupwire.CheckThreshold(s.Updates.SetupWire().Chain.GenesisForkVersion, int(req.T), int(req.N)) != nil:
-		return backend.Refused(backend.StatusBadKey, "%v", setupwire.CheckThreshold(s.Updates.SetupWire().Chain.GenesisForkVersion, int(req.T), int(req.N)))
+	case setupwire.CheckThresholdOn(s.Updates.SetupWire().Platform.Platform, s.Updates.SetupWire().Chain.GenesisForkVersion, int(req.T), int(req.N)) != nil:
+		return backend.Refused(backend.StatusBadKey, "%v", setupwire.CheckThresholdOn(s.Updates.SetupWire().Platform.Platform, s.Updates.SetupWire().Chain.GenesisForkVersion, int(req.T), int(req.N)))
 	case len(req.Commitments) != int(req.T):
 		return backend.Refused(backend.StatusBadKey, "%d commitments for threshold %d", len(req.Commitments), req.T)
 	case importorder.CommitmentsHash(req.Commitments) != e.CommitmentsHash:

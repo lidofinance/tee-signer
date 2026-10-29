@@ -149,8 +149,8 @@ func TestDecodeSetupBytes(t *testing.T) {
 		{"approver count 9", set(o.locked, 9), "9 approvers, at most 8"},
 		{"change delay presence 2", set(o.locked+1+32*3+1, 2), "change_delay_seconds presence byte is 2"},
 		{"platform 9", set(o.private+1+len(s.SignerName), 9), "unknown platform 9"},
-		{"keygen host count 17", set(len(b)-1, 17), "17 keygen_peer_attestation_hosts, at most 16"},
-		{"keygen host empty", append(set(len(b)-1, 1), 0), "keygen_peer_attestation_hosts is empty"},
+		{"peer host count 17", set(len(b)-1, 17), "17 peer_attestation_hosts, at most 16"},
+		{"peer host empty", append(set(len(b)-1, 1), 0), "peer_attestation_hosts is empty"},
 	}
 	for _, c := range cases {
 		if _, err := DecodeSetup(c.b); err == nil || !strings.Contains(err.Error(), c.want) {
@@ -258,25 +258,25 @@ func TestSetupRefusals(t *testing.T) {
 		{"dev dir with space", "setup-dev", func(s *Setup) { s.Platform.SlashingLogStore.Dir = "/var/lib/my marks" }, "slashing_log_store.dir", ""},
 		{"bucket on dev", "setup-dev", func(s *Setup) { s.Platform.SlashingLogStore.Bucket = "b" }, "slashing_log_store.bucket does not apply to dev", "skip"},
 		{"key release on dev", "setup-dev", func(s *Setup) { s.Platform.SealingKeyRelease.Region = "eu-west-1" }, "sealing_key_release.region does not apply to dev", "skip"},
-		{"peer hosts on azure", "setup-azure", func(s *Setup) { s.Platform.KeygenPeerAttestationHosts = []string{"a.example:443"} }, "keygen_peer_attestation_hosts is for nitro and dev", ""},
-		{"peer hosts on gcp", "setup-gcp", func(s *Setup) { s.Platform.KeygenPeerAttestationHosts = []string{"a.example:443"} }, "keygen_peer_attestation_hosts is for nitro and dev", ""},
+		{"peer hosts on azure", "setup-azure", func(s *Setup) { s.Platform.PeerAttestationHosts = []string{"a.example:443"} }, "peer_attestation_hosts is for nitro and dev", ""},
+		{"peer hosts on gcp", "setup-gcp", func(s *Setup) { s.Platform.PeerAttestationHosts = []string{"a.example:443"} }, "peer_attestation_hosts is for nitro and dev", ""},
 		{"17 peer hosts", "setup-nitro-peers", func(s *Setup) {
-			s.Platform.KeygenPeerAttestationHosts = nil
+			s.Platform.PeerAttestationHosts = nil
 			for i := range 17 {
-				s.Platform.KeygenPeerAttestationHosts = append(s.Platform.KeygenPeerAttestationHosts, fmt.Sprintf("h%02d.example:443", i))
+				s.Platform.PeerAttestationHosts = append(s.Platform.PeerAttestationHosts, fmt.Sprintf("h%02d.example:443", i))
 			}
-		}, "17 keygen_peer_attestation_hosts", "17 keygen_peer_attestation_hosts, at most 16"},
-		{"peer host without port", "setup-nitro-peers", func(s *Setup) { s.Platform.KeygenPeerAttestationHosts[0] = "a.example" }, "want host:port", ""},
-		{"peer host upper case", "setup-nitro-peers", func(s *Setup) { s.Platform.KeygenPeerAttestationHosts[0] = "A.example:443" }, "want host:port", ""},
-		{"peer host with scheme", "setup-nitro-peers", func(s *Setup) { s.Platform.KeygenPeerAttestationHosts[0] = "https://a.example:443" }, "want host:port", ""},
-		{"peer host with path", "setup-nitro-peers", func(s *Setup) { s.Platform.KeygenPeerAttestationHosts[0] = "a.example:443/certs" }, "want host:port", ""},
-		{"peer host port 0", "setup-nitro-peers", func(s *Setup) { s.Platform.KeygenPeerAttestationHosts[0] = "a.example:0" }, "want host:port", ""},
-		{"peer host port 0443", "setup-nitro-peers", func(s *Setup) { s.Platform.KeygenPeerAttestationHosts[0] = "a.example:0443" }, "want host:port", ""},
-		{"peer host port 65536", "setup-nitro-peers", func(s *Setup) { s.Platform.KeygenPeerAttestationHosts[0] = "a.example:65536" }, "above 65535", ""},
-		{"peer hosts unsorted", "setup-nitro-peers", func(s *Setup) { slices.Reverse(s.Platform.KeygenPeerAttestationHosts) }, "keygen_peer_attestation_hosts must be sorted", ""},
+		}, "17 peer_attestation_hosts", "17 peer_attestation_hosts, at most 16"},
+		{"peer host without port", "setup-nitro-peers", func(s *Setup) { s.Platform.PeerAttestationHosts[0] = "a.example" }, "want host:port", ""},
+		{"peer host upper case", "setup-nitro-peers", func(s *Setup) { s.Platform.PeerAttestationHosts[0] = "A.example:443" }, "want host:port", ""},
+		{"peer host with scheme", "setup-nitro-peers", func(s *Setup) { s.Platform.PeerAttestationHosts[0] = "https://a.example:443" }, "want host:port", ""},
+		{"peer host with path", "setup-nitro-peers", func(s *Setup) { s.Platform.PeerAttestationHosts[0] = "a.example:443/certs" }, "want host:port", ""},
+		{"peer host port 0", "setup-nitro-peers", func(s *Setup) { s.Platform.PeerAttestationHosts[0] = "a.example:0" }, "want host:port", ""},
+		{"peer host port 0443", "setup-nitro-peers", func(s *Setup) { s.Platform.PeerAttestationHosts[0] = "a.example:0443" }, "want host:port", ""},
+		{"peer host port 65536", "setup-nitro-peers", func(s *Setup) { s.Platform.PeerAttestationHosts[0] = "a.example:65536" }, "above 65535", ""},
+		{"peer hosts unsorted", "setup-nitro-peers", func(s *Setup) { slices.Reverse(s.Platform.PeerAttestationHosts) }, "peer_attestation_hosts must be sorted", ""},
 		{"peer host repeated", "setup-nitro-peers", func(s *Setup) {
-			s.Platform.KeygenPeerAttestationHosts[1] = s.Platform.KeygenPeerAttestationHosts[0]
-		}, "keygen_peer_attestation_hosts must be sorted", ""},
+			s.Platform.PeerAttestationHosts[1] = s.Platform.PeerAttestationHosts[0]
+		}, "peer_attestation_hosts must be sorted", ""},
 
 		{"1 approver", "", func(s *Setup) { s.Locked.Approvers = ApproverSet{Keys: keys(1), ApprovalsNeeded: 2} }, "1 keys, want 2 to 8", ""},
 		{"9 approvers", "", func(s *Setup) { s.Locked.Approvers = ApproverSet{Keys: keys(9), ApprovalsNeeded: 5} }, "9 keys", "9 approvers, at most 8"},
@@ -426,7 +426,7 @@ func TestGroupHashes(t *testing.T) {
 	}
 }
 
-// keygen_peer_attestation_hosts: setup_hash covers every host, through
+// peer_attestation_hosts: setup_hash covers every host, through
 // platform_commitment only; the cap decodes back.
 func TestKeygenPeerHosts(t *testing.T) {
 	ss := samples(t)
@@ -435,9 +435,9 @@ func TestKeygenPeerHosts(t *testing.T) {
 	pr0, _ := plain.PolicyRoot()
 	h0, _ := plain.Hash()
 	seen := map[[32]byte]string{h0: "none"}
-	for i := range s.Platform.KeygenPeerAttestationHosts {
+	for i := range s.Platform.PeerAttestationHosts {
 		c := *s
-		c.Platform.KeygenPeerAttestationHosts = slices.Delete(slices.Clone(s.Platform.KeygenPeerAttestationHosts), i, i+1)
+		c.Platform.PeerAttestationHosts = slices.Delete(slices.Clone(s.Platform.PeerAttestationHosts), i, i+1)
 		h, err := c.Hash()
 		if err != nil {
 			t.Fatal(err)
@@ -451,18 +451,18 @@ func TestKeygenPeerHosts(t *testing.T) {
 		}
 	}
 	c := *s
-	c.Platform.KeygenPeerAttestationHosts = nil
+	c.Platform.PeerAttestationHosts = nil
 	for i := range MaxPeerHosts {
-		c.Platform.KeygenPeerAttestationHosts = append(c.Platform.KeygenPeerAttestationHosts, fmt.Sprintf("h%02d.example:443", i))
+		c.Platform.PeerAttestationHosts = append(c.Platform.PeerAttestationHosts, fmt.Sprintf("h%02d.example:443", i))
 	}
 	got, err := DecodeSetup(must(c.Encode()))
-	if err != nil || !reflect.DeepEqual(got.Platform.KeygenPeerAttestationHosts, c.Platform.KeygenPeerAttestationHosts) {
-		t.Fatalf("16 keygen_peer_attestation_hosts: %v", err)
+	if err != nil || !reflect.DeepEqual(got.Platform.PeerAttestationHosts, c.Platform.PeerAttestationHosts) {
+		t.Fatalf("16 peer_attestation_hosts: %v", err)
 	}
 	d := ss["setup-dev"]
-	d.Platform.KeygenPeerAttestationHosts = []string{"127.0.0.1:8443"}
+	d.Platform.PeerAttestationHosts = []string{"127.0.0.1:8443"}
 	if _, err := DecodeSetup(must(d.Encode())); err != nil {
-		t.Fatalf("dev with keygen_peer_attestation_hosts: %v", err)
+		t.Fatalf("dev with peer_attestation_hosts: %v", err)
 	}
 }
 

@@ -14,8 +14,9 @@ import (
 // TypeOrder is HANDOVER_ORDER: the signed order in, its State out. Any
 // client with a client certificate may send it; the approvers' signatures
 // carry the authority. Pushing it again does no harm and reads the state.
-// The number lives in backend/handover, which a runner without key
-// generation links.
+// It must equal handover.TypeOrder (tee-signer/handover, which this
+// module cannot import); TestTypeOrderMatchesHandoverOrder there checks
+// that.
 const TypeOrder wire.MsgType = 0x31
 
 // Outcomes of HANDOVER_ORDER.

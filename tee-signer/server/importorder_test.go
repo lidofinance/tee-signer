@@ -135,8 +135,9 @@ func TestImportSplit(t *testing.T) {
 	}
 }
 
-// A single-node split (t = n = 1) is taken under an import order on every
-// platform's setup, GCP included: the threshold rule knows no platform.
+// A single-node split (t = n = 1) is taken under an import order on the
+// dev, Nitro and Azure setups; a GCP signer takes no share of one, on any
+// chain: the import order's 1 of 1 is refused (setupwire.CheckThresholdOn).
 func TestImportSingleNode(t *testing.T) {
 	for _, name := range []string{"setup-dev", "setup-nitro", "setup-azure", "setup-gcp"} {
 		t.Run(name, func(t *testing.T) {
@@ -150,7 +151,14 @@ func TestImportSingleNode(t *testing.T) {
 			}
 			e := newTgtEnv(t, "dev", func(s *setupwire.Setup) { s.Platform = g.Platform })
 			sk, pk := newKey(t)
-			if err := e.importSealed(pk, sk, 5, nil); err != nil {
+			err = e.importSealed(pk, sk, 5, nil)
+			if g.Platform.Platform == setupwire.PlatformGCP {
+				if err == nil || !strings.Contains(err.Error(), "single-node") {
+					t.Fatalf("1 of 1 on gcp: %v, want the single-node refusal", err)
+				}
+				return
+			}
+			if err != nil {
 				t.Fatalf("1 of 1 on %s: %v", g.Platform.Platform, err)
 			}
 			if !hasKey(e.srv.Signer.Keys(), pk) {

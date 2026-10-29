@@ -48,10 +48,11 @@ func (s *Server) readShare(pk backend.Pubkey, f func(rec *shareRecord, secret *[
 }
 
 // handoverSource serves HANDOVER_ORDER and HANDOVER as a source
-// (handover_source.go). A runner with a setup built with key generation
-// (peer_* tags) has one, so every image of that build can hand its shares
-// to the next one; a build without the peer tags has neither side, and
-// Server.handoverSrc stays nil there (both messages are UNSUPPORTED).
+// (handover_source.go). A release build with a setup and the mark log has
+// one (tee-signer/handover_wire.go), so every image can hand its shares
+// to the next one; a debug build, or a runner without a setup, has
+// neither side, and Server.handoverSrc stays nil there (both messages are
+// UNSUPPORTED).
 type handoverSource interface {
 	order(ctx context.Context, payload []byte) ([]byte, error)
 	handover(ctx context.Context, payload []byte) ([]byte, error)

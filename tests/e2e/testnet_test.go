@@ -14,6 +14,7 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
@@ -30,7 +31,9 @@ import (
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/platform/setup"
 	"github.com/lidofinance/tee-signer/signer-protocol"
+	"github.com/lidofinance/tee-signer/signer-protocol/buildflavor"
 	"github.com/lidofinance/tee-signer/signer-protocol/remote"
+	wireadmin "github.com/lidofinance/tee-signer/signer-protocol/wire/admin"
 )
 
 // testnetChainSetup is the dev sample setup (setupForTest) on the chain
@@ -179,6 +182,97 @@ func checkRunnerclientFlavor(t *testing.T, dir, addr string, cliCfg *tls.Config,
 		t.Fatalf("runnerclient with allow_testnet_build: %v", err)
 	}
 	t.Logf("runnerclient: refused the testnet runner without allow_testnet_build, took it with the setting (version %s)", h.Version)
+}
+
+// TestE2ETestnetImagesUpdateWaits: a testnet runner on a devnet, with a
+// setup that names no time lock, so the image default holds: 2 minutes in
+// a testnet build, 48 hours in the default build. An allowed-images update
+// waits the images minimum instead, 7 minutes (7 days in the default
+// build): that wait is what keeps a new image from being trusted the
+// moment its update arrives. The update is sent at the start; it stays
+// pending across a restart and past the time lock, and comes into force
+// after its 7 minutes. attest/runnerclient refuses the runner without
+// allow_testnet_build and takes it with the setting.
+func TestE2ETestnetImagesUpdateWaits(t *testing.T) {
+	if flavor.Build != flavor.Testnet {
+		t.Fatal("run with -tags testnet")
+	}
+	if setupwire.DefaultTimeLock != buildflavor.TestnetFlavorTimeLock || setupwire.ImagesMinTimeLock != buildflavor.TestnetFlavorImagesMinTimeLock {
+		t.Fatal("this test binary does not have the testnet constants")
+	}
+	c := newChain(t) // a devnet: core.DevConfig's fork version and root
+	dir := t.TempDir()
+	caFile, cliCfg := testPKI(t, dir, "waits")
+	var cluster [32]byte
+	rand.Read(cluster[:])
+	raw := orderSetupFor(t, c, filepath.Join(dir, "signer-1"), caFile, "signer-1", cluster, nil)
+	s, err := setupwire.DecodeSetup(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Locked.ChangeDelaySeconds != nil {
+		t.Fatal("the setup names a time lock")
+	}
+	setupFile := filepath.Join(dir, "signer-1.setup")
+	if err := os.WriteFile(setupFile, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	addr := fmt.Sprintf("tcp:127.0.0.1:%d", freePort(t))
+	p := startPeerAt(t, runnerBinary(t, "dev-testnet"), "signer-1", filepath.Join(dir, "signer-1"), setupFile, addr)
+	if h, err := p.cl.Health(ctx); err != nil || flavor.FromVersion(h.Version) != flavor.Testnet {
+		t.Fatalf("HEALTH: %v %+v, want the testnet flavour", err, h)
+	}
+	checkRunnerclientFlavor(t, dir, addr, cliCfg, mustSetupHash(t, raw))
+
+	// The allowed-images update: the locked group gains a GCP image.
+	timeLock, imagesMin := uint64(setupwire.DefaultTimeLock), uint64(setupwire.ImagesMinTimeLock)
+	lh, _ := s.GroupHash(setupwire.GroupLocked)
+	next := s.Locked
+	img := make([]byte, 32)
+	rand.Read(img)
+	next.AllowedImageMeasurements = []setupwire.Image{{Kind: setupwire.ImageGCP, Measurement: img}}
+	ub := &setupwire.UpdateBody{ClusterID: s.ClusterID, ChainHash: s.Chain.Hash(), Group: setupwire.GroupLocked, Version: 1,
+		PrevHash: lh, ActivateAt: uint64(time.Now().Unix()), Locked: &next, Salts: e2eSalts(t, setupwire.NumLockedLeaves)}
+	updHash, _ := ub.Hash()
+	sent := time.Now()
+	before := uint64(sent.Unix())
+	outcome, st, err := sendConfigUpdate(t, addr, cliCfg, signConfigUpdate(t, ub, 1, 2))
+	if err != nil || outcome != wireadmin.ConfigAccepted {
+		t.Fatalf("allowed-images update: %d %v", outcome, err)
+	}
+	pend := st.Locked.Pending
+	if pend.Version != 1 || pend.Hash != updHash || pend.EffectiveAt < before+imagesMin || pend.EffectiveAt > before+imagesMin+2 {
+		t.Fatalf("update pending %+v, sent at %d, want effective %d s later", pend, before, imagesMin)
+	}
+	effective := pend.EffectiveAt
+	t.Logf("sent the allowed-images update: effective in %d s (7 days in the default build), past the setup's %d s time lock", effective-before, timeLock)
+
+	// Still pending, with the same time, after a restart: the wait is in
+	// the mark log, not in memory.
+	p.restart(t)
+	stillPending := func(when string) {
+		t.Helper()
+		st := devIdentity(t, p.cl).State.Locked
+		if st.Version != 0 || st.Pending.Version != 1 || st.Pending.Hash != updHash || st.Pending.EffectiveAt != effective {
+			t.Fatalf("locked group %+v %s, want version 0 with the update pending as sent (effective at %d)", st, when, effective)
+		}
+	}
+	stillPending("after a restart")
+	// Past the time lock the update still waits: the images minimum is
+	// the longer wait.
+	sleepUntil(t, before+timeLock+1)
+	stillPending("past the time lock")
+	sleepUntil(t, effective-5)
+	stillPending("5 s before its time")
+	deadline := time.Unix(int64(effective)+30, 0)
+	for devIdentity(t, p.cl).State.Locked != (backend.ConfigGroup{Version: 1, Hash: updHash}) {
+		if time.Now().After(deadline) {
+			t.Fatal("the allowed-images update did not come into force")
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Logf("the allowed-images update came into force %v after sending (images minimum %d s), having waited past the %d s time lock and a restart",
+		time.Since(sent).Round(time.Second), imagesMin, timeLock)
 }
 
 // sleepUntil waits until the Unix second at, logging the wait.

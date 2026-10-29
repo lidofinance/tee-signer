@@ -14,9 +14,9 @@
 //	setup-tool check [-platform P] [-chain CHAIN_JSON] FILE
 //	    Decode FILE strictly and print setup_sha256, platform and signer,
 //	    policy_root and platform_commitment, and one
-//	    keygen_peer_attestation_hosts line per host (on nitro
-//	    "keygen_peer_attestation_hosts none" without any: its key
-//	    generation then reaches no azure-maa or gcp-cs peer's key set). With
+//	    peer_attestation_hosts line per host (on nitro
+//	    "peer_attestation_hosts none" without any: its handover verifier
+//	    then reaches no azure-maa or gcp-cs key set). With
 //	    -platform, refuse a setup for another platform. With -chain, refuse
 //	    a setup whose chain or first fork schedule differs from the runner
 //	    chain.json (cloud/chains/chain.sh picks that file by chain name).
@@ -194,11 +194,11 @@ func check(args []string) error {
 	pr, _ := s.PolicyRoot()
 	pc, _ := s.PlatformCommitment()
 	fmt.Printf("setup_sha256 %x\nplatform %s\nsigner %s\npolicy_root %x\nplatform_commitment %x\n", h, s.Platform.Platform, s.SignerName, pr, pc)
-	for _, e := range s.Platform.KeygenPeerAttestationHosts {
-		fmt.Printf("keygen_peer_attestation_hosts %s\n", e)
+	for _, e := range s.Platform.PeerAttestationHosts {
+		fmt.Printf("peer_attestation_hosts %s\n", e)
 	}
-	if len(s.Platform.KeygenPeerAttestationHosts) == 0 && s.Platform.Platform == setupwire.PlatformNitro {
-		fmt.Println("keygen_peer_attestation_hosts none")
+	if len(s.Platform.PeerAttestationHosts) == 0 && s.Platform.Platform == setupwire.PlatformNitro {
+		fmt.Println("peer_attestation_hosts none")
 	}
 	return nil
 }

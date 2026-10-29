@@ -75,7 +75,7 @@ type HandoverImportOptions struct {
 	// client for the key sets).
 	VerifierOptions []runnerclient.Option
 	// LimitedEgress and PeerEndpoints: on a runner that reaches only its
-	// setup's peer hosts (setup.PeerEgress), every host the source's
+	// setup's peer hosts (setup.AttestationEgress), every host the source's
 	// verifier fetches a key set from must be one of them.
 	LimitedEgress bool
 	PeerEndpoints []string

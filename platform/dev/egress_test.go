@@ -12,7 +12,7 @@ import (
 	"github.com/lidofinance/tee-signer/platform"
 )
 
-// With option egress (a dev setup's keygen_peer_attestation_hosts) the HTTP client reaches
+// With option egress (a dev setup's peer_attestation_hosts) the HTTP client reaches
 // the listed host:ports and no other; without it the platform keeps no
 // client of its own, as before.
 func TestEgress(t *testing.T) {
@@ -42,7 +42,7 @@ func TestEgress(t *testing.T) {
 	if got, err := get(ok.URL); err != nil || got != "listed" {
 		t.Fatalf("listed endpoint: %q %v", got, err)
 	}
-	want := fmt.Sprintf("dev: no route for %s: not one of the setup's keygen_peer_attestation_hosts", strings.TrimPrefix(other.URL, "https://"))
+	want := fmt.Sprintf("dev: no route for %s: not one of the setup's peer_attestation_hosts", strings.TrimPrefix(other.URL, "https://"))
 	if _, err := get(other.URL); err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("other endpoint: %v", err)
 	}

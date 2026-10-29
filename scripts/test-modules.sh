@@ -8,7 +8,8 @@
 #
 # Tags: the runner modules test with all four platform tags at once, as the
 # platform packages need; tee-signer also with each tag alone (package main),
-# with lockcheck (devkit/lockorder) and with testnet. Logs:
+# with lockcheck (devkit/lockorder), with testnet and with the tags of a release
+# runner. Logs:
 # logs/test-<module>.log.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
@@ -50,7 +51,9 @@ checks() {
       go test $RACE -count=1 -v -tags "$ALL_TAGS" ./... || return 1
       go test $RACE -count=1 -tags "$ALL_TAGS,lockcheck" ./server || return 1
       go test $RACE -count=1 -v -tags platform_dev,testnet . ./attls || return 1
-      go test $RACE -count=1 -v -tags testnet -run 'Flavor|ImageCheck' ./server || return 1 ;;
+      go test $RACE -count=1 -v -tags testnet -run 'Flavor|ImageCheck' ./server || return 1
+      # The tags a release runner is built with (scripts/common.sh runner_tags).
+      go test $RACE -count=1 -tags "$(runner_tags runner-dev)" ./server . || return 1 ;;
     platform|slashing-log|platform-aws|platform-azure|platform-gcp|trusted-time|signer-admin)
       # The operator tools and the clock build without the runner tags.
       case "$1" in trusted-time|signer-admin) ;; *) vet_builds || return 1 ;; esac

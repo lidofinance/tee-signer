@@ -101,9 +101,9 @@ func statementNitroSetup(t testing.TB) *Setup {
 	s := statementSetup(t)
 	s.SignerName = "nitro-1"
 	s.Platform = PlatformConfig{Platform: PlatformNitro, AllowedClientCA: s.Platform.AllowedClientCA,
-		SlashingLogStore:           Store{Bucket: "lido-signer-marks-nitro-1", Region: "eu-central-1"},
-		SealingKeyRelease:          KeyRelease{Region: "eu-central-1", KMSKeyID: "arn:aws:kms:eu-central-1:111122223333:key/0b6f4c7e-58a1-4c39-9d2e-5f0a8e3b7c41"},
-		KeygenPeerAttestationHosts: []string{"signer-2.example.internal:9443"}}
+		SlashingLogStore:     Store{Bucket: "lido-signer-marks-nitro-1", Region: "eu-central-1"},
+		SealingKeyRelease:    KeyRelease{Region: "eu-central-1", KMSKeyID: "arn:aws:kms:eu-central-1:111122223333:key/0b6f4c7e-58a1-4c39-9d2e-5f0a8e3b7c41"},
+		PeerAttestationHosts: []string{"signer-2.example.internal:9443"}}
 	s.PlatformSalt = vsum("platform_salt nitro-1")
 	if _, err := s.Encode(); err != nil {
 		t.Fatal(err)

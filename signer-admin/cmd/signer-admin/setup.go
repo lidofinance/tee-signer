@@ -150,6 +150,16 @@ func cmdSetup(args []string, out io.Writer) error {
 			return fmt.Errorf("signer %s: %w", s.SignerName, err)
 		}
 	}
+	// Every split of the cluster's keys has at most as many shares as the
+	// file has signers. t = n is the split the threshold rule refuses
+	// last, so a cluster that fails it can hold no key at all: one GCP
+	// signer (1 of 1 is refused there on every chain). The runners refuse
+	// such an order; this refuses the setup.
+	for _, s := range setups {
+		if err := setupwire.CheckThresholdOn(s.Platform.Platform, s.Chain.GenesisForkVersion, len(setups), len(setups)); err != nil {
+			return fmt.Errorf("signer %s: a cluster of %d signer(s) can hold no key: %w", s.SignerName, len(setups), err)
+		}
+	}
 	// One set of policy salts for the cluster, one platform salt per signer.
 	salts, err := setupwire.NewPolicySalts(toolRand)
 	if err != nil {
