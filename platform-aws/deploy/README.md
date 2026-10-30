@@ -15,7 +15,7 @@ setup ("Setup").
 | `nitro-cli/target-arch.patch` | one change to `src/lib.rs` of nitro-cli: the kernel blob name follows `NITRO_CLI_TARGET_ARCH` when it is set, so an x86_64 machine can build an arm64 EIF |
 | `enclave/Dockerfile` | the generic enclave image: static runner and the flags that are the same for every operator (`-setup platform`, the NTS clock, `-record none`). Built into an EIF by `scripts/nitro-eif.sh`. The fixed vsock port map is in its comments |
 | `test-client-ca.pem` | public root certificate of a test PKI (`scripts/make-test-ca.sh`), for a test setup's `allowed_client_ca` (base64 of its DER). Its private key is not in the repo |
-| `kms-key-policy.json.tmpl` | key policy: `Decrypt`/`GenerateDataKey` only with `kms:RecipientAttestation:PCR0/1/2/3`; `Encrypt` for the key admin only with exactly the encryption context `purpose=record-creds` (the record credentials), so the admin cannot make a sealing key (`purpose=sealing`) or a mark log key (`signer-key`), which carry setup_hash (`platform-aws/nitro`, `slashing-log/docs/marklog.md`, "Record keys"); `DescribeKey` and `GetKeyPolicy` for the parent role, which the runner reads at start for key_release_hash (`platform-aws/nitro` ReleaseHash). `platform-aws/nitro/planting_test.go` evaluates these conditions. `scripts/kms-policy.sh` renders it per build to `build/nitro/kms-key-policy-<arch>.json` |
+| `kms-key-policy.json.tmpl` | key policy: `Decrypt`/`GenerateDataKey` only with `kms:RecipientAttestation:PCR0/1/2/3`; `Encrypt` for the key admin only with exactly the encryption context `purpose=record-creds` (the record credentials), so the admin cannot make a sealing key (`purpose=sealing`) or a mark log key (`signer-key`), which carry setup_hash (`platform-aws/nitro`, `slashing-log/docs/marklog.md`, "Record keys"); `DescribeKey`, `GetKeyPolicy` and `ListGrants` for the parent role, which the runner reads at start for key_release_hash and the lock check (`platform-aws/nitro` KeyRule). `platform-aws/nitro/planting_test.go` evaluates these conditions. `scripts/kms-policy.sh` renders it per build to `build/nitro/kms-key-policy-<arch>.json` |
 | `main.tf` | KMS key (PCR0-3), parent role, enclave-enabled EC2 instance, the DynamoDB record table, its writer user, a deny on table writes for the parent role, and an optional inbound rule for the network entry (`entry_cidrs`). Optional `ssh_public_key` and `ssh_cidrs` give a key pair and an SSH rule for the operator. Variables `instance_type` (default `c6g.large`) and `region` (default `eu-central-1`) are the Graviton choice, see "Graviton (arm64)" |
 | `target/main.tf` | a second signer next to a running one, a handover target. Its own root module and state, so no plan of it can change the running signer. It reads the parent role, instance profile, security group and key pair by name. It makes a new KMS key that releases to the target EIF's PCR0..2 alone (the same PCR3, the parent role's read of the key and its policy, the admin's `record-creds` encrypt) and, with `instance = true`, a second `c6g.large` parent. The admin encrypts a second access key of the record writer under the new key. `scripts/tf-validate.sh` validates it |
 | `parent-run.sh` | parent setup: allocator, one vsock-proxy per route of the signer's setup (KMS, STS, the coarse-time host, the mark bucket, four NTS-KE), the host agent with the setup (`SETUP`), udprelay, `nitro-cli run-enclave`, the forwarder (network entry). Runs on x86_64 and arm64 parents (`SETUP`, `CPU_COUNT`, `MEMORY_MIB`) |
@@ -55,8 +55,32 @@ SETUP=signer-2.bin platform-aws/deploy/parent-run.sh               # on the pare
   `kms:PutKeyPolicy`, so this holds fully only once the key policy is
   locked. A runner whose setup is on mainnet refuses to start until it is:
   no principal may hold PutKeyPolicy, CreateGrant, ImportKeyMaterial or
-  ReplicateKey (`signer-protocol/docs/protocol.md`, "Key rule lock"). The
-  key policy template does not pass that check.
+  ReplicateKey, Decrypt and GenerateDataKey need literal PCR0, PCR1 and
+  PCR2 values, and the key may have no grants
+  (`signer-protocol/docs/protocol.md`, "Key rule lock"). The key policy
+  template does not pass that check. The no-grants rule counts grants
+  that AWS services make too (EBS, S3 or DynamoDB encryption with the
+  key), so the signer's key must serve no other service.
+- Before the lock the admin can still allow itself `kms:Encrypt` under
+  the sealing context and leave a blob of a key it knows at
+  `sealing/datakey.kms`. The runner uses a stored sealing blob only when
+  the store also lists an object under `shares/`. On a store without
+  one it copies the blob to `sealing/datakey.kms.ignored-<hash>`, logs a
+  warning and makes a new key. If shares were only missing at that start
+  (a partial restore, a late mount), put the copy back as
+  `sealing/datakey.kms` next to them. The share check is weak on its
+  own: any object under `shares/` passes it. The barrier behind it is
+  the mark log, whose claim refuses stored shares without a record that
+  opens, but before the lock the admin can plant such a record too
+  (`kms:Encrypt` under a mark log key's context). So for mainnet, create
+  the key with its final, locked policy, or, if the key had a mutable
+  phase, check its CloudTrail history before the first start: no
+  `CreateGrant`, no `Encrypt` under a context other than
+  `purpose=record-creds`, and every `PutKeyPolicy` reviewed. To create
+  it locked, `aws kms create-key --policy` needs
+  `--bypass-policy-lockout-safety-check`: without it KMS refuses a
+  policy that does not let the caller change it later, which is the
+  point here.
 - The routes follow from the setup over a fixed port map: KMS and STS of
   the key release region on vsock 8000 and 8001, `www.cloudflare.com` on
   8002, the mark bucket on 8004, NTS-KE on 8005 to 8008, and the setup's
