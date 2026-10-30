@@ -25,7 +25,8 @@
 #      working does not pass as a clean build.
 #   4. The NTS clock (github.com/lidofinance/tee-signer/trusted-time/nts, tag nts) is in the cloud builds
 #      and not in the dev builds; the UDP relay's package only in AWS builds.
-#   5. Development and operator packages stay out of runners. The dev platform
+#   5. Development and operator packages stay out of runners (signer-admin,
+#      governance/setuptext and the others in package_cloud). The dev platform
 #      requires platform_dev. Protocol, core and time packages stay independent
 #      of the runner and cloud integrations.
 #
@@ -87,6 +88,8 @@ package_cloud() {
     github.com/lidofinance/tee-signer/devkit|github.com/lidofinance/tee-signer/devkit/*|github.com/lidofinance/tee-signer/tests|github.com/lidofinance/tee-signer/tests/*|github.com/lidofinance/tee-signer/signer-admin|github.com/lidofinance/tee-signer/signer-admin/*|github.com/lidofinance/tee-signer/web3signer-api|github.com/lidofinance/tee-signer/web3signer-api/*|github.com/lidofinance/tee-signer/signer-core/software|github.com/lidofinance/tee-signer/signer-core/software/*) echo none ;;
     # The UDP relay: its client is the Nitro enclave's NTP path.
     github.com/lidofinance/tee-signer/platform-aws/nitro|github.com/lidofinance/tee-signer/platform-aws/nitro/*|github.com/lidofinance/tee-signer/platform-aws/hostagent|github.com/lidofinance/tee-signer/platform-aws/hostagent/*|github.com/lidofinance/tee-signer/platform-aws/udprelay) echo aws ;;
+    # The human form of setups and updates: for the operator tools only.
+    github.com/lidofinance/tee-signer/governance/setuptext|github.com/lidofinance/tee-signer/governance/setuptext/*) echo none ;;
     # NTS test servers never belong in a binary.
     github.com/lidofinance/tee-signer/trusted-time/nts/ntstest) echo none ;;
     github.com/lidofinance/tee-signer/platform-azure/azure|github.com/lidofinance/tee-signer/platform-azure/azure/*) echo azure ;;

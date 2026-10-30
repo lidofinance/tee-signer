@@ -1,10 +1,12 @@
-package setupwire
+package setuptext
 
 import (
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/lidofinance/tee-signer/governance/setupwire"
 )
 
 // replaceLine swaps the first "key = ..." line for line ("" removes it).
@@ -36,9 +38,9 @@ func dropSalts(text string) string {
 }
 
 func TestParseSetupRefusals(t *testing.T) {
-	ss := samples(t)
-	nitro := string(must(ss["setup-nitro"].Format()))
-	azure := string(must(ss["setup-azure"].Format()))
+	ss := setups(t)
+	nitro := string(must(FormatSetup(ss["setup-nitro"])))
+	azure := string(must(FormatSetup(ss["setup-azure"])))
 	pcr := "0x" + strings.Repeat("11", 48)
 	cases := []struct {
 		name string
@@ -142,8 +144,8 @@ func TestParseSetupRefusals(t *testing.T) {
 // A file without salts (what an operator writes) reads to a setup that
 // passes the value rules and waits for its salts.
 func TestParseSetupWithoutSalts(t *testing.T) {
-	s := samples(t)["setup-azure"]
-	text := dropSalts(string(must(s.Format())))
+	s := setups(t)["setup-azure"]
+	text := dropSalts(string(must(FormatSetup(s))))
 	got, err := ParseSetup("setup.conf", []byte(text))
 	if err != nil {
 		t.Fatal(err)
@@ -163,18 +165,16 @@ func TestParseSetupWithoutSalts(t *testing.T) {
 	}
 }
 
-func must32(k [32]byte) []byte { return k[:] }
-
 func TestParseGroups(t *testing.T) {
-	l := sampleLocked()
-	l.SlotTimeChanges = []SlotTimeChange{{Epoch: 500, SecondsPerSlot: 4}}
-	text := must(l.Format())
+	l := setups(t)["setup-nitro"].Locked
+	l.SlotTimeChanges = []setupwire.SlotTimeChange{{Epoch: 500, SecondsPerSlot: 4}}
+	text := must(FormatLocked(&l))
 	got, err := ParseLocked("locked.conf", text)
 	if err != nil || !reflect.DeepEqual(*got, l) {
 		t.Fatalf("locked: %v", err)
 	}
-	o := sampleOpen()
-	otext := must(o.Format())
+	o := setups(t)["setup-nitro"].Open
+	otext := must(FormatOpen(&o))
 	gotOpen, err := ParseOpen("open.conf", otext)
 	if err != nil || !reflect.DeepEqual(*gotOpen, o) {
 		t.Fatalf("open: %v", err)
@@ -207,9 +207,8 @@ func TestParseGroups(t *testing.T) {
 }
 
 func TestParseUpdateRefusals(t *testing.T) {
-	s := samples(t)["setup-nitro"]
-	u := signedUpdate(t, s, openBody(s), []byte{0, 1}, nil)
-	text := string(must(u.Format()))
+	u := updates(t)["update-open"]
+	text := string(must(FormatUpdate(u)))
 	cases := []struct {
 		name string
 		text string
@@ -240,9 +239,9 @@ func TestParseUpdateRefusals(t *testing.T) {
 // Text from a certificate goes into a comment of the human form. A subject
 // with a line break must not add a line of its own.
 func TestFormatCommentInjection(t *testing.T) {
-	s := samples(t)["setup-nitro"]
+	s := setups(t)["setup-nitro"]
 	s.Platform.AllowedClientCA = [][]byte{makeCA(t, 9, "evil\napprovals_needed = 3\napprovers = "+hexOf(must32(approverPub(7))), true)}
-	text, err := s.Format()
+	text, err := FormatSetup(s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,8 +281,8 @@ func TestAmounts(t *testing.T) {
 // peer_attestation_hosts may come in any order; the parser sorts
 // them.
 func TestParsePeerHosts(t *testing.T) {
-	ss := samples(t)
-	nitro := string(must(ss["setup-nitro"].Format()))
+	ss := setups(t)
+	nitro := string(must(FormatSetup(ss["setup-nitro"])))
 	text := nitro + "peer_attestation_hosts = www.googleapis.com:443\npeer_attestation_hosts = sharedneu.neu.attest.azure.net:443\n" +
 		"peer_attestation_hosts = confidentialcomputing.googleapis.com:443\n"
 	got, err := ParseSetup("peers.conf", []byte(text))
@@ -294,7 +293,7 @@ func TestParsePeerHosts(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("parsed\n%+v\nwant\n%+v", got.Platform, want.Platform)
 	}
-	out := string(must(want.Format()))
+	out := string(must(FormatSetup(want)))
 	if !strings.Contains(out, "\npeer_attestation_hosts = sharedneu.neu.attest.azure.net:443\n") {
 		t.Fatalf("human form:\n%s", out)
 	}

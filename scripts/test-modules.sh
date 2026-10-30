@@ -42,7 +42,7 @@ checks() {
       go vet -tags platform_aws ./... && go test $RACE -count=1 -v -tags platform_aws ./transport || return 1 ;;
     governance)
       go test $RACE -count=1 -v ./... || return 1
-      go vet -tags testnet ./... && go test $RACE -count=1 -v -tags testnet ./setupwire ./flavor ./handoverorder || return 1 ;;
+      go vet -tags testnet ./... && go test $RACE -count=1 -v -tags testnet ./setupwire ./setuptext ./flavor ./handoverorder || return 1 ;;
     tee-signer)
       vet_builds || return 1
       local tags

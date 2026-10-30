@@ -1,4 +1,9 @@
-package setupwire
+// Package setuptext is the human form of setups, config groups and
+// config updates: "key = value" text that operators write and approvers
+// read before they sign. Only the operator tools use it (signer-admin,
+// setup-tool); a runner reads the binary form (governance/setupwire) and
+// never links this package (scripts/check-deps.sh, scripts/check-imports.sh).
+package setuptext
 
 import (
 	"bytes"
@@ -16,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/buildflavor"
 )
@@ -49,7 +55,7 @@ import (
 // binary -> human -> binary returns the same bytes.
 
 // MaxHuman bounds a human file.
-const MaxHuman = 4 * MaxSetup
+const MaxHuman = 4 * setupwire.MaxSetup
 
 var keyRE = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$`)
 
@@ -291,6 +297,23 @@ func parseAddress(s string) (backend.Address, error) {
 	return backend.Address(b), nil
 }
 
+// The enum names of setupwire, indexed by value.
+var (
+	presetNames     = setupwire.PresetNames()
+	groupNames      = setupwire.GroupNames()
+	imageNames      = setupwire.ImageKindNames()
+	rootDomainNames = setupwire.RootDomainNames()
+)
+
+func enumValue(names []string, s string) (uint8, bool) {
+	for i, n := range names {
+		if n != "" && n == s {
+			return uint8(i), true
+		}
+	}
+	return 0, false
+}
+
 func enumParser(names []string, want string) func(string) (uint8, error) {
 	return func(s string) (uint8, error) {
 		if v, ok := enumValue(names, s); ok {
@@ -356,27 +379,27 @@ func parseBase64(s string) ([]byte, error) {
 }
 
 // parseImage reads "nitro PCR0 PCR1 PCR2" or "azure|gcp|ta HASH".
-func parseImage(s string) (Image, error) {
+func parseImage(s string) (setupwire.Image, error) {
 	f := strings.Fields(s)
 	if len(f) == 0 {
-		return Image{}, errors.New("want KIND MEASUREMENT")
+		return setupwire.Image{}, errors.New("want KIND MEASUREMENT")
 	}
 	k, ok := enumValue(imageNames, f[0])
 	if !ok {
-		return Image{}, fmt.Errorf("kind %q, want nitro, azure, gcp or ta", f[0])
+		return setupwire.Image{}, fmt.Errorf("kind %q, want nitro, azure, gcp or ta", f[0])
 	}
-	im := Image{Kind: ImageKind(k)}
+	im := setupwire.Image{Kind: setupwire.ImageKind(k)}
 	parts := 1
-	if im.Kind == ImageNitro {
+	if im.Kind == setupwire.ImageNitro {
 		parts = 3
 	}
 	if len(f) != 1+parts {
-		return Image{}, fmt.Errorf("a %s image takes %d hex values", im.Kind, parts)
+		return setupwire.Image{}, fmt.Errorf("a %s image takes %d hex values", im.Kind, parts)
 	}
 	for _, h := range f[1:] {
 		b, err := parseHex(h, im.Kind.Size()/parts)
 		if err != nil {
-			return Image{}, err
+			return setupwire.Image{}, err
 		}
 		im.Measurement = append(im.Measurement, b...)
 	}
@@ -384,75 +407,57 @@ func parseImage(s string) (Image, error) {
 }
 
 // parseFork reads "EPOCH VERSION".
-func parseFork(s string) (Fork, error) {
+func parseFork(s string) (setupwire.Fork, error) {
 	f := strings.Fields(s)
 	if len(f) != 2 {
-		return Fork{}, errors.New("want EPOCH VERSION")
+		return setupwire.Fork{}, errors.New("want EPOCH VERSION")
 	}
 	e, err := parseU64(f[0])
 	if err != nil {
-		return Fork{}, err
+		return setupwire.Fork{}, err
 	}
 	v, err := parseVersion(f[1])
-	return Fork{Epoch: e, Version: v}, err
+	return setupwire.Fork{Epoch: e, Version: v}, err
 }
 
 // parseApproval reads "POSITION SIGNATURE".
-func parseApproval(s string) (Approval, error) {
+func parseApproval(s string) (setupwire.Approval, error) {
 	f := strings.Fields(s)
 	if len(f) != 2 {
-		return Approval{}, errors.New("want POSITION SIGNATURE")
+		return setupwire.Approval{}, errors.New("want POSITION SIGNATURE")
 	}
 	pos, err := parseUint(8)(f[0])
 	if err != nil {
-		return Approval{}, err
+		return setupwire.Approval{}, err
 	}
 	sig, err := parseHex(f[1], 64)
 	if err != nil {
-		return Approval{}, err
+		return setupwire.Approval{}, err
 	}
-	return Approval{Position: uint8(pos), Signature: [64]byte(sig)}, nil
+	return setupwire.Approval{Position: uint8(pos), Signature: [64]byte(sig)}, nil
 }
 
 // parseSlotTime reads "EPOCH SECONDS".
-func parseSlotTime(s string) (SlotTimeChange, error) {
+func parseSlotTime(s string) (setupwire.SlotTimeChange, error) {
 	f := strings.Fields(s)
 	if len(f) != 2 {
-		return SlotTimeChange{}, errors.New("want EPOCH SECONDS_PER_SLOT")
+		return setupwire.SlotTimeChange{}, errors.New("want EPOCH SECONDS_PER_SLOT")
 	}
 	e, err := parseU64(f[0])
 	if err != nil {
-		return SlotTimeChange{}, err
+		return setupwire.SlotTimeChange{}, err
 	}
 	secs, err := parseU64(f[1])
-	return SlotTimeChange{Epoch: e, SecondsPerSlot: secs}, err
+	return setupwire.SlotTimeChange{Epoch: e, SecondsPerSlot: secs}, err
 }
 
-// leafNames are the leaf names of each group, in leaf order.
-var (
-	publicLeafNames = fieldNames((&Setup{}).publicFields())
-	lockedLeafNames = fieldNames((&Locked{}).fields())
-	openLeafNames   = fieldNames((&Open{}).fields())
-)
-
-func fieldNames(fs []field) []string {
-	out := make([]string, len(fs))
-	for i, f := range fs {
-		out[i] = f.name
-	}
-	return out
-}
-
-// LeafNames are the names of the leaves of the public part and of the two
-// groups, in leaf order.
-func LeafNames() (public, locked, open []string) {
-	return slices.Clone(publicLeafNames), slices.Clone(lockedLeafNames), slices.Clone(openLeafNames)
-}
+// The leaf names of the public part and of the two groups, in leaf order.
+var publicLeafNames, lockedLeafNames, openLeafNames = setupwire.LeafNames()
 
 const saltPrefix = "salt."
 
 // salts reads salt.NAME for every name: all of them, or none (nil).
-func (p *parser) salts(names []string) Salts {
+func (p *parser) salts(names []string) setupwire.Salts {
 	if p.err != nil {
 		return nil
 	}
@@ -468,7 +473,7 @@ func (p *parser) salts(names []string) Salts {
 		}
 		return nil
 	}
-	out := make(Salts, len(names))
+	out := make(setupwire.Salts, len(names))
 	for i, n := range names {
 		out[i] = scalar(p, saltPrefix+n, parse32)
 	}
@@ -478,7 +483,7 @@ func (p *parser) salts(names []string) Salts {
 // ParseSetup reads a human setup file. name is used in errors. A file
 // without salts gives a setup that passes CheckValues but not Check:
 // signer-config setup draws its salts.
-func ParseSetup(name string, data []byte) (*Setup, error) {
+func ParseSetup(name string, data []byte) (*setupwire.Setup, error) {
 	p, err := newParser(name, data)
 	if err != nil {
 		return nil, err
@@ -487,10 +492,10 @@ func ParseSetup(name string, data []byte) (*Setup, error) {
 	switch {
 	case !ok && p.err == nil:
 		p.err = fmt.Errorf("%s: setup_format_version is missing", name)
-	case ok && version != strconv.Itoa(FormatVersion):
-		p.fail(n, "setup_format_version", fmt.Errorf("%q, want %d", version, FormatVersion))
+	case ok && version != strconv.Itoa(setupwire.FormatVersion):
+		p.fail(n, "setup_format_version", fmt.Errorf("%q, want %d", version, setupwire.FormatVersion))
 	}
-	s := &Setup{}
+	s := &setupwire.Setup{}
 	s.SignerName = scalar(p, "signer_name", parseText)
 	s.ClusterID = scalar(p, "cluster_id", parse32)
 	s.HandoverGeneration = scalar(p, "handover_generation", parseU64)
@@ -501,14 +506,14 @@ func ParseSetup(name string, data []byte) (*Setup, error) {
 	p.platform(&s.Platform)
 	p.locked(&s.Locked)
 	p.open(&s.Open)
-	s.PolicySalts = PolicySalts{Public: p.salts(publicLeafNames), Locked: p.salts(lockedLeafNames), Open: p.salts(openLeafNames)}
+	s.PolicySalts = setupwire.PolicySalts{Public: p.salts(publicLeafNames), Locked: p.salts(lockedLeafNames), Open: p.salts(openLeafNames)}
 	if ps := optional(p, "platform_salt", parse32); ps != nil {
 		s.PlatformSalt = *ps
 	}
 	if err := p.done(); err != nil {
 		return nil, err
 	}
-	if s.unsalted() {
+	if !s.Salted() {
 		if err := s.CheckValues(); err != nil {
 			return nil, fmt.Errorf("%s: %w", name, err)
 		}
@@ -520,19 +525,13 @@ func ParseSetup(name string, data []byte) (*Setup, error) {
 	return s, nil
 }
 
-// unsalted reports whether the setup has no salt at all.
-func (s *Setup) unsalted() bool {
-	p := &s.PolicySalts
-	return p.Public == nil && p.Locked == nil && p.Open == nil && s.PlatformSalt == [32]byte{}
-}
-
 // ParseLocked reads a human file of the locked group's values (no salts).
-func ParseLocked(name string, data []byte) (*Locked, error) {
+func ParseLocked(name string, data []byte) (*setupwire.Locked, error) {
 	p, err := newParser(name, data)
 	if err != nil {
 		return nil, err
 	}
-	l := &Locked{}
+	l := &setupwire.Locked{}
 	p.locked(l)
 	if err := p.done(); err != nil {
 		return nil, err
@@ -544,12 +543,12 @@ func ParseLocked(name string, data []byte) (*Locked, error) {
 }
 
 // ParseOpen reads a human file of the open group's values (no salts).
-func ParseOpen(name string, data []byte) (*Open, error) {
+func ParseOpen(name string, data []byte) (*setupwire.Open, error) {
 	p, err := newParser(name, data)
 	if err != nil {
 		return nil, err
 	}
-	o := &Open{}
+	o := &setupwire.Open{}
 	p.open(o)
 	if err := p.done(); err != nil {
 		return nil, err
@@ -560,10 +559,10 @@ func ParseOpen(name string, data []byte) (*Open, error) {
 	return o, nil
 }
 
-// ParseUpdateBody reads the human form of an update body (what Format
-// writes for signer-config show). Without salts it passes CheckValues
+// ParseUpdateBody reads the human form of an update body (what
+// FormatUpdateBody writes for signer-config show). Without salts it passes CheckValues
 // only.
-func ParseUpdateBody(name string, data []byte) (*UpdateBody, error) {
+func ParseUpdateBody(name string, data []byte) (*setupwire.UpdateBody, error) {
 	p, err := newParser(name, data)
 	if err != nil {
 		return nil, err
@@ -585,13 +584,13 @@ func ParseUpdateBody(name string, data []byte) (*UpdateBody, error) {
 }
 
 // ParseUpdate reads the human form of a signed update.
-func ParseUpdate(name string, data []byte) (*Update, error) {
+func ParseUpdate(name string, data []byte) (*setupwire.Update, error) {
 	p, err := newParser(name, data)
 	if err != nil {
 		return nil, err
 	}
-	u := &Update{Body: *p.body()}
-	byPos := func(a, b Approval) int { return cmp.Compare(a.Position, b.Position) }
+	u := &setupwire.Update{Body: *p.body()}
+	byPos := func(a, b setupwire.Approval) int { return cmp.Compare(a.Position, b.Position) }
 	u.Approvals = sortedSet(p, "approver_signature", listOf(p, "approver_signature", parseApproval), byPos)
 	u.NewSet = sortedSet(p, "new_key_signature", listOf(p, "new_key_signature", parseApproval), byPos)
 	if err := p.done(); err != nil {
@@ -603,17 +602,17 @@ func ParseUpdate(name string, data []byte) (*Update, error) {
 	return u, nil
 }
 
-func (p *parser) chain(c *Chain) {
+func (p *parser) chain(c *setupwire.Chain) {
 	c.GenesisValidatorsRoot = scalar(p, "genesis_validators_root", parseRoot)
 	c.GenesisForkVersion = scalar(p, "genesis_fork_version", parseVersion)
 	c.GenesisTime = scalar(p, "genesis_time", parseU64)
 	c.SecondsPerSlot = scalar(p, "seconds_per_slot", parseU64)
 	c.SlotsPerEpoch = scalar(p, "slots_per_epoch", parseU64)
-	c.Preset = Preset(scalar(p, "preset", enumParser(presetNames, "mainnet or minimal")))
+	c.Preset = setupwire.Preset(scalar(p, "preset", enumParser(presetNames, "mainnet or minimal")))
 	c.VoluntaryExitForkVersion = scalar(p, "voluntary_exit_fork_version", parseVersion)
 }
 
-func (p *parser) safety(s *Safety) {
+func (p *parser) safety(s *setupwire.Safety) {
 	s.MaxSignEpochsAheadOfClock = scalar(p, "max_sign_epochs_ahead_of_clock", parseU64)
 	s.SlashingMarkPrewrite.BlockSlots = scalar(p, "slashing_mark_prewrite.block_slots", parseU64)
 	s.SlashingMarkPrewrite.SourceEpochs = scalar(p, "slashing_mark_prewrite.source_epochs", parseU64)
@@ -622,15 +621,15 @@ func (p *parser) safety(s *Safety) {
 
 // The keys of the platform-dependent parts, indexed by platform.
 var (
-	storeKeys = [][]string{PlatformNitro: {"bucket", "region"}, PlatformAzure: {"account", "container", "subscription", "resource_group"},
-		PlatformGCP: {"bucket"}, PlatformDev: {"dir"}}
-	keyReleaseKeys = [][]string{PlatformNitro: {"region", "kms_key_id"}, PlatformAzure: {"maa_endpoint", "akv_endpoint", "kid"},
-		PlatformGCP: {"wif_provider", "kms_key", "attest_audience"}, PlatformDev: {}}
+	storeKeys = [][]string{setupwire.PlatformNitro: {"bucket", "region"}, setupwire.PlatformAzure: {"account", "container", "subscription", "resource_group"},
+		setupwire.PlatformGCP: {"bucket"}, setupwire.PlatformDev: {"dir"}}
+	keyReleaseKeys = [][]string{setupwire.PlatformNitro: {"region", "kms_key_id"}, setupwire.PlatformAzure: {"maa_endpoint", "akv_endpoint", "kid"},
+		setupwire.PlatformGCP: {"wif_provider", "kms_key", "attest_audience"}, setupwire.PlatformDev: {}}
 )
 
 // part reads prefix.KEY for the keys of platform pl, and refuses the keys
 // of the other platforms.
-func (p *parser) part(pl Platform, prefix string, keys [][]string) map[string]string {
+func (p *parser) part(pl setupwire.Platform, prefix string, keys [][]string) map[string]string {
 	if p.err != nil {
 		return nil
 	}
@@ -650,14 +649,14 @@ func (p *parser) part(pl Platform, prefix string, keys [][]string) map[string]st
 	return out
 }
 
-func (p *parser) store(pl Platform, prefix string) Store {
+func (p *parser) store(pl setupwire.Platform, prefix string) setupwire.Store {
 	v := p.part(pl, prefix, storeKeys)
-	return Store{Bucket: v["bucket"], Region: v["region"], Account: v["account"], Container: v["container"],
+	return setupwire.Store{Bucket: v["bucket"], Region: v["region"], Account: v["account"], Container: v["container"],
 		Subscription: v["subscription"], ResourceGroup: v["resource_group"], Dir: v["dir"]}
 }
 
-func (p *parser) platform(c *PlatformConfig) {
-	c.Platform = scalar(p, "platform", ParsePlatform)
+func (p *parser) platform(c *setupwire.PlatformConfig) {
+	c.Platform = scalar(p, "platform", setupwire.ParsePlatform)
 	c.AllowedClientCA = sortedSet(p, "allowed_client_ca", listOf(p, "allowed_client_ca", parseBase64), bytes.Compare)
 	c.SlashingLogStore = p.store(c.Platform, "slashing_log_store")
 	if p.has("encrypted_state_store.") {
@@ -665,7 +664,7 @@ func (p *parser) platform(c *PlatformConfig) {
 		c.EncryptedStateStore = &st
 	}
 	v := p.part(c.Platform, "sealing_key_release", keyReleaseKeys)
-	c.SealingKeyRelease = KeyRelease{Region: v["region"], KMSKeyID: v["kms_key_id"], MAAEndpoint: v["maa_endpoint"],
+	c.SealingKeyRelease = setupwire.KeyRelease{Region: v["region"], KMSKeyID: v["kms_key_id"], MAAEndpoint: v["maa_endpoint"],
 		AKVEndpoint: v["akv_endpoint"], KID: v["kid"], WIFProvider: v["wif_provider"], KMSKey: v["kms_key"],
 		AttestAudience: v["attest_audience"]}
 	if a := optional(p, "sealing_key_release.no_lock_accepted", parseBool); a != nil {
@@ -678,13 +677,13 @@ func (p *parser) platform(c *PlatformConfig) {
 		listOf(p, "peer_attestation_hosts", parseEndpoint), strings.Compare)
 }
 
-func parseEndpoint(s string) (string, error) { return s, CheckEndpoint(s) }
+func parseEndpoint(s string) (string, error) { return s, setupwire.CheckEndpoint(s) }
 
-func (p *parser) locked(l *Locked) {
+func (p *parser) locked(l *setupwire.Locked) {
 	l.Approvers.Keys = values(listOf(p, "approvers", parse32))
 	l.Approvers.ApprovalsNeeded = uint8(scalar(p, "approvals_needed", parseUint(8)))
 	l.ChangeDelaySeconds = optional(p, "change_delay_seconds", parseU64)
-	l.AllowedImageMeasurements = sortedSet(p, "allowed_image_measurements", listOf(p, "allowed_image_measurements", parseImage), compareImages)
+	l.AllowedImageMeasurements = sortedSet(p, "allowed_image_measurements", listOf(p, "allowed_image_measurements", parseImage), setupwire.CompareImages)
 	l.AllowedFeeRecipients = sortedSet(p, "allowed_fee_recipients", listOf(p, "allowed_fee_recipients", parseAddress),
 		func(a, b backend.Address) int { return bytes.Compare(a[:], b[:]) })
 	l.BuilderGasLimitMin = scalar(p, "builder_gas_limit_min", parseU64)
@@ -705,31 +704,31 @@ func (p *parser) locked(l *Locked) {
 		l.BareRootDomains |= 1 << d
 	}
 	l.SlotTimeChanges = sortedSet(p, "slot_time_changes", listOf(p, "slot_time_changes", parseSlotTime),
-		func(a, b SlotTimeChange) int { return cmp.Compare(a.Epoch, b.Epoch) })
+		func(a, b setupwire.SlotTimeChange) int { return cmp.Compare(a.Epoch, b.Epoch) })
 	l.AllowedBuilderRequestAuthDataRoots = sortedSet(p, "allowed_builder_request_auth_data_roots",
 		listOf(p, "allowed_builder_request_auth_data_roots", parseRoot), func(a, b backend.Root) int { return bytes.Compare(a[:], b[:]) })
 }
 
-func (p *parser) open(o *Open) {
-	o.ForkSchedule = sortedSet(p, "fork_schedule", listOf(p, "fork_schedule", parseFork), func(a, b Fork) int { return cmp.Compare(a.Epoch, b.Epoch) })
+func (p *parser) open(o *setupwire.Open) {
+	o.ForkSchedule = sortedSet(p, "fork_schedule", listOf(p, "fork_schedule", parseFork), func(a, b setupwire.Fork) int { return cmp.Compare(a.Epoch, b.Epoch) })
 	o.GloasForkEpoch = optional(p, "gloas_fork_epoch", parseU64)
 }
 
-func (p *parser) body() *UpdateBody {
-	u := &UpdateBody{}
+func (p *parser) body() *setupwire.UpdateBody {
+	u := &setupwire.UpdateBody{}
 	u.ClusterID = scalar(p, "cluster_id", parse32)
 	u.ChainHash = scalar(p, "chain_hash", parse32)
-	u.Group = Group(scalar(p, "group", enumParser(groupNames, "locked or open")))
+	u.Group = setupwire.Group(scalar(p, "group", enumParser(groupNames, "locked or open")))
 	u.Version = scalar(p, "version", parseU64)
 	u.PrevHash = scalar(p, "prev_hash", parse32)
 	u.ActivateAt = scalar(p, "activate_at", parseU64)
 	switch u.Group {
-	case GroupLocked:
-		u.Locked = &Locked{}
+	case setupwire.GroupLocked:
+		u.Locked = &setupwire.Locked{}
 		p.locked(u.Locked)
 		u.Salts = p.salts(lockedLeafNames)
-	case GroupOpen:
-		u.Open = &Open{}
+	case setupwire.GroupOpen:
+		u.Open = &setupwire.Open{}
 		p.open(u.Open)
 		u.Salts = p.salts(openLeafNames)
 	}
@@ -765,15 +764,15 @@ func unixNote(t uint64) string {
 	return time.Unix(int64(t), 0).UTC().Format(time.RFC3339)
 }
 
-// Format checks the setup and writes its human form.
-func (s *Setup) Format() ([]byte, error) {
+// FormatSetup checks the setup and writes its human form.
+func FormatSetup(s *setupwire.Setup) ([]byte, error) {
 	if err := s.Check(); err != nil {
 		return nil, err
 	}
 	w := &printer{}
-	w.note("Signer setup, format %d (attestation-prover.md, \"Signer changes\"). setup_hash is over policy_root", FormatVersion)
+	w.note("Signer setup, format %d (attestation-prover.md, \"Signer changes\"). setup_hash is over policy_root", setupwire.FormatVersion)
 	w.note("(the salted leaves of the public part and the two groups) and platform_commitment (the private part).")
-	w.kv("setup_format_version", FormatVersion)
+	w.kv("setup_format_version", setupwire.FormatVersion)
 	w.kv("signer_name", s.SignerName)
 	w.kv("cluster_id", hexOf(s.ClusterID[:]))
 	w.kv("handover_generation", s.HandoverGeneration)
@@ -811,13 +810,13 @@ func (s *Setup) Format() ([]byte, error) {
 	return []byte(w.b.String()), nil
 }
 
-func formatSalts(w *printer, names []string, salts Salts) {
+func formatSalts(w *printer, names []string, salts setupwire.Salts) {
 	for i, n := range names {
 		w.kv(saltPrefix+n, hexOf(salts[i][:]))
 	}
 }
 
-func formatPlatform(w *printer, p *PlatformConfig) {
+func formatPlatform(w *printer, p *setupwire.PlatformConfig) {
 	w.kv("platform", p.Platform)
 	for _, der := range p.AllowedClientCA {
 		sum := sha256.Sum256(der)
@@ -842,7 +841,7 @@ func formatPlatform(w *printer, p *PlatformConfig) {
 		w.kv("sealing_key_release.no_lock_accepted", true)
 	}
 	if k.UnsafeSingleKeyAccepted {
-		w.note("UNSAFE: %s", UnsafeSingleKeyWarning)
+		w.note("UNSAFE: %s", setupwire.UnsafeSingleKeyWarning)
 		w.kv("sealing_key_release.unsafe_single_key_accepted", true)
 	}
 	if len(p.PeerAttestationHosts) > 0 {
@@ -853,7 +852,7 @@ func formatPlatform(w *printer, p *PlatformConfig) {
 	}
 }
 
-func formatStore(w *printer, pl Platform, prefix string, s *Store) {
+func formatStore(w *printer, pl setupwire.Platform, prefix string, s *setupwire.Store) {
 	vals := map[string]string{"bucket": s.Bucket, "region": s.Region, "account": s.Account, "container": s.Container,
 		"subscription": s.Subscription, "resource_group": s.ResourceGroup, "dir": s.Dir}
 	for _, name := range storeKeys[pl] {
@@ -861,7 +860,7 @@ func formatStore(w *printer, pl Platform, prefix string, s *Store) {
 	}
 }
 
-func formatLocked(w *printer, l *Locked) {
+func formatLocked(w *printer, l *setupwire.Locked) {
 	w.note("locked: public; a change waits out the change delay")
 	for _, k := range l.Approvers.Keys {
 		w.kv("approvers", hexOf(k[:]))
@@ -875,7 +874,7 @@ func formatLocked(w *printer, l *Locked) {
 			buildflavor.DefaultFlavorTimeLock, buildflavor.TestnetFlavorTimeLock)
 	}
 	for _, im := range l.AllowedImageMeasurements {
-		if im.Kind == ImageNitro {
+		if im.Kind == setupwire.ImageNitro {
 			w.kv("allowed_image_measurements", fmt.Sprintf("%s %s %s %s", im.Kind, hexOf(im.Measurement[:48]), hexOf(im.Measurement[48:96]), hexOf(im.Measurement[96:])))
 		} else {
 			w.kv("allowed_image_measurements", fmt.Sprintf("%s %s", im.Kind, hexOf(im.Measurement)))
@@ -920,7 +919,7 @@ func formatLocked(w *printer, l *Locked) {
 	}
 }
 
-func formatOpen(w *printer, o *Open) {
+func formatOpen(w *printer, o *setupwire.Open) {
 	w.note("open: public; a change applies without a change delay")
 	for _, f := range o.ForkSchedule {
 		w.kv("fork_schedule", fmt.Sprintf("%d %s", f.Epoch, hexOf(f.Version[:])))
@@ -930,8 +929,8 @@ func formatOpen(w *printer, o *Open) {
 	}
 }
 
-// Format checks the group and writes its human form (no salts).
-func (l *Locked) Format() ([]byte, error) {
+// FormatLocked checks the group and writes its human form (no salts).
+func FormatLocked(l *setupwire.Locked) ([]byte, error) {
 	if err := l.Check(); err != nil {
 		return nil, err
 	}
@@ -940,8 +939,8 @@ func (l *Locked) Format() ([]byte, error) {
 	return []byte(w.b.String()), nil
 }
 
-// Format checks the group and writes its human form (no salts).
-func (o *Open) Format() ([]byte, error) {
+// FormatOpen checks the group and writes its human form (no salts).
+func FormatOpen(o *setupwire.Open) ([]byte, error) {
 	if err := o.Check(); err != nil {
 		return nil, err
 	}
@@ -950,7 +949,7 @@ func (o *Open) Format() ([]byte, error) {
 	return []byte(w.b.String()), nil
 }
 
-func formatBody(w *printer, u *UpdateBody) {
+func formatBody(w *printer, u *setupwire.UpdateBody) {
 	w.note("Config update (setup-phase.md, section 6). Approvers sign the header: these fields and the root of the group's salted leaves.")
 	w.kv("cluster_id", hexOf(u.ClusterID[:]))
 	w.kv("chain_hash", hexOf(u.ChainHash[:]))
@@ -961,7 +960,7 @@ func formatBody(w *printer, u *UpdateBody) {
 	w.kv("activate_at", u.ActivateAt)
 	w.blank()
 	names := openLeafNames
-	if u.Group == GroupLocked {
+	if u.Group == setupwire.GroupLocked {
 		formatLocked(w, u.Locked)
 		names = lockedLeafNames
 	} else {
@@ -972,8 +971,8 @@ func formatBody(w *printer, u *UpdateBody) {
 	formatSalts(w, names, u.Salts)
 }
 
-// Format checks the body and writes its human form.
-func (u *UpdateBody) Format() ([]byte, error) {
+// FormatUpdateBody checks the body and writes its human form.
+func FormatUpdateBody(u *setupwire.UpdateBody) ([]byte, error) {
 	if err := u.Check(); err != nil {
 		return nil, err
 	}
@@ -982,15 +981,15 @@ func (u *UpdateBody) Format() ([]byte, error) {
 	return []byte(w.b.String()), nil
 }
 
-// Format checks the signed update and writes its human form.
-func (u *Update) Format() ([]byte, error) {
-	if err := u.check(); err != nil {
+// FormatUpdate checks the signed update and writes its human form.
+func FormatUpdate(u *setupwire.Update) ([]byte, error) {
+	if err := u.Check(); err != nil {
 		return nil, err
 	}
 	w := &printer{}
 	formatBody(w, &u.Body)
 	w.blank()
-	w.note("signatures over %s and the header, by position", CtxConfigUpdate)
+	w.note("signatures over %s and the header, by position", setupwire.CtxConfigUpdate)
 	for _, a := range u.Approvals {
 		w.kv("approver_signature", fmt.Sprintf("%d %s", a.Position, hexOf(a.Signature[:])))
 	}

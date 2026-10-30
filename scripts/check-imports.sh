@@ -6,7 +6,10 @@
 #   2. no import path of the dev repos this tree came from;
 #   3. outside _test.go files, nothing of devkit/ or tests/;
 #   4. every module of this repo that a module imports is required and
-#      replaced in its go.mod, so the module builds on its own.
+#      replaced in its go.mod, so the module builds on its own;
+#   5. outside _test.go files, only the operator tools (signer-admin) and
+#      tests/ import governance/setuptext, the human form of setups, so no
+#      runner package can.
 # Reads the sources only; exits non-zero on the first kind of violation.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -61,8 +64,16 @@ for m in "${mods[@]}"; do
   done <<<"$imports"
 done
 
+# 5: who imports the human form. Imports inside the governance module count too.
+while IFS= read -r f; do
+  case "$f" in
+    signer-admin/*|tests/*|governance/setuptext/*|*_test.go) ;;
+    *) bad "$f imports $P/governance/setuptext (only signer-admin and tests may)" ;;
+  esac
+done < <(grep -rlE --include='*.go' --exclude-dir=.git --exclude-dir=third_party "\"$P/governance/setuptext(/[^\"]*)?\"" . | sed 's#^\./##')
+
 if [ "$fail" != 0 ]; then
   echo "check-imports: FAILED" >&2
   exit 1
 fi
-echo "check-imports: ${#mods[@]} modules, no internal import across modules, devkit and tests only in tests"
+echo "check-imports: ${#mods[@]} modules, no internal import across modules, devkit and tests only in tests, governance/setuptext only in the tools"

@@ -20,7 +20,9 @@ import (
 
 var update = flag.Bool("update", false, "rewrite the golden files in testdata")
 
-const eth = gweiPerETH
+const eth = 1_000_000_000
+
+func must32(k [32]byte) []byte { return k[:] }
 
 // approverKey is test approver i: a key from a fixed seed, so signatures
 // are the same on every run.

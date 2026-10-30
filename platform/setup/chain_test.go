@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lidofinance/tee-signer/governance/setuptext"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 )
 
@@ -56,7 +57,7 @@ func TestChainLinesAndCompare(t *testing.T) {
 			keys[k] = true
 		}
 	}
-	sample, err := os.ReadFile(filepath.Join("..", "..", "governance", "setupwire", "testdata", "setup-nitro.conf"))
+	sample, err := os.ReadFile(filepath.Join("..", "..", "governance", "setuptext", "testdata", "setup-nitro.conf"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +69,7 @@ func TestChainLinesAndCompare(t *testing.T) {
 		human.WriteString(l + "\n")
 	}
 	human.WriteString(lines)
-	s, err := setupwire.ParseSetup("hoodi.conf", []byte(human.String()))
+	s, err := setuptext.ParseSetup("hoodi.conf", []byte(human.String()))
 	if err != nil {
 		t.Fatalf("%v\n%s", err, human.String())
 	}

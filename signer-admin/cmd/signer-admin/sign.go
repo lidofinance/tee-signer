@@ -17,6 +17,7 @@ import (
 
 	"github.com/lidofinance/tee-signer/governance/flavor"
 	"github.com/lidofinance/tee-signer/governance/handoverorder"
+	"github.com/lidofinance/tee-signer/governance/setuptext"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 )
 
@@ -96,7 +97,7 @@ func cmdShow(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	text, err := body.Format()
+	text, err := setuptext.FormatUpdateBody(body)
 	if err != nil {
 		return err
 	}

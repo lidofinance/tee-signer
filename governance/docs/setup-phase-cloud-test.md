@@ -191,7 +191,7 @@ Set these once per shell, from the deploy settings of each cloud.
    `slashing_log_min_lock_days = 1`, and the rest of `locked`: approvers 1
    to 3, `approvals_needed = 2`, `change_delay_seconds = 0`, the exit and
    balance values and `withdrawal_credentials`
-   (`governance/setupwire/testdata/setup-gcp.conf` lists them, without its
+   (`governance/setuptext/testdata/setup-gcp.conf` lists them, without its
    `salt.*` and `platform_salt` lines: `signer-config setup` draws the
    salts). Then one section per signer:
 
