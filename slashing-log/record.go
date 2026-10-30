@@ -46,6 +46,7 @@ type Record struct {
 	Sig    [ed25519.SignatureSize]byte
 
 	body []byte // the signed bytes, as read (Parse)
+	v1   bool   // read as SMARK1 (Parse): it encodes back without the share set
 }
 
 // ConfigState is the config state a record carries (section 6): per group
@@ -280,7 +281,11 @@ func putFlag(b []byte, on bool) []byte {
 
 func (r *Record) encodeBody() []byte {
 	be := binary.BigEndian
-	b := append([]byte(recordMagic), r.Setup[:]...)
+	magic := recordMagic
+	if r.v1 {
+		magic = recordMagicV1
+	}
+	b := append([]byte(magic), r.Setup[:]...)
 	b = append(b, byte(len(r.Signer)))
 	b = append(b, r.Signer...)
 	b = be.AppendUint64(b, r.Version)
@@ -333,6 +338,9 @@ func (r *Record) encodeBody() []byte {
 	b = putFlag(b, r.SourceGate != nil)
 	if r.SourceGate != nil {
 		b = be.AppendUint64(b, *r.SourceGate)
+	}
+	if r.v1 {
+		return b
 	}
 	b = putFlag(b, r.Shares != nil)
 	if s := r.Shares; s != nil {
@@ -400,7 +408,7 @@ func Parse(enc []byte) (*Record, error) {
 	}
 	body := enc[:len(enc)-ed25519.SignatureSize]
 	rd := &recReader{b: body[len(recordMagic):]}
-	r := &Record{}
+	r := &Record{v1: !v2}
 	rd.fixed(r.Setup[:])
 	r.Signer = string(rd.take(int(rd.u8())))
 	r.Version, r.PrevVersion = rd.u64(), rd.u64()
