@@ -99,7 +99,7 @@ func readKeyT(t *testing.T, path string) []byte {
 // source's attested state and the target's cloud.json, the approvers sign,
 // push sends the order to the source only, the source holds it pending for
 // the time lock, then active. A draft whose not_after comes before the
-// source would act is refused, and so is a target image off the list.
+// source would act is refused, and so is a target on another cloud.
 //
 // SIGNER_ADMIN_HANDOVER_RUNNER names a runner-dev (a dev release build), which serves
 // HANDOVER_ORDER as a source (runner/server/handover_source.go). This
@@ -211,14 +211,45 @@ func TestHandoverFlowDevRunner(t *testing.T) {
 	if err == nil || count(out, `^s1 refused: .*one order at a time`) != 1 {
 		t.Fatalf("a second order: %v\n%s", err, out)
 	}
-	// The target's image must be on the source's list: a nitro target is
-	// not on the dev setup's.
-	ncloud := writeJSONFile(t, filepath.Join(dir, "s1c", "cloud.json"), map[string]any{
+	// A nitro target is on another cloud than the dev source: refused.
+	ncloud := nitroTargetCloud(t, filepath.Join(dir, "s1c"), cert, key, th)
+	out = failTool(t, "handover-draft", "-cluster", cl, "-signer", "s1", "-target-cloud", ncloud, "-out", filepath.Join(dir, "n.bin"))
+	wantIn(t, out, "only between runners on the same cloud")
+}
+
+// nitroTargetCloud writes the cloud.json of an aws-nitro target in dir.
+func nitroTargetCloud(t *testing.T, dir, cert, key string, setupHash [32]byte) string {
+	t.Helper()
+	return writeJSONFile(t, filepath.Join(dir, "cloud.json"), map[string]any{
 		"address": "tcp:127.0.0.1:1", "client_cert": cert, "client_key": key,
-		"attestation": map[string]any{"verifier": "aws-nitro", "setup_sha256": hex.EncodeToString(th[:]),
+		"attestation": map[string]any{"verifier": "aws-nitro", "setup_sha256": hex.EncodeToString(setupHash[:]),
 			"nitro_pcrs": map[string]string{"0": strings.Repeat("11", 48), "1": strings.Repeat("12", 48), "2": strings.Repeat("13", 48),
 				"3": strings.Repeat("33", 48)}},
 	})
-	out = failTool(t, "handover-draft", "-cluster", cl, "-signer", "s1", "-target-cloud", ncloud, "-out", filepath.Join(dir, "n.bin"))
-	wantIn(t, out, "not on the allowed-images list")
+}
+
+// handover-draft refuses a target on another cloud than the source before
+// it connects to anything: a dev source and an aws-nitro target. The
+// source's cloud.json points at a closed port, so a draft that got past
+// the check would fail on the connection instead.
+func TestHandoverDraftRefusesCrossCloud(t *testing.T) {
+	dir := t.TempDir()
+	ca, cert, key := clientPKI(t, dir)
+	keys := approvers(t, dir, 3)
+	conf := writeFile(t, filepath.Join(dir, "setup.conf"), setupText(dir, ca, genesisTime(), lockedText(keys, 2, 2, fee1), names[:1]...))
+	mustTool(t, "setup", "-out", filepath.Join(dir, "setups"), conf)
+	writeJSONFile(t, filepath.Join(dir, "s1", "cloud.json"), map[string]any{
+		"address": "tcp:127.0.0.1:1", "client_cert": cert, "client_key": key, "attestation": map[string]any{"verifier": "dev"},
+	})
+	cl := writeJSONFile(t, filepath.Join(dir, "cluster.json"), map[string]any{
+		"signers": []map[string]string{{"name": "s1", "cloud": "s1/cloud.json", "setup": "setups/s1.setup"}},
+	})
+	var th [32]byte
+	rand.Read(th[:])
+	ncloud := nitroTargetCloud(t, filepath.Join(dir, "s1b"), cert, key, th)
+	out := failTool(t, "handover-draft", "-cluster", cl, "-signer", "s1", "-target-cloud", ncloud, "-out", filepath.Join(dir, "n.bin"))
+	wantIn(t, out, "target s1b has the aws-nitro verifier, but the source is on dev", "only between runners on the same cloud")
+	if _, err := os.Stat(filepath.Join(dir, "n.bin")); !os.IsNotExist(err) {
+		t.Fatalf("the refused draft was written (stat: %v)", err)
+	}
 }
