@@ -12,7 +12,11 @@
 //     and the +1 absorbs a restart reading that is up to one epoch behind
 //     the last pre-restart reading (two time servers that disagree by a
 //     second across an epoch boundary). It needs no storage, but it is
-//     only as good as the clock (see README.md).
+//     only as good as the clock (see README.md). With the device mark the
+//     core reads the mark once, at the first load: a validator imported
+//     later without history gets the same bounds from its import floor
+//     (ImportFloor; the server puts the block and target bounds into its
+//     own mark, SourceFloor gates the source).
 //
 // Mark log (Mode.MarkLog, package markstore): the core keeps one device
 // mark for every validator, and every raise of it is a record in a locked,
@@ -120,7 +124,11 @@ type Hooks struct {
 
 	mu     namedMutex[hooksMuName]
 	floors map[backend.Pubkey]uint64
-	expect map[backend.Pubkey]bool
+	// deviceFloor is the restart floor epoch LoadDeviceMark applied to the
+	// device mark, which every validator loaded at start takes.
+	deviceFloor    uint64
+	hasDeviceFloor bool
+	expect         map[backend.Pubkey]bool
 	// The source gate (SourceFloor, decideGate): while on, a validator
 	// without vote history of its own (history) signs no vote with a source
 	// below gateFloor. decided: the gate was read from the log or set.
@@ -403,11 +411,20 @@ func (h *Hooks) ExpectRecord(pk backend.Pubkey) {
 	h.expect[pk] = true
 }
 
-// Floor returns the floor epoch applied to pk at load time.
+// Floor returns the floor epoch applied to pk's marks: its own restart
+// floor (per-validator marks), else the device mark's, and at least its
+// import floor (NoteImportFloor), whose block and target bounds the server
+// puts into pk's own mark.
 func (h *Hooks) Floor(pk backend.Pubkey) (uint64, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	f, ok := h.floors[pk]
+	if !ok && h.hasDeviceFloor {
+		f, ok = h.deviceFloor, true
+	}
+	if kf, has := h.keyFloor[pk]; has {
+		f, ok = max(f, kf), true
+	}
 	return f, ok
 }
 
@@ -557,6 +574,9 @@ func (h *Hooks) LoadDeviceMark() (backend.Watermark, bool, error) {
 			fw.SourceEpoch = wm.SourceEpoch
 		}
 		wm, found = Merge(wm, fw), true
+		h.mu.Lock()
+		h.deviceFloor, h.hasDeviceFloor = f, true
+		h.mu.Unlock()
 		h.log.Info("restart from the mark log", "clock_epoch", e, "floor_epoch", f,
 			"log_source", h.mark.SourceEpoch, "log_target", h.mark.TargetEpoch, "log_block_slot", h.mark.BlockSlot,
 			"refuse_target_lte", wm.TargetEpoch, "refuse_source_lt", wm.SourceEpoch, "refuse_block_slot_lte", wm.BlockSlot)
