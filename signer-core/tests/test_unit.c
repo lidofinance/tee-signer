@@ -945,6 +945,63 @@ static void test_repeats_in_run(void)
 }
 
 /*
+ * An import drops the validator's repeat roots: a resend of the last vote or
+ * block after an import that covers it goes to the marks and is refused, and
+ * is not counted as an exact repeat. Imports at the vote, strictly inside it,
+ * and at the block's slot, with both mark scopes.
+ */
+static void test_repeat_dropped_by_import(void)
+{
+    for (uint32_t scope = SC_MARKS_PER_VALIDATOR; scope <= SC_MARKS_PER_DEVICE; scope++) {
+        host_t h = {0};
+        sc_config cfg;
+        sc_signer_stats st;
+        uint8_t sig[96];
+        uint64_t repeats;
+        int rc;
+        make_config(&cfg);
+        cfg.mark_scope = scope;
+        set_epoch(&h, E + 1);
+        sc_signer *s = new_signer(&h, &cfg, 4, 4);
+        vkeys k1 = add_validator(s, 60, SC_INDEX_UNKNOWN);
+        vkeys k2 = add_validator(s, 61, SC_INDEX_UNKNOWN);
+
+        /* Import (E, E) after the vote (E - 1, E). */
+        sc_attestation_data a = att(E - 1, E, 1);
+        CHECK_RC(sc_sign_attestation(s, k1.pk, &a, sig), SC_OK);
+        CHECK_RC(sc_sign_attestation(s, k1.pk, &a, sig), SC_OK); /* a repeat before */
+        sc_watermark at = {0, E, E, SC_WM_HAS_ATTESTATION};
+        CHECK_RC(sc_signer_import(s, k1.pk, cfg.genesis_validators_root, &at), SC_OK);
+        sc_signer_get_stats(s, &st);
+        repeats = st.exact_repeats;
+        rc = sc_sign_attestation(s, k1.pk, &a, sig);
+        CHECK(rc == SC_ERR_SLASH_SOURCE || rc == SC_ERR_SLASH_TARGET);
+        sc_signer_get_stats(s, &st);
+        CHECK(st.exact_repeats == repeats);
+
+        /* Import (E - 2, E - 1), strictly inside the vote (E - 3, E). */
+        a = att(E - 3, E, 2);
+        CHECK_RC(sc_sign_attestation(s, k2.pk, &a, sig), SC_OK);
+        sc_watermark in = {0, E - 2, E - 1, SC_WM_HAS_ATTESTATION};
+        CHECK_RC(sc_signer_import(s, k2.pk, cfg.genesis_validators_root, &in), SC_OK);
+        rc = sc_sign_attestation(s, k2.pk, &a, sig);
+        CHECK(rc == SC_ERR_SLASH_SOURCE || rc == SC_ERR_SLASH_TARGET);
+
+        /* Import the slot of the last block. */
+        sc_beacon_block_header b = blk(E * 32 + 1, 1);
+        CHECK_RC(sc_sign_block(s, k1.pk, &b, sig), SC_OK);
+        CHECK_RC(sc_sign_block(s, k1.pk, &b, sig), SC_OK); /* a repeat before */
+        sc_watermark bt = {E * 32 + 1, 0, 0, SC_WM_HAS_BLOCK};
+        CHECK_RC(sc_signer_import(s, k1.pk, cfg.genesis_validators_root, &bt), SC_OK);
+        sc_signer_get_stats(s, &st);
+        repeats = st.exact_repeats;
+        CHECK_RC(sc_sign_block(s, k1.pk, &b, sig), SC_ERR_SLASH_BLOCK);
+        sc_signer_get_stats(s, &st);
+        CHECK(st.exact_repeats == repeats);
+    }
+}
+
+/*
  * Restart, for per-validator and per-device marks: the validator loads with
  * no repeat roots, so the repeat is refused after the restart (the marks),
  * as is another root at that target or slot.
@@ -2227,6 +2284,48 @@ static sc_proposer_preferences prefs(uint64_t slot, uint64_t index, const sc_con
     return p;
 }
 
+/*
+ * An import drops the Gloas repeat roots too: after an import of the slot,
+ * a resend of the last PTC vote or envelope is refused by the raised slot
+ * bound and is not counted as an exact repeat.
+ */
+static void test_gloas_repeat_dropped_by_import(void)
+{
+    host_t h = {0};
+    sc_config cfg;
+    sc_signer_stats st;
+    uint8_t sig[96];
+    uint64_t repeats;
+    make_gloas_config(&cfg);
+    set_epoch(&h, G);
+    sc_signer *s = new_signer(&h, &cfg, 8, 4);
+    vkeys k = add_validator(s, 44, 1000);
+
+    sc_payload_attestation_data d = ptc(G * 32 + 4, 1);
+    CHECK_RC(sc_sign_payload_attestation(s, k.pk, &d, sig), SC_OK);
+    CHECK_RC(sc_sign_payload_attestation(s, k.pk, &d, sig), SC_OK); /* a repeat before */
+    sc_watermark imp = {G * 32 + 4, 0, 0, SC_WM_HAS_BLOCK};
+    CHECK_RC(sc_signer_import(s, k.pk, cfg.genesis_validators_root, &imp), SC_OK);
+    sc_signer_get_stats(s, &st);
+    repeats = st.exact_repeats;
+    CHECK_RC(sc_sign_payload_attestation(s, k.pk, &d, sig), SC_ERR_EQUIVOCATION);
+    sc_signer_get_stats(s, &st);
+    CHECK(st.exact_repeats == repeats);
+
+    sc_beacon_block_header b = gblock(G * 32 + 6, 1);
+    sc_payload_envelope e = envelope_for(&b, &cfg, 7);
+    CHECK_RC(sc_sign_block(s, k.pk, &b, sig), SC_OK);
+    CHECK_RC(sc_sign_payload_envelope(s, k.pk, &e, sig), SC_OK);
+    CHECK_RC(sc_sign_payload_envelope(s, k.pk, &e, sig), SC_OK); /* a repeat before */
+    imp.block_slot = G * 32 + 6;
+    CHECK_RC(sc_signer_import(s, k.pk, cfg.genesis_validators_root, &imp), SC_OK);
+    sc_signer_get_stats(s, &st);
+    repeats = st.exact_repeats;
+    CHECK_RC(sc_sign_payload_envelope(s, k.pk, &e, sig), SC_ERR_EQUIVOCATION);
+    sc_signer_get_stats(s, &st);
+    CHECK(st.exact_repeats == repeats);
+}
+
 static void test_gloas_preferences(void)
 {
     host_t h = {0};
@@ -3083,6 +3182,7 @@ int main(int argc, char **argv)
     test_table_and_errors();
     test_fork_versions();
     test_repeats_in_run();
+    test_repeat_dropped_by_import();
     test_repeat_restart();
     test_device_marks();
     test_cover_epoch();
@@ -3100,6 +3200,7 @@ int main(int argc, char **argv)
     test_gloas_import();
     test_gloas_sign_root();
     test_gloas_envelope();
+    test_gloas_repeat_dropped_by_import();
     test_gloas_preferences();
     test_builder_auth();
     test_builder_auth_go(data_dir);

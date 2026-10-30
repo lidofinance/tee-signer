@@ -632,7 +632,9 @@ static void op_root(fz_in *in, int v)
 
 static void op_import(fz_in *in, int v)
 {
+    history_t *h = &W.hist[v];
     sc_watermark wm;
+    int rc;
     uint8_t gvr[32];
     uint8_t sel = fz_u8(in);
     memcpy(gvr, W.cfg.genesis_validators_root, 32);
@@ -642,7 +644,33 @@ static void op_import(fz_in *in, int v)
     wm.block_slot = pick_slot(in);
     wm.source_epoch = pick_epoch(in);
     wm.target_epoch = pick_epoch(in);
-    check_status(sc_signer_import(W.s, g_pk[v], gvr, &wm));
+    rc = sc_signer_import(W.s, g_pk[v], gvr, &wm);
+    check_status(rc);
+    if (rc != SC_OK)
+        return;
+    /* The imported maxima join the history with a root no message hashes
+     * to: the vote, and the block slot as a block, PTC vote and envelope
+     * (the import raises the Gloas slot bounds to it). A later vote at their
+     * target or around them, or a later message at that slot, is then a
+     * violation, a repeat that skipped the marks included. They are not
+     * checked against the history: imported data may conflict with what
+     * this signer signed. */
+    if ((wm.flags & SC_WM_HAS_ATTESTATION) && h->natt < HIST) {
+        h->att[h->natt].a = wm.source_epoch;
+        h->att[h->natt].b = wm.target_epoch;
+        memset(h->att[h->natt].root, 0xff, 32);
+        h->natt++;
+    }
+    if (wm.flags & SC_WM_HAS_BLOCK) {
+        signed_t *lists[3] = {h->blk, h->ptc, h->env};
+        int *counts[3] = {&h->nblk, &h->nptc, &h->nenv};
+        for (int i = 0; i < 3; i++)
+            if (*counts[i] < HIST) {
+                lists[i][*counts[i]].a = wm.block_slot;
+                memset(lists[i][*counts[i]].root, 0xff, 32);
+                (*counts[i])++;
+            }
+    }
 }
 
 static void op_policy(fz_in *in)

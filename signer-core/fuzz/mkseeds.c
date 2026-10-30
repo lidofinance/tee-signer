@@ -367,6 +367,38 @@ static void signer_seeds(void)
             put("signer", name, in, n);
         }
     }
+    /* A request, an import of its slot or vote (block and attestation flags,
+     * the same picks), then the request again: the import drops the repeat
+     * roots, so the marks refuse it. */
+    static const uint8_t imp[] = {SC_WM_HAS_BLOCK | SC_WM_HAS_ATTESTATION};
+    static const struct {
+        const char *name;
+        int op;
+    } kinds[] = {{"attestation", OP_ATTESTATION},
+                 {"block", OP_BLOCK},
+                 {"ptc", OP_PTC},
+                 {"envelope", OP_ENVELOPE}};
+    for (size_t fs = 0; fs < sizeof flag_sets; fs++) {
+        for (size_t i = 0; i < sizeof kinds / sizeof kinds[0]; i++) {
+            uint8_t in[HEADER_LEN + 8 * (2 + ARGS_LEN)];
+            size_t n = HEADER_LEN;
+            char name[64];
+            memset(in, 0, HEADER_LEN);
+            in[0] = flag_sets[fs];
+            in[2] = 3;
+            in[3] = 2;
+            in[4] = 7;
+            n = op_block(in, n, OP_TIME, 0, gloas, sizeof gloas);
+            n = op_block(in, n, OP_ADD, 0, add, sizeof add);
+            if (kinds[i].op == OP_ENVELOPE)
+                n = op_block(in, n, OP_BLOCK, 0, NULL, 0);
+            n = op_block(in, n, kinds[i].op, 0, NULL, 0);
+            n = op_block(in, n, OP_IMPORT, 0, imp, sizeof imp);
+            n = op_block(in, n, kinds[i].op, 0, NULL, 0);
+            snprintf(name, sizeof name, "import-f%zu-%s", fs, kinds[i].name);
+            put("signer", name, in, n);
+        }
+    }
 }
 
 int main(int argc, char **argv)
