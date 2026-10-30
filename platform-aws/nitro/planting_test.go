@@ -5,11 +5,13 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"net/http/httptest"
 	"os"
@@ -231,6 +233,8 @@ func TestAnotherSetupOpensNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The first setup sealed a share: from now on the blob counts.
+	store.Put(sharePrefix+"aa01", []byte("sealed share"))
 	again, err := x.keys(one).dataKey(ctx, store)
 	if err != nil || !bytes.Equal(again, k1) {
 		t.Fatalf("restart with the same setup: %v", err)
@@ -279,6 +283,9 @@ func TestPlantedSealingKeyRefused(t *testing.T) {
 	}
 	store, _ := filestore.New(t.TempDir())
 	store.Put(dataKeyBlob, planted)
+	// With a share stored the runner takes the blob as its own: it does not
+	// decrypt, and the start stops.
+	store.Put(sharePrefix+"aa01", []byte("sealed share"))
 	if dek, err := x.keys(setup).dataKey(ctx, store); err == nil || !strings.Contains(err.Error(), "does not decrypt") {
 		t.Fatalf("planted sealing key: %x %v", dek, err)
 	}
@@ -295,5 +302,92 @@ func TestPlantedSealingKeyRefused(t *testing.T) {
 	got, err := x.keys(setup).recordCredentials(ctx, store, "record/writer-credentials.kms")
 	if err != nil || got.AccessKeyID != "AKIDWRITER" || got.SecretAccessKey != "writer-secret" {
 		t.Fatalf("record credentials: %+v %v", got, err)
+	}
+}
+
+// A store whose listing shows no shares, though shares sealed under the
+// stored key exist (a partial restore, a late mount), must not lose that
+// key: the ignored blob stays under another name, and putting it back
+// with the shares opens the old key again.
+func TestIgnoredSealingKeyKept(t *testing.T) {
+	x := newKMSFixture(t)
+	ctx := context.Background()
+	setup := [32]byte{7}
+	store, _ := filestore.New(t.TempDir())
+	k1, err := x.keys(setup).dataKey(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, _ := store.Get(dataKeyBlob)
+
+	// The shares are missing from the store at this start.
+	k2, err := x.keys(setup).dataKey(ctx, store)
+	if err != nil || bytes.Equal(k2, k1) {
+		t.Fatalf("start without shares: %v", err)
+	}
+	names, err := store.List("sealing/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []byte
+	for _, n := range names {
+		if strings.HasPrefix(n, dataKeyBlob+".ignored-") {
+			kept, _ = store.Get(n)
+		}
+	}
+	if !bytes.Equal(kept, original) {
+		t.Fatalf("the original blob is gone: %q", names)
+	}
+
+	// The operator puts the old blob back next to the restored shares.
+	store.Put(dataKeyBlob, kept)
+	store.Put(sharePrefix+"aa01", []byte("sealed share"))
+	if k3, err := x.keys(setup).dataKey(ctx, store); err != nil || !bytes.Equal(k3, k1) {
+		t.Fatalf("restored blob: %v", err)
+	}
+}
+
+// AWS-KMS-02: before the key policy is locked, the key admin holds
+// PutKeyPolicy and can allow itself Encrypt under the sealing context. It
+// plants a blob of a key it knows; the blob still decrypts after the lock.
+// On a store without shares the runner ignores the blob and makes a new
+// key, which it then keeps across restarts once a share is sealed.
+func TestSealingKeyPlantedBeforeLock(t *testing.T) {
+	x := newKMSFixture(t)
+	x.f.adminMay = func(map[string]string) bool { return true } // the policy before the lock
+	ctx := context.Background()
+	setup := [32]byte{7}
+	known := bytes.Repeat([]byte{0x42}, 32)
+	planted, err := x.encrypt(known, x.keys(setup).sealingContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, _ := filestore.New(t.TempDir())
+	store.Put(dataKeyBlob, planted)
+	store.Put("record/writer-credentials.kms", []byte("not a share"))
+	store.Put("wm/aa01", []byte("not a share either"))
+
+	dek, err := x.keys(setup).dataKey(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(dek, known) {
+		t.Fatal("the runner took the planted sealing key")
+	}
+	stored, err := store.Get(dataKeyBlob)
+	if err != nil || bytes.Equal(stored, planted) {
+		t.Fatalf("the planted blob is still stored: %v", err)
+	}
+	// The ignored blob is kept under another name, not destroyed.
+	sum := sha256.Sum256(planted)
+	if kept, err := store.Get(fmt.Sprintf("%s.ignored-%x", dataKeyBlob, sum[:8])); err != nil || !bytes.Equal(kept, planted) {
+		t.Fatalf("the ignored blob was not kept: %v", err)
+	}
+
+	// The runner seals a share; the next start opens its own blob.
+	store.Put(sharePrefix+"aa01", []byte("sealed share"))
+	again, err := x.keys(setup).dataKey(ctx, store)
+	if err != nil || !bytes.Equal(again, dek) {
+		t.Fatalf("restart with a share stored: %v", err)
 	}
 }

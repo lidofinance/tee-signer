@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -14,16 +15,35 @@ import (
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
-// keyPolicyKMS answers DescribeKey and GetKeyPolicy for one key, as KMS
-// does in the JSON 1.1 protocol.
+// keyPolicyKMS answers DescribeKey, GetKeyPolicy and ListGrants for one
+// key, as KMS does in the JSON 1.1 protocol.
 type keyPolicyKMS struct {
 	arn, origin, policy string
 	multiRegion         bool
 	denyPolicy          bool
+	grants              []map[string]any
+	pageSize            int // grants per ListGrants page; 0: all on one
+	denyGrants          bool
+	grantCalls          int
+	grantKeyIDs         []string // the KeyId of each ListGrants call
+	policyKeyIDs        []string // the KeyId of each GetKeyPolicy call
+	dropMarker          bool     // a truncated page without NextMarker
+}
+
+// isAlias reports whether a KeyId names an alias: GetKeyPolicy and
+// ListGrants take a key ID or key ARN only.
+func isAlias(id string) bool {
+	return strings.HasPrefix(id, "alias/") || strings.Contains(id, ":alias/")
+}
+
+// refuseAlias answers as KMS does to an alias where it takes none.
+func refuseAlias(w http.ResponseWriter) {
+	w.WriteHeader(http.StatusBadRequest)
+	json.NewEncoder(w).Encode(map[string]string{"__type": "NotFoundException", "message": "alias not accepted"})
 }
 
 func (f *keyPolicyKMS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	var in struct{ KeyId, PolicyName string }
+	var in struct{ KeyId, PolicyName, Marker string }
 	_ = json.NewDecoder(r.Body).Decode(&in)
 	w.Header().Set("Content-Type", "application/x-amz-json-1.1")
 	switch r.Header.Get("X-Amz-Target") {
@@ -31,12 +51,39 @@ func (f *keyPolicyKMS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"KeyMetadata": map[string]any{"Arn": f.arn, "KeyId": in.KeyId,
 			"Origin": f.origin, "KeyManager": "CUSTOMER", "MultiRegion": f.multiRegion, "KeyState": "Enabled"}})
 	case "TrentService.GetKeyPolicy":
+		f.policyKeyIDs = append(f.policyKeyIDs, in.KeyId)
+		if isAlias(in.KeyId) {
+			refuseAlias(w)
+			return
+		}
 		if f.denyPolicy || in.PolicyName != "default" {
 			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(map[string]string{"__type": "AccessDeniedException", "message": "not allowed"})
 			return
 		}
 		json.NewEncoder(w).Encode(map[string]any{"Policy": f.policy, "PolicyName": "default"})
+	case "TrentService.ListGrants":
+		f.grantCalls++
+		f.grantKeyIDs = append(f.grantKeyIDs, in.KeyId)
+		if isAlias(in.KeyId) {
+			refuseAlias(w)
+			return
+		}
+		if f.denyGrants {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"__type": "AccessDeniedException", "message": "not allowed"})
+			return
+		}
+		from, _ := strconv.Atoi(in.Marker)
+		to := len(f.grants)
+		if f.pageSize > 0 {
+			to = min(from+f.pageSize, to)
+		}
+		out := map[string]any{"Grants": f.grants[from:to], "Truncated": to < len(f.grants)}
+		if to < len(f.grants) && !f.dropMarker {
+			out["NextMarker"] = strconv.Itoa(to)
+		}
+		json.NewEncoder(w).Encode(out)
 	default:
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]string{"__type": "UnknownOperationException"})

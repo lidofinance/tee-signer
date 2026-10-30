@@ -4,8 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"path"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/kms/types"
 
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
@@ -14,14 +19,17 @@ import (
 // have (research/admin-proof-key-release.md in the PoC repo, section 2.1):
 // with any of them someone can change the policy, hand out the key by a
 // grant, put in key material they know, or copy the key to another
-// region. A wildcard that covers one of them (kms:*, *, kms:Put*) counts
-// too.
-var lockActions = []string{"kms:PutKeyPolicy", "kms:CreateGrant", "kms:ImportKeyMaterial", "kms:ReplicateKey"}
+// region. The alias actions are here too: a setup may name the key by
+// alias, and a principal that can point that alias at another key moves
+// the runner's next start to a key with another policy. A wildcard that
+// covers one of them (kms:*, *, kms:Put*) counts too.
+var lockActions = []string{"kms:PutKeyPolicy", "kms:CreateGrant", "kms:ImportKeyMaterial", "kms:ReplicateKey",
+	"kms:CreateAlias", "kms:UpdateAlias", "kms:DeleteAlias"}
 
 // keyActions are the KMS actions that give out key material or move it
 // under another key (RBRNIT-01). A locked policy allows them only to a
-// Nitro enclave of a named image: an Allow of one of them needs a
-// kms:RecipientAttestation condition (enclaveBound). GenerateDataKey*
+// Nitro enclave of a named image: an Allow of one of them needs literal
+// kms:RecipientAttestation:PCR0, PCR1 and PCR2 conditions (enclaveBinding). GenerateDataKey*
 // without plaintext is not here: its answer holds no plaintext.
 var keyActions = []string{"kms:Decrypt", "kms:GenerateDataKey", "kms:GenerateDataKeyPair", "kms:ReEncryptFrom", "kms:ReEncryptTo"}
 
@@ -36,12 +44,12 @@ const encryptAction = "kms:Encrypt"
 // when its material was made inside KMS (Origin AWS_KMS), it has no
 // replicas in other regions, no Allow statement of the policy grants any
 // principal one of lockActions, every Allow of one of keyActions is bound
-// to an enclave (enclaveBound), and every other Allow of Encrypt holds to
+// to an enclave (enclaveBinding), and every other Allow of Encrypt holds to
 // the record credentials' context (recordCredsOnly). Conditions do not count for
 // lockActions: a grant under a condition is still a grant. Deny statements only take away, so they
 // are skipped. A policy that does not parse is not locked. Grants that
-// already exist on the key are not in the policy and not read; a locked
-// policy that never allowed CreateGrant has none from after it was set.
+// already exist on the key are not in the policy: KeyRule reads them and
+// grantLock decides on them (AWS-KMS-01).
 func policyLock(policy, origin string, multiRegion bool) (backend.KeyLock, string) {
 	switch {
 	case origin != "AWS_KMS":
@@ -76,12 +84,17 @@ func policyLock(policy, origin string, multiRegion bool) (backend.KeyLock, strin
 				return backend.KeyLockNotLocked, fmt.Sprintf("statement %s allows %s", name, a)
 			}
 		}
-		if s.enclaveBound() {
+		bound, bad := s.enclaveBinding()
+		if bad != "" {
+			return backend.KeyLockNotLocked, fmt.Sprintf("statement %s: %s", name, bad)
+		}
+		if bound {
 			continue
 		}
 		for _, a := range keyActions {
 			if s.grants(a) {
-				return backend.KeyLockNotLocked, fmt.Sprintf("statement %s allows %s without a kms:RecipientAttestation condition: a principal outside the enclave gets the key", name, a)
+				return backend.KeyLockNotLocked, fmt.Sprintf("statement %s allows %s without literal kms:RecipientAttestation:PCR0, PCR1 and PCR2 conditions: "+
+					"a principal outside the enclave, or an enclave of another image, gets the key", name, a)
 			}
 		}
 		if s.grants(encryptAction) && !s.recordCredsOnly() {
@@ -122,31 +135,112 @@ func (s keyPolicyStatement) recordCredsOnly() bool {
 	return false
 }
 
-// enclaveBound reports whether the statement's condition ties it to a
-// Nitro enclave image: a StringEquals or StringEqualsIgnoreCase test of a
-// kms:RecipientAttestation key against values that are all non-empty
-// strings. KMS checks such a key only on a request with an attestation
-// document (the Recipient parameter), so a request without one does not
-// match. IfExists, StringLike and set operators do not count.
-func (s keyPolicyStatement) enclaveBound() bool {
+// recipientPrefix starts the Nitro attestation condition keys of KMS.
+const recipientPrefix = "kms:recipientattestation:"
+
+// imagePCRs are the PCRs that name one enclave image (NREL-01): PCR0 the
+// whole image, PCR1 the kernel and boot ramfs, PCR2 the application. PCR3
+// (the parent's IAM role) and PCR8 (the signing certificate) do not: any
+// image that role starts, or that certificate signs, matches them.
+var imagePCRs = []string{"pcr0", "pcr1", "pcr2"}
+
+// sha384Hex is a literal PCR or ImageSha384 value.
+var sha384Hex = regexp.MustCompile(`^[0-9a-fA-F]{96}$`)
+
+// zeroImageKeys are the recipient keys whose all-zero value is that of a
+// debug-mode enclave: AWS documents that an enclave started with
+// --debug-mode or --attach-console has PCRs of zeros only.
+var zeroImageKeys = []string{"pcr0", "pcr1", "pcr2", "imagesha384"}
+
+// enclaveBinding reports whether the statement's condition ties it to one
+// Nitro enclave image: StringEquals or StringEqualsIgnoreCase tests of
+// kms:RecipientAttestation:PCR0, PCR1 and PCR2 (NREL-01). KMS checks such
+// a key only on a request with an attestation document (the Recipient
+// parameter), so a request without one does not match. IfExists,
+// StringLike and set operators do not count.
+//
+// bad is set when a kms:RecipientAttestation condition of the statement,
+// under any operator, has a key other than PCR0 to PCR31 or ImageSha384,
+// or a value that is not 96 hex digits. A policy variable such as
+// ${aws:PrincipalTag/pcr0} is not 96 hex digits: IAM fills it in per
+// request from state outside the key policy, so it fixes no image. bad is
+// also set for an all-zero PCR0, PCR1, PCR2 or ImageSha384: those are the
+// values of any debug-mode enclave, whose host can read its memory.
+func (s keyPolicyStatement) enclaveBinding() (bound bool, bad string) {
+	fixed := map[string]bool{}
 	for op, keys := range s.Condition {
-		if !strings.EqualFold(op, "StringEquals") && !strings.EqualFold(op, "StringEqualsIgnoreCase") {
-			continue
-		}
+		exact := strings.EqualFold(op, "StringEquals") || strings.EqualFold(op, "StringEqualsIgnoreCase")
 		for k, raw := range keys {
-			if !strings.HasPrefix(strings.ToLower(k), "kms:recipientattestation:") {
+			lk := strings.ToLower(k)
+			name, ok := strings.CutPrefix(lk, recipientPrefix)
+			if !ok {
 				continue
+			}
+			if !knownRecipientKey(name) {
+				return false, fmt.Sprintf("condition key %s is not a Nitro PCR or ImageSha384", k)
 			}
 			var vals stringOrList
 			if json.Unmarshal(raw, &vals) != nil || len(vals) == 0 {
-				continue
+				return false, fmt.Sprintf("condition %s on %s has no string values", op, k)
 			}
-			if !slices.Contains(vals, "") {
-				return true
+			for _, v := range vals {
+				if !sha384Hex.MatchString(v) {
+					return false, fmt.Sprintf("condition %s on %s has the value %q, not 96 hex digits", op, k, v)
+				}
+				if strings.Trim(v, "0") == "" && slices.Contains(zeroImageKeys, name) {
+					return false, fmt.Sprintf("condition %s on %s is all zeros, the value of a debug-mode enclave", op, k)
+				}
+			}
+			if exact {
+				fixed[name] = true
 			}
 		}
 	}
-	return false
+	for _, p := range imagePCRs {
+		if !fixed[p] {
+			return false, ""
+		}
+	}
+	return true, ""
+}
+
+// knownRecipientKey reports whether name (lower case, after the
+// kms:RecipientAttestation: prefix) is a key KMS fills from a Nitro
+// attestation document: imagesha384, or pcr0 to pcr31.
+func knownRecipientKey(name string) bool {
+	if name == "imagesha384" {
+		return true
+	}
+	n, ok := strings.CutPrefix(name, "pcr")
+	if !ok || n == "" || len(n) > 2 || (len(n) == 2 && n[0] == '0') {
+		return false
+	}
+	i, err := strconv.Atoi(n)
+	return err == nil && i >= 0 && i <= 31
+}
+
+// grantLock decides on the grants of a key whose policy is locked
+// (AWS-KMS-01). A grant gives its grantee key use that the key policy does
+// not show, and it stays in force after the policy is locked. KMS grant
+// constraints (EncryptionContextEquals, EncryptionContextSubset,
+// SourceArn) never name the recipient's attestation, so a grant of
+// Decrypt or GenerateDataKey hands the key to a principal outside the
+// enclave, and a grant of Encrypt lets one plant a sealing key. A locked
+// key therefore has no grants at all. KMS grants are eventually
+// consistent: a grant made just before the lock may not show in
+// ListGrants for a few minutes. The code cannot close that; the deploy
+// rule waits (platform-aws/deploy/README.md).
+func grantLock(grants []types.GrantListEntry) (backend.KeyLock, string) {
+	if len(grants) == 0 {
+		return backend.KeyLockLocked, ""
+	}
+	g := grants[0]
+	ops := make([]string, len(g.Operations))
+	for i, o := range g.Operations {
+		ops[i] = string(o)
+	}
+	return backend.KeyLockNotLocked, fmt.Sprintf("the key has %d grant(s), for example %s to %s for %s: a grant is outside the key policy and cannot require the enclave as recipient",
+		len(grants), aws.ToString(g.GrantId), aws.ToString(g.GranteePrincipal), strings.Join(ops, ","))
 }
 
 // grants reports whether an Allow statement covers action: Action names it
