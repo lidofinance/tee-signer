@@ -314,8 +314,9 @@ Azure (`platform-azure/deploy/deploy.sh`, settings above):
 3. `key-create 1`: key `signer-gkek-1` with the release policy for that
    hash. `KEY_IMMUTABLE` stays false for the test.
 4. `key-role 1`, then `store-role 1` with `SETUP_FILE_1=setups/signer-1.setup`:
-   the data role and Reader on the container. Reader lets the lock check
-   read the immutability policy. Wait a few minutes for the roles to apply.
+   the data role on the container and Reader on its storage account.
+   Reader lets the lock check read the account and the container. Wait a
+   few minutes for the roles to apply.
 
 GCP (`platform-gcp/deploy/deploy.sh`, settings above):
 
@@ -395,8 +396,8 @@ them after a rollback.
 
 ## Not checked offline
 
-- Reader on the container scope grants `containers/read` and
-  `immutabilityPolicies/read` for the lock check (Azure RBAC docs; not run).
+- Reader on the account scope grants `storageAccounts/read` and
+  `containers/read` for the lock check (Azure RBAC docs; not run).
 - `roles/storage.legacyBucketReader` holds `storage.buckets.get` (GCP role
   reference; not run).
 - `SIGNER_SETUP` near the 64 KB setup cap under a wildcard CCE rule, and the

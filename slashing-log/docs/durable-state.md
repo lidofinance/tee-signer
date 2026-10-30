@@ -116,9 +116,10 @@ The names are created once (S3 `If-None-Match: *`, GCS
 clients (`markstore.Log`), so the copy works on the locked bucket of the
 mark log as well as on a plain one. On the setup path the runner refuses
 a store that keeps overwritten objects as previous versions the client
-does not read (`markstore.CheckVersions`: an Azure container with
-version-level immutability), since an admin could hide the newest commits
-there and the restore would take an older one. A commit name taken by a
+does not read, or that can append to an object (`markstore.CheckVersions`:
+an Azure account or container with version-level immutability, or a
+policy with protected append writes), since an admin could hide or change
+the newest commits there and the restore would take an older one. A commit name taken by a
 valid commit of another process means a clone: that process changes no
 durable state from then on (`ErrLost`). Objects that are not commits cost
 a skip each, as in the mark log.

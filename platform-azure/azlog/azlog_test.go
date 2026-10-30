@@ -71,10 +71,10 @@ func openARM(t *testing.T, url string, client *http.Client) *Log {
 	return l.(*Log)
 }
 
-// A container with version-level immutability keeps overwritten blobs as
-// previous versions, which List and Get do not read: the lock check
-// refuses it even with a locked policy, and so it does during a migration
-// to it.
+// A container or account with version-level immutability keeps
+// overwritten blobs as previous versions, which List and Get do not read,
+// and a policy with protected append writes lets bytes be added to a
+// blob: the lock check refuses each, even with a locked policy.
 func TestAzureLockRefusesVersionLevelImmutability(t *testing.T) {
 	srv := wormfake.New(wormfake.Azure, "marks")
 	defer srv.Close()
@@ -87,79 +87,103 @@ func TestAzureLockRefusesVersionLevelImmutability(t *testing.T) {
 		lock wormfake.Lock
 		want string
 	}{
-		{wormfake.Lock{Compliance: true, Days: 30, VersionLevel: true}, "enabled true"},
+		{wormfake.Lock{Compliance: true, Days: 30, VersionLevel: true}, "version-level immutability (enabled true"},
 		{wormfake.Lock{Compliance: true, Days: 30, Migrating: true}, `migration "InProgress"`},
+		{wormfake.Lock{Compliance: true, Days: 30, AccountVersionLevel: true}, "storage account acct has version-level immutability"},
+		{wormfake.Lock{Compliance: true, Days: 30, AppendWrites: true}, "allows appends"},
 	} {
 		srv.SetLock(c.lock)
-		err := markstore.CheckLock(ctx, l, 30)
-		if !errors.Is(err, markstore.ErrNoLock) || !strings.Contains(err.Error(), "version-level") || !strings.Contains(err.Error(), c.want) {
-			t.Errorf("%+v: %v, want ErrNoLock for version-level immutability", c.lock, err)
+		for what, err := range map[string]error{"lock": markstore.CheckLock(ctx, l, 30), "versions": markstore.CheckVersions(ctx, l)} {
+			if !errors.Is(err, markstore.ErrNoLock) || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("%s check, %+v: %v, want ErrNoLock with %q", what, c.lock, err, c.want)
+			}
 		}
 	}
 }
 
-// The container read on its own: a container answer without
-// immutableStorageWithVersioning is container-level; no container is no
-// lock; any other failure fails the check.
+// The management-plane reads on their own: the account, then the
+// container with its policy. A refusal or a failed read fails both checks;
+// a container without a locked policy fails only the lock check.
 func TestAzureLockContainerRead(t *testing.T) {
-	const policy = `{"properties":{"immutabilityPeriodSinceCreationInDays":30,"state":"Locked"}}`
+	const pol = `"immutabilityPolicy":{"properties":{"immutabilityPeriodSinceCreationInDays":30,"state":"Locked"}}`
 	for _, c := range []struct {
-		name      string
-		status    int
-		container string
-		ok        bool
-		noLock    bool
+		name               string
+		acctStatus         int    // 0: 200
+		acct               string // "": an account without version-level immutability
+		status             int
+		container          string
+		lockOK, versionsOK bool
+		noLock             bool   // a failure is ErrNoLock
+		want               string // in the error of a failure
 	}{
-		{"no versioning property", http.StatusOK, `{"properties":{"hasImmutabilityPolicy":true}}`, true, false},
-		{"version-level off", http.StatusOK, `{"properties":{"immutableStorageWithVersioning":{"enabled":false}}}`, true, false},
-		{"version-level on", http.StatusOK, `{"properties":{"immutableStorageWithVersioning":{"enabled":true,"migrationState":"Completed"}}}`, false, true},
-		{"no container", http.StatusNotFound, `{"error":{"code":"ContainerNotFound"}}`, false, true},
-		{"no read access", http.StatusForbidden, `{"error":{"code":"AuthorizationFailed"}}`, false, false},
-		{"not JSON", http.StatusOK, `<html>`, false, false},
+		{"no versioning property", 0, "", 200, `{"properties":{"hasImmutabilityPolicy":true,` + pol + `}}`, true, true, false, ""},
+		{"version-level off", 0, "", 200, `{"properties":{"immutableStorageWithVersioning":{"enabled":false},` + pol + `}}`, true, true, false, ""},
+		{"version-level on", 0, "", 200, `{"properties":{"immutableStorageWithVersioning":{"enabled":true,"migrationState":"Completed"},` + pol + `}}`, false, false, true, "version-level"},
+		{"migration in progress", 0, "", 200, `{"properties":{"immutableStorageWithVersioning":{"enabled":false,"migrationState":"InProgress"},` + pol + `}}`, false, false, true, "InProgress"},
+		{"append writes all", 0, "", 200, `{"properties":{"immutabilityPolicy":{"properties":{"immutabilityPeriodSinceCreationInDays":30,"state":"Locked","allowProtectedAppendWritesAll":true}}}}`, false, false, true, "allows appends"},
+		{"append writes", 0, "", 200, `{"properties":{"immutabilityPolicy":{"properties":{"immutabilityPeriodSinceCreationInDays":30,"state":"Locked","allowProtectedAppendWrites":true}}}}`, false, false, true, "allows appends"},
+		{"no policy", 0, "", 200, `{"properties":{"hasImmutabilityPolicy":false}}`, false, true, true, `mode "none"`},
+		{"unlocked policy", 0, "", 200, `{"properties":{"immutabilityPolicy":{"properties":{"immutabilityPeriodSinceCreationInDays":30,"state":"Unlocked"}}}}`, false, true, true, `mode "Unlocked"`},
+		{"no container", 0, "", 404, `{"error":{"code":"ContainerNotFound"}}`, false, false, true, "no container at http"},
+		{"no account", 404, `{"error":{"code":"ResourceNotFound"}}`, 200, `{"properties":{` + pol + `}}`, false, false, true, "no storage account at http"},
+		{"account version-level", 0, `{"properties":{"immutableStorageWithVersioning":{"enabled":true}}}`, 200, `{"properties":{` + pol + `}}`, false, false, true, "storage account acct has version-level"},
+		{"no account read access", 403, `{"error":{"code":"AuthorizationFailed"}}`, 200, `{"properties":{` + pol + `}}`, false, false, false, "403"},
+		{"no container read access", 0, "", 403, `{"error":{"code":"AuthorizationFailed"}}`, false, false, false, "403"},
+		{"not JSON", 0, "", 200, `<html>`, false, false, false, "container"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			var policyReads int
+			const acctPath = "/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.Storage/storageAccounts/acct"
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Query().Get("api-version") != ARMAPIVersion {
 					http.Error(w, "api-version", http.StatusBadRequest)
 					return
 				}
 				switch r.URL.Path {
-				case "/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.Storage/storageAccounts/acct/blobServices/default/containers/marks":
+				case acctPath:
+					if c.acctStatus != 0 {
+						w.WriteHeader(c.acctStatus)
+					}
+					if c.acct == "" {
+						w.Write([]byte(`{"properties":{}}`))
+						return
+					}
+					w.Write([]byte(c.acct))
+				case acctPath + "/blobServices/default/containers/marks":
 					w.WriteHeader(c.status)
 					w.Write([]byte(c.container))
-				case "/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.Storage/storageAccounts/acct/blobServices/default/containers/marks/immutabilityPolicies/default":
-					policyReads++
-					w.Write([]byte(policy))
 				default:
 					http.NotFound(w, r)
 				}
 			}))
 			defer srv.Close()
-			err := markstore.CheckLock(context.Background(), openARM(t, srv.URL, srv.Client()), 30)
-			switch {
-			case c.ok && err != nil:
-				t.Fatalf("lock check: %v", err)
-			case !c.ok && err == nil:
-				t.Fatal("lock check passed")
-			case !c.ok && errors.Is(err, markstore.ErrNoLock) != c.noLock:
-				t.Fatalf("lock check: %v, want ErrNoLock %v", err, c.noLock)
+			l := openARM(t, srv.URL, srv.Client())
+			for _, k := range []struct {
+				what string
+				ok   bool
+				err  error
+			}{
+				{"lock check", c.lockOK, markstore.CheckLock(context.Background(), l, 30)},
+				{"version check", c.versionsOK, markstore.CheckVersions(context.Background(), l)},
+			} {
+				switch {
+				case k.ok && k.err != nil:
+					t.Errorf("%s: %v", k.what, k.err)
+				case k.ok:
+				case k.err == nil:
+					t.Errorf("%s passed", k.what)
+				case errors.Is(k.err, markstore.ErrNoLock) != c.noLock || !strings.Contains(k.err.Error(), c.want):
+					t.Errorf("%s: %v, want ErrNoLock %v and %q", k.what, k.err, c.noLock, c.want)
+				}
 			}
-			if !c.ok && policyReads != 0 {
-				t.Fatalf("read the policy %d times after the container read refused", policyReads)
-			}
-			// The state copy's check answers the same way, 404 included.
-			err = markstore.CheckVersions(context.Background(), openARM(t, srv.URL, srv.Client()))
-			switch {
-			case c.ok && err != nil:
-				t.Fatalf("version check: %v", err)
-			case !c.ok && err == nil:
-				t.Fatal("version check passed")
-			case !c.ok && errors.Is(err, markstore.ErrNoLock) != c.noLock:
-				t.Fatalf("version check: %v, want ErrNoLock %v", err, c.noLock)
-			}
-			if c.status == http.StatusNotFound && !strings.Contains(err.Error(), "/subscriptions/sub-1/resourceGroups/rg-1/") {
-				t.Fatalf("404 error does not name the path: %v", err)
+			if c.status == http.StatusNotFound || c.acctStatus == http.StatusNotFound {
+				for _, f := range []func(context.Context) error{
+					func(ctx context.Context) error { return markstore.CheckLock(ctx, l, 30) },
+					func(ctx context.Context) error { return markstore.CheckVersions(ctx, l) },
+				} {
+					if err := f(context.Background()); err == nil || !strings.Contains(err.Error(), "/subscriptions/sub-1/resourceGroups/rg-1/") {
+						t.Errorf("404 error does not name the path: %v", err)
+					}
+				}
 			}
 		})
 	}

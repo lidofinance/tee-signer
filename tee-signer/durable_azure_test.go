@@ -16,9 +16,10 @@ import (
 	"github.com/lidofinance/tee-signer/slashing-log/wormfake"
 )
 
-// The state copy refuses an Azure container with version-level immutability
-// on the setup path, as the mark log's lock check does: the restore reads
-// current blob versions only, so an admin could hide the newest commits.
+// On the setup path the state copy refuses what the lock check of the mark
+// log refuses: version-level immutability on the container or the account,
+// and a policy that allows appends. The restore reads current blob
+// versions only, so an admin could hide or change the newest commits.
 func TestDurableCopyRefusesVersionLevelImmutability(t *testing.T) {
 	srv := wormfake.New(wormfake.Azure, "state")
 	defer srv.Close()
@@ -48,12 +49,14 @@ func TestDurableCopyRefusesVersionLevelImmutability(t *testing.T) {
 	for _, l := range []wormfake.Lock{
 		{Compliance: true, Days: 30, VersionLevel: true},
 		{Compliance: true, Days: 30, Migrating: true},
+		{Compliance: true, Days: 30, AccountVersionLevel: true},
+		{Compliance: true, Days: 30, AppendWrites: true},
 	} {
 		srv.SetLock(l)
 		before := len(srv.Names())
 		err := open(true)
-		if !errors.Is(err, markstore.ErrNoLock) || !strings.Contains(err.Error(), "version-level") {
-			t.Errorf("%+v: %v, want a version-level refusal", l, err)
+		if !errors.Is(err, markstore.ErrNoLock) || !strings.Contains(err.Error(), "version-level") && !strings.Contains(err.Error(), "allows appends") {
+			t.Errorf("%+v: %v, want a refusal", l, err)
 		}
 		if len(srv.Names()) != before {
 			t.Errorf("%+v: wrote to the store before the refusal", l)
@@ -70,7 +73,7 @@ func TestDurableCopyRefusesVersionLevelImmutability(t *testing.T) {
 	srv.Subscription = "sub-2"
 	srv.SetLock(wormfake.Lock{Compliance: true, Days: 30, VersionLevel: true})
 	before := len(srv.Names())
-	if err := open(true); !errors.Is(err, markstore.ErrNoLock) || !strings.Contains(err.Error(), "no container") {
+	if err := open(true); !errors.Is(err, markstore.ErrNoLock) || !strings.Contains(err.Error(), "management plane has no") {
 		t.Errorf("container not found over ARM: %v, want a refusal", err)
 	}
 	if len(srv.Names()) != before {

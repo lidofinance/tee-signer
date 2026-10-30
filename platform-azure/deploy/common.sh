@@ -70,6 +70,19 @@ store_scopes() {
   done | sort -u
 }
 
+# store_accounts N: the resource ID of each storage account that holds a
+# container of store_scopes N, one per line. The lock check reads these.
+store_accounts() {
+  local f part acct
+  f="$(setup_file "$1")"
+  for part in slashing_log_store encrypted_state_store; do
+    acct="$(setup_value "$f" "$part.account")"
+    [ -n "$acct" ] || continue
+    printf '/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Storage/storageAccounts/%s\n' \
+      "$(setup_value "$f" "$part.subscription")" "$(setup_value "$f" "$part.resource_group")" "$acct"
+  done | sort -u
+}
+
 RG="${RG:-signer-poc-rg}"
 
 # Network entry: how the Dirk forks reach port 7100 of a signer (README,
