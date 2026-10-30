@@ -11,8 +11,9 @@
  *  - every call returns a defined status;
  *  - per validator, over the whole input and across restarts: no two signed
  *    attestations with the same target and different data, none surrounding
- *    another, none with source > target; no two different blocks, PTC votes
- *    or envelopes for one slot;
+ *    another, none with source > target, none whose target is not the
+ *    epoch of its slot; no two different blocks, PTC votes or envelopes
+ *    for one slot;
  *  - with flag F_VERIFY, attestation and block signatures verify under the
  *    share key over the signing root sc_signer_signing_root gives.
  * Stored records only change through the core, so rollback is out of scope;
@@ -275,7 +276,7 @@ static void check_status(int rc)
 {
     if (g_trace)
         fprintf(stderr, "  op %d v%d: %s\n", g_op, g_v, sc_status_name(rc));
-    FUZZ_CHECK(rc >= SC_OK && rc <= SC_ERR_POLICY_BUILDER_AUTH);
+    FUZZ_CHECK(rc >= SC_OK && rc <= SC_ERR_POLICY_TARGET_SLOT);
 }
 
 static void record_slot(signed_t *h, int *n, uint64_t slot, const uint8_t root[32], const char *what)
@@ -299,6 +300,7 @@ static void record_attestation(int v, const sc_attestation_data *d)
     uint64_t s = d->source.epoch, t = d->target.epoch;
     sc_htr_attestation_data(d, root);
     FUZZ_CHECK(s <= t);
+    FUZZ_CHECK(W.cfg.slots_per_epoch && t == d->slot / W.cfg.slots_per_epoch);
     for (int i = 0; i < h->natt; i++) {
         const signed_t *p = &h->att[i];
         if (p->b == t && memcmp(p->root, root, 32) != 0)
@@ -354,6 +356,10 @@ static void op_attestation(fz_in *in, int v)
         d.slot = pick_slot(in);
         d.source.epoch = pick_epoch(in);
         d.target.epoch = sel & 0x40 ? d.source.epoch + (fz_u8(in) & 7) : pick_epoch(in);
+        /* The slot of the target's epoch, unless bit 0 keeps the picked one
+         * (then the target is most often not the slot's epoch). */
+        if (!(sel & 0x01) && W.cfg.slots_per_epoch)
+            d.slot = d.target.epoch * W.cfg.slots_per_epoch + d.slot % W.cfg.slots_per_epoch;
         pick_root(in, d.beacon_block_root);
         pick_root(in, d.source.root);
         pick_root(in, d.target.root);

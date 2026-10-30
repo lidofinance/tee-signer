@@ -276,6 +276,12 @@ core does not parse JSON; the caller does.
 
 ## Policy
 
+- An attestation's target epoch must be the epoch of its slot
+  (`SC_ERR_POLICY_TARGET_SLOT`). `process_attestation` asserts the same, so
+  other data is never included; signed, it would only raise the target
+  mark and refuse the honest vote of the slot's epoch. The check comes
+  before the repeat shortcut and the slashing check, so the request moves
+  no mark and no repeat root.
 - Attestation target, block epoch and RANDAO epoch must be <= clock epoch +
   `max_epochs_ahead`. The clock epoch comes from the `now` callback and
   `genesis_time`, `seconds_per_slot`, `slots_per_epoch`, and the slot time

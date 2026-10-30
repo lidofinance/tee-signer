@@ -101,8 +101,13 @@ typedef enum {
                         signer may sign before the update takes effect */
 
     /* Builder API authentication. Appended. */
-    SC_ERR_POLICY_BUILDER_AUTH /* BuilderRequestAuth whose data root is not in
-                                  builder_auth_roots (an empty list refuses all) */
+    SC_ERR_POLICY_BUILDER_AUTH, /* BuilderRequestAuth whose data root is not in
+                                   builder_auth_roots (an empty list refuses all) */
+
+    /* Attestation data consistency. Appended. */
+    SC_ERR_POLICY_TARGET_SLOT /* attestation target epoch is not the epoch of its
+                                 slot: no chain includes it, and signing it would
+                                 only raise the target mark */
 } sc_status;
 
 /* Short constant name for a status code, e.g. "SC_ERR_SLASH_TARGET". */
@@ -774,7 +779,10 @@ void sc_signer_get_slot_times(const sc_signer *s, sc_slot_times *out);
 
 /* Signing. Each returns SC_OK and a 96-byte compressed G2 signature, or an
  * error code and leaves signature untouched. sc_sign_block and
- * sc_sign_attestation sign an exact repeat (see sc_repeat_roots). */
+ * sc_sign_attestation sign an exact repeat (see sc_repeat_roots).
+ * sc_sign_attestation refuses data whose target epoch is not the epoch of
+ * its slot (SC_ERR_POLICY_TARGET_SLOT) before the repeat shortcut and the
+ * slashing check, so such a request moves no mark and no repeat root. */
 int sc_sign_block(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
                   const sc_beacon_block_header *block, uint8_t signature[SC_SIGNATURE_LEN]);
 int sc_sign_attestation(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],

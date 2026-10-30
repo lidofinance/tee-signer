@@ -73,7 +73,7 @@ func wantStatus(t *testing.T, err error, want backend.Status) {
 }
 
 func TestStatusNamesMatchCore(t *testing.T) {
-	for i := 0; i <= int(backend.StatusPolicyBuilderAuth); i++ {
+	for i := 0; i <= int(backend.StatusPolicyTargetSlot); i++ {
 		if got, want := core.StatusName(i), backend.Status(i).String(); got != want {
 			t.Errorf("status %d: core says %s, Go says %s", i, got, want)
 		}

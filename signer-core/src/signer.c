@@ -701,6 +701,12 @@ int sc_sign_attestation(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
         return SC_ERR_UNKNOWN_VALIDATOR;
     if (data->source.epoch > data->target.epoch)
         return SC_ERR_SLASH_SOURCE_GT_TARGET;
+    /* process_attestation asserts target.epoch == epoch(slot). Data that
+     * breaks it is never included; signing it would only raise the target
+     * mark and refuse the honest vote of the slot's epoch. Checked before
+     * the repeat shortcut and the marks, so nothing of it is remembered. */
+    if (data->target.epoch != data->slot / s->cfg.slots_per_epoch)
+        return SC_ERR_POLICY_TARGET_SLOT;
     if ((rc = read_clock(s, &now)) != SC_OK)
         return rc;
     if ((rc = sc_policy_check_epoch(&s->cfg, &s->slot_times, now, data->target.epoch)) != SC_OK)
@@ -1237,6 +1243,7 @@ const char *sc_status_name(int status)
     case SC_ERR_SELECTION_PROOF: return "SC_ERR_SELECTION_PROOF";
     case SC_ERR_SCHEDULE: return "SC_ERR_SCHEDULE";
     case SC_ERR_POLICY_BUILDER_AUTH: return "SC_ERR_POLICY_BUILDER_AUTH";
+    case SC_ERR_POLICY_TARGET_SLOT: return "SC_ERR_POLICY_TARGET_SLOT";
     default: return "SC_ERR_UNKNOWN";
     }
 }
