@@ -356,11 +356,17 @@ static void test_attestation_slot(void)
     /* Target above the slot's epoch, inside the clock horizon. */
     sc_attestation_data above = att(E, E + 2, 2);
     above.slot = (E + 1) * 32 + 3;
-    CHECK(sc_sign_attestation(s, k.pk, &above, sig) != SC_OK);
+    CHECK_RC(sc_sign_attestation(s, k.pk, &above, sig), SC_ERR_POLICY_TARGET_SLOT);
     /* Target below the slot's epoch. */
     sc_attestation_data below = att(E, E + 1, 3);
     below.slot = (E + 2) * 32;
-    CHECK(sc_sign_attestation(s, k.pk, &below, sig) != SC_OK);
+    CHECK_RC(sc_sign_attestation(s, k.pk, &below, sig), SC_ERR_POLICY_TARGET_SLOT);
+    /* Refused for its slot before the slashing check sees the target. */
+    sc_attestation_data dbl = att(E - 1, E, 4);
+    dbl.slot = (E + 1) * 32;
+    CHECK_RC(sc_sign_attestation(s, k.pk, &dbl, sig), SC_ERR_POLICY_TARGET_SLOT);
+    CHECK(!strcmp(sc_status_name(SC_ERR_POLICY_TARGET_SLOT), "SC_ERR_POLICY_TARGET_SLOT"));
+    CHECK(SC_ERR_POLICY_TARGET_SLOT == 28);
 
     /* Nothing moved: the marks, the write count and the repeat root are
      * those of the first vote. */

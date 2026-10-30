@@ -61,7 +61,7 @@ ok    = status:u16 (= 0)  body
 error = status:u16 (!= 0) detail_len:u16 detail (UTF-8, at most 1024 bytes)
 ```
 
-Status codes 0 to 27 are the signer core's `sc_status` values
+Status codes 0 to 28 are the signer core's `sc_status` values
 (`include/signer_core.h` of signer-core, see `core/README.md`); the runner
 also uses some of them for its own refusals. Codes from 1000 come from the
 runner. `signer-protocol/errors.go` holds the list. An error that is not a
@@ -95,6 +95,7 @@ that; a client that needs to tell causes apart reads `detail`.
 | 25 | `SC_ERR_SELECTION_PROOF` | kinds 9 and 10: the selection proof does not verify under the validator key | no |
 | 26 | `SC_ERR_SCHEDULE` | a fork schedule update changes an epoch the signer may sign before it applies (`sc_signer_set_schedule`); CONFIG_UPDATE returns it, no SIGN does | no |
 | 27 | `SC_ERR_POLICY_BUILDER_AUTH` | kind 14: the root of the BuilderRequestAuth data is not on `builder_request_auth_roots` (an empty list refuses all) | no (until a locked config update) |
+| 28 | `SC_ERR_POLICY_TARGET_SLOT` | kind 1: the attestation's target epoch is not the epoch of its slot; no chain includes such data, and signing it would only raise the target mark | no |
 | 1000 | `BAD_REQUEST` | the payload does not parse, or the kind of a typed SIGN is unknown; also a well-formed CONFIG_UPDATE or HANDOVER message the runner refuses (reason in `detail`) | no |
 | 1001 | `UNSUPPORTED` | a message type this runner does not serve (unknown, another build, a flag that turns it off, a runner without a setup); an ATTEST or IDENTITY request of another version; an unknown root message type | no |
 | 1002 | `INTERNAL` | anything else | maybe |
@@ -105,7 +106,7 @@ that; a client that needs to tell causes apart reads `detail`.
 | 1007 | `RATE_LIMITED` | an attest-only client certificate had its fresh attestations of the minute (see "Client roles"); `detail` says how many seconds to wait | later |
 
 `backend.Status.IsSlashing` covers 9 to 12 and 24; `IsPolicy` covers 13
-to 23, 25 and 1003. Codes 26 and 27 are in neither (see "Open items").
+to 23, 25, 28 and 1003. Codes 26 and 27 are in neither (see "Open items").
 
 A refusal caused by the restart floor carries
 `(at or below restart floor epoch N)` in `detail`.
@@ -259,8 +260,9 @@ Exact repeats: a SIGN for an attestation (kind 1) or block (kind 2) whose
 signing root equals the last one the runner signed for that validator
 gets the same signature again, so a validator client's retry works. The
 C core decides (`sc_repeat_roots`): the checks before it still run (the
-proposer index of a block, source not above target for an attestation,
-the clock and the epoch horizon), then the core signs the same root
+proposer index of a block, source not above target and the target epoch
+equal to the slot's epoch for an attestation, the clock and the epoch
+horizon), then the core signs the same root
 again (BLS is deterministic, so the signature is the same) without the
 slashing check and without a watermark or record write. Anything else at that target or
 slot is refused by the slashing rules, and so is a repeat of an older

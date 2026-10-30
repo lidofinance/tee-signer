@@ -32,10 +32,15 @@ func TestAttestationTargetSlot(t *testing.T) {
 	for name, m := range map[string]*backend.AttestationData{
 		"target above the slot's epoch": withSlot(att(19, 21), 20*32+5),
 		"target below the slot's epoch": withSlot(att(19, 20), 21*32),
+		// Refused for its slot before the slashing check sees the target.
+		"a double vote by target, wrong slot": withSlot(att(18, 19), 20*32),
 	} {
-		if err := sign(m); err == nil {
-			t.Fatalf("%s: signed", name)
+		if err := sign(m); backend.StatusOf(err) != backend.StatusPolicyTargetSlot {
+			t.Fatalf("%s: %v", name, err)
 		}
+	}
+	if !backend.StatusPolicyTargetSlot.IsPolicy() || backend.StatusPolicyTargetSlot.IsSlashing() {
+		t.Fatal("SC_ERR_POLICY_TARGET_SLOT is a policy refusal")
 	}
 	st, err := s.State(pk)
 	if err != nil {
