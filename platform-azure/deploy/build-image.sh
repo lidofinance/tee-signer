@@ -71,12 +71,17 @@ mkdir -p "$CTX"
 # Explicit modes, the same as the Dockerfile's COPY --chmod: the image must
 # not depend on the umask of the builder or on the mode of the input files.
 install -m 0555 "$RUNNER" "$CTX/runner"
+mkdir -m 0755 "$CTX/licenses"
+install -m 0644 "$RUNNER.licenses/"* "$CTX/licenses/"
 DOCKERFILE="$AZ_DIR/Dockerfile"
 install -m 0644 "$DOCKERFILE" "$CTX/Dockerfile"
 # More files of the image, "file|source|mode in the image" each, checked in
-# the image below like the runner. Only the build overlay adds any
+# the image below like the runner. The build overlay may add files too
 # (its network entry, which may set DOCKERFILE too).
 extra=()
+for notice in "$CTX/licenses/"*; do
+  extra+=("licenses/${notice##*/}|$notice|-rw-r--r--")
+done
 devnet_hook azure_image_ctx "$CTX"
 
 build_once() { # build_once <n>: archive in $OUT/runner-<n>.oci.tar, prints the manifest digest
@@ -123,6 +128,7 @@ loaded="$(docker image inspect "$LOCAL_RUNNER_IMAGE" --format '{{.Id}}')"
 {
   printf 'runner      %s\n' "$(sha256sum <"$RUNNER" | cut -d' ' -f1)"
   printf 'Dockerfile  %s\n' "$(sha256sum <"$DOCKERFILE" | cut -d' ' -f1)"
+  (cd "$CTX" && sha256sum licenses/*)
   devnet_hook azure_image_inputs
   printf 'image       %s\n' "$d1"
   printf 'setup       per signer, in SIGNER_SETUP (deploy.sh group-deploy)\n'

@@ -73,4 +73,11 @@ cache. `make loc` prints code line counts per module and per runner build.
 
 ## License
 
-Apache License 2.0 (`Apache-2.0`), see [LICENSE](LICENSE). Vendored third-party code keeps its own license in its folder.
+Unless otherwise noted, first-party code and documentation are licensed under the
+[Apache License 2.0](LICENSE) (`Apache-2.0`). Third-party code, dependencies and
+imported test fixtures retain their own licences and notices; the root licence
+does not replace those terms.
+
+Binary distributions must include the accompanying licence bundle. The cloud
+image builds include it at `/licenses`. See [licence packaging](docs/licensing.md)
+for the bundle contents and redistribution instructions.

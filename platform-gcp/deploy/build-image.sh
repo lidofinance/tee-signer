@@ -73,6 +73,8 @@ mkdir -p "$CTX"
 # Explicit modes, the same as the Dockerfile's COPY --chmod: the image must
 # not depend on the umask of the builder or on the mode of the input files.
 install -m 0555 "$RUNNER" "$CTX/runner"
+mkdir -m 0755 "$CTX/licenses"
+install -m 0644 "$RUNNER.licenses/"* "$CTX/licenses/"
 render_dockerfile "$DOCKERFILE" >"$CTX/Dockerfile"
 chmod 0644 "$CTX/Dockerfile"
 if grep -Eq '@[A-Z_]+@' "$CTX/Dockerfile"; then
@@ -80,8 +82,11 @@ if grep -Eq '@[A-Z_]+@' "$CTX/Dockerfile"; then
 fi
 
 # More files of the image, "file|source|mode in the image" each, checked in
-# the image below like the runner. Only the build overlay adds any.
+# the image below like the runner. The build overlay may add files too.
 extra=()
+for notice in "$CTX/licenses/"*; do
+  extra+=("licenses/${notice##*/}|$notice|-rw-r--r--")
+done
 devnet_hook gcp_image_ctx "$CTX"
 
 build_once() { # build_once <n>: archive in $OUT/runner-<n>.oci.tar, prints the manifest digest
@@ -145,6 +150,7 @@ devnet_hook gcp_image_check_entrypoint
 {
   printf 'runner      %s\n' "$(sha256sum <"$RUNNER" | cut -d' ' -f1)"
   printf 'Dockerfile  %s (rendered)\n' "$(sha256sum <"$CTX/Dockerfile" | cut -d' ' -f1)"
+  (cd "$CTX" && sha256sum licenses/*)
   printf 'image       %s\n' "$d1"
   printf 'network     %s\n' "$NETWORK_ENTRY"
   devnet_hook gcp_image_inputs "$CTX"

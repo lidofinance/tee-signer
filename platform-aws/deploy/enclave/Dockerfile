@@ -56,6 +56,7 @@
 # Without it the image, and so PCR0 and PCR2, would follow the builder's umask.
 FROM scratch
 COPY --chmod=0555 runner /runner
+COPY --chmod=u=rwX,go=rX licenses/ /licenses/
 ENTRYPOINT ["/runner", \
   "-platform", "nitro", \
   "-setup", "platform", \

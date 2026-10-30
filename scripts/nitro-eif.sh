@@ -125,6 +125,8 @@ mkdir -p "$CTX"
 # Explicit modes, the same as the Dockerfile's COPY --chmod: the image, and
 # so PCR0 and PCR2, must not depend on the builder's umask.
 install -m 0555 "$RUNNER" "$CTX/runner"
+mkdir -m 0755 "$CTX/licenses"
+install -m 0644 "$RUNNER.licenses/"* "$CTX/licenses/"
 install -m 0644 "$ROOT/platform-aws/deploy/enclave/Dockerfile" "$CTX/Dockerfile"
 # Do not reset mtimes here: BuildKit skips re-sending context files whose
 # size and mtime look unchanged, which once put a stale runner in the
@@ -157,6 +159,13 @@ build_eif() { # build_eif <tag>
   [ "$got" = "$(sha256sum <"$CTX/runner" | cut -d" " -f1)" ] || { docker rm -f "$cid" >/dev/null; die "/runner in the image differs from $CTX/runner"; }
   gotmode="$(docker cp "$cid:/runner" - | tar -tv | cut -c1-10)"
   [ "$gotmode" = "-r-xr-xr-x" ] || { docker rm -f "$cid" >/dev/null; die "/runner has mode $gotmode in the image, want -r-xr-xr-x"; }
+  local notice
+  for notice in "$CTX/licenses/"*; do
+    got="$(docker cp "$cid:/licenses/${notice##*/}" - | tar -xO | sha256sum | cut -d' ' -f1)"
+    [ "$got" = "$(sha256sum <"$notice" | cut -d' ' -f1)" ] || { docker rm -f "$cid" >/dev/null; die "/licenses/${notice##*/} differs from $notice"; }
+    gotmode="$(docker cp "$cid:/licenses/${notice##*/}" - | tar -tv | cut -c1-10)"
+    [ "$gotmode" = "-rw-r--r--" ] || { docker rm -f "$cid" >/dev/null; die "/licenses/${notice##*/} has mode $gotmode, want -rw-r--r--"; }
+  done
   docker rm -f "$cid" >/dev/null
   # The command: the setup from the platform, the NTS clock, the mark log
   # of the setup as the clone protection. No operator value, no option the
@@ -206,6 +215,7 @@ bash "$ROOT/scripts/kms-policy.sh" render "$OUT/build-enclave-$arch.json" "$OUT/
 {
   printf 'runner      %s (runner-aws%s)\n' "$(sha256sum <"$RUNNER" | cut -d' ' -f1)" "$SUFFIX"
   printf 'Dockerfile  %s\n' "$(sha256sum <"$CTX/Dockerfile" | cut -d' ' -f1)"
+  (cd "$CTX" && sha256sum licenses/*)
   printf 'setup       from the host agent at every start (chain, client CA, KMS key, region, mark bucket, signer)\n'
   printf 'clock       nts: NTS-KE via vsock 8005-8008, NTP via udprelay on vsock 7102\n'
   printf 'nitro-cli  %s, target-arch.patch %s, built on %s, image %s\n' "$NITRO_CLI_TAG" \
@@ -217,7 +227,7 @@ log "inputs and PCRs in $OUT/inputs-$arch.txt; the setup goes to the parent (pla
 
 # The EIF itself: kernel, the runner in the ramdisk, nothing of an operator,
 # PCRs recomputed without nitro-cli.
-bash "$ROOT/scripts/eif-check.sh" "$OUT/runner-$arch.eif" "$arch" --runner "$RUNNER" --generic \
+bash "$ROOT/scripts/eif-check.sh" "$OUT/runner-$arch.eif" "$arch" --runner "$RUNNER" --licenses "$CTX/licenses" --generic \
   --build-json "$OUT/build-enclave-$arch.json" --blobs "$NITRO_CLI_DIR/blobs/$arch"
 
 ls -l "$OUT"/runner-"$arch"*.eif
