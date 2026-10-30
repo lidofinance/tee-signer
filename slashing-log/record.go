@@ -66,15 +66,15 @@ type Pending struct {
 	EffectiveAt uint64 // unix seconds: the later of activate_at and arrival + wait
 }
 
-// OrderKind is the kind of a pending order (section 10, phase 2).
+// OrderKind is the kind of a pending order (section 10, phase 2). The
+// handover order is the only kind: Parse and SetState refuse every other,
+// so a record of an earlier build with a key generation order (kind 2)
+// does not read.
 type OrderKind uint8
 
-const (
-	OrderHandover OrderKind = 1
-	OrderDKG      OrderKind = 2
-)
+const OrderHandover OrderKind = 1
 
-// Order is a pending handover or DKG order (phase 2).
+// Order is a pending handover order (phase 2).
 type Order struct {
 	Kind  OrderKind
 	Hash  [32]byte
@@ -545,7 +545,7 @@ func (r *Record) check() error {
 			return bad("pending update at or below the active version, or without a body copy")
 		}
 	}
-	if o := r.State.Order; o != nil && o.Kind != OrderHandover && o.Kind != OrderDKG {
+	if o := r.State.Order; o != nil && o.Kind != OrderHandover {
 		return bad(fmt.Sprintf("order kind %d", o.Kind))
 	}
 	if d := r.Exits; d != nil {

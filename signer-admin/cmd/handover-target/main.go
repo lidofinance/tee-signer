@@ -209,7 +209,7 @@ func identityCmd(args []string) error {
 	if st.SetupHash != sh {
 		return fmt.Errorf("the target attests setup %x, its setup file hashes to %x", st.SetupHash[:8], sh[:8])
 	}
-	keys := st.KeyOrigin.Generated + st.KeyOrigin.Imported
+	keys := st.KeyOrigin.Imported
 	switch {
 	case st.Locked.Version != 0 || st.Open.Version != 0:
 		return fmt.Errorf("the target is past version 0 (locked %d, open %d); a handover target starts at version 0", st.Locked.Version, st.Open.Version)
@@ -246,7 +246,7 @@ func importCmd(args []string) error {
 	dir := fs.String("pages", "", "the folder handover-source wrote")
 	parallel := fs.Int("parallel", 4, "requests at a time, each on its own connection")
 	per := fs.Int("batch", 32, "shares per request")
-	asImported := fs.Bool("as-imported", false, "count every share as imported: for a target that cannot check the source's origin proof")
+	asImported := fs.Bool("as-imported", false, "skip the origin checks: for a target that cannot check the source's origin proof")
 	limit := fs.Int("limit", 0, "store at most this many new shares, then stop (a first look, or a test of the resume); 0: all")
 	fs.Parse(args)
 	if *connPath == "" || *orderPath == "" || *dir == "" {
@@ -464,13 +464,13 @@ feed:
 		return err
 	}
 	ko := id.State.KeyOrigin
-	done := id.State.Order.Kind == 0 && ko.Generated+ko.Imported >= m.Total
+	done := id.State.Order.Kind == 0 && ko.Imported >= m.Total
 	rate := 0.0
 	if stored > 0 {
 		rate = elapsed.Seconds() / float64(stored)
 	}
-	fmt.Printf("handover import: %d new shares stored in %.1f s (%.3f s a share), %d held before; the target holds %d of %d (generated %d, imported %d); done %t\n",
-		stored, elapsed.Seconds(), rate, skipped+heldNow, ko.Generated+ko.Imported, m.Total, ko.Generated, ko.Imported, done)
+	fmt.Printf("handover import: %d new shares stored in %.1f s (%.3f s a share), %d held before; the target holds %d of %d; done %t\n",
+		stored, elapsed.Seconds(), rate, skipped+heldNow, ko.Imported, m.Total, done)
 	switch {
 	case !done && limited:
 		return fmt.Errorf("stopped at -limit %d: the import has not ended; run import again without -limit", *limit)

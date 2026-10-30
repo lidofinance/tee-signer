@@ -307,7 +307,7 @@ func TestUpdateHashedSignature(t *testing.T) {
 	header, _ := u.Body.Header()
 	u.Approvals[1].Signature = SignApproval(approverKey(3), CtxImportOrder, true, header)
 	if err := u.Verify(&s.Locked.Approvers); err == nil {
-		t.Fatal("a signature under the DKG order's hashed context verified")
+		t.Fatal("a signature under the import order's hashed context verified")
 	}
 	r := signedUpdate(t, s, rotationBody(s), []byte{0, 1}, []byte{2, 3, 4})
 	if r.NewSet[0].Signature, err = r.Body.SignHashed(approverKey(2)); err != nil {

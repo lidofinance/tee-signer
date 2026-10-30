@@ -36,7 +36,7 @@ enough.
 | time | 8 | unix seconds from the trusted clock (the host clock on the flag path); the age check reads it |
 | locked group | 53, or 113 with a pending update | see below |
 | open group | 53, or 113 with a pending update | see below |
-| pending order | 1, or 42 | presence byte, then kind (1 handover; 2 was the DKG order of earlier builds), hash, act time (phase 2) |
+| pending order | 1, or 42 | presence byte, then kind (1 handover, the only kind; a reader refuses any other), hash, act time (phase 2) |
 | target | 1, or 33 | presence byte, then the `setup_hash` a tombstone hands over to |
 | exits | 1, or 19 + 104 per exit | presence byte, then the day (8), the stake counted that day in Gwei (8), the number of exits (2, up to 200), and per exit the validator key (48), index (8), exit epoch (8), stake (8) and the approval's nonce (32) |
 | source gate | 1, or 9 | presence byte, then the source floor epoch (see "Source gate") |

@@ -28,11 +28,11 @@ func TestSSIStorage01SecondShareDoesNotReplaceTheFirst(t *testing.T) {
 	stale := oneKey(t, e) // the list a request read before either share
 	pk := newPubkey(t)
 	a, b := newSecret(t), newSecret(t)
-	ka, err := e.srv.addShareOf(pk, &a, 7, nil, "handover", shareOrigin{}, stale)
+	ka, err := e.srv.addShareOf(pk, &a, 7, nil, "handover", stale)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.srv.addShareOf(pk, &b, 8, nil, "handover", shareOrigin{}, stale); err == nil {
+	if _, err := e.srv.addShareOf(pk, &b, 8, nil, "handover", stale); err == nil {
 		t.Fatal("a second share of a loaded validator was taken")
 	}
 	e.restart()
@@ -42,33 +42,9 @@ func TestSSIStorage01SecondShareDoesNotReplaceTheFirst(t *testing.T) {
 	}
 }
 
-// APSTATE-01: the key origin of the losing share was noted before its
-// load failed, so an imported share counted as generated. Now the origin
-// is noted only for a share that loaded.
-func TestAPSTATE01LoserOriginNotCounted(t *testing.T) {
-	e := newTgtEnv(t, "dev", nil)
-	stale := oneKey(t, e)
-	pk := newPubkey(t)
-	a, b := newSecret(t), newSecret(t)
-	if _, err := e.srv.addShareOf(pk, &a, 7, nil, "handover", shareOrigin{}, stale); err != nil {
-		t.Fatal(err)
-	}
-	gen := shareOrigin{generated: true, order: make([]byte, 32)}
-	if _, err := e.srv.addShareOf(pk, &b, 7, nil, "handover", gen, stale); err == nil {
-		t.Fatal("a second share of a loaded validator was taken")
-	}
-	if ko := e.srv.SetupState().KeyOrigin; ko.Generated != 0 || ko.Imported != 2 {
-		t.Fatalf("key origin %+v, want two imported", ko)
-	}
-	e.restart()
-	if ko := e.srv.SetupState().KeyOrigin; ko.Generated != 0 || ko.Imported != 2 {
-		t.Fatalf("after a restart: key origin %+v, want two imported", ko)
-	}
-}
-
 // The same under the race detector: many requests at once for one
-// validator, each with its own share and origin. One wins; the stored
-// record, the loaded share and the key origin all name the winner.
+// validator, each with its own share. One wins; the stored record and the
+// loaded share name the winner, and the key origin counts two keys.
 func TestShareAdmissionConcurrent(t *testing.T) {
 	e := newTgtEnv(t, "dev", nil)
 	stale := oneKey(t, e)
@@ -76,18 +52,13 @@ func TestShareAdmissionConcurrent(t *testing.T) {
 	const n = 8
 	var wg sync.WaitGroup
 	won := make([]*backend.ValidatorKey, n)
-	gens := make([]bool, n)
 	for i := range n {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			sec := newSecret(t)
-			o := shareOrigin{}
-			if i%2 == 1 {
-				o = shareOrigin{generated: true}
-			}
-			if k, err := e.srv.addShareOf(pk, &sec, uint64(i), &testMark, "handover", o, stale); err == nil {
-				won[i], gens[i] = &k, o.generated
+			if k, err := e.srv.addShareOf(pk, &sec, uint64(i), &testMark, "handover", stale); err == nil {
+				won[i] = &k
 			}
 		}()
 	}
@@ -111,8 +82,8 @@ func TestShareAdmissionConcurrent(t *testing.T) {
 		if len(keys) != 2 || i < 0 || keys[i].SharePubkey != won[w].SharePubkey || keys[i].Index != uint64(w) {
 			t.Fatalf("%s: loaded %+v, the winner %+v", when, keys, won[w])
 		}
-		if ko := e.srv.SetupState().KeyOrigin; (ko.Generated == 1) != gens[w] || ko.Generated+ko.Imported != 2 {
-			t.Fatalf("%s: key origin %+v, the winner generated %v", when, ko, gens[w])
+		if ko := e.srv.SetupState().KeyOrigin; ko.Imported != 2 {
+			t.Fatalf("%s: key origin %+v, want two keys", when, ko)
 		}
 	}
 	check("before a restart")
@@ -130,7 +101,7 @@ func TestShareAdmissionConcurrent(t *testing.T) {
 // such a page is refused, and the validator signs once the import ends.
 func TestAPSTATE02RepeatedShareInAPage(t *testing.T) {
 	e := newTgtEnv(t, "dev", nil)
-	src := newSource(t, 0, 4, nil, testMark)
+	src := newSource(t, 4, testMark)
 	order, hash := e.order([]byte{1, 2}, nil)
 	pages := src.pages(e.sealTo(), hash, 2)
 	e.mustImp(order, pages[0], 0)
@@ -151,7 +122,7 @@ func TestAPSTATE02RepeatedShareInAPage(t *testing.T) {
 func oneKey(t *testing.T, e *tgtEnv) []backend.ValidatorKey {
 	t.Helper()
 	sec := newSecret(t)
-	if _, err := e.srv.addShareOf(newPubkey(t), &sec, 1, nil, "sealed", shareOrigin{}, nil); err != nil {
+	if _, err := e.srv.addShareOf(newPubkey(t), &sec, 1, nil, "sealed", nil); err != nil {
 		t.Fatal(err)
 	}
 	return e.signer.Keys()

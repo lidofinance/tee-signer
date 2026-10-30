@@ -124,11 +124,6 @@ type Server struct {
 	// one share per validator at a time (SSI-STORAGE-01).
 	admitMu   sync.Mutex
 	admitting map[backend.Pubkey]bool
-	// generated holds the loaded keys made in key generation, with the hash
-	// of their DKG order (nil under a policy file). Every other loaded key
-	// was imported (keyorigin.go).
-	originMu  sync.Mutex
-	generated map[backend.Pubkey][]byte
 	// attestLimit counts the fresh attestations of attest-only clients
 	// (limit.go); limitNow, if set, is its clock (tests).
 	attestLimit attestLimit
@@ -147,17 +142,12 @@ type Server struct {
 	connsNote, handshakesNote, inflightNote limitNote
 }
 
-// shareRecord is the sealed form of a stored share. Generated and Order
-// say where it came from: a share made in key generation inside this
-// runner (and the DKG order it was made under), or else an import. The
-// record is sealed, so the host cannot make an imported share look
-// generated.
+// shareRecord is the sealed form of a stored share. parseShareRecord
+// reads it and refuses a field it does not have (keyorigin.go).
 type shareRecord struct {
-	Pubkey    backend.Pubkey `json:"pubkey"`
-	Secret    []byte         `json:"secret"`
-	Index     uint64         `json:"index"`
-	Generated bool           `json:"generated,omitempty"`
-	Order     []byte         `json:"order,omitempty"`
+	Pubkey backend.Pubkey `json:"pubkey"`
+	Secret []byte         `json:"secret"`
+	Index  uint64         `json:"index"`
 	// History: the import that stored the share carried attestation
 	// maxima, which raised the mark log first. A restart exempts the key
 	// from the source gate (state.Hooks.NoteHistory). The host can roll
@@ -232,10 +222,9 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 			errs = append(errs, fmt.Errorf("%s: unseal: %w", k, err))
 			continue
 		}
-		var rec shareRecord
-		err = json.Unmarshal(plain, &rec)
+		rec, err := parseShareRecord(plain)
 		clear(plain)
-		if err != nil || rec.Pubkey != pk || len(rec.Secret) != 32 || !validOrigin(&rec) {
+		if err != nil || rec.Pubkey != pk || len(rec.Secret) != 32 {
 			clear(rec.Secret)
 			errs = append(errs, fmt.Errorf("%s: bad record", k))
 			continue
@@ -249,9 +238,6 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", k, err))
 			continue
-		}
-		if rec.Generated {
-			s.noteGenerated(pk, rec.Order)
 		}
 		if rec.History {
 			s.Hooks.NoteHistory(pk)
@@ -717,29 +703,19 @@ func describe(m backend.Message) string {
 // addShare seals and stores an imported share and loads it into the
 // signer. how is "plaintext" or "sealed", for the log.
 func (s *Server) addShare(pk backend.Pubkey, secret *[32]byte, index uint64, interchange *backend.Watermark, how string) (backend.ValidatorKey, error) {
-	return s.addShareOf(pk, secret, index, interchange, how, shareOrigin{}, nil)
+	return s.addShareOf(pk, secret, index, interchange, how, nil)
 }
 
-// shareOrigin is the key origin a stored share keeps (keyorigin.go): made
-// in key generation under the DKG order order (nil under a policy file),
-// or else imported.
-type shareOrigin struct {
-	generated bool
-	order     []byte
-}
-
-// addShareOf is addShare with the share's key origin. keys, if not nil, is
-// the signer's list the duplicate check uses (a handover import takes it
-// once per request); nil reads it now.
+// addShareOf is addShare with keys, the signer's list the duplicate check
+// uses (a handover import takes it once per request); nil reads it now.
 //
 // One share per validator is added at a time, and the duplicate check
 // looks at the core after the caller's list: keys may be older than a
 // share of pk that another request loaded since. A second share of a
 // validator is refused before it is stored, so it never replaces the
-// stored record of the share that loaded (SSI-STORAGE-01), and its key
-// origin is not noted (APSTATE-01).
+// stored record of the share that loaded (SSI-STORAGE-01).
 func (s *Server) addShareOf(pk backend.Pubkey, secret *[32]byte, index uint64, interchange *backend.Watermark, how string,
-	origin shareOrigin, keys []backend.ValidatorKey) (backend.ValidatorKey, error) {
+	keys []backend.ValidatorKey) (backend.ValidatorKey, error) {
 	if !s.reserve(pk) {
 		return backend.ValidatorKey{}, &backend.RefusedError{Code: backend.StatusDuplicate, Detail: "another request is adding this validator"}
 	}
@@ -775,7 +751,7 @@ func (s *Server) addShareOf(pk backend.Pubkey, secret *[32]byte, index uint64, i
 			return backend.ValidatorKey{}, backend.Refused(backend.StatusStorage, "raise the mark log to the interchange maxima: %v", err)
 		}
 	}
-	blob, err := s.sealRecord(shareRecord{Pubkey: pk, Secret: secret[:], Index: index, Generated: origin.generated, Order: origin.order,
+	blob, err := s.sealRecord(shareRecord{Pubkey: pk, Secret: secret[:], Index: index,
 		History: interchange != nil && interchange.HasAttestation})
 	if err != nil {
 		return backend.ValidatorKey{}, err
@@ -783,12 +759,7 @@ func (s *Server) addShareOf(pk backend.Pubkey, secret *[32]byte, index uint64, i
 	if err := s.Platform.Store.Put(shareKey(pk), blob); err != nil {
 		return backend.ValidatorKey{}, backend.Refused(backend.StatusPlatform, "store share: %v", err)
 	}
-	k, err := s.loadShare(pk, secret, index, interchange, how)
-	if origin.generated && k.Pubkey == pk {
-		// Only a loaded key counts (keyOrigin), and only its own origin.
-		s.noteGenerated(pk, origin.order)
-	}
-	return k, err
+	return s.loadShare(pk, secret, index, interchange, how)
 }
 
 // reserve marks pk as being added; false if it is already.
@@ -880,13 +851,6 @@ func (s *Server) checkShare(pk backend.Pubkey, secret *[32]byte, keys []backend.
 		return &backend.RefusedError{Code: backend.StatusBadKey, Detail: "share secret"}
 	}
 	return nil
-}
-
-// sealShare seals a share for the store. generated marks a share made in
-// key generation inside this runner, under the DKG order order (nil under
-// a policy file); any other share is an import.
-func (s *Server) sealShare(pk backend.Pubkey, secret *[32]byte, index uint64, generated bool, order []byte) ([]byte, error) {
-	return s.sealRecord(shareRecord{Pubkey: pk, Secret: secret[:], Index: index, Generated: generated, Order: order})
 }
 
 // sealRecord seals a share record for the store.

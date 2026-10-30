@@ -1,5 +1,5 @@
 // Package approver loads approver keys and signs what approvers sign:
-// config updates, DKG orders, handover orders, import orders and exit
+// config updates, handover orders, import orders and exit
 // approvals. An approver signs one of
 // two forms of the same body: the direct form, Ed25519 over the kind's
 // context and the body, or the hashed form, Ed25519 over 32 bytes, the

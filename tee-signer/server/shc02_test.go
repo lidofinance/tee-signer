@@ -22,7 +22,7 @@ func TestSHC02HandoverMarkAboveTheHorizonRefused(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			e := newTgtEnv(t, "dev", nil)
 			before, v := e.marks.Mark()
-			src := newSource(t, 0, 2, [][32]byte{{0xd1}}, mark)
+			src := newSource(t, 2, mark)
 			order, hash := e.order([]byte{1, 2}, nil)
 			page := src.pages(e.sealTo(), hash, 8)[0]
 			if _, err := e.imp(order, page, handover.ImportAsImported); err == nil {

@@ -2,9 +2,7 @@ package platform
 
 import "fmt"
 
-// Change is a set of store writes that belong together: a key generation
-// commit (the shares and their key records), the key records a lock
-// closes. Apply writes it.
+// Change is a set of store writes that belong together. Apply writes it.
 type Change struct{ ops []ChangeOp }
 
 // ChangeOp is one write of a Change: a put, or a delete when Delete is set.

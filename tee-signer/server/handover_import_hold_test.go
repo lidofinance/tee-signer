@@ -19,7 +19,7 @@ import (
 )
 
 // Tests that the order slot of a handover import holds until every share
-// is in (importslot.go): no config update, share or DKG order clears it or
+// is in (importslot.go): no config update or share clears it or
 // slips in, also across a restart.
 
 // cfg is the target as the config update tests see it (config_test.go),
@@ -61,7 +61,7 @@ func (e *tgtEnv) importUpdates() map[string][]byte {
 // the same rotation is taken.
 func TestHandoverImportRefusesConfigUpdates(t *testing.T) {
 	e := newTgtEnv(t, "dev", nil)
-	src := newSource(t, 24, 0, [][32]byte{{0xd1}}, testMark)
+	src := newSource(t, 24, testMark)
 	order, hash := e.order([]byte{1, 2}, nil)
 	pages := src.pages(e.sealTo(), hash, 8)
 	e.mustImp(order, pages[0], 0)
@@ -121,7 +121,7 @@ func TestHandoverImportRefusesConfigUpdates(t *testing.T) {
 // under its order, which the old set signed, to its end.
 func TestHandoverImportSlotOutlivesRotation(t *testing.T) {
 	e := newTgtEnv(t, "dev", nil)
-	src := newSource(t, 16, 0, [][32]byte{{0xd1}}, testMark)
+	src := newSource(t, 16, testMark)
 	order, hash := e.order([]byte{1, 2}, nil)
 	pages := src.pages(e.sealTo(), hash, 8)
 	e.mustImp(order, pages[0], 0)
@@ -165,14 +165,13 @@ func TestHandoverImportSlotOutlivesRotation(t *testing.T) {
 	}
 	// Another order of the old set counts for nothing now.
 	o2, h2 := e.order([]byte{1, 2}, func(b *handoverorder.Body) { b.NotAfter++ })
-	_, err := e.imp(o2, newSource(t, 1, 0, [][32]byte{{0xd1}}, testMark).pages(e.sealTo(), h2, 4)[0], 0)
+	_, err := e.imp(o2, newSource(t, 1, testMark).pages(e.sealTo(), h2, 4)[0], 0)
 	refusedImport(t, err, backend.StatusBadRequest, "approver")
 }
 
 // The slot is written only on a runner still at version 0 with no key: an
 // update or a share that came after the first request's checks stops the
-// start. After the start a sealed import, a DKG order and a new key
-// generation session are refused.
+// start. After the start a sealed import is refused.
 func TestHandoverImportStartChecks(t *testing.T) {
 	start := func(e *tgtEnv, hash [32]byte) error {
 		im := e.srv.imp.(*importer)
@@ -214,7 +213,7 @@ func TestHandoverImportStartChecks(t *testing.T) {
 
 	// After the start.
 	e = newTgtEnv(t, "dev", nil)
-	src := newSource(t, 8, 0, [][32]byte{{0xd1}}, testMark)
+	src := newSource(t, 8, testMark)
 	order, hash := e.order([]byte{1, 2}, nil)
 	e.mustImp(order, src.pages(e.sealTo(), hash, 4)[0], 0)
 	sk, _ = software.NewSecret()

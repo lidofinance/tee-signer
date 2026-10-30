@@ -48,14 +48,14 @@ var testCarryHash = [32]byte{0xca}
 
 // share is a sealed handed-over share of a fresh key, with the mark and
 // the origin in its header, under testCarryHash.
-func share(t *testing.T, to *sealedimport.Key, mark backend.Watermark, origin uint8, order [32]byte, okey ed25519.PrivateKey) (*Share, [32]byte) {
+func share(t *testing.T, to *sealedimport.Key, mark backend.Watermark, okey ed25519.PrivateKey) (*Share, [32]byte) {
 	t.Helper()
 	var sec [32]byte
 	rand.Read(sec[:])
 	pk := backend.Pubkey{1, 2}
 	rand.Read(pk[2:]) // a page names each validator once
 	s := &Share{SealedImportRequest: backend.SealedImportRequest{Pubkey: pk, SharePubkey: backend.Pubkey{3, 4},
-		Index: 77, Interchange: &mark}, Origin: origin, Order: order}
+		Index: 77, Interchange: &mark}, Origin: OriginImported}
 	id := &backend.Identity{}
 	to.Fill(id)
 	var err error
@@ -77,7 +77,7 @@ func TestShare(t *testing.T) {
 	_, okey, _ := ed25519.GenerateKey(rand.Reader)
 	opub := [32]byte(okey.Public().(ed25519.PublicKey))
 	mark := backend.Watermark{HasAttestation: true, SourceEpoch: 10, TargetEpoch: 11, HasBlock: true, BlockSlot: 400}
-	s, sec := share(t, to, mark, OriginGenerated, [32]byte{0xd}, okey)
+	s, sec := share(t, to, mark, okey)
 	enc, err := s.Encode()
 	if err != nil {
 		t.Fatal(err)
@@ -99,23 +99,14 @@ func TestShare(t *testing.T) {
 	if _, err := to.Open(&back.SealedImportRequest); err == nil {
 		t.Fatal("a handed-over share opened as a plain sealed import")
 	}
-	// Generated to imported: the AAD and the signature both break.
-	imp := *back
-	imp.Origin, imp.Order = OriginImported, [32]byte{}
-	if _, err := to.OpenAAD(imp.Sealed, imp.AAD(testCarryHash)); err == nil {
-		t.Fatal("a share opened with another origin")
-	}
-	if err := imp.VerifyOrigin(opub); err == nil {
-		t.Fatal("the origin signature verified for another origin")
-	}
-	// Another order hash, another mark: the same.
+	// Another origin, another mark: the AAD and the signature both break.
 	o2 := *back
-	o2.Order[0] ^= 1
+	o2.Origin = 2
 	low := *back
 	m := mark
 	m.TargetEpoch--
 	low.Interchange = &m
-	for name, x := range map[string]*Share{"order": &o2, "mark": &low} {
+	for name, x := range map[string]*Share{"origin": &o2, "mark": &low} {
 		if _, err := to.OpenAAD(x.Sealed, x.AAD(testCarryHash)); err == nil {
 			t.Fatalf("a share opened with another %s", name)
 		}
@@ -133,21 +124,32 @@ func TestShare(t *testing.T) {
 	if _, err := to.OpenAAD(plain.Sealed, plain.AAD(testCarryHash)); err == nil {
 		t.Fatal("a plain sealed import opened as a handed-over share")
 	}
-	// Origin rules.
-	bad := *back
-	bad.Origin = 3
-	if _, err := bad.Encode(); err == nil {
-		t.Fatal("origin 3 encoded")
+	// Origin rules: only origin 1. Origin 2 was a key made in key
+	// generation in earlier builds, with its order's hash in the reserved
+	// bytes; such a share does not decode.
+	for _, o := range []uint8{0, 2, 3} {
+		bad := *back
+		bad.Origin = o
+		if _, err := bad.Encode(); err == nil || !strings.Contains(err.Error(), "want 1 (imported)") {
+			t.Errorf("origin %d encoded: %v", o, err)
+		}
 	}
-	bad = *back
-	bad.Origin = OriginImported
-	if _, err := bad.Encode(); err == nil || !strings.Contains(err.Error(), "imported share names a DKG order") {
-		t.Fatalf("imported with an order: %v", err)
+	at := func(set map[int]byte) []byte {
+		b := bytes.Clone(enc)
+		for i, v := range set {
+			b[i] = v
+		}
+		return b
 	}
+	h := wireadmin.SealedHeaderLen
 	for name, b := range map[string][]byte{
-		"short":    enc[:len(enc)-1],
-		"trailing": append(bytes.Clone(enc), 0),
-		"origin 0": func() []byte { b := bytes.Clone(enc); b[wireadmin.SealedHeaderLen] = 0; return b }(),
+		"short":                    enc[:len(enc)-1],
+		"trailing":                 append(bytes.Clone(enc), 0),
+		"origin 0":                 at(map[int]byte{h: 0}),
+		"origin 2":                 at(map[int]byte{h: 2}),
+		"origin 2 with order hash": at(map[int]byte{h: 2, h + 1: 0xd, h + 32: 0xd}),
+		"first reserved byte":      at(map[int]byte{h + 1: 1}),
+		"last reserved byte":       at(map[int]byte{h + 32: 1}),
 	} {
 		if _, err := DecodeShare(b); err == nil {
 			t.Errorf("share %s decoded", name)
@@ -162,7 +164,7 @@ func TestResponse(t *testing.T) {
 	r := &Response{Mark: mark, Total: 3, Carry: Carry{Set: KeySet{Total: 3}}, Origin: OriginProof{Key: [32]byte(okey.Public().(ed25519.PublicKey)), Nonce: []byte("n"),
 		Attestation: &backend.Attestation{Platform: "dev", Format: "dev-json", UserData: []byte{1}, Document: []byte("{}")}}}
 	for i := range 3 {
-		s, _ := share(t, to, mark, OriginImported, [32]byte{}, okey)
+		s, _ := share(t, to, mark, okey)
 		s.Pubkey[0] = byte(i)
 		s.SignOrigin(okey)
 		r.Shares = append(r.Shares, *s)
@@ -182,7 +184,7 @@ func TestResponse(t *testing.T) {
 	// A share with another mark than the page's is refused.
 	m2 := mark
 	m2.SourceEpoch++
-	s, _ := share(t, to, m2, OriginImported, [32]byte{}, okey)
+	s, _ := share(t, to, m2, okey)
 	r.Shares = append(r.Shares, *s)
 	enc, _ = r.Encode()
 	if _, err := DecodeResponse(enc); err == nil || !strings.Contains(err.Error(), "handed-over mark") {

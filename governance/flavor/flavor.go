@@ -118,8 +118,8 @@ func (l Limits) Wait(active *setupwire.Locked, u *setupwire.UpdateBody) uint64 {
 }
 
 // OrderWait is handoverorder.Wait under l: the time lock in force, at least the
-// images minimum. On the dev platform a runner waits the time lock alone
-// (runner/keygen); dev says so.
+// images minimum. On the dev platform a runner waits the time lock alone;
+// dev says so.
 func (l Limits) OrderWait(active *setupwire.Locked, dev bool) uint64 {
 	if dev {
 		return l.TimeLock(active)

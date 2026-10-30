@@ -11,7 +11,7 @@
 //	body   = 'H' version:u8(1) cluster_id[32] chain_hash[32] not_after:u64
 //	         source target
 //	runner = name:str setup_hash[32] settings
-//	settings = verifier:u8 image (as in a DKG order participant):
+//	settings = verifier:u8 image:
 //	           aws-nitro: pcr0..pcr2[144] pcr3[48] has:u8 [pcr8[48]]
 //	           | azure-maa: cce_policy_sha256[32] maa_host:str compliance:u8
 //	           | gcp-cs: image_digest[32] audience:str hwmodel_count:u8 {hwmodel:str}
@@ -267,8 +267,7 @@ func (b *Body) CheckImage(allowed []setupwire.Image, devOK bool) error {
 
 // Wait is how long an order waits from its arrival before it acts: the
 // change delay in force, and at least the images minimum, because it decides which code holds the shares next. dev is
-// the dev platform, which protects nothing and waits its change delay only,
-// as DKG orders do there.
+// the dev platform, which protects nothing and waits its change delay only.
 func Wait(active *setupwire.Locked, dev bool) uint64 {
 	if dev {
 		return active.ChangeDelay()

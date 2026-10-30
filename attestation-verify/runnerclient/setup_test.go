@@ -189,7 +189,7 @@ func TestMinVersions(t *testing.T) {
 	}
 }
 
-// NewVerifier, which share-import and the key generation peers use, runs
+// NewVerifier, which share-import uses, runs
 // the setup checks after the platform check.
 func TestNewVerifierChecksTheSetup(t *testing.T) {
 	a := Attestation{Verifier: VerifierDev, SetupSHA256: pinOf(testSetupHash), MinLockedVersion: 2}
@@ -311,7 +311,7 @@ func TestSetupStateHelpers(t *testing.T) {
 	d := DescribeSetup(&s, before)
 	for _, want := range []string{"setup_sha256=5e70" + strings.Repeat("0", 60), "locked_version=2 locked_sha256=01" + strings.Repeat("0", 62),
 		"locked_pending_version=3", "locked_pending_effective_at=2027-01-15T08:00:00Z", "open_version=1 open_sha256=03",
-		"approver_set_sha256=04", "generated_keys=0 imported_keys=0"} {
+		"approver_set_sha256=04", "imported_keys=0"} {
 		if !strings.Contains(d, want) {
 			t.Fatalf("%q lacks %q", d, want)
 		}
@@ -323,10 +323,10 @@ func TestSetupStateHelpers(t *testing.T) {
 		t.Fatalf("in force: %q", d)
 	}
 	order.KeyReleaseHash = backend.Root{6}
-	order.KeyOrigin = backend.KeyOrigin{Generated: 3, Imported: 1, OrdersHash: backend.Root{7}}
+	order.KeyOrigin = backend.KeyOrigin{Imported: 1}
 	if d := DescribeSetup(&order, at); !strings.Contains(d, "order=handover order_sha256=05") ||
 		!strings.Contains(d, "order_act_at=2027-01-15T08:00:00Z") || !strings.Contains(d, "key_release_sha256=06") ||
-		!strings.Contains(d, "generated_keys=3 imported_keys=1 keygen_orders_sha256=07") {
+		!strings.HasSuffix(d, " imported_keys=1") {
 		t.Fatalf("order: %q", d)
 	}
 	flagPath := backend.SetupState{SetupHash: backend.Root{1, 2, 3}}

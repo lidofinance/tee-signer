@@ -216,7 +216,7 @@ func changeOf(puts map[string][]byte, dels []string) *platform.Change {
 // chunk: the change did not). The same process then writes the change.
 func TestApplyAllOrNothing(t *testing.T) {
 	base := filled(600, "shares/", 1024, 1)
-	// The change: 400 new key records, 300 new shares, 200 changed shares and
+	// The change: 400 new side records, 300 new shares, 200 changed shares and
 	// 10 deletes. It is larger than maxInline, so it writes a segment, and
 	// the merge into segment 0 makes it the whole state: two chunks.
 	puts := filled(400, "shares/k/", 1500, 2)
@@ -348,10 +348,10 @@ func TestCommitsAgainstModel(t *testing.T) {
 	t.Logf("%d entries, %d commits, %d objects, %d bytes written, segments at most %d", len(model), s.writes, s.objects, s.bytesOut, maxSegs)
 }
 
-// Key generation at scale: sessions of 64 keys up to 8,192, each written as
-// the runner writes it (pending record, one change with 64 shares and key
-// records, the committed record, 64 key record updates for the deposits,
-// the expired record deleted). The upload per session stays flat while
+// Batches at scale: 128 sessions of 64 keys, up to 8,192, each a pending
+// object, one change with 64 shares and 64 side records, the pending
+// object rewritten, 64 side record updates, and the session before
+// deleted. The upload per session stays flat while
 // the state grows, every object stays under the read limit, a small change
 // is one small object, and the copy restores the state.
 func TestWriteCostPerSessionIsFlat(t *testing.T) {

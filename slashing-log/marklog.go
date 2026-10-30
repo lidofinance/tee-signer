@@ -1143,7 +1143,7 @@ func (m *MarkLog) SetState(ctx context.Context, st ConfigState) error {
 			return fmt.Errorf("markstore: %s pending version %d is not above the active %d", g, ns.Pending.Version, ns.Version)
 		}
 	}
-	if o := st.Order; o != nil && o.Kind != OrderHandover && o.Kind != OrderDKG {
+	if o := st.Order; o != nil && o.Kind != OrderHandover {
 		return fmt.Errorf("markstore: order kind %d", o.Kind)
 	}
 	for _, ref := range refsOf(&st) {

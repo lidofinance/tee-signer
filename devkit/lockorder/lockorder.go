@@ -13,7 +13,7 @@
 //
 //	type ordersMu struct{}
 //
-//	func (ordersMu) LockName() string { return "keygen.Orders.mu" }
+//	func (ordersMu) LockName() string { return "server.Orders.mu" }
 //
 //	mu lockorder.Mutex[ordersMu]
 package lockorder

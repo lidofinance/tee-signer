@@ -281,8 +281,6 @@ type srcShare struct {
 	pk, share backend.Pubkey
 	secret    [32]byte
 	index     uint64
-	origin    uint8
-	order     [32]byte
 }
 
 // source is a made-up HANDOVER source: its shares, the mark and the
@@ -295,22 +293,17 @@ type source struct {
 	nonce     []byte
 }
 
-// newSource has gen shares made in key generation, split between the DKG
-// orders orders (a zero order: a policy file), then imp imported ones.
-func newSource(t *testing.T, gen, imp int, orders [][32]byte, mark backend.Watermark) *source {
+// newSource has n imported shares.
+func newSource(t *testing.T, n int, mark backend.Watermark) *source {
 	t.Helper()
 	src := &source{t: t, mark: mark, nonce: []byte("handover-import-test-nonce-0001")}
 	_, src.originKey, _ = ed25519.GenerateKey(rand.Reader)
-	for i := range gen + imp {
+	for i := range n {
 		sk, _ := software.NewSecret()
 		other, _ := software.NewSecret()
 		pk, _ := core.PubkeyOf(other) // the validator key; sk is its share
 		sp, _ := core.PubkeyOf(sk)
-		sh := srcShare{pk: pk, share: sp, secret: sk, index: uint64(100 + i), origin: handover.OriginImported}
-		if i < gen {
-			sh.origin, sh.order = handover.OriginGenerated, orders[i%len(orders)]
-		}
-		src.shares = append(src.shares, sh)
+		src.shares = append(src.shares, srcShare{pk: pk, share: sp, secret: sk, index: uint64(100 + i)})
 	}
 	slices.SortFunc(src.shares, func(a, b srcShare) int { return bytes.Compare(a.pk[:], b.pk[:]) })
 	return src
@@ -345,7 +338,7 @@ func (src *source) pages(to *backend.Identity, orderHash [32]byte, per int) []*h
 		r := &handover.Response{Mark: src.mark, Total: uint32(len(src.shares)), Origin: src.proof(orderHash), Carry: carry}
 		for _, sh := range src.shares[start:min(start+per, len(src.shares))] {
 			x := handover.Share{SealedImportRequest: backend.SealedImportRequest{Pubkey: sh.pk, SharePubkey: sh.share, Index: sh.index, Interchange: ic},
-				Origin: sh.origin, Order: sh.order}
+				Origin: handover.OriginImported}
 			if x.Sealed, err = sealedimport.SealAAD(to, x.AAD(ch), &sh.secret); err != nil {
 				src.t.Fatal(err)
 			}
@@ -370,12 +363,11 @@ var testMark = backend.Watermark{HasAttestation: true, SourceEpoch: startEpoch +
 
 // The whole import: the target signs nothing from the first share on, the
 // mark log is raised to the mark before any share is stored, every share
-// keeps its key origin, and the target signs again above the mark once
+// counts as imported, and the target signs again above the mark once
 // the last share is in. Sending the pages again stores nothing.
 func TestHandoverImport(t *testing.T) {
 	e := newTgtEnv(t, "dev", nil)
-	d1, d2 := [32]byte{0xd1}, [32]byte{0xd2}
-	src := newSource(t, 290, 10, [][32]byte{d1, d2, {}}, testMark)
+	src := newSource(t, 300, testMark)
 	order, hash := e.order([]byte{1, 2}, nil)
 
 	// Before: version 0, no key, the first record holds version 0 of both
@@ -426,18 +418,11 @@ func TestHandoverImport(t *testing.T) {
 	}
 
 	r = e.mustImp(order, pages[1], 0)
-	if !r.Done || r.Held != 300 || r.Generated != 290 || r.Imported != 10 {
+	if !r.Done || r.Held != 300 || r.Imported != 300 {
 		t.Fatalf("second page: %+v", r)
 	}
 	st := e.srv.SetupState()
-	want := backend.KeyOrigin{Generated: 290, Imported: 10}
-	var orders [][32]byte
-	for _, sh := range src.shares {
-		if sh.origin == handover.OriginGenerated && sh.order != ([32]byte{}) {
-			orders = append(orders, sh.order)
-		}
-	}
-	want.OrdersHash = backend.KeygenOrdersHash(orders)
+	want := backend.KeyOrigin{Imported: 300}
 	if st.KeyOrigin != want || st.Order.Kind != 0 {
 		t.Fatalf("after the import: key origin %+v, order %+v; want %+v", st.KeyOrigin, st.Order, want)
 	}
@@ -476,7 +461,7 @@ func TestHandoverImport(t *testing.T) {
 // the import goes on, skips what is in and ends.
 func TestHandoverImportRestart(t *testing.T) {
 	e := newTgtEnv(t, "dev", nil)
-	src := newSource(t, 20, 0, [][32]byte{{0xd1}}, testMark)
+	src := newSource(t, 20, testMark)
 	order, hash := e.order([]byte{2, 3}, nil)
 	pages := src.pages(e.sealTo(), hash, 8)
 	e.mustImp(order, pages[0], 0)
@@ -497,7 +482,7 @@ func TestHandoverImportRestart(t *testing.T) {
 			t.Fatalf("the first page again: %+v", last)
 		}
 	}
-	if !last.Done || last.Held != 20 || last.Generated != 20 {
+	if !last.Done || last.Held != 20 || last.Imported != 20 {
 		t.Fatalf("after the restart: %+v", last)
 	}
 	if err := e.attest(src.shares[0].pk, startEpoch+9, startEpoch+10); err != nil {
@@ -509,7 +494,7 @@ func TestHandoverImportRestart(t *testing.T) {
 // once, the import ends once.
 func TestHandoverImportParallel(t *testing.T) {
 	e := newTgtEnv(t, "dev", nil)
-	src := newSource(t, 60, 4, [][32]byte{{0xd1}}, testMark)
+	src := newSource(t, 64, testMark)
 	order, hash := e.order([]byte{1, 3}, nil)
 	pages := src.pages(e.sealTo(), hash, 4)
 	var wg sync.WaitGroup
@@ -527,7 +512,7 @@ func TestHandoverImportParallel(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := e.mustImp(order, pages[0], 0)
-	if !r.Done || r.Held != 64 || r.Generated != 60 || r.Imported != 4 {
+	if !r.Done || r.Held != 64 || r.Imported != 64 {
 		t.Fatalf("%+v", r)
 	}
 	slots := 0
@@ -544,7 +529,7 @@ func TestHandoverImportParallel(t *testing.T) {
 // What breaks the contract is refused, and nothing is stored.
 func TestHandoverImportRefusals(t *testing.T) {
 	e := newTgtEnv(t, "dev", nil)
-	src := newSource(t, 4, 1, [][32]byte{{0xd1}}, testMark)
+	src := newSource(t, 5, testMark)
 	order, hash := e.order([]byte{1, 2}, nil)
 	page := src.pages(e.sealTo(), hash, 8)[0]
 	none := func() {
@@ -627,7 +612,7 @@ func TestHandoverImportRefusals(t *testing.T) {
 	if r := e.mustImp(order, page, 0); !r.Done {
 		t.Fatalf("%+v", r)
 	}
-	other2 := newSource(t, 1, 0, [][32]byte{{0xd1}}, testMark)
+	other2 := newSource(t, 1, testMark)
 	o2, h2 := e.order([]byte{1, 2}, func(b *handoverorder.Body) { b.NotAfter++ })
 	_, err = e.imp(o2, other2.pages(e.sealTo(), h2, 8)[0], 0)
 	refusedImport(t, err, backend.StatusBadRequest, "empty runner only")
@@ -636,7 +621,7 @@ func TestHandoverImportRefusals(t *testing.T) {
 // The runner's state before the first share: an empty target at version 0
 // of a generation 2 setup only.
 func TestHandoverImportNeedsAnEmptyTarget(t *testing.T) {
-	src := newSource(t, 2, 0, [][32]byte{{0xd1}}, testMark)
+	src := newSource(t, 2, testMark)
 
 	gen1 := newTgtEnv(t, "dev", func(s *setupwire.Setup) { s.HandoverGeneration = 1 })
 	order, hash := gen1.order([]byte{1, 2}, nil)
@@ -677,16 +662,16 @@ func TestHandoverImportNeedsAnEmptyTarget(t *testing.T) {
 }
 
 // Off the dev platform the dev source's proof is refused; the operator can
-// count every share as imported instead.
+// skip the origin checks instead.
 func TestHandoverImportAsImported(t *testing.T) {
 	e := newTgtEnv(t, "nitro", nil)
-	src := newSource(t, 5, 0, [][32]byte{{0xd1}}, testMark)
+	src := newSource(t, 5, testMark)
 	order, hash := e.order([]byte{1, 2}, nil)
 	page := src.pages(e.sealTo(), hash, 8)[0]
 	_, err := e.imp(order, page, 0)
 	refusedImport(t, err, backend.StatusBadKey, "-as-imported")
 	r := e.mustImp(order, page, handover.ImportAsImported)
-	if !r.Done || r.Generated != 0 || r.Imported != 5 {
+	if !r.Done || r.Imported != 5 {
 		t.Fatalf("%+v", r)
 	}
 }
@@ -695,7 +680,7 @@ func TestHandoverImportAsImported(t *testing.T) {
 // maxima and the target's log is not raised.
 func TestHandoverImportEmptyMark(t *testing.T) {
 	e := newTgtEnv(t, "dev", nil)
-	src := newSource(t, 3, 0, [][32]byte{{0xd1}}, backend.Watermark{})
+	src := newSource(t, 3, backend.Watermark{})
 	order, hash := e.order([]byte{1, 2}, nil)
 	page := src.pages(e.sealTo(), hash, 8)[0]
 	if page.Shares[0].Interchange != nil {
@@ -715,18 +700,18 @@ func TestHandoverImportEmptyMark(t *testing.T) {
 // order, no other mark, no plain sealed import.
 func TestHandoverImportMidway(t *testing.T) {
 	e := newTgtEnv(t, "dev", nil)
-	src := newSource(t, 8, 0, [][32]byte{{0xd1}}, testMark)
+	src := newSource(t, 8, testMark)
 	order, hash := e.order([]byte{1, 2}, nil)
 	pages := src.pages(e.sealTo(), hash, 4)
 	e.mustImp(order, pages[0], 0)
 
 	o2, h2 := e.order([]byte{1, 2}, func(b *handoverorder.Body) { b.NotAfter++ })
-	_, err := e.imp(o2, newSource(t, 1, 0, [][32]byte{{0xd1}}, testMark).pages(e.sealTo(), h2, 4)[0], 0)
+	_, err := e.imp(o2, newSource(t, 1, testMark).pages(e.sealTo(), h2, 4)[0], 0)
 	refusedImport(t, err, backend.StatusBadRequest, "takes no other order")
 
 	higher := testMark
 	higher.TargetEpoch++
-	_, err = e.imp(order, newSource(t, 1, 0, [][32]byte{{0xd1}}, higher).pages(e.sealTo(), hash, 4)[0], 0)
+	_, err = e.imp(order, newSource(t, 1, higher).pages(e.sealTo(), hash, 4)[0], 0)
 	refusedImport(t, err, backend.StatusBadRequest, "this import has")
 
 	sk, _ := software.NewSecret()

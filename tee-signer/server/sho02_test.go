@@ -34,7 +34,7 @@ func (s *listHookStore) List(prefix string) ([]string, error) {
 // written, and the source signs on.
 func TestSHO02CapacityCheckedUnderTheLock(t *testing.T) {
 	src := newSrcEnv(t, nil)
-	keys := src.addKeys(2, 0, [32]byte{}, &srcMark)
+	keys := src.addKeys(2, &srcMark)
 	tgt := newTargetOf(t, src, nil, nil, func(s *setupwire.Setup) { s.MaxKeys = 2 })
 	src.clock.add(8 * testEpoch)
 	order, _ := srcOrder(t, src, tgt, []byte{1, 2}, nil)
@@ -44,7 +44,7 @@ func TestSHO02CapacityCheckedUnderTheLock(t *testing.T) {
 	src.clock.add(srcDelay)
 	src.srv.Platform.Store = &listHookStore{shareStore: src.store, onList: func() {
 		sec, pk := newSecret(t), newPubkey(t)
-		if _, err := src.srv.addShareOf(pk, &sec, 300, nil, "sealed", shareOrigin{}, nil); err != nil {
+		if _, err := src.srv.addShareOf(pk, &sec, 300, nil, "sealed", nil); err != nil {
 			t.Errorf("the share added meanwhile: %v", err)
 		}
 	}}

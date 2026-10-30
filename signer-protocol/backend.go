@@ -211,8 +211,7 @@ var AttestOnlyClientOID = asn1.ObjectIdentifier{1, 2, 840, 113556, 1, 8000, 2554
 
 // AdminClientOID is the extended key usage of the admin client role
 // (docs/protocol.md, "Client roles"): the only role that may send imports,
-// config updates, exit approvals, orders, key generation and handover
-// messages. It counts only when the leaf and the leaf's direct issuer both
+// config updates, exit approvals, orders and handover messages. It counts only when the leaf and the leaf's direct issuer both
 // list it and that issuer is an intermediate, not the pinned root
 // (runner/attls.Role). Same GUID arc as AttestOnlyClientOID, last arc 2.
 var AdminClientOID = asn1.ObjectIdentifier{1, 2, 840, 113556, 1, 8000, 2554,
@@ -247,7 +246,7 @@ const (
 // ATTEST and HEALTH:
 // setup_hash, the state of both config groups as the mark log holds it, the
 // hash of the active approver set, the pending order, the key-release hash
-// and the key origin. A runner without a setup (the flag path of tests and
+// and the number of loaded keys. A runner without a setup (the flag path of tests and
 // local runners) puts the SHA-256 of its chain config file in SetupHash and
 // leaves the rest zero.
 type SetupState struct {
@@ -281,50 +280,19 @@ type PendingUpdate struct {
 }
 
 // Order is the pending handover order (kind 1). Kind 0, all zero: none.
-// Kind 2 was the DKG order of earlier builds and no longer occurs.
+// ParseSetupState refuses every other kind.
 type Order struct {
 	Kind  uint8  `json:"kind"`
 	Hash  Root   `json:"hash"`
 	ActAt uint64 `json:"act_at"` // Unix seconds
 }
 
-// KeyOrigin says where the runner's loaded keys come from: how many it made in key
-// generation, how many it imported, and KeygenOrdersHash over the DKG
-// orders the generated ones came from. Generated plus Imported is the
-// number of loaded keys, the ones keys_hash covers. A proof that shows
-// Imported 0 shows that no loaded key came from outside a TEE.
+// KeyOrigin counts the runner's loaded keys, the ones keys_hash covers.
+// Every key comes in by an import (sealed, handed over, or plaintext in a
+// debug build), so Imported is their number. The encoding keeps 36
+// reserved bytes around it, zero (AppendSetupState).
 type KeyOrigin struct {
-	Generated  uint32 `json:"generated"`
-	Imported   uint32 `json:"imported"`
-	OrdersHash Root   `json:"orders_hash"`
-}
-
-// KeygenOrdersContext is the context of KeygenOrdersHash, an entry of the
-// registry in backend/setupwire (CtxKeygenOrders).
-const KeygenOrdersContext = "signer-keygen-orders-v1"
-
-// KeygenOrdersHash is the key origin's hash of the DKG orders that made the
-// generated keys:
-//
-//	SHA-256(len(ctx):u16 || ctx || n:u32 || order_hash[32] x n)
-//
-// with the n distinct order hashes in ascending byte order. No order (no
-// generated key) gives 32 zero bytes, not the hash of an empty list.
-func KeygenOrdersHash(orders [][32]byte) Root {
-	orders = slices.Clone(orders)
-	slices.SortFunc(orders, func(a, b [32]byte) int { return bytes.Compare(a[:], b[:]) })
-	orders = slices.Compact(orders)
-	if len(orders) == 0 {
-		return Root{}
-	}
-	h := sha256.New()
-	h.Write(binary.BigEndian.AppendUint16(nil, uint16(len(KeygenOrdersContext))))
-	h.Write([]byte(KeygenOrdersContext))
-	h.Write(binary.BigEndian.AppendUint32(nil, uint32(len(orders))))
-	for _, o := range orders {
-		h.Write(o[:])
-	}
-	return Root(h.Sum(nil))
+	Imported uint32 `json:"imported"`
 }
 
 // KeyReleaseContext is the context of KeyReleaseHash, an entry of the
@@ -369,7 +337,9 @@ const SetupStateLen = 32 + 2*(8+32+8+32+8) + 32 + (1 + 32 + 8) + 32 + (4 + 4 + 3
 //	locked: version:u64 hash[32] pending_version:u64 pending_hash[32] pending_effective_at:u64
 //	open:   the same
 //	approver_set_hash[32] order_kind:u8 order_hash[32] order_act_at:u64 key_release_hash[32]
-//	key_origin: generated_keys:u32 imported_keys:u32 keygen_orders_hash[32]
+//	reserved[4] imported_keys:u32 reserved[32]
+//
+// The reserved bytes are zero.
 func AppendSetupState(b []byte, s *SetupState) []byte {
 	be := binary.BigEndian
 	b = append(b, s.SetupHash[:]...)
@@ -385,14 +355,15 @@ func AppendSetupState(b []byte, s *SetupState) []byte {
 	b = append(b, s.Order.Hash[:]...)
 	b = be.AppendUint64(b, s.Order.ActAt)
 	b = append(b, s.KeyReleaseHash[:]...)
-	b = be.AppendUint32(b, s.KeyOrigin.Generated)
+	b = be.AppendUint32(b, 0)
 	b = be.AppendUint32(b, s.KeyOrigin.Imported)
-	return append(b, s.KeyOrigin.OrdersHash[:]...)
+	return append(b, make([]byte, 32)...)
 }
 
 // ParseSetupState reads an encoding of exactly SetupStateLen bytes. It
 // refuses a pending update at or below the active version, an empty one
-// with a hash or time, and an order of an unknown kind.
+// with a hash or time, an order of a kind other than 0 and 1, and reserved
+// bytes that are not zero.
 func ParseSetupState(b []byte) (SetupState, error) {
 	var s SetupState
 	if len(b) != SetupStateLen {
@@ -417,13 +388,25 @@ func ParseSetupState(b []byte) (SetupState, error) {
 	copy(s.Order.Hash[:], take(32))
 	s.Order.ActAt = be.Uint64(take(8))
 	copy(s.KeyReleaseHash[:], take(32))
-	s.KeyOrigin.Generated = be.Uint32(take(4))
+	r1 := take(4)
 	s.KeyOrigin.Imported = be.Uint32(take(4))
-	copy(s.KeyOrigin.OrdersHash[:], take(32))
-	if s.Order.Kind > 2 || s.Order.Kind == 0 && (s.Order.Hash != Root{} || s.Order.ActAt != 0) {
+	r2 := take(32)
+	if !allZero(r1) || !allZero(r2) {
+		return SetupState{}, errors.New("setup state: reserved bytes are not zero")
+	}
+	if s.Order.Kind > 1 || s.Order.Kind == 0 && (s.Order.Hash != Root{} || s.Order.ActAt != 0) {
 		return SetupState{}, fmt.Errorf("setup state: order of kind %d", s.Order.Kind)
 	}
 	return s, nil
+}
+
+func allZero(b []byte) bool {
+	for _, c := range b {
+		if c != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // userDataHash starts a user data hash: the context, length-prefixed as in

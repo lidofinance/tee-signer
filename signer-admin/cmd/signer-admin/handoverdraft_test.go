@@ -15,8 +15,8 @@ import (
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 )
 
-// show, sign and assemble take a handover order offline, as they take a
-// DKG order: the human form names source and target, the signature files
+// show, sign and assemble take a handover order offline: the human form
+// names source and target, the signature files
 // are over signer-handover-order-v1, assemble wants k approvers in force,
 // and the active file must be the source's.
 func TestHandoverOrderOffline(t *testing.T) {
@@ -66,9 +66,9 @@ func TestHandoverOrderOffline(t *testing.T) {
 	out = failTool(t, "sign", "-key", keys[1].file, signed)
 	wantIn(t, out, "signed already")
 	// Another order kind's signature is not a handover order's.
-	dkgSig := writeFile(t, filepath.Join(dir, "dkg.sig"), string((&sigFile{bodyHash: handoverorder.Hash(enc), key: [32]byte(mustKey(t, keys[1].pub)),
+	otherSig := writeFile(t, filepath.Join(dir, "other.sig"), string((&sigFile{bodyHash: handoverorder.Hash(enc), key: [32]byte(mustKey(t, keys[1].pub)),
 		sig: setupwire.SignApproval(readKeyT(t, keys[1].file), setupwire.CtxImportOrder, false, enc)}).format()))
-	out = failTool(t, "assemble", "-out", filepath.Join(dir, "x.signed"), body, sigs[0], dkgSig)
+	out = failTool(t, "assemble", "-out", filepath.Join(dir, "x.signed"), body, sigs[0], otherSig)
 	wantIn(t, out, "does not verify")
 	// The active values of another signer are not the order's source.
 	writeJSONFile(t, filepath.Join(dir, "s2.active"), activeFile{Setup: hex.EncodeToString(mustRead(t, filepath.Join(dir, "setups", "s2.setup")))})

@@ -93,9 +93,8 @@ the AAD, so no kind of object opens as another.
 
 Every object is at most 1 MiB, the read limit of the store clients
 (`s3log.go:358`, `gcslog.go:210`, `azlog.go:253`): a chunk holds at most
-960 KiB of changes, a value at most 256 KiB (`MaxEntry`; the largest the
-runner writes is a session record, about 17 KB for 64 keys of three
-participants), and a commit carries at most 128 KiB of changes.
+960 KiB of changes, a value at most 256 KiB (`MaxEntry`), and a commit
+carries at most 128 KiB of changes.
 
 The object key comes from the same key release as the mark log's record
 keys: Key Vault's released key on Azure, Cloud KMS through WIF on GCP. The
@@ -192,8 +191,8 @@ also works; then the admin can delete objects, which the next section is
 about.
 
 The runner deletes nothing in the store. It holds what the runner wrote over
-the retention period: here a mean of 0.4 to 0.7 MB per 64-key session on a
-runner that signs deposits, plus the whole state once a day ("Cost").
+the retention period: one object or more per change, plus the whole state
+once a day ("Cost").
 
 ### Why a rolled-back copy is no slashing risk
 
@@ -227,8 +226,8 @@ or bind the share set's generation into the mark log.
 ### Cost
 
 A commit of many keys uploads about the same amount whatever the size of
-the state (`TestWriteCostPerSessionIsFlat`, which writes keys as the key
-generation of earlier builds did). Merges into segment 0 write the whole
+the state (`TestWriteCostPerSessionIsFlat`, 64 keys per change up to
+8,192). Merges into segment 0 write the whole
 state, so the mean upload per commit grows with the log of the state. A
 restart reads the copy also when the state directory is kept.
 
@@ -236,21 +235,13 @@ On a cloud object store each commit is at least one object create.
 
 ### Design notes
 
-- One change per COMMIT. COMMIT writes the shares and key records of a
-  session as one change, and loads the shares after it, so a failed write
-  leaves no share without its key record, and a retried COMMIT writes a
-  missing key record.
+- One change per commit: `Apply` writes a set of store writes as one
+  commit, so they land together or not at all.
 - The file store's `List` walks only the prefix's folder, not the whole
   state directory.
-- The file store fsyncs each file, and a 64-key COMMIT writes 129 files.
-  With the copy, the local writes after a commit and the restore sync the
-  file system once instead (`syncfs`); without the copy (Nitro) each write
-  syncs.
-- Deposit signing writes the key record on each SETUP_SIGN, so one commit
-  per signature: 64 per 64-key session on a runner that signs, in the
-  request path. On a cloud store each is a PUT request. Fewer would need
-  the coordinator to send several deposits per request, which the protocol
-  does not have.
+- The file store fsyncs each file. With the copy, the local writes after
+  a commit and the restore sync the file system once instead (`syncfs`);
+  without the copy (Nitro) each write syncs.
 - The restart lists the whole prefix, chunks and every version included, so
   the listing grows with what the store keeps, not with the state.
 - PUBLIC_KEYS fails above 10,082 keys, because its answer must fit one
@@ -349,17 +340,16 @@ under an approver-signed handover order (`signer-protocol/docs/protocol.md`,
   writes the tombstone that names the target (markstore `HandOverTo`) and
   seals each page from that read. After the tombstone, also after a
   restart, it answers that target only, with the same mark.
-- Each share's header adds its key origin (imported, or generated under
-  a DKG order in an earlier build, from its sealed record) to the sealed
-  import's header. The page carries the carry: the key set handed over and the
+- Each share's header adds its key origin (always imported) to the
+  sealed import's header. The page carries the carry: the key set handed over and the
   day's exits of the mark log. Each share is sealed under the HPKE
   associated data `signer-handover-share-v1` over its header and the
   carry's hash. The runner signs each header with an origin key it makes
   per process, and the response carries the attestation of that key
   (`signer-handover-origin-key-v1` over the order hash and the key). A
-  target that checks both with the order's source settings can count the
-  shares as generated; without that check it must count them as imported,
-  because anyone can seal a share to its public import key.
+  target that checks both with the order's source settings knows that the
+  headers came from the source's image; anyone can seal a share to its
+  public import key.
 
 ### The target
 
@@ -391,11 +381,9 @@ fresh log, carries that config as version 0 of both groups.
   force again.
 - The origin proof must verify with the verifier and image the order names
   for the source (the dev verifier on the dev platform only), and every
-  share's header under the origin key. Then a generated share keeps its
-  origin and DKG order hash in its sealed record, so the key origin counts
-  survive restarts; an imported one counts as imported. A runner that
-  cannot check the proof refuses, unless the request asks to count every
-  share as imported (`handover-target import -as-imported`).
+  share's header under the origin key. A runner that cannot check the
+  proof refuses, unless the request asks to skip the origin checks
+  (`handover-target import -as-imported`).
 - Each share opens with this boot's import key under its header and the
   carry's hash, so a lowered mark, an edited origin or an edited carry does
   not open. The carried exits go into the mark log before the import ends. The mark log is raised
@@ -436,8 +424,7 @@ CCE policy hash or the image digest.
   copy holding the state before or after and the same process writing the
   change again (`TestApplyAllOrNothing`); 4,000 random commits against a
   model with restarts from the copy alone (`TestCommitsAgainstModel`);
-  8,192 keys written as the key generation of earlier builds wrote them,
-  upload per batch flat, every object under 1 MiB, one small change one
+  8,192 keys written in batches, upload per batch flat, every object under 1 MiB, one small change one
   small object (`TestWriteCostPerSessionIsFlat`); a lost
   chunk (fallback to an older commit, then refusal); a delete finished at
   start; hints never uploaded; refresh compacting.

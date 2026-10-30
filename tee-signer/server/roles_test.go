@@ -181,7 +181,7 @@ func TestAttestOnlyRole(t *testing.T) {
 	}
 	forbidden := map[string]wire.MsgType{"SIGN": wire.TypeSign, "IMPORT_SHARE": wireadmin.TypeImportShare,
 		"IMPORT_SHARE_SEALED": wireadmin.TypeImportSealed, "CONFIG_UPDATE": wireadmin.TypeConfigUpdate,
-		"type 0x30": 0x30, "DKG_HELLO": 0x20, "DKG_OPERATOR": 0x25, "DKG_ORDER": 0x27, "unknown": 0x7f}
+		"type 0x30": 0x30, "type 0x20": 0x20, "type 0x25": 0x25, "type 0x27": 0x27, "unknown": 0x7f}
 	for name, typ := range forbidden {
 		_, err := ac.call(typ, sign)
 		if refusedWith(err) != backend.StatusForbidden || !strings.Contains(err.Error(), "attest-only") {

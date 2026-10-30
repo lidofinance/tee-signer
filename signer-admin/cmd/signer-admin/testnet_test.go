@@ -27,7 +27,7 @@ func (fc *fakeCluster) allowTestnet(t *testing.T, names ...string) {
 
 // Testnet runners (backend/flavor): signer-admin refuses them until
 // cloud.json sets allow_testnet_build; then status names the build, and
-// draft and dkg waits follow the testnet times. An image gained waits the
+// draft and order waits follow the testnet times. An image gained waits the
 // testnet images minimum, 7 minutes, and the runner takes the update with
 // that wait. Offline views name both builds' waits. A cluster of two
 // flavours is refused.

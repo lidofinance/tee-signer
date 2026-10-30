@@ -22,8 +22,8 @@
 // exists. A commit is written after every chunk it names, a restore reads
 // the state only through a commit, and Apply puts a whole set of changes
 // into one commit. So a failed or interrupted write leaves the copy at the
-// commit before, and a key generation commit's shares and key records
-// land together or not at all.
+// commit before, and the writes of one Apply land together or not at
+// all.
 //
 // Every object is encrypted and authenticated with AES-256-GCM under a key
 // from the platform's key release (platform.Keys, the same release as the
@@ -85,9 +85,7 @@ const (
 	// MaxObject bounds every object of the copy. The store clients read at
 	// most 1 MiB of an object, so a larger one would never open again.
 	MaxObject = 1 << 20
-	// MaxEntry bounds one value. The largest the runner writes is a key
-	// generation session's pending record, about 17 KB for 64 keys of three
-	// participants.
+	// MaxEntry bounds one value.
 	MaxEntry = 256 << 10
 	// chunkPlain is the most a chunk holds, less if the header with the
 	// wrapped key needs more than the rest of MaxObject (chunkLimit).

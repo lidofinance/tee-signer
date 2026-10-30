@@ -5,7 +5,7 @@
 //     keys is this build.
 //   - testnet (go build -tags testnet): the same code with one minute for
 //     each day of the default, so research on a devnet or a test network can
-//     change images and run DKG orders in minutes. A testnet runner reports
+//     change images and run handover orders in minutes. A testnet runner reports
 //     its flavour (HEALTH's version, its TLS certificate's subject), starts
 //     on devnets and the test networks of backend/flavor only, and clients
 //     refuse it unless their connection settings allow it.

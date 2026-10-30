@@ -36,9 +36,9 @@ const ImportVersion = 1
 
 // Request flags.
 const (
-	// ImportAsImported counts every share of the request as imported and
-	// skips the origin checks: for a target built without the verifier of
-	// the source's platform, by the operator's choice.
+	// ImportAsImported skips the origin checks (the source's origin proof
+	// and each header's signature): for a target built without the
+	// verifier of the source's platform, by the operator's choice.
 	ImportAsImported uint8 = 1
 )
 
@@ -105,12 +105,11 @@ func DecodeImportRequest(p []byte) (*ImportRequest, error) {
 
 // ImportResponse is the target's answer.
 type ImportResponse struct {
-	Outcomes  []uint8 // one per share of the request
-	Held      uint32  // keys the target holds now
-	Total     uint32  // the source's total
-	Done      bool    // every share is in; the target signs again
-	Generated uint32  // key origin counts of the held keys
-	Imported  uint32
+	Outcomes []uint8 // one per share of the request
+	Held     uint32  // keys the target holds now
+	Total    uint32  // the source's total
+	Done     bool    // every share is in; the target signs again
+	Imported uint32  // the loaded keys (backend.KeyOrigin)
 }
 
 // Encode is the IMPORT_HANDOVER response.
@@ -128,7 +127,9 @@ func (r *ImportResponse) Encode() ([]byte, error) {
 		done = 1
 	}
 	p = append(p, done)
-	p = binary.BigEndian.AppendUint32(p, r.Generated)
+	// Four reserved zero bytes: earlier builds counted keys made in key
+	// generation here.
+	p = binary.BigEndian.AppendUint32(p, 0)
 	return binary.BigEndian.AppendUint32(p, r.Imported), nil
 }
 
@@ -157,9 +158,13 @@ func DecodeImportResponse(p []byte) (*ImportResponse, error) {
 	default:
 		r.Done = d == 1
 	}
-	r.Generated, r.Imported = c.u32(), c.u32()
+	reserved := c.u32()
+	r.Imported = c.u32()
 	if err := c.done(); err != nil {
 		return nil, err
+	}
+	if reserved != 0 {
+		return nil, errors.New("handover import: the reserved count is not zero")
 	}
 	return r, nil
 }

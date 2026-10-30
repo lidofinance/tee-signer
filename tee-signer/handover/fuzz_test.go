@@ -40,14 +40,11 @@ func seedPage(t testing.TB) *Response {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i, origin := range []uint8{OriginGenerated, OriginImported} {
+	for i := range 2 {
 		var sec [32]byte
 		rand.Read(sec[:])
 		s := Share{SealedImportRequest: backend.SealedImportRequest{Pubkey: backend.Pubkey{byte(i + 1)}, SharePubkey: backend.Pubkey{byte(i + 3)},
-			Index: uint64(70 + i), Interchange: &mark}, Origin: origin}
-		if origin == OriginGenerated {
-			s.Order = [32]byte{0xd0}
-		}
+			Index: uint64(70 + i), Interchange: &mark}, Origin: OriginImported}
 		if s.Sealed, err = sealedimport.SealAAD(id, s.AAD(ch), &sec); err != nil {
 			t.Fatal(err)
 		}
@@ -109,7 +106,7 @@ func FuzzDecodeImportRequest(f *testing.F) {
 }
 
 func FuzzDecodeImportResponse(f *testing.F) {
-	f.Add(mustEnc((&ImportResponse{Outcomes: []uint8{Stored, Held}, Held: 5, Total: 9, Generated: 2, Imported: 3}).Encode()))
+	f.Add(mustEnc((&ImportResponse{Outcomes: []uint8{Stored, Held}, Held: 5, Total: 9, Imported: 3}).Encode()))
 	f.Add(mustEnc((&ImportResponse{Done: true}).Encode()))
 	f.Fuzz(func(t *testing.T, b []byte) {
 		var r *ImportResponse

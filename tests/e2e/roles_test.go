@@ -22,8 +22,8 @@ import (
 )
 
 // Client roles (docs/protocol.md, "Client roles"): the runners sign only
-// for a signing certificate and take imports, config updates, orders and
-// key generation only from an admin certificate. The tests' PKI has both
+// for a signing certificate and take imports, config updates and orders
+// only from an admin certificate. The tests' PKI has both
 // under one root; a signing configuration knows its admin twin, so a test
 // that imports and then signs over TLS uses the right certificate for
 // each.

@@ -15,9 +15,8 @@ import (
 // The setup pins. Every verifier this package builds runs them after the platform
 // check, on the setup state of the verified identity. The signing
 // client, cloud-import (again on the identity it seals each
-// share to), proof-check, share-import and the key generation peers
-// (runner/keygen, a policy participant's attestation) build their verifier
-// here, so all of them refuse the same runners:
+// share to), proof-check and share-import build their verifier here, so
+// all of them refuse the same runners:
 //
 //   - With setup_sha256, a runner whose setup_hash differs is refused.
 //   - Without it, a runner that reports a setup is refused, unless
@@ -183,8 +182,7 @@ func rootHex(r backend.Root) string { return hex.EncodeToString(r[:]) }
 // pending update is in force at now, <group>_pending_version,
 // <group>_pending_sha256 and <group>_pending_effective_at for a pending
 // update, approver_set_sha256, and order, order_sha256 and order_act_at for
-// a pending order, key_release_sha256 when set, and the key origin:
-// generated_keys, imported_keys and keygen_orders_sha256 when set. For a
+// a pending order, key_release_sha256 when set, and imported_keys. For a
 // runner on the flag path: setup_sha256 and flag_path true.
 func SetupLog(s *backend.SetupState, now time.Time) []any {
 	out := []any{"setup_sha256", rootHex(s.SetupHash)}
@@ -211,11 +209,7 @@ func SetupLog(s *backend.SetupState, now time.Time) []any {
 	if s.KeyReleaseHash != (backend.Root{}) {
 		out = append(out, "key_release_sha256", rootHex(s.KeyReleaseHash))
 	}
-	out = append(out, "generated_keys", s.KeyOrigin.Generated, "imported_keys", s.KeyOrigin.Imported)
-	if s.KeyOrigin.OrdersHash != (backend.Root{}) {
-		out = append(out, "keygen_orders_sha256", rootHex(s.KeyOrigin.OrdersHash))
-	}
-	return out
+	return append(out, "imported_keys", s.KeyOrigin.Imported)
 }
 
 // DescribeSetup is SetupLog as one line of key=value pairs, for tools that
