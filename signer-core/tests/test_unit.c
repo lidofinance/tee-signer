@@ -1365,10 +1365,14 @@ static void test_saturation_signer(void)
         CHECK_RC(sc_sign_block(s, k.pk, &b, sig), SC_ERR_SLASH_BLOCK);
 
         /* A horizon that reaches UINT64_MAX: the signer signs there. The
-         * block mark saturates; the target mark lands one window above T. */
+         * block mark saturates; the target mark lands one window above T.
+         * Genesis at 0 with 1 s slots and the clock at UINT64_MAX, so slot
+         * UINT64_MAX has started and every slot below it too. */
         host_t h2 = {0};
         cfg.max_epochs_ahead = M;
-        set_epoch(&h2, E);
+        cfg.genesis_time = 0;
+        cfg.seconds_per_slot = 1;
+        h2.now = M;
         sc_signer *s2 = new_signer(&h2, &cfg, 2, 0);
         vkeys k2 = add_validator(s2, 51, SC_INDEX_UNKNOWN);
         a = att_in(T - 1, T, T * 32, 1);
