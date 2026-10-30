@@ -1,5 +1,5 @@
 {
-  "description": "Golden vectors of the attestation statement, setup format 1 (docs/attestation-statement.md). Hex is 0x-prefixed; every hash is SHA-256. Made by backend/setupwire TestStatementVectors -update; the test recomputes them.",
+  "description": "Golden vectors of the attestation statement, setup format 2 (docs/attestation-statement.md). Hex is 0x-prefixed; every hash is SHA-256. Made by backend/setupwire TestStatementVectors -update; the test recomputes them.",
   "contexts": {
     "approver_set": "signer-approver-set-v1",
     "attest_user_data": "signer-runner-attest-v1",
