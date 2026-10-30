@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/slashing-log"
 )
@@ -50,7 +50,7 @@ func (l *gateLog) SetSourceGate(f uint64, on bool) {
 // record carries until the log's source reaches its floor, and a new gate
 // for a log without a vote (RBRLOG-02).
 func TestSourceGateAtRestart(t *testing.T) {
-	cfg := core.DevConfig(genesis, 12, 32)
+	cfg := software.DevConfig(genesis, 12, 32)
 	cfg.DeviceMark = true
 	margin := DefaultFloorMargin(cfg)
 	const epoch = 50
@@ -104,7 +104,7 @@ func TestSourceGateAtRestart(t *testing.T) {
 // it: a restart right after the raise must not read the raised source as
 // history of every validator.
 func TestSourceGateBeforeTheFirstRaise(t *testing.T) {
-	cfg := core.DevConfig(genesis, 12, 32)
+	cfg := software.DevConfig(genesis, 12, 32)
 	cfg.DeviceMark = true
 	clk := &fakeClock{t: at(50, 5)}
 	h, err := New(cfg, Mode{Floor: true, FloorMargin: DefaultFloorMargin(cfg), MarkLog: true}, clk, nil, nil, quiet)

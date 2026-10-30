@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/remote"
 	"github.com/lidofinance/tee-signer/slashing-log/wormfake"
@@ -21,7 +22,7 @@ import (
 // runner signs on from the log's mark without a new import.
 func TestE2EDurableStateDev(t *testing.T) {
 	c := newChain(t)
-	sk, _ := core.NewSecret()
+	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
 	logDir := t.TempDir()
 	addr := fmt.Sprintf("tcp:127.0.0.1:%d", freePort(t))
@@ -50,7 +51,7 @@ func TestE2EDurableStateDev(t *testing.T) {
 // marks/ and state/. The VM's disk is lost; the share comes back.
 func TestE2EDurableStateGCP(t *testing.T) {
 	c := newChain(t)
-	sk, _ := core.NewSecret()
+	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
 	const image = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 	g := fakeGoogle(t, image)

@@ -35,6 +35,7 @@
 # builder's umask.
 FROM scratch
 COPY --chmod=0555 runner /runner
+COPY --chmod=u=rwX,go=rX licenses/ /licenses/
 # Launch policy labels (Google "launch policies" reference). The defaults are
 # strict already. They are spelled out so a reviewer sees them.
 # No allow_env_override: the container token lists env values (claims

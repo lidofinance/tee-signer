@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
 	"github.com/lidofinance/tee-signer/trusted-time/clock"
@@ -17,7 +18,7 @@ import (
 // only): sealed, marked generated under order.
 func putGenerated(t *testing.T, s *Server, order []byte) backend.Pubkey {
 	t.Helper()
-	sk, _ := core.NewSecret()
+	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
 	blob, err := s.sealShare(pk, &sk, backend.IndexUnknown, true, order)
 	if err != nil {
@@ -41,7 +42,7 @@ func TestKeyOrigin(t *testing.T) {
 	if ko := s.SetupState().KeyOrigin; ko != (backend.KeyOrigin{}) {
 		t.Fatalf("no key: %+v", ko)
 	}
-	sk, _ := core.NewSecret()
+	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
 	if _, err := s.addShare(pk, &sk, 7, nil, "sealed"); err != nil {
 		t.Fatal(err)
@@ -92,7 +93,7 @@ func TestKeyOrigin(t *testing.T) {
 	flag := shareServer(t, store, [32]byte{}, [32]byte{})
 	flag.State = constState(backend.SetupState{SetupHash: backend.Root{0xf}})
 	flag.KeyReleaseHash = [32]byte{0x77}
-	fsk, _ := core.NewSecret()
+	fsk, _ := software.NewSecret()
 	fpk, _ := core.PubkeyOf(fsk)
 	if _, err := flag.addShare(fpk, &fsk, 8, nil, "sealed"); err != nil {
 		t.Fatal(err)
@@ -112,7 +113,7 @@ func TestKeyOriginBadRecord(t *testing.T) {
 	} {
 		store := &shareStore{m: map[string][]byte{}}
 		s := shareServer(t, store, setup, logID)
-		sk, _ := core.NewSecret()
+		sk, _ := software.NewSecret()
 		pk, _ := core.PubkeyOf(sk)
 		rec.Pubkey, rec.Secret, rec.Index = pk, sk[:], 7
 		plain, _ := json.Marshal(rec)

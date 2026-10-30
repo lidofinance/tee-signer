@@ -3,7 +3,7 @@ package server
 import (
 	"github.com/lidofinance/tee-signer/governance/importorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
-	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/threshold"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
@@ -37,6 +37,22 @@ func (s *Server) checkImportOrder(req *backend.SealedImportRequest) (*importorde
 	return &o.Body, e, nil
 }
 
+// singleKey is HEALTH's single_key for the platform part p of the setup
+// (docs/protocol.md, "Key rule lock"): on GCP, whether the setup accepts
+// a key held alone (a 1 of 1 import order, setupwire.CheckThresholdOn),
+// "accepted" or "refused"; "n/a" elsewhere, where such an order needs no
+// acceptance. The acceptance is in the private part of the setup, so a
+// verifier sees it only here, unattested, as it sees key_lock.
+func singleKey(p *setupwire.PlatformConfig) string {
+	switch {
+	case p.Platform != setupwire.PlatformGCP:
+		return "n/a"
+	case p.SealingKeyRelease.UnsafeSingleKeyAccepted:
+		return "accepted"
+	}
+	return "refused"
+}
+
 // checkSplit checks the share against the split the order names (issue #5
 // R1 and R5): the request's t, n and share index are the order's, 2t > n,
 // its commitments hash to the order's entry, commitment 0 is the
@@ -44,6 +60,10 @@ func (s *Server) checkImportOrder(req *backend.SealedImportRequest) (*importorde
 // share index (the check key generation makes of its own share). So a
 // share is filed only under the validator whose polynomial it lies on.
 func (s *Server) checkSplit(req *backend.SealedImportRequest, b *importorder.Body, e *importorder.Entry) error {
+	// The threshold rule of this signer's platform and chain, once: the
+	// case and its message use the same result.
+	w := s.Updates.SetupWire()
+	thresholdErr := setupwire.CheckThresholdOn(&w.Platform, w.Chain.GenesisForkVersion, int(req.T), int(req.N))
 	switch {
 	case req.T == 0:
 		return backend.Refused(backend.StatusBadRequest, "IMPORT_SHARE_SEALED under an import order needs t, n, the share index and the commitments")
@@ -52,8 +72,8 @@ func (s *Server) checkSplit(req *backend.SealedImportRequest, b *importorder.Bod
 			req.T, req.N, req.ShareIndex, b.T, b.N, b.ShareIndex)
 	case 2*int(req.T) <= int(req.N):
 		return backend.Refused(backend.StatusBadKey, "threshold %d of %d: two disjoint groups of signers could both sign", req.T, req.N)
-	case setupwire.CheckThresholdOn(s.Updates.SetupWire().Platform.Platform, s.Updates.SetupWire().Chain.GenesisForkVersion, int(req.T), int(req.N)) != nil:
-		return backend.Refused(backend.StatusBadKey, "%v", setupwire.CheckThresholdOn(s.Updates.SetupWire().Platform.Platform, s.Updates.SetupWire().Chain.GenesisForkVersion, int(req.T), int(req.N)))
+	case thresholdErr != nil:
+		return backend.Refused(backend.StatusBadKey, "%v", thresholdErr)
 	case len(req.Commitments) != int(req.T):
 		return backend.Refused(backend.StatusBadKey, "%d commitments for threshold %d", len(req.Commitments), req.T)
 	case importorder.CommitmentsHash(req.Commitments) != e.CommitmentsHash:
@@ -61,12 +81,15 @@ func (s *Server) checkSplit(req *backend.SealedImportRequest, b *importorder.Bod
 	case req.Commitments[0] != req.Pubkey:
 		return backend.Refused(backend.StatusBadKey, "commitment 0 is not the validator key %s", req.Pubkey.String()[:18])
 	}
-	want, err := core.FeldmanEval(req.Commitments, uint64(req.ShareIndex))
+	want, err := threshold.FeldmanEval(req.Commitments, uint64(req.ShareIndex))
 	if err != nil {
 		return backend.Refused(backend.StatusBadKey, "commitments: %v", err)
 	}
 	if want != req.SharePubkey {
 		return backend.Refused(backend.StatusBadKey, "share_pubkey is not share %d of validator %s", req.ShareIndex, req.Pubkey.String()[:18])
+	}
+	if w.Platform.Platform == setupwire.PlatformGCP && req.T == 1 && req.N == 1 {
+		s.Log.Warn("UNSAFE: taking a 1 of 1 share on GCP under the setup's unsafe_single_key_accepted", "pubkey", req.Pubkey.String(), "why", setupwire.UnsafeSingleKeyWarning)
 	}
 	return nil
 }

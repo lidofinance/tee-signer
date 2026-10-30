@@ -1,9 +1,11 @@
-package core
+package core_test
 
 import (
 	"errors"
 	"testing"
 
+	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
@@ -31,17 +33,17 @@ func (h *failingDeviceHooks) StoreDeviceMark(wm backend.Watermark) error {
 // signs under them. A key whose history did not reach the core must sign
 // nothing.
 func TestSSIHISTORY02FailedImportLeavesNoSignableKey(t *testing.T) {
-	h := &failingDeviceHooks{deviceHooks: deviceHooks{MemHooks: NewMemHooks()}}
+	h := &failingDeviceHooks{deviceHooks: deviceHooks{MemHooks: software.NewMemHooks()}}
 	h.Clock = clockAtEpoch(20)
-	cfg := DevConfig(genesis, 12, 32)
+	cfg := software.DevConfig(genesis, 12, 32)
 	cfg.DeviceMark = true
-	s, err := NewSigner(cfg, 4, 0, h)
+	s, err := core.NewSigner(cfg, 4, 0, h)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(s.Close)
-	sk, _ := NewSecret()
-	pk, _ := PubkeyOf(sk)
+	sk, _ := software.NewSecret()
+	pk, _ := core.PubkeyOf(sk)
 	history := backend.Watermark{HasAttestation: true, SourceEpoch: 15, TargetEpoch: 18}
 	h.failStores = 1
 	if _, err := s.AddValidator(pk, sk, 7, &history); err == nil {

@@ -1,4 +1,4 @@
-package core
+package core_test
 
 import (
 	"crypto/sha256"
@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
@@ -16,7 +18,7 @@ import (
 // deviceHooks are MemHooks with one device mark, kept across a restart
 // when a test hands the same hooks to a second Signer.
 type deviceHooks struct {
-	*MemHooks
+	*software.MemHooks
 	mu    sync.Mutex
 	mark  backend.Watermark
 	found bool
@@ -53,16 +55,16 @@ func TestReview4F2HostileVotePinsSourceBound(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			epoch := uint64(20)
-			h := &deviceHooks{MemHooks: NewMemHooks()}
+			h := &deviceHooks{MemHooks: software.NewMemHooks()}
 			h.Clock = func() (uint64, error) { return clockAtEpoch(epoch)() }
-			cfg := DevConfig(genesis, 12, 32)
+			cfg := software.DevConfig(genesis, 12, 32)
 			cfg.DeviceMark = true
-			ska, _ := NewSecret()
-			pka, _ := PubkeyOf(ska)
-			skb, _ := NewSecret()
-			pkb, _ := PubkeyOf(skb)
-			start := func() *Signer {
-				s, err := NewSigner(cfg, 4, 0, h)
+			ska, _ := software.NewSecret()
+			pka, _ := core.PubkeyOf(ska)
+			skb, _ := software.NewSecret()
+			pkb, _ := core.PubkeyOf(skb)
+			start := func() *core.Signer {
+				s, err := core.NewSigner(cfg, 4, 0, h)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -102,7 +104,7 @@ func TestReview4F2HostileVotePinsSourceBound(t *testing.T) {
 // Design rule 2 lists them under the switch, and the TA refuses them. With
 // the switch off they must be refused.
 func TestReview5R11BareRootsWithSwitchOff(t *testing.T) {
-	s, pk, cfg := newTestSigner(t, NewMemHooks())
+	s, pk, cfg := newTestSigner(t, software.NewMemHooks())
 	if cfg.AllowUnverifiedNonslashable {
 		t.Fatal("DevConfig turns the switch on")
 	}
@@ -179,7 +181,7 @@ func TestReview4BuilderRequestAuthPlainContainerRoot(t *testing.T) {
 	}
 
 	// The C core: its signature must verify over the spec signing root.
-	s, pk, cfg, _ := gloasSigner(t, NewMemHooks())
+	s, pk, cfg, _ := gloasSigner(t, software.NewMemHooks())
 	c0 := s.Config()
 	p := c0.Policy()
 	p.BuilderRequestAuthRoots = []backend.Root{backend.BuilderRequestAuthDataRoot(data)}
@@ -192,7 +194,7 @@ func TestReview4BuilderRequestAuthPlainContainerRoot(t *testing.T) {
 	}
 	d := backend.ComputeDomain(backend.DomainBuilderRequestAuth, cfg.GenesisForkVersion, backend.Root{})
 	signing := sha(want, d)
-	if !Verify(pk, backend.Root(signing), sig) {
+	if !core.Verify(pk, backend.Root(signing), sig) {
 		t.Errorf("the core's BuilderRequestAuth signature does not verify over the plain Container signing root %x", signing[:])
 	}
 }

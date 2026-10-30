@@ -1,7 +1,7 @@
 package state
 
 // Names of this package's locks for the lock order check
-// (runner/lockorder, -tags lockcheck).
+// (devkit/lockorder, -tags lockcheck).
 
 type hooksMuName struct{}
 

@@ -4,7 +4,18 @@
 > Not audited. Not for production or mainnet funds. Interfaces and formats will
 > change without notice.
 
-In this repo, signer-core is the C module of the TEE signer: the runner links it through its Go binding (`core`, with the development backend `software`; module path `github.com/lidofinance/tee-signer/signer-core`). blst is vendored in `third_party/blst` at the pin in `scripts/common.sh`, checked against `third_party/blst.sha256`. The OP-TEE trusted app and the other folders this README names outside signer-core stay in `lidofinance/threshold-signer-poc`.
+In this repo, signer-core is the C module of the TEE signer. The runner links it through its Go binding (`core`; module path `github.com/lidofinance/tee-signer/signer-core`). blst is vendored in `third_party/blst` at the pin in `scripts/common.sh`, checked against `third_party/blst.sha256`. The OP-TEE trusted app and the other folders this README names outside signer-core stay in `lidofinance/threshold-signer-poc`.
+
+The Go packages have separate roles:
+
+- `core` binds signing, policy and slashing protection. Its only first-party production dependency is `signer-protocol`.
+- `threshold` checks polynomial commitments and recovers signatures and public keys from shares. It links blst directly and does not import `core`. The current provisioning path still uses its commitment checks.
+- `software` is the development backend. It also holds the sample chain configuration, memory-only hooks, random key generation and share splitting used by tests. Runners do not import it.
+
+The binding tests use the public `core` API from an external test package.
+Development helpers are test dependencies, so the bindings do not depend on them.
+Threshold recovery and commitment checks have their own external test package
+in `threshold/`.
 
 Portable C signing core of the threshold signer, for the cloud runner and
 the OP-TEE trusted app of each "hardware Dirk" node (`../ta/`):
@@ -212,7 +223,8 @@ window for this reason.
 If `store_watermark` fails, the request is refused and the state is left
 unchanged.
 
-`sc_watermark_encode` / `decode` give a fixed 32-byte record for storage.
+[`markformat`](../markformat/README.md) provides the fixed 32-byte watermark storage
+record. The core only handles in-memory watermark values.
 Rollback protection of that record (RPMB or similar) is the TA's job.
 
 ### One mark per device

@@ -20,6 +20,7 @@ import (
 	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/platform/dev"
 	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
 	wireadmin "github.com/lidofinance/tee-signer/signer-protocol/wire/admin"
@@ -148,7 +149,7 @@ func newEnvWith(t *testing.T, lock *uint64, change func(s *setupwire.Setup)) *en
 	if raw, err = s.Encode(); err != nil {
 		t.Fatal(err)
 	}
-	sk, _ := core.NewSecret()
+	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
 	e := &env{t: t, raw: raw, setup: s, hash: mustHash(t, s), dir: t.TempDir(), sk: sk, pk: pk,
 		clock: &fakeClock{t: time.Unix(testGenesis+startEpoch*testEpoch+5, 0), trusted: true}}

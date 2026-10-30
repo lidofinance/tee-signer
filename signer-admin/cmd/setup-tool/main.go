@@ -10,7 +10,9 @@
 //	    OUT (mode 0644) and print its setup_sha256. A file without salts
 //	    gets fresh random ones: the policy salts of this signer alone (a
 //	    cluster whose signers share one policy_root comes from
-//	    signer-config setup) and its platform salt.
+//	    signer-config setup) and its platform salt. A GCP setup with
+//	    sealing_key_release.unsafe_single_key_accepted gets a WARNING
+//	    on stderr (setupwire.UnsafeSingleKeyWarning); encode and check.
 //	setup-tool check [-platform P] [-chain CHAIN_JSON] FILE
 //	    Decode FILE strictly and print setup_sha256, platform and signer,
 //	    policy_root and platform_commitment, and one
@@ -127,7 +129,17 @@ func encode(human, out string) error {
 		return err
 	}
 	fmt.Printf("setup_sha256 %x\n", h)
+	warnSingleKey(s)
 	return nil
+}
+
+// warnSingleKey prints the single-key warning for a setup that accepts a
+// key held alone on GCP, so the operator sees it when the setup is made and
+// when it is checked, not only in the file.
+func warnSingleKey(s *setupwire.Setup) {
+	if s.Platform.SealingKeyRelease.UnsafeSingleKeyAccepted {
+		fmt.Fprintf(os.Stderr, "setup-tool: WARNING: the setup accepts a key held alone on GCP (sealing_key_release.unsafe_single_key_accepted): %s\n", setupwire.UnsafeSingleKeyWarning)
+	}
 }
 
 func read(path string) (*setupwire.Setup, error) {
@@ -200,5 +212,6 @@ func check(args []string) error {
 	if len(s.Platform.PeerAttestationHosts) == 0 && s.Platform.Platform == setupwire.PlatformNitro {
 		fmt.Println("peer_attestation_hosts none")
 	}
+	warnSingleKey(s)
 	return nil
 }

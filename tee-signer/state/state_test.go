@@ -15,6 +15,7 @@ import (
 	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/platform/dev"
 	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/tee-signer/record"
 	"github.com/lidofinance/tee-signer/trusted-time/clock"
@@ -115,9 +116,9 @@ type node struct {
 
 func newNode(t testing.TB, mode Mode) *node {
 	t.Helper()
-	sk, _ := core.NewSecret()
+	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
-	n := &node{cfg: core.DevConfig(genesis, 12, 32), mode: mode, clk: &fakeClock{}, store: newMemStore(), sk: sk, pk: pk}
+	n := &node{cfg: software.DevConfig(genesis, 12, 32), mode: mode, clk: &fakeClock{}, store: newMemStore(), sk: sk, pk: pk}
 	return n
 }
 
@@ -184,7 +185,7 @@ func wantSlashing(t *testing.T, err error) {
 }
 
 func TestModeValidation(t *testing.T) {
-	cfg := core.DevConfig(genesis, 12, 32)
+	cfg := software.DevConfig(genesis, 12, 32)
 	clk := &fakeClock{}
 	if _, err := New(cfg, Mode{}, clk, nil, nil, quiet); err == nil {
 		t.Fatal("no protection accepted")
@@ -207,7 +208,7 @@ func TestModeValidation(t *testing.T) {
 }
 
 func TestFloorWatermark(t *testing.T) {
-	cfg := core.DevConfig(genesis, 12, 32)
+	cfg := software.DevConfig(genesis, 12, 32)
 	wm := FloorWatermark(cfg, 101)
 	if wm.TargetEpoch != 101 || wm.SourceEpoch != 101 || wm.BlockSlot != 102*32-1 || !wm.HasBlock || !wm.HasAttestation {
 		t.Fatalf("%+v", wm)
@@ -374,7 +375,7 @@ func TestRepeatRootsWithFloor(t *testing.T) {
 	wantSlashing(t, n.attest(14, 15, 1))
 
 	// The record of validator A under validator B's key.
-	skB, _ := core.NewSecret()
+	skB, _ := software.NewSecret()
 	pkB, _ := core.PubkeyOf(skB)
 	blob, _ := n.store.Get(rrKey(n.pk))
 	_ = n.store.Put(rrKey(pkB), blob)
@@ -763,7 +764,7 @@ func TestRestartSafetyProperty(t *testing.T) {
 }
 
 func ExampleFloorWatermark() {
-	cfg := core.DevConfig(genesis, 12, 32)
+	cfg := software.DevConfig(genesis, 12, 32)
 	wm := FloorWatermark(cfg, 101)
 	fmt.Println(wm.BlockSlot, wm.SourceEpoch, wm.TargetEpoch)
 	// Output: 3263 101 101

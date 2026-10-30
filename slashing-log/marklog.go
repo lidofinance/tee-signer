@@ -14,7 +14,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/lidofinance/tee-signer/devkit/lockorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/signer-protocol"
@@ -167,7 +166,7 @@ type MarkLog struct {
 	pubs map[string]ed25519.PublicKey
 	bad  map[string]bool // blobs the key release refused as not authentic
 
-	mu      lockorder.Mutex[markLogMuName]
+	mu      namedMutex[markLogMuName]
 	owner   [16]byte
 	claimed bool
 	version uint64 // newest record this process wrote or read

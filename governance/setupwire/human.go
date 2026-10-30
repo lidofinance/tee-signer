@@ -671,6 +671,9 @@ func (p *parser) platform(c *PlatformConfig) {
 	if a := optional(p, "sealing_key_release.no_lock_accepted", parseBool); a != nil {
 		c.SealingKeyRelease.NoLockAccepted = *a
 	}
+	if a := optional(p, "sealing_key_release.unsafe_single_key_accepted", parseBool); a != nil {
+		c.SealingKeyRelease.UnsafeSingleKeyAccepted = *a
+	}
 	c.PeerAttestationHosts = sortedSet(p, "peer_attestation_hosts",
 		listOf(p, "peer_attestation_hosts", parseEndpoint), strings.Compare)
 }
@@ -837,6 +840,10 @@ func formatPlatform(w *printer, p *PlatformConfig) {
 	if k.NoLockAccepted {
 		w.note("Cloud KMS has no lock on the key rule; this setup accepts that, and a mainnet runner starts anyway")
 		w.kv("sealing_key_release.no_lock_accepted", true)
+	}
+	if k.UnsafeSingleKeyAccepted {
+		w.note("UNSAFE: %s", UnsafeSingleKeyWarning)
+		w.kv("sealing_key_release.unsafe_single_key_accepted", true)
 	}
 	if len(p.PeerAttestationHosts) > 0 {
 		w.note("hosts the handover verifier fetches key sets from; a nitro enclave reaches no other host besides its fixed routes")

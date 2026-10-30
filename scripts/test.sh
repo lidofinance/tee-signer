@@ -88,6 +88,8 @@ if [ "$HOST_ARCH" = x86_64 ] && command -v qemu-aarch64 >/dev/null && [ -x "$BUI
   summary "$LOGS/e2e-aarch64-qemu.log" | grep -E '^(ok|FAIL)'
 fi
 
+make -C "$ROOT/markformat" fuzz FUZZ_SECONDS="${FUZZ_SECONDS:-3}" >"$LOGS/fuzz-markformat.log" 2>&1 || { tail -40 "$LOGS/fuzz-markformat.log"; exit 1; }
+
 log "signer-core: its own suites"
 bash "$ROOT/signer-core/scripts/test.sh" >"$LOGS/test-signer-core-c.log" 2>&1 || { tail -40 "$LOGS/test-signer-core-c.log"; exit 1; }
 grep -E '^(PASS|FAIL)' "$LOGS/test-signer-core-c.log"

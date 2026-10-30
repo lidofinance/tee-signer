@@ -28,6 +28,7 @@ check: ## guards: module boundaries, secret scan, release gate self-test, gofmt
 	bash $(ROOT)/scripts/check-imports.sh
 	bash $(ROOT)/scripts/check-forbidden.sh
 	bash $(ROOT)/scripts/release-gate-test.sh
+	python3 -B $(ROOT)/scripts/bundle-licenses-test.py
 	@for m in */go.mod; do d=$${m%/go.mod}; out=$$(cd $$d && gofmt -l . | grep -v '^third_party/' || true); \
 		[ -z "$$out" ] || { echo "gofmt: $$d: $$out"; exit 1; }; done; echo "gofmt: clean"
 
@@ -56,6 +57,7 @@ fuzz: core ## every Go fuzz target for FUZZ_TIME each
 
 fuzz-core: ## the C fuzz targets (ASan, UBSan): regression inputs, then FUZZ_SECONDS each
 	FUZZ_SECONDS=$(FUZZ_SECONDS) bash $(ROOT)/signer-core/scripts/fuzz.sh ci
+	$(MAKE) -C $(ROOT)/markformat fuzz FUZZ_SECONDS=$(FUZZ_SECONDS)
 
 model: core ## the slashing model test (tee-signer/server) with MODEL_RUNS seeds
 	cd $(ROOT)/tee-signer && SLASHMODEL_RUNS=$(MODEL_RUNS) go test $(RACE) -count=1 -v -timeout 60m \

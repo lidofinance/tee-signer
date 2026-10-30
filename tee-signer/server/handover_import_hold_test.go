@@ -12,6 +12,7 @@ import (
 	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	wireadmin "github.com/lidofinance/tee-signer/signer-protocol/wire/admin"
 	"github.com/lidofinance/tee-signer/slashing-log"
@@ -200,7 +201,7 @@ func TestHandoverImportStartChecks(t *testing.T) {
 	}
 	// A share stored since.
 	e := newTgtEnv(t, "dev", nil)
-	sk, _ := core.NewSecret()
+	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
 	if _, err := e.srv.addShare(pk, &sk, 1, nil, "sealed"); err != nil {
 		t.Fatal(err)
@@ -216,7 +217,7 @@ func TestHandoverImportStartChecks(t *testing.T) {
 	src := newSource(t, 8, 0, [][32]byte{{0xd1}}, testMark)
 	order, hash := e.order([]byte{1, 2}, nil)
 	e.mustImp(order, src.pages(e.sealTo(), hash, 4)[0], 0)
-	sk, _ = core.NewSecret()
+	sk, _ = software.NewSecret()
 	pk, _ = core.PubkeyOf(sk)
 	_, err := e.srv.addShare(pk, &sk, 1, nil, "sealed")
 	refusedImport(t, err, backend.StatusNotReady, "handover import")

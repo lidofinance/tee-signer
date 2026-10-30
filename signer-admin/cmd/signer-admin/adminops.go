@@ -248,11 +248,12 @@ func cmdImportDraft(args []string, out io.Writer) error {
 	splitPath := fs.String("split", "", "the split file: t, n, each signer's share index and each validator's commitments (no secret)")
 	notAfter := fs.String("not-after", "12h", "the runner takes no share under the order from then on: RFC 3339 time, or a duration from now")
 	outPath := fs.String("out", "import.bin", "the order body to sign; the target's setup and locked values in force go to the same name with .active")
+	allowGCPSingle := fs.Bool("allow-gcp-unsafe-single-key", false, "confirm a 1 of 1 order to a GCP signer whose setup accepts it; UNSAFE: "+setupwire.UnsafeSingleKeyWarning)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 || *target == "" || *splitPath == "" {
-		return errors.New("usage: signer-admin import-draft -cluster cluster.json -signer NAME -split FILE [-not-after 12h] [-out import.bin]")
+		return errors.New("usage: signer-admin import-draft -cluster cluster.json -signer NAME -split FILE [-not-after 12h] [-allow-gcp-unsafe-single-key] [-out import.bin]")
 	}
 	split, err := readSplit(*splitPath)
 	if err != nil {
@@ -268,8 +269,19 @@ func cmdImportDraft(args []string, out io.Writer) error {
 	if !ok || idx == 0 || idx > split.N {
 		return fmt.Errorf("%s: no share index 1 to %d for %s", *splitPath, split.N, m.name)
 	}
-	if err := setupwire.CheckThreshold(m.setup.Chain.GenesisForkVersion, int(split.T), int(split.N)); err != nil {
+	// The target's own rule, so an order its runner refuses is not drafted
+	// (CheckThresholdOn: a 1 of 1 order to a GCP signer needs the setup's
+	// acceptance). A 1 of 1 order to a GCP signer is unsafe even with it,
+	// so the drafter confirms it with -allow-gcp-unsafe-single-key and
+	// sees the warning; show prints the same line to each approver.
+	if err := setupwire.CheckThresholdOn(&m.setup.Platform, m.setup.Chain.GenesisForkVersion, int(split.T), int(split.N)); err != nil {
 		return err
+	}
+	if m.setup.Platform.Platform == setupwire.PlatformGCP && split.T == 1 && split.N == 1 {
+		if !*allowGCPSingle {
+			return fmt.Errorf("%s: a 1 of 1 order to a GCP signer: %s; -allow-gcp-unsafe-single-key confirms it", m.name, setupwire.UnsafeSingleKeyWarning)
+		}
+		fprintf(out, "WARNING %s: 1 of 1 on GCP: %s\n", m.name, setupwire.UnsafeSingleKeyWarning)
 	}
 	b := &importorder.Body{ClusterID: m.setup.ClusterID, ChainHash: m.setup.Chain.Hash(), Target: m.setupHash,
 		T: split.T, N: split.N, ShareIndex: idx}
@@ -340,11 +352,20 @@ func showImport(out io.Writer, path string, raw []byte, activePath string) error
 	if err != nil {
 		return err
 	}
+	single := b.T == 1 && b.N == 1
+	if a == nil && single {
+		fprintf(out, "1 of 1: the target holds the whole key; show with its active values (-active, or %s.active) says whether it is a GCP signer, where that is UNSAFE\n", path)
+	}
 	if a != nil {
 		if h, _ := a.setup.Hash(); h != b.Target || a.setup.ClusterID != b.ClusterID {
 			fprintf(out, "target: the active values are not of this order's target\n")
 		} else {
 			fprintf(out, "target: %s, the setup of the active values; approvers of its locked version %d\n", a.setup.SignerName, a.ref.version)
+			// What import-draft printed to the drafter, for each approver
+			// before sign.
+			if single && a.setup.Platform.Platform == setupwire.PlatformGCP {
+				fprintf(out, "WARNING %s: 1 of 1 on GCP: %s\n", a.setup.SignerName, setupwire.UnsafeSingleKeyWarning)
+			}
 		}
 	}
 	if signed != nil {

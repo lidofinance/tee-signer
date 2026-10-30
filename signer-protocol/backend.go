@@ -79,6 +79,16 @@ type Health struct {
 	// open, why it was not read, or, for a platform without a lock, that
 	// the setup accepts that.
 	KeyLockWhy string `json:"key_lock_why,omitempty"`
+	// SingleKey says whether this signer holds a key alone (a 1 of 1
+	// import order) on a platform where that is unsafe: on GCP "accepted"
+	// when the setup says sealing_key_release.unsafe_single_key_accepted,
+	// "refused" when it does not; "n/a" on the other platforms, where a
+	// 1 of 1 order needs no acceptance (docs/protocol.md, "Key rule
+	// lock"). The acceptance sits in the private part of the setup, which
+	// an attestation verifier sees only as platform_commitment, so HEALTH
+	// says it, unattested, as it says key_lock. Runners without a setup
+	// and runners before it leave it out.
+	SingleKey string `json:"single_key,omitempty"`
 	// Image is the runner's check of its own image against
 	// allowed_image_measurements in force (docs/protocol.md, "Image
 	// check"). Unattested here; the attestation document carries the image

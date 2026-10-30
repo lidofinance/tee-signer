@@ -20,8 +20,8 @@ SRC="$BUILD/core-src"
 LIB="$BUILD/$HOST_ARCH/lib"
 for t in test_unit test_ssz_static test_bls_sign test_eip3076; do
   gcc -std=c11 -O2 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -Wno-format-truncation \
-    -I"$SRC/src" -I"$SRC/include" -I"$BLST_DIR/bindings" -I"$UP/tests" \
-    "$UP/tests/$t.c" -o "$OUT/$t" "$LIB/libsigner_core.a" "$LIB/libblst.a"
+    -I"$ROOT/markformat" -I"$SRC/src" -I"$SRC/include" -I"$BLST_DIR/bindings" -I"$UP/tests" \
+    "$UP/tests/$t.c" "$ROOT/markformat/markformat.c" -o "$OUT/$t" "$LIB/libsigner_core.a" "$LIB/libblst.a"
 done
 ssz="$(ls -d "$UP"/vectors/consensus-spec-tests/v1.6.0-beta.0/tests/minimal)"
 bls="$(ls -d "$UP"/vectors/consensus-spec-tests/v1.5.0/tests/general/phase0/bls/sign)"

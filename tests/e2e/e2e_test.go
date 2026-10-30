@@ -43,6 +43,8 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
+	"github.com/lidofinance/tee-signer/signer-core/threshold"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/remote"
 )
@@ -149,7 +151,7 @@ type chain struct {
 
 func newChain(t *testing.T) chain {
 	now := uint64(time.Now().Unix())
-	cfg := core.DevConfig(now-1000*epochSecs, secondsPerSlot, slotsPerEpoch)
+	cfg := software.DevConfig(now-1000*epochSecs, secondsPerSlot, slotsPerEpoch)
 	cfg.Forks = nil // keep one fork version
 	raw, _ := json.MarshalIndent(cfg, "", "  ")
 	p := filepath.Join(t.TempDir(), "chain.json")
@@ -334,9 +336,9 @@ var ctx = context.Background()
 // one 3-of-5 key; the first serves TCP and a unix socket.
 func TestE2E(t *testing.T) {
 	c := newChain(t)
-	sk, _ := core.NewSecret()
+	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
-	shares, err := core.Split(sk, 3, 5)
+	shares, err := software.Split(sk, 3, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -413,7 +415,7 @@ func TestE2E(t *testing.T) {
 		}
 		sigs = append(sigs, sig)
 	}
-	full, err := core.RecoverSignature([]uint64{1, 2, 3}, sigs)
+	full, err := threshold.RecoverSignature([]uint64{1, 2, 3}, sigs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -435,7 +437,7 @@ func TestE2E(t *testing.T) {
 		}
 		again = append(again, sig)
 	}
-	if full2, _ := core.RecoverSignature([]uint64{1, 2, 3}, again); full2 != full {
+	if full2, _ := threshold.RecoverSignature([]uint64{1, 2, 3}, again); full2 != full {
 		t.Fatal("recovered signature of the repeat differs")
 	}
 	t.Logf("exact repeat of the attestation on 3 runners: same partial signatures, same recovered signature")
@@ -579,7 +581,7 @@ func TestE2E(t *testing.T) {
 // gets two different votes for one target.
 func TestE2EClockSkewBreaksFloor(t *testing.T) {
 	c := newChain(t)
-	sk, _ := core.NewSecret()
+	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
 	addr := fmt.Sprintf("tcp:127.0.0.1:%d", freePort(t))
 	r := newRunner(t, "runner-skew", c, addr)
@@ -645,7 +647,7 @@ func TestE2EHTTPSDateIgnoresHostClock(t *testing.T) {
 		t.Fatalf("clock %d s off system time (system clock is +1h for the runner's dev platform), trusted=%v", off, h.ClockTrusted)
 	}
 	t.Logf("runner clock %s: %+d s from real time although the dev platform clock is +1h", h.ClockSource, off)
-	sk, _ := core.NewSecret()
+	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
 	if _, err := adminOf(cl).ImportShare(ctx, backend.ImportShareRequest{Pubkey: pk, Secret: sk, Index: 7}); err != nil {
 		t.Fatal(err)

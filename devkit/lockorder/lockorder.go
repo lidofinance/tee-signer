@@ -1,10 +1,12 @@
+//go:build lockcheck
+
 // Package lockorder holds mutexes with a name, for a lock order check in
 // tests. Built with the tag lockcheck, every Lock records which named
 // locks its goroutine holds; taking B while holding A records the order
-// A before B, and the first time a goroutine takes them the other way
-// round it panics with both orders. That finds an inversion on any one
-// run through both paths, without hitting the deadlock (TKGORDER-02 was
-// one). Without the tag the check compiles to nothing.
+// A before B. An acquisition that closes a cycle in the observed orders
+// panics with the cycle and the stacks of its earlier edges. This catches
+// direct inversions (including TKGORDER-02) and cycles across several paths
+// without hitting the deadlock. Without the tag the check compiles to nothing.
 //
 // The name comes from a type parameter, so the zero value is ready and
 // every instance of a struct field shares one name and one order:

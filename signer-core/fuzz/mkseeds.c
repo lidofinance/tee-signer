@@ -212,20 +212,9 @@ static void registration_go(const char *dir)
 
 static void records(void)
 {
-    static const sc_watermark wms[] = {
-        {0, 0, 0, 0},
-        {100, 0, 0, SC_WM_HAS_BLOCK},
-        {0, 9, 10, SC_WM_HAS_ATTESTATION},
-        {13440031, 420000, 420001, SC_WM_HAS_BLOCK | SC_WM_HAS_ATTESTATION},
-        {UINT64_MAX, UINT64_MAX, UINT64_MAX, 3},
-    };
     uint8_t enc[SC_REPEAT_ROOTS_ENCODED_LEN];
     char name[32];
-    for (size_t i = 0; i < sizeof wms / sizeof wms[0]; i++) {
-        sc_watermark_encode(&wms[i], enc);
-        snprintf(name, sizeof name, "wm-%zu", i);
-        put("watermark", name, enc, SC_WATERMARK_ENCODED_LEN);
-    }
+
     for (uint32_t flags = 0; flags < 4; flags++) {
         sc_repeat_roots r;
         r.flags = flags;

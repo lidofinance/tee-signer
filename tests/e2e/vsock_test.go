@@ -18,11 +18,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mdlayher/vsock"
-
 	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/remote"
+	"github.com/mdlayher/vsock"
 )
 
 // TestE2EVsock tries vsock loopback (CID 1). WSL2 kernels ship without
@@ -52,7 +52,7 @@ func TestE2EVsock(t *testing.T) {
 	r.start()
 	cl := client(t, addr)
 	waitReady(t, cl)
-	sk, _ := core.NewSecret()
+	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
 	if _, err := adminOf(cl).ImportShare(ctx, backend.ImportShareRequest{Pubkey: pk, Secret: sk, Index: 7}); err != nil {
 		t.Fatal(err)

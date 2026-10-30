@@ -10,6 +10,7 @@ import (
 	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
 	"github.com/lidofinance/tee-signer/slashing-log"
@@ -77,8 +78,8 @@ func (e *tgtEnv) addKeys(n, gen int, order [32]byte, mark *backend.Watermark) []
 	e.t.Helper()
 	var out []backend.Pubkey
 	for i := range n {
-		sk, _ := core.NewSecret()
-		other, _ := core.NewSecret()
+		sk, _ := software.NewSecret()
+		other, _ := software.NewSecret()
 		pk, _ := core.PubkeyOf(other)
 		var origin shareOrigin
 		if i < gen {

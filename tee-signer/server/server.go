@@ -18,7 +18,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/lidofinance/tee-signer/devkit/lockorder"
 	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-protocol"
@@ -115,7 +114,7 @@ type Server struct {
 	// sharesMu orders share additions (read) against the handover's read
 	// of every share and its tombstone (write): no share is added between
 	// the two, so none is left behind.
-	sharesMu lockorder.RWMutex[sharesMuName]
+	sharesMu namedRWMutex[sharesMuName]
 	// blocked holds validators whose import raised the mark log but whose
 	// interchange maxima the core did not take: they sign nothing until a
 	// restart, which reads the raised mark.
@@ -969,6 +968,9 @@ func (s *Server) health() (*backend.Health, error) {
 	}
 	if s.SetupHash != ([32]byte{}) {
 		h.KeyLock, h.KeyLockWhy = s.KeyLock.String(), s.KeyLockWhy
+	}
+	if s.Updates != nil {
+		h.SingleKey = singleKey(&s.Updates.SetupWire().Platform)
 	}
 	st := s.Signer.Stats()
 	h.Stats = &backend.SignerStats{

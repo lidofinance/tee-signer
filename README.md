@@ -15,6 +15,14 @@ cannot sign below them. Operators set it up with an approver-signed setup.
 Everything that talks to the runner (the Dirk fork, the gateway, validator
 clients, the operator tools) is untrusted, and the runner checks what they send.
 
+On GCP a signer that holds a key alone (1 of 1) is unsafe and refused unless
+its setup accepts the risk: Cloud KMS cannot lock the rule that releases the
+sealing key, so anyone with IAM or KMS admin rights on the project, the pool
+or the key (folder and organization admins included) can rebind it and
+decrypt the sealing key outside any TEE, which opens the whole key from the
+state bucket. See
+[platform-gcp/deploy/README.md](platform-gcp/deploy/README.md#setup), "Setup".
+
 The history before this repo is in
 [lidofinance/threshold-signer-poc](https://github.com/lidofinance/threshold-signer-poc).
 
@@ -26,6 +34,7 @@ every module builds and tests on its own.
 
 | Module | What it holds |
 |---|---|
+| [markformat](markformat) | Portable C watermark storage codec and its Go binding |
 | [signer-core](signer-core) | The C signing core: SSZ, BLS (blst, vendored), EIP-3076 slashing protection, signing policy; its Go binding, fuzz targets and simulator |
 | [signer-protocol](signer-protocol) | The runner's wire protocol: request types, frames, transports, client connection |
 | [governance](governance) | The setup format, approver sets and signed updates, approved orders (handover, import, exit), chain configs |
@@ -39,7 +48,7 @@ every module builds and tests on its own.
 | [trusted-time](trusted-time) | The runner clock and the NTS client |
 | [signer-admin](signer-admin) | Operator tools: setup updates and orders, share import, handover |
 | [web3signer-api](web3signer-api) | Parsing and checks of Web3Signer signing requests |
-| [devkit](devkit) | Test helpers: fuzz oracles, goroutine leak check, lock order check |
+| [devkit](devkit) | Test helpers: fuzz oracles and driver, goroutine leak and lock order checks |
 | [tests](tests) | End-to-end tests across modules, against the built runners |
 
 ## Build
@@ -69,3 +78,14 @@ The signer-core vector suites need the pinned test vectors:
 `signer-core/scripts/fetch.sh` downloads them, or `VECTORS_DIR` names a copy.
 Without network, set `NO_NETWORK=1` and `GOPROXY=off` and use a filled Go module
 cache. `make loc` prints code line counts per module and per runner build.
+
+## License
+
+Unless otherwise noted, first-party code and documentation are licensed under the
+[Apache License 2.0](LICENSE) (`Apache-2.0`). Third-party code, dependencies and
+imported test fixtures retain their own licences and notices; the root licence
+does not replace those terms.
+
+Binary distributions must include the accompanying licence bundle. The cloud
+image builds include it at `/licenses`. See [licence packaging](docs/licensing.md)
+for the bundle contents and redistribution instructions.

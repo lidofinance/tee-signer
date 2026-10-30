@@ -260,6 +260,7 @@ func TestSetupRefusals(t *testing.T) {
 		{"key release on dev", "setup-dev", func(s *Setup) { s.Platform.SealingKeyRelease.Region = "eu-west-1" }, "sealing_key_release.region does not apply to dev", "skip"},
 		{"peer hosts on azure", "setup-azure", func(s *Setup) { s.Platform.PeerAttestationHosts = []string{"a.example:443"} }, "peer_attestation_hosts is for nitro and dev", ""},
 		{"peer hosts on gcp", "setup-gcp", func(s *Setup) { s.Platform.PeerAttestationHosts = []string{"a.example:443"} }, "peer_attestation_hosts is for nitro and dev", ""},
+		{"single key accepted on azure", "setup-azure", func(s *Setup) { s.Platform.SealingKeyRelease.UnsafeSingleKeyAccepted = true }, "unsafe_single_key_accepted does not apply to azure", "skip"},
 		{"17 peer hosts", "setup-nitro-peers", func(s *Setup) {
 			s.Platform.PeerAttestationHosts = nil
 			for i := range 17 {

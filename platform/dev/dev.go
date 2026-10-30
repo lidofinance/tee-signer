@@ -7,14 +7,9 @@ package dev
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 	"time"
@@ -28,25 +23,6 @@ import (
 // devKey is public on purpose: anyone with the state directory can unseal.
 var devKey = sha256.Sum256([]byte("tee-signer dev sealing key v1 (NOT SECRET)"))
 
-// GCMSealer seals with AES-256-GCM: blob = nonce(12) || ciphertext||tag.
-// Cloud platforms reuse it with a key they get from KMS.
-type GCMSealer struct{ aead cipher.AEAD }
-
-func NewGCMSealer(key []byte) (*GCMSealer, error) {
-	if len(key) != 32 {
-		return nil, errors.New("sealer: want a 32-byte key")
-	}
-	b, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	g, err := cipher.NewGCM(b)
-	if err != nil {
-		return nil, err
-	}
-	return &GCMSealer{aead: g}, nil
-}
-
 // NewDevKeys is the dev platform's key release: AES-GCM under a public key
 // made from measurement, which stands in for the image measurement. Runners
 // with the same value open each other's keys, as two runners of one image
@@ -54,13 +30,13 @@ func NewGCMSealer(key []byte) (*GCMSealer, error) {
 // release. Like the sealer it protects nothing.
 func NewDevKeys(measurement string) platform.SealerKeys {
 	k := sha256.Sum256([]byte("tee-signer dev key release v1 (NOT SECRET)|" + measurement))
-	s, _ := NewGCMSealer(k[:])
+	s, _ := platform.NewGCMSealer(k[:])
 	return platform.SealerKeys{Sealer: s}
 }
 
 // NewDevSealer uses the fixed dev key.
-func NewDevSealer() *GCMSealer {
-	s, _ := NewGCMSealer(devKey[:])
+func NewDevSealer() *platform.GCMSealer {
+	s, _ := platform.NewGCMSealer(devKey[:])
 	return s
 }
 
@@ -68,12 +44,12 @@ func NewDevSealer() *GCMSealer {
 // made from setup_hash, so that a runner with another setup over the same
 // state directory opens nothing this one sealed, as on the cloud platforms.
 // A zero setup (the flag path) gets the fixed dev key.
-func NewSetupSealer(setup [32]byte) *GCMSealer {
+func NewSetupSealer(setup [32]byte) *platform.GCMSealer {
 	if setup == ([32]byte{}) {
 		return NewDevSealer()
 	}
 	k := sha256.Sum256(append([]byte("tee-signer dev setup sealing key v1 (NOT SECRET)|"), setup[:]...))
-	s, _ := NewGCMSealer(k[:])
+	s, _ := platform.NewGCMSealer(k[:])
 	return s
 }
 
@@ -84,24 +60,8 @@ func NewSetupKeys(measurement string, setup [32]byte) platform.SealerKeys {
 		return NewDevKeys(measurement)
 	}
 	k := sha256.Sum256(append([]byte("tee-signer dev setup key release v1 (NOT SECRET)|"+measurement+"|"), setup[:]...))
-	s, _ := NewGCMSealer(k[:])
+	s, _ := platform.NewGCMSealer(k[:])
 	return platform.SealerKeys{Sealer: s}
-}
-
-func (s *GCMSealer) Seal(plaintext, aad []byte) ([]byte, error) {
-	nonce := make([]byte, s.aead.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return nil, err
-	}
-	return s.aead.Seal(nonce, nonce, plaintext, aad), nil
-}
-
-func (s *GCMSealer) Unseal(blob, aad []byte) ([]byte, error) {
-	n := s.aead.NonceSize()
-	if len(blob) < n+s.aead.Overhead() {
-		return nil, errors.New("sealer: blob too short")
-	}
-	return s.aead.Open(nil, blob[:n], blob[n:], aad)
 }
 
 // Attester returns an unsigned JSON document. Measurement is the

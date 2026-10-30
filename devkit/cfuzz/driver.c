@@ -1,6 +1,6 @@
 /*
  * driver.c - a small coverage-guided fuzz engine for the libFuzzer targets
- * in this folder, for machines with gcc but without clang's libFuzzer.
+ * in the repository, for machines with gcc but without clang's libFuzzer.
  * It takes the libFuzzer flags the scripts use, so scripts/fuzz.sh runs
  * either engine the same way.
  *

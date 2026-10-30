@@ -34,6 +34,7 @@
  *   sim gen SEED FILE                   write the input a seed makes
  * covfuzz.c feeds sim_run_bytes with coverage feedback.
  */
+#include "../tests/markformat_host.h"
 #include <inttypes.h>
 #include <setjmp.h>
 #include <stdarg.h>
@@ -607,7 +608,7 @@ static int ta_state_write(inst_t *in, uint64_t floor, uint64_t last, const sc_wa
     in->disk.has_state = 1;
     in->disk.floor = floor;
     in->disk.last_step = last;
-    sc_watermark_encode(mark, in->disk.mark);
+    test_watermark_encode(mark, in->disk.mark);
     count_write(in);
     TRACE("  write signer %d state: floor epoch +%" PRIu64 " step %s, mark src +%" PRId64
           " tgt +%" PRId64 " blk +%" PRId64 " (n=%" PRIu64 " this epoch)\n",
@@ -632,7 +633,7 @@ static int ta_clock_load(inst_t *in)
     if (in->ta_loaded)
         return SC_OK;
     if (!in->disk.has_state ||
-        sc_watermark_decode(in->disk.mark, SC_WATERMARK_ENCODED_LEN, &mark) != SC_OK ||
+        test_watermark_decode(in->disk.mark, SC_WATERMARK_ENCODED_LEN, &mark) != SC_OK ||
         in->disk.last_step > in->disk.floor)
         return SC_ERR_STORAGE;
     in->ta_base = in->disk.floor;
@@ -979,7 +980,7 @@ static int cb_load_wm(void *ctx, const uint8_t pk[48], sc_watermark *out)
     memset(&wm, 0, sizeof wm);
     if (in->p->persist_marks && in->disk.has_wm[k]) {
         if (in->disk.has_wm[k] != 1 ||
-            sc_watermark_decode(in->disk.wm[k], SC_WATERMARK_ENCODED_LEN, &wm) != SC_OK)
+            test_watermark_decode(in->disk.wm[k], SC_WATERMARK_ENCODED_LEN, &wm) != SC_OK)
             return SC_ERR_STORAGE;
         found = 1;
     }
@@ -1024,7 +1025,7 @@ static int cb_store_wm(void *ctx, const uint8_t pk[48], const sc_watermark *wm)
         crash_now(in);
     if (act == ACT_FAIL)
         return SC_ERR_STORAGE;
-    sc_watermark_encode(wm, enc);
+    test_watermark_encode(wm, enc);
     if (act == ACT_TORN) {
         size_t cut = g.torn_cut ? (size_t)g.torn_cut : 1 + rnd() % (SC_WATERMARK_ENCODED_LEN - 1);
         if (!in->disk.has_wm[k])
@@ -2000,7 +2001,7 @@ static void run_start(const int profs[NSIGMAX], int nk, uint64_t start_off, uint
             in->disk.has_state = 1;
             in->disk.floor = g.now_ms / 1000;
             in->disk.last_step = 0;
-            sc_watermark_encode(&none, in->disk.mark);
+            test_watermark_encode(&none, in->disk.mark);
         }
         inst_boot(in);
         memset(in->recovering, 0, sizeof in->recovering); /* first start, not a restart */

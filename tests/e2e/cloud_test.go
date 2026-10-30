@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/remote"
 	"github.com/lidofinance/tee-signer/signer-protocol/sealedimport"
@@ -62,9 +63,9 @@ func TestE2ESealedImport(t *testing.T) {
 	waitReady(t, ca)
 	waitReady(t, cb)
 
-	sk, _ := core.NewSecret()
+	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
-	shares, _ := core.Split(sk, 3, 5)
+	shares, _ := software.Split(sk, 3, 5)
 	share := shares[0].Secret
 	sharePk, _ := core.PubkeyOf(share)
 
@@ -278,7 +279,7 @@ func TestE2EMutualTLS(t *testing.T) {
 	id := devIdentity(t, good)
 	pinned, _ := newTLSClient(addr, goodCfg, nil, remote.WithTLSKeyPin(id.TLSKeyHash))
 	defer pinned.Close()
-	sk, _ := core.NewSecret()
+	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
 	if _, err := adminOf(pinned).ImportShareSealed(ctx, backend.ImportShareRequest{Pubkey: pk, Secret: sk, Index: 7}, pk, remote.DevVerifier); err != nil {
 		t.Fatal(err)
@@ -342,7 +343,7 @@ func TestE2EClientCertificateUsesTheRunnerClock(t *testing.T) {
 // once the second has claimed the record.
 func TestE2ECloneSharedRecord(t *testing.T) {
 	c := newChain(t)
-	sk, _ := core.NewSecret()
+	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
 
 	type result struct{ aSigned, bSigned, doubles int }
