@@ -267,6 +267,13 @@ func (im *importer) start(ctx context.Context, hash [32]byte, total uint32) erro
 	if n := len(s.Signer.Keys()); n > 0 {
 		return im.refuse("this runner took %d keys since the first checks; an import starts on an empty runner only", n)
 	}
+	// A stored share that did not load would load at the next start beside
+	// the handed-over ones, and the import would never end (HTC-01).
+	if names, err := ListShares(s.Platform.Store); err != nil {
+		return backend.Refused(backend.StatusStorage, "handover import: stored shares: %v", err)
+	} else if len(names) > 0 {
+		return im.refuse("this runner stores %d shares; an import starts on a runner with none stored", len(names))
+	}
 	if err := s.Updates.setImportOrder(ctx, &markstore.Order{Kind: markstore.OrderHandover, Hash: hash, ActAt: unix(t)}); err != nil {
 		return err
 	}
