@@ -84,9 +84,14 @@ const ARMAPIVersion = "2023-05-01"
 // locked (CheckVersions).
 func (l *Log) Lock(ctx context.Context) (markstore.Lock, error) {
 	container, found, err := l.container(ctx)
-	if err != nil || !found {
-		// No such container: no lock.
-		return markstore.Lock{Kind: "azure immutability policy", Mode: "none"}, err
+	if err != nil {
+		return markstore.Lock{}, err
+	}
+	if !found {
+		// No such container under this subscription and resource group
+		// (a wrong one in the setup also gives 404): no lock, and
+		// CheckLock stops the start.
+		return markstore.Lock{Kind: "azure immutability policy", Mode: "none"}, nil
 	}
 	var p struct {
 		Properties struct {
@@ -94,9 +99,12 @@ func (l *Log) Lock(ctx context.Context) (markstore.Lock, error) {
 			State string `json:"state"` // Locked or Unlocked
 		} `json:"properties"`
 	}
-	if found, err = l.armGet(ctx, container+"/immutabilityPolicies/default", "immutability policy", &p); err != nil || !found {
+	if found, err = l.armGet(ctx, container+"/immutabilityPolicies/default", "immutability policy", &p); err != nil {
+		return markstore.Lock{}, err
+	}
+	if !found {
 		// No policy on the container: no lock.
-		return markstore.Lock{Kind: "azure immutability policy", Mode: "none"}, err
+		return markstore.Lock{Kind: "azure immutability policy", Mode: "none"}, nil
 	}
 	if p.Properties.Days < 0 || p.Properties.Days > 1<<20 {
 		return markstore.Lock{}, fmt.Errorf("azlog: immutability period of %d days", p.Properties.Days)
@@ -110,10 +118,16 @@ func (l *Log) Lock(ctx context.Context) (markstore.Lock, error) {
 // enabled, or a migration to it started). There an overwrite makes a new
 // current version and keeps the locked one as a previous version, and List
 // and Get read current versions only, so a storage admin could hide the
-// newest objects and roll the log or the state copy back. A missing
-// container passes: nothing in it to hide.
+// newest objects and roll the log or the state copy back. A container the
+// management plane does not find (404) fails too: the account name is
+// global, so the data plane can reach a container that a wrong
+// subscription or resource group in the setup hides from this check.
 func (l *Log) CheckVersions(ctx context.Context) error {
-	_, _, err := l.container(ctx)
+	u, found, err := l.container(ctx)
+	if err == nil && !found {
+		err = fmt.Errorf("%w: azlog: the management plane has no container at %s; check the subscription, resource group, account and container",
+			markstore.ErrNoLock, u)
+	}
 	return err
 }
 

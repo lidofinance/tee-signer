@@ -318,7 +318,8 @@ gives the managed identity's token for `https://management.azure.com/`.
 The identity needs read access to the container and its immutability
 policy: Reader on the container scope (`platform-azure/deploy/deploy.sh store-role N`).
 The account name is unique across Azure, so a wrong subscription or group
-in the setup finds no container (404), and the check fails closed.
+in the setup finds no container (404), and the check fails closed. The
+state copy's version check also fails on that 404.
 
 The Azure check refuses a container with version-level immutability
 (`immutableStorageWithVersioning` enabled, or a migration to it under way),

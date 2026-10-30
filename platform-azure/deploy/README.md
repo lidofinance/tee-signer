@@ -516,7 +516,8 @@ identity, reads the container and its immutability policy, and needs
 Reader on the container (`deploy.sh store-role N`). A custom role with only
 `immutabilityPolicies/read` is not enough: the check also reads the
 container (`containers/read`) and stops the runner on a 403. The state
-copy's container gets the same version-level check at start.
+copy's container gets the same version-level check at start, with a
+setup; a container the management plane does not find stops it too.
 
 ## State copy and handover
 

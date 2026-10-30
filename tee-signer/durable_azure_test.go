@@ -63,4 +63,17 @@ func TestDurableCopyRefusesVersionLevelImmutability(t *testing.T) {
 	if err := open(false); err != nil {
 		t.Fatalf("flag path: %v", err)
 	}
+	// A wrong subscription in the setup: the management plane finds no
+	// container while the data plane still reaches it. The check fails
+	// instead of passing.
+	// Set before SetLock, whose mutex orders it before the handler's read.
+	srv.Subscription = "sub-2"
+	srv.SetLock(wormfake.Lock{Compliance: true, Days: 30, VersionLevel: true})
+	before := len(srv.Names())
+	if err := open(true); !errors.Is(err, markstore.ErrNoLock) || !strings.Contains(err.Error(), "no container") {
+		t.Errorf("container not found over ARM: %v, want a refusal", err)
+	}
+	if len(srv.Names()) != before {
+		t.Error("wrote to the store before the refusal")
+	}
 }

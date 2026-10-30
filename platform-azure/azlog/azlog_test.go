@@ -148,6 +148,19 @@ func TestAzureLockContainerRead(t *testing.T) {
 			if !c.ok && policyReads != 0 {
 				t.Fatalf("read the policy %d times after the container read refused", policyReads)
 			}
+			// The state copy's check answers the same way, 404 included.
+			err = markstore.CheckVersions(context.Background(), openARM(t, srv.URL, srv.Client()))
+			switch {
+			case c.ok && err != nil:
+				t.Fatalf("version check: %v", err)
+			case !c.ok && err == nil:
+				t.Fatal("version check passed")
+			case !c.ok && errors.Is(err, markstore.ErrNoLock) != c.noLock:
+				t.Fatalf("version check: %v, want ErrNoLock %v", err, c.noLock)
+			}
+			if c.status == http.StatusNotFound && !strings.Contains(err.Error(), "/subscriptions/sub-1/resourceGroups/rg-1/") {
+				t.Fatalf("404 error does not name the path: %v", err)
+			}
 		})
 	}
 }

@@ -89,6 +89,9 @@ type Server struct {
 	Auth func(r *http.Request) error
 	// PageSize bounds each listing page (default 3, so tests page).
 	PageSize int
+	// Subscription, if set, is the Azure container's subscription: the
+	// management plane answers 404 for any other, as Azure does.
+	Subscription string
 
 	mu       sync.Mutex
 	objects  map[string][]*version // name -> versions, oldest first
@@ -629,6 +632,10 @@ func (s *Server) serveARM(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(r.URL.Path, "/")
 	if r.Method != http.MethodGet || len(parts) < 13 || r.URL.Query().Get("api-version") == "" {
 		http.Error(w, `{"error":{"code":"InvalidResourceType"}}`, http.StatusBadRequest)
+		return
+	}
+	if s.Subscription != "" && parts[2] != s.Subscription {
+		http.Error(w, `{"error":{"code":"ResourceNotFound"}}`, http.StatusNotFound)
 		return
 	}
 	if len(parts) == 13 && r.URL.Path == s.armContainerPath(parts[2], parts[4], parts[8]) {
