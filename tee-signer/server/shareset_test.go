@@ -339,3 +339,33 @@ func TestRewriteAlwaysFailsKeepsResetting(t *testing.T) {
 		t.Fatal("the stale record of B read without refusal")
 	}
 }
+
+// A share write whose store reply was lost but which landed: the runner
+// reads it back and keeps the set after, so the import stands and the
+// next start finds the stored set vouched, with no reset.
+func TestShareWriteLostReplyLanded(t *testing.T) {
+	e := newTgtEnv(t, "dev", nil)
+	pka, pkb, _ := promotedPair(t, e)
+	skc, pkc := newKey(t)
+	e.store.mu.Lock()
+	e.store.landPut = func(k string) bool { return k == shareKey(pkc) }
+	e.store.mu.Unlock()
+	if err := e.importSealed(pkc, skc, 7, nil); err != nil {
+		t.Fatalf("an import whose write landed with its reply lost: %v", err)
+	}
+	e.store.mu.Lock()
+	e.store.landPut = nil
+	e.store.mu.Unlock()
+	skd, pkd := newKey(t)
+	if err := e.importSealed(pkd, skd, 8, nil); err != nil {
+		t.Fatal(err)
+	}
+	puts := e.store.putsOf(shareKey(pka)) + e.store.putsOf(shareKey(pkb))
+	e.restart()
+	if n := e.store.putsOf(shareKey(pka)) + e.store.putsOf(shareKey(pkb)); n != puts {
+		t.Fatalf("%d records rewritten: the start reset after a write whose reply was lost", n-puts)
+	}
+	if !e.recordOf(pkb).History {
+		t.Fatal("B lost its history")
+	}
+}
