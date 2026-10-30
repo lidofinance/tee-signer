@@ -1314,18 +1314,30 @@ static void test_saturation(void)
     CHECK(tmp.committed.block_slot == M && tmp.committed.target_epoch == M && tmp.ram.source_epoch == M);
 }
 
+/* An attestation whose slot is in its target epoch: the highest such
+ * target is the epoch of slot UINT64_MAX, so the signer never books a
+ * target mark near UINT64_MAX itself (test_saturation covers that layer). */
+static sc_attestation_data att_in(uint64_t source, uint64_t target, uint64_t slot, uint8_t tag)
+{
+    sc_attestation_data a = att(source, target, tag);
+    a.slot = slot;
+    return a;
+}
+
 /*
  * The same through the signer. With a normal clock horizon a message near
  * UINT64_MAX never reaches the marks: SC_ERR_POLICY_FUTURE refuses it
  * first, while an import of UINT64_MAX values goes in and then refuses
  * every vote and block. With max_epochs_ahead at UINT64_MAX the horizon
- * saturates and the signer signs at the top of the range; its stored mark
- * saturates, and a restart from it refuses everything, with both mark
+ * saturates and the signer signs at the top of the range: its stored block
+ * mark saturates, its target mark lands one window above the highest
+ * target a slot allows, and a restart refuses everything, with both mark
  * scopes.
  */
 static void test_saturation_signer(void)
 {
     const uint64_t M = UINT64_MAX;
+    const uint64_t T = M / 32; /* epoch of slot UINT64_MAX */
     sc_watermark all = {M, M, M, SC_WM_HAS_BLOCK | SC_WM_HAS_ATTESTATION};
     uint8_t sig[96];
     sc_slashing_state st;
@@ -1338,7 +1350,7 @@ static void test_saturation_signer(void)
         set_epoch(&h, E);
         sc_signer *s = new_signer(&h, &cfg, 2, 0);
         vkeys k = add_validator(s, 50, SC_INDEX_UNKNOWN);
-        sc_attestation_data a = att(M - 1, M, 1);
+        sc_attestation_data a = att_in(T - 1, T, T * 32, 1);
         sc_beacon_block_header b = blk(M - 1, 1);
         CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_ERR_POLICY_FUTURE);
         CHECK_RC(sc_sign_block(s, k.pk, &b, sig), SC_ERR_POLICY_FUTURE);
@@ -1352,45 +1364,44 @@ static void test_saturation_signer(void)
         CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_ERR_SLASH_SOURCE);
         CHECK_RC(sc_sign_block(s, k.pk, &b, sig), SC_ERR_SLASH_BLOCK);
 
-        /* A horizon that reaches UINT64_MAX: the signer signs there, and
-         * the mark it books saturates. */
+        /* A horizon that reaches UINT64_MAX: the signer signs there. The
+         * block mark saturates; the target mark lands one window above T. */
         host_t h2 = {0};
         cfg.max_epochs_ahead = M;
         set_epoch(&h2, E);
         sc_signer *s2 = new_signer(&h2, &cfg, 2, 0);
         vkeys k2 = add_validator(s2, 51, SC_INDEX_UNKNOWN);
-        a = att(M - 1, M - 1, 1);
+        a = att_in(T - 1, T, T * 32, 1);
         b = blk(M - 1, 1);
         CHECK_RC(sc_sign_attestation(s2, k2.pk, &a, sig), SC_OK);
         CHECK_RC(sc_sign_block(s2, k2.pk, &b, sig), SC_OK);
         CHECK_RC(sc_signer_get_state(s2, k2.pk, &st), SC_OK);
-        CHECK(st.committed.block_slot == M && st.committed.target_epoch == M);
-        CHECK(st.committed.source_epoch == (scope == SC_MARKS_PER_DEVICE ? M - 1 : M));
-        CHECK(st.ram.block_slot == M - 1 && st.ram.source_epoch == M - 1 && st.ram.target_epoch == M - 1);
-        a = att(M - 1, M, 2);
+        CHECK(st.committed.block_slot == M && st.committed.target_epoch == T + 1);
+        CHECK(st.committed.source_epoch == (scope == SC_MARKS_PER_DEVICE ? T - 1 : T));
+        CHECK(st.ram.block_slot == M - 1 && st.ram.source_epoch == T - 1 && st.ram.target_epoch == T);
         b = blk(M, 2);
-        CHECK_RC(sc_sign_attestation(s2, k2.pk, &a, sig), SC_OK);
         CHECK_RC(sc_sign_block(s2, k2.pk, &b, sig), SC_OK);
         CHECK_RC(sc_signer_get_state(s2, k2.pk, &st), SC_OK);
-        CHECK(st.committed.block_slot == M && st.committed.target_epoch == M &&
-              st.ram.block_slot == M && st.ram.target_epoch == M);
+        CHECK(st.committed.block_slot == M && st.ram.block_slot == M);
 
-        /* Restart from the stored mark: at UINT64_MAX, so every vote and
-         * block is refused, the repeats of the last ones included. */
+        /* Restart from the stored mark: block slot UINT64_MAX and target
+         * T + 1, so every block and every vote is refused, the repeats of
+         * the last ones included. */
         int writes = h2.writes;
         sc_signer_wipe(s2);
         s2 = new_signer(&h2, &cfg, 2, 0);
         add_validator(s2, 51, SC_INDEX_UNKNOWN);
         CHECK_RC(sc_signer_get_state(s2, k2.pk, &st), SC_OK);
-        CHECK(st.ram.block_slot == M && st.ram.target_epoch == M &&
-              st.ram.source_epoch == (scope == SC_MARKS_PER_DEVICE ? M - 1 : M));
-        /* Per validator the source bound saturated too, so the source
-         * refuses the last vote; per device it sits at the signed source,
-         * so the target does. */
+        CHECK(st.ram.block_slot == M && st.ram.target_epoch == T + 1 &&
+              st.ram.source_epoch == (scope == SC_MARKS_PER_DEVICE ? T - 1 : T));
+        /* Per validator the source bound is one window above the signed
+         * source, so the source refuses the last vote; per device it sits at
+         * the signed source, so the target does. */
+        a = att_in(T - 1, T, T * 32, 1);
         CHECK_RC(sc_sign_attestation(s2, k2.pk, &a, sig),
                  scope == SC_MARKS_PER_DEVICE ? SC_ERR_SLASH_TARGET : SC_ERR_SLASH_SOURCE);
         CHECK_RC(sc_sign_block(s2, k2.pk, &b, sig), SC_ERR_SLASH_BLOCK);
-        a = att(M, M, 3);
+        a = att_in(T, T, M, 3);
         CHECK_RC(sc_sign_attestation(s2, k2.pk, &a, sig), SC_ERR_SLASH_TARGET);
         a = att(E - 1, E, 3);
         b = blk(E * 32, 3);
