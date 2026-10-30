@@ -221,7 +221,11 @@ roll the mark back.
   operator imports the shares again (sealed import to the new boot key, as
   after any new deployment). Either way the runner signs from the log's
   mark: the source bound comes from the log, the floor adds its target and
-  block bounds. `tests/e2e` `TestE2EMarkLogLostState*`,
+  block bounds. A share imported again without vote history (no EIP-3076
+  attestation maxima) also gets its own source floor, the restart floor
+  epoch at the import. Its first vote then waits about margin + 2 epochs:
+  the source must reach the floor and stay below the clock epoch.
+  `tests/e2e` `TestE2EMarkLogLostState*`,
   `TestE2EDurableState*` and `attestation-verify/runnerclient`
   `TestE2EAzureRunnerMarkLogLostState`, `TestE2EAzureRunnerDurableAndHandover`
   run this on each platform build.

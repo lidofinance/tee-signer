@@ -156,6 +156,9 @@ type shareRecord struct {
 	// SourceFloor: the import came without vote history, and the key signs
 	// no vote with a source below this epoch, the restart floor epoch at the
 	// import (state.Hooks.ImportFloor, SLBOUND-01). A restart sets it again.
+	// The host stores the record and can put back an older one with a lower
+	// floor or none; only a follow-up change anchors the floor in the mark
+	// log.
 	SourceFloor uint64 `json:"source_floor,omitempty"`
 }
 

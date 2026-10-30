@@ -2,8 +2,11 @@ package state
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
+	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/slashing-log"
@@ -118,5 +121,53 @@ func TestSourceGateBeforeTheFirstRaise(t *testing.T) {
 	}
 	if f, on := l.SourceGate(); !on || f != 50+DefaultFloorMargin(cfg) {
 		t.Errorf("gate at the raise: %d %v", f, on)
+	}
+}
+
+// errClock fails every reading.
+type errClock struct{}
+
+func (errClock) Now() (time.Time, error) { return time.Time{}, errors.New("no clock") }
+func (errClock) Source() string          { return "broken" }
+func (errClock) Trusted() bool           { return false }
+
+// ImportFloor is on only with the restart floor and a mark log in use, and
+// fails closed when the clock cannot be read.
+func TestImportFloorModes(t *testing.T) {
+	cfg := software.DevConfig(genesis, 12, 32)
+	cfg.DeviceMark = true
+	margin := DefaultFloorMargin(cfg)
+	ok := &fakeClock{t: at(50, 5)}
+	for _, c := range []struct {
+		name    string
+		mode    Mode
+		clock   platform.Clock
+		useLog  bool
+		on      bool
+		wantErr bool
+	}{
+		{"floor and mark log: on", Mode{Floor: true, FloorMargin: margin, MarkLog: true}, ok, true, true, false},
+		{"no restart floor: off", Mode{MarkLog: true}, ok, true, false, false},
+		{"no mark log mode: off", Mode{Floor: true, FloorMargin: margin}, ok, true, false, false},
+		{"mark log not in use yet: off", Mode{Floor: true, FloorMargin: margin, MarkLog: true}, ok, false, false, false},
+		{"clock error", Mode{Floor: true, FloorMargin: margin, MarkLog: true}, errClock{}, true, false, true},
+		{"clock before 1970", Mode{Floor: true, FloorMargin: margin, MarkLog: true}, &fakeClock{t: time.Unix(-1, 0)}, true, false, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h, err := New(cfg, c.mode, c.clock, nil, nil, quiet)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.useLog {
+				h.UseMarkLog(&gateLog{}, backend.Watermark{}, false)
+			}
+			f, on, err := h.ImportFloor()
+			if (err != nil) != c.wantErr {
+				t.Fatalf("error %v, want one: %v", err, c.wantErr)
+			}
+			if on != c.on || on && f != 50+margin {
+				t.Errorf("floor %v at %d, want %v at %d", on, f, c.on, 50+margin)
+			}
+		})
 	}
 }
