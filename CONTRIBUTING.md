@@ -3,61 +3,54 @@
 Everyone works through branches and pull requests, maintainers included.
 Nothing lands on `main` without review.
 
+## Getting started
+
+Follow the [build instructions](README.md#build) and read the README of
+the module you want to change. Run the commands below from the repo root.
+
 ## Commits
 
-Use [Conventional Commits](https://www.conventionalcommits.org/), with the
-module as the scope:
+Use [Conventional Commits](https://www.conventionalcommits.org/) with the
+module as the scope, for example:
 
 ```
-fix(slashing-log): refuse a foreign record on a conditional create conflict
-feat(platform-aws): check the recipient attestation condition of the key policy
-test(tee-signer): red test for a share loaded before its history
+fix(slashing-log): stop when another runner writes the next record
 ```
 
-- The scope is the folder name of the module the change is in. A change
-  that spans modules gets one commit per module where it can be split;
-  otherwise use the module that holds the reason for the change.
-- Repo-wide changes (scripts, Makefile, CI, top-level docs) use `build`,
-  `ci` or `docs`, without a scope.
-- Subject in lower case, no period at the end, at most 72 characters. Say
-  what the code does after the change.
-- The body says why, and names the finding or issue it fixes.
-- A change to a stored or wire format marks the type with `!` and has a
-  `BREAKING CHANGE:` footer. It bumps the format version, comes with a
-  migration test, and its PR lists every reader of the format.
+- Keep commits focused and buildable. Use the module folder name as the
+  scope; repo-wide changes use `build`, `ci` or `docs` without a scope.
+- Use a lower-case subject, at most 72 characters, without a final period.
+  Explain why in the body and link a related issue, if any.
+- Stored or wire format changes need a version bump, a migration test,
+  `!` and a `BREAKING CHANGE:` footer. List affected readers in the PR.
 
 Every commit is signed (GPG or SSH, with a key on your GitHub account).
-Branch protection refuses unsigned commits.
 
 ## Pull requests
 
-- One change per PR. Branch names: `fix/<topic>`, `feat/<topic>`,
-  `test/<topic>`, `docs/<topic>`.
-- The PR description says what changes, why, how it was tested, and which
-  modules it touches.
-- CI must pass: `make check` and `make test-modules` at least, `make test`
-  for changes to a runner build.
-- Review: at least one approval from a code owner of every module the PR
-  touches. A change to a module marked PERIMETER in
-  [SECURITY-SCOPE.md](SECURITY-SCOPE.md) needs two approvals, and the
-  author does not count.
-- Merge by squash. The squash commit follows the commit rules above.
+- One change per PR. Explain what changes, why, the affected modules and
+  how you tested it. Note any checks you could not run.
+- Run `make check` and `make test-modules`; also run `make test` for runner
+  build changes. All required CI checks must pass.
+- Get at least one reviewer approval. The author does not count.
+- Squash when merging; the final commit follows the rules above.
 
 ## Module rules
 
-- Each module keeps its own `go.mod` (or C or Rust build), tests and
-  README.
-- A module imports another module only through its public packages, and
-  lists it in its `go.mod` with a `replace` line to `../<module>`.
-  `scripts/check-imports.sh` checks both.
-- Test helpers go in `devkit` or next to the code as `_test.go` files.
-  Product code imports nothing of `devkit` except `devkit/lockorder`.
-- New parsers of untrusted bytes come with a fuzz target.
-- Code under `third_party/` is vendored at a pin. Change it only to move
-  the pin, in its own PR, with the checksums updated.
+- Keep modules independent, with their own build files, tests and README.
+  Use public packages and local `go.mod` replacements between Go modules.
+- Keep test helpers and development-only code out of production builds.
+- Add fuzz tests for parsers of untrusted input.
+- Update dependency pins and checksums together.
 
 ## What never goes into the repo
 
-Secrets, real cloud account or project IDs, personal paths and private
-infrastructure names. `scripts/check-forbidden.sh` checks every file; run
-`make check` before you push.
+Never commit secrets, real cloud account or project IDs, personal paths
+or private infrastructure names. Use fake values in examples and tests.
+`make check` scans for private keys, tokens and AWS account IDs only, so
+review your diff before pushing.
+
+## Security issues
+
+Do not report vulnerabilities in public issues or pull requests. Follow
+[SECURITY.md](SECURITY.md).
