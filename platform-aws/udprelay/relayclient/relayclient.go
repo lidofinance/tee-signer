@@ -1,7 +1,9 @@
-// Package udprelay carries UDP datagrams over a stream connection. An AWS
-// Nitro enclave has no network, so the NTS clock's NTP queries go over vsock
-// to a relay on the parent instance, which sends them on as UDP and sends the
-// answers back (cmd/udprelay). NTS-KE is TCP and goes through vsock-proxy.
+// Package relayclient is the enclave side of the UDP relay, which carries
+// UDP datagrams over a stream connection. An AWS Nitro enclave has no
+// network, so the NTS clock's NTP queries go over vsock to a relay on the
+// parent instance, which sends them on as UDP and sends the answers back
+// (cmd/udprelay, package udprelay). NTS-KE is TCP and goes through
+// vsock-proxy.
 //
 // The relay is not trusted, like the rest of the parent. Every NTS answer is
 // authenticated with keys from NTS-KE (AEAD_AES_SIV_CMAC_256, RFC 8915
@@ -21,7 +23,7 @@
 // A frame of length 0 or over the limit ends the connection. The relay sends
 // a datagram from the client only to the destination it accepted, on a
 // connected UDP socket, so it only passes on answers from that address.
-package udprelay
+package relayclient
 
 import (
 	"context"
@@ -43,16 +45,17 @@ const (
 	MaxDatagram = 2048
 	// MaxDest is the longest destination frame: a DNS name (255) and a port.
 	MaxDest = 262
-	// maxReason caps the reason text of a refusal.
-	maxReason = 200
+	// MaxReason caps the reason text of a refusal.
+	MaxReason = 200
 )
 
-var errFrame = errors.New("udprelay: bad frame length")
+// ErrFrame is a frame of length 0 or over the limit.
+var ErrFrame = errors.New("udprelay: bad frame length")
 
-// writeFrame writes one frame in one Write call.
-func writeFrame(w io.Writer, p []byte) error {
+// WriteFrame writes one frame in one Write call.
+func WriteFrame(w io.Writer, p []byte) error {
 	if len(p) == 0 || len(p) > 0xffff {
-		return errFrame
+		return ErrFrame
 	}
 	buf := make([]byte, 2+len(p))
 	binary.BigEndian.PutUint16(buf, uint16(len(p)))
@@ -61,15 +64,15 @@ func writeFrame(w io.Writer, p []byte) error {
 	return err
 }
 
-// readFrame reads one frame of 1 to max octets into buf (len(buf) >= max).
-func readFrame(r io.Reader, buf []byte, max int) ([]byte, error) {
+// ReadFrame reads one frame of 1 to max octets into buf (len(buf) >= max).
+func ReadFrame(r io.Reader, buf []byte, max int) ([]byte, error) {
 	var h [2]byte
 	if _, err := io.ReadFull(r, h[:]); err != nil {
 		return nil, err
 	}
 	n := int(binary.BigEndian.Uint16(h[:]))
 	if n == 0 || n > max {
-		return nil, fmt.Errorf("%w: %d (1 to %d)", errFrame, n, max)
+		return nil, fmt.Errorf("%w: %d (1 to %d)", ErrFrame, n, max)
 	}
 	if _, err := io.ReadFull(r, buf[:n]); err != nil {
 		return nil, err
@@ -77,8 +80,8 @@ func readFrame(r io.Reader, buf []byte, max int) ([]byte, error) {
 	return buf[:n], nil
 }
 
-// printable keeps the printable ASCII of an untrusted text, cut to n octets.
-func printable(b []byte, n int) string {
+// Printable keeps the printable ASCII of an untrusted text, cut to n octets.
+func Printable(b []byte, n int) string {
 	var s strings.Builder
 	for _, c := range b {
 		if s.Len() >= n {
@@ -110,14 +113,14 @@ func (c *Conn) Write(p []byte) (int, error) {
 	if len(p) == 0 || len(p) > MaxDatagram {
 		return 0, fmt.Errorf("udprelay: datagram of %d octets (1 to %d)", len(p), MaxDatagram)
 	}
-	if err := writeFrame(c.Conn, p); err != nil {
+	if err := WriteFrame(c.Conn, p); err != nil {
 		return 0, err
 	}
 	return len(p), nil
 }
 
 func (c *Conn) Read(b []byte) (int, error) {
-	p, err := readFrame(c.Conn, c.buf, MaxDatagram)
+	p, err := ReadFrame(c.Conn, c.buf, MaxDatagram)
 	if err != nil {
 		return 0, err
 	}
@@ -140,18 +143,18 @@ func Dial(ctx context.Context, relay transport.Addr, dest string) (*Conn, error)
 	}
 	_ = c.SetDeadline(dl)
 	buf := make([]byte, MaxDatagram)
-	if err := writeFrame(c, []byte(dest)); err != nil {
+	if err := WriteFrame(c, []byte(dest)); err != nil {
 		c.Close()
 		return nil, fmt.Errorf("udprelay: %s: %w", dest, err)
 	}
-	st, err := readFrame(c, buf, 1+maxReason)
+	st, err := ReadFrame(c, buf, 1+MaxReason)
 	if err != nil {
 		c.Close()
 		return nil, fmt.Errorf("udprelay: %s: no status from the relay: %w", dest, err)
 	}
 	if st[0] != 0 {
 		c.Close()
-		return nil, fmt.Errorf("udprelay: relay refused %s: %s", dest, printable(st[1:], maxReason))
+		return nil, fmt.Errorf("udprelay: relay refused %s: %s", dest, Printable(st[1:], MaxReason))
 	}
 	_ = c.SetDeadline(time.Time{})
 	return &Conn{Conn: c, dest: dest, buf: buf}, nil

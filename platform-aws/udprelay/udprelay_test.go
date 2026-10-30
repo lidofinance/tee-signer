@@ -14,46 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lidofinance/tee-signer/platform-aws/udprelay/relayclient"
 	"github.com/lidofinance/tee-signer/signer-protocol/transport"
 )
-
-func TestFrameRoundTrip(t *testing.T) {
-	var b bytes.Buffer
-	for _, n := range []int{1, 48, MaxDatagram} {
-		p := bytes.Repeat([]byte{byte(n)}, n)
-		if err := writeFrame(&b, p); err != nil {
-			t.Fatal(err)
-		}
-		got, err := readFrame(&b, make([]byte, MaxDatagram), MaxDatagram)
-		if err != nil || !bytes.Equal(got, p) {
-			t.Fatalf("%d octets: %v", n, err)
-		}
-	}
-	if err := writeFrame(&b, nil); !errors.Is(err, errFrame) {
-		t.Fatalf("empty frame written: %v", err)
-	}
-	cases := map[string][]byte{
-		"zero length":  {0, 0},
-		"over the cap": binary.BigEndian.AppendUint16(nil, MaxDatagram+1),
-	}
-	for name, raw := range cases {
-		if _, err := readFrame(bytes.NewReader(raw), make([]byte, MaxDatagram), MaxDatagram); !errors.Is(err, errFrame) {
-			t.Fatalf("%s: %v", name, err)
-		}
-	}
-	if _, err := readFrame(bytes.NewReader([]byte{0, 5, 1, 2}), make([]byte, MaxDatagram), MaxDatagram); !errors.Is(err, io.ErrUnexpectedEOF) {
-		t.Fatalf("cut frame: %v", err)
-	}
-	if _, err := readFrame(bytes.NewReader([]byte{0}), make([]byte, MaxDatagram), MaxDatagram); !errors.Is(err, io.ErrUnexpectedEOF) {
-		t.Fatalf("cut header: %v", err)
-	}
-}
-
-func TestPrintable(t *testing.T) {
-	if got := printable([]byte("ok\x00\x1b[31m\xff"), 6); got != "ok??[3" {
-		t.Fatalf("got %q", got)
-	}
-}
 
 // fakeDNS answers from a table and counts lookups.
 type fakeDNS struct {
@@ -248,7 +211,7 @@ func TestRelayRoundTrip(t *testing.T) {
 	relay := startRelay(t, srv)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	c, err := Dial(ctx, relay, dest(u.port()))
+	c, err := relayclient.Dial(ctx, relay, dest(u.port()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +221,7 @@ func TestRelayRoundTrip(t *testing.T) {
 		if _, err := c.Write([]byte(msg)); err != nil {
 			t.Fatal(err)
 		}
-		buf := make([]byte, MaxDatagram+1)
+		buf := make([]byte, relayclient.MaxDatagram+1)
 		n, err := c.Read(buf)
 		if err != nil || string(buf[:n]) != "re:"+msg {
 			t.Fatalf("datagram %d: %q %v", i, buf[:min(n, 20)], err)
@@ -270,7 +233,7 @@ func TestRelayRoundTrip(t *testing.T) {
 	if n, err := c.Read(small); err != nil || n != 4 || string(small) != "re:a" {
 		t.Fatalf("short read %q %v", small[:n], err)
 	}
-	if _, err := c.Write(make([]byte, MaxDatagram+1)); err == nil {
+	if _, err := c.Write(make([]byte, relayclient.MaxDatagram+1)); err == nil {
 		t.Fatal("datagram over the cap written")
 	}
 	if _, err := c.Write(nil); err == nil {
@@ -299,8 +262,8 @@ func TestRelayRefusesDestinations(t *testing.T) {
 	srv := &Server{Allow: loopAllow(123)}
 	relay := startRelay(t, srv)
 	ctx := context.Background()
-	for _, d := range []string{dest(u.port()), "localhost:123", "8.8.8.8:123", "not a destination", strings.Repeat("a", MaxDest) + ":123"} {
-		c, err := Dial(ctx, relay, d)
+	for _, d := range []string{dest(u.port()), "localhost:123", "8.8.8.8:123", "not a destination", strings.Repeat("a", relayclient.MaxDest) + ":123"} {
+		c, err := relayclient.Dial(ctx, relay, d)
 		if err == nil {
 			c.Close()
 			t.Fatalf("%s accepted", d)
@@ -308,12 +271,12 @@ func TestRelayRefusesDestinations(t *testing.T) {
 		t.Logf("%.40s: %v", d, err)
 	}
 	if got := srv.Counter.Refused.Load(); got != 4 {
-		t.Errorf("refused %d, want 4 (the long one is refused by Dial itself)", got)
+		t.Errorf("refused %d, want 4 (the long one is refused by relayclient.Dial itself)", got)
 	}
 	// A destination that is not printable ASCII.
 	raw := rawConn(t, relay)
-	_ = writeFrame(raw, []byte("127.0.0.1:123\x00"))
-	st, err := readFrame(raw, make([]byte, 300), 300)
+	_ = relayclient.WriteFrame(raw, []byte("127.0.0.1:123\x00"))
+	st, err := relayclient.ReadFrame(raw, make([]byte, 300), 300)
 	if err != nil || st[0] != 1 {
 		t.Fatalf("NUL in the destination: %q %v", st, err)
 	}
@@ -358,23 +321,23 @@ func TestRelayGarbage(t *testing.T) {
 	c := rawConn(t, relay)
 	_, _ = c.Write([]byte{0, 0})
 	closed(t, c)
-	// A destination frame over MaxDest.
+	// A destination frame over relayclient.MaxDest.
 	c = rawConn(t, relay)
-	_, _ = c.Write(binary.BigEndian.AppendUint16(nil, MaxDest+1))
+	_, _ = c.Write(binary.BigEndian.AppendUint16(nil, relayclient.MaxDest+1))
 	closed(t, c)
 	// Accepted, then a datagram frame over the cap: the session ends.
 	c = rawConn(t, relay)
-	_ = writeFrame(c, []byte(dest(u.port())))
-	if st, err := readFrame(c, make([]byte, 300), 300); err != nil || st[0] != 0 {
+	_ = relayclient.WriteFrame(c, []byte(dest(u.port())))
+	if st, err := relayclient.ReadFrame(c, make([]byte, 300), 300); err != nil || st[0] != 0 {
 		t.Fatalf("status %q %v", st, err)
 	}
-	_, _ = c.Write(binary.BigEndian.AppendUint16(nil, MaxDatagram+1))
+	_, _ = c.Write(binary.BigEndian.AppendUint16(nil, relayclient.MaxDatagram+1))
 	_, _ = c.Write(bytes.Repeat([]byte{0xff}, 100))
 	closed(t, c)
 	// Accepted, then a zero length frame.
 	c = rawConn(t, relay)
-	_ = writeFrame(c, []byte(dest(u.port())))
-	_, _ = readFrame(c, make([]byte, 300), 300)
+	_ = relayclient.WriteFrame(c, []byte(dest(u.port())))
+	_, _ = relayclient.ReadFrame(c, make([]byte, 300), 300)
 	_, _ = c.Write([]byte{0, 0})
 	closed(t, c)
 	// Something else on the port ("GET /" reads as a length of 18245).
@@ -386,7 +349,7 @@ func TestRelayGarbage(t *testing.T) {
 		t.Fatalf("%d datagrams reached the server", u.got.Load())
 	}
 	// The relay still works.
-	cl, err := Dial(context.Background(), relay, dest(u.port()))
+	cl, err := relayclient.Dial(context.Background(), relay, dest(u.port()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,16 +362,16 @@ func TestRelayGarbage(t *testing.T) {
 	}
 }
 
-// An answer over MaxDatagram is dropped, the next one passes.
+// An answer over relayclient.MaxDatagram is dropped, the next one passes.
 func TestRelayDropsLargeAnswers(t *testing.T) {
 	u := startUDP(t, func(p []byte) []byte {
 		if string(p) == "big" {
-			return make([]byte, MaxDatagram+1)
+			return make([]byte, relayclient.MaxDatagram+1)
 		}
 		return echo(p)
 	})
 	srv := &Server{Allow: loopAllow(u.port())}
-	c, err := Dial(context.Background(), startRelay(t, srv), dest(u.port()))
+	c, err := relayclient.Dial(context.Background(), startRelay(t, srv), dest(u.port()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,7 +379,7 @@ func TestRelayDropsLargeAnswers(t *testing.T) {
 	_ = c.SetDeadline(time.Now().Add(3 * time.Second))
 	_, _ = c.Write([]byte("big"))
 	_, _ = c.Write([]byte("small"))
-	buf := make([]byte, MaxDatagram+1)
+	buf := make([]byte, relayclient.MaxDatagram+1)
 	n, err := c.Read(buf)
 	if err != nil || string(buf[:n]) != "re:small" {
 		t.Fatalf("%q %v", buf[:min(n, 10)], err)
@@ -426,7 +389,7 @@ func TestRelayDropsLargeAnswers(t *testing.T) {
 	}
 }
 
-func sendN(t *testing.T, c *Conn, n int) {
+func sendN(t *testing.T, c *relayclient.Conn, n int) {
 	t.Helper()
 	for i := range n {
 		if _, err := c.Write([]byte{byte(i)}); err != nil {
@@ -439,7 +402,7 @@ func TestRelayRateLimits(t *testing.T) {
 	t.Run("per destination", func(t *testing.T) {
 		u := startUDP(t, func([]byte) []byte { return nil })
 		srv := &Server{Allow: loopAllow(u.port()), DestRate: 0.001, DestBurst: 2}
-		c, err := Dial(context.Background(), startRelay(t, srv), dest(u.port()))
+		c, err := relayclient.Dial(context.Background(), startRelay(t, srv), dest(u.port()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -456,7 +419,7 @@ func TestRelayRateLimits(t *testing.T) {
 		srv := &Server{Allow: loopAllow(u1.port(), u2.port()), Rate: 0.001, Burst: 3}
 		relay := startRelay(t, srv)
 		for _, u := range []*udpServer{u1, u2} {
-			c, err := Dial(context.Background(), relay, dest(u.port()))
+			c, err := relayclient.Dial(context.Background(), relay, dest(u.port()))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -471,7 +434,7 @@ func TestRelayRateLimits(t *testing.T) {
 	t.Run("per session", func(t *testing.T) {
 		u := startUDP(t, func([]byte) []byte { return nil })
 		srv := &Server{Allow: loopAllow(u.port()), PerSession: 3}
-		c, err := Dial(context.Background(), startRelay(t, srv), dest(u.port()))
+		c, err := relayclient.Dial(context.Background(), startRelay(t, srv), dest(u.port()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -486,12 +449,12 @@ func TestRelayRateLimits(t *testing.T) {
 		u := startUDP(t, echo)
 		srv := &Server{Allow: loopAllow(u.port()), MaxSessions: 1}
 		relay := startRelay(t, srv)
-		c, err := Dial(context.Background(), relay, dest(u.port()))
+		c, err := relayclient.Dial(context.Background(), relay, dest(u.port()))
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer c.Close()
-		if c2, err := Dial(context.Background(), relay, dest(u.port())); err == nil || !strings.Contains(err.Error(), "busy") {
+		if c2, err := relayclient.Dial(context.Background(), relay, dest(u.port())); err == nil || !strings.Contains(err.Error(), "busy") {
 			if c2 != nil {
 				c2.Close()
 			}
@@ -499,7 +462,7 @@ func TestRelayRateLimits(t *testing.T) {
 		}
 		c.Close()
 		waitFor(t, func() bool { return srv.Counter.sessionsNow.Load() == 0 })
-		c3, err := Dial(context.Background(), relay, dest(u.port()))
+		c3, err := relayclient.Dial(context.Background(), relay, dest(u.port()))
 		if err != nil {
 			t.Fatalf("after the first ended: %v", err)
 		}
@@ -513,7 +476,7 @@ func TestRelaySessionTimeouts(t *testing.T) {
 	srv := &Server{Allow: loopAllow(u.port()), Idle: 100 * time.Millisecond, MaxLife: 400 * time.Millisecond,
 		PerSession: 100, DestBurst: 100, Burst: 100}
 	relay := startRelay(t, srv)
-	c, err := Dial(context.Background(), relay, dest(u.port()))
+	c, err := relayclient.Dial(context.Background(), relay, dest(u.port()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -525,7 +488,7 @@ func TestRelaySessionTimeouts(t *testing.T) {
 	if d := time.Since(start); d > time.Second {
 		t.Fatalf("idle session closed after %v", d)
 	}
-	c, err = Dial(context.Background(), relay, dest(u.port()))
+	c, err = relayclient.Dial(context.Background(), relay, dest(u.port()))
 	if err != nil {
 		t.Fatal(err)
 	}
