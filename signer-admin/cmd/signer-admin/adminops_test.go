@@ -171,12 +171,12 @@ func TestImportAndExitOffline(t *testing.T) {
 // an exit is refused until push brought its approval, then the signing
 // leaf's VOLUNTARY_EXIT signs.
 //
-// SIGNER_ADMIN_RUNNER names a dev runner of the cloud repo with the role
+// SIGNER_ADMIN_RUNNER names a dev runner of this repo with the role
 // check; without it the test is skipped.
 func TestAdminFlowDevRunner(t *testing.T) {
 	bin := os.Getenv("SIGNER_ADMIN_RUNNER")
 	if bin == "" {
-		t.Skip("SIGNER_ADMIN_RUNNER is not set (a dev runner binary of the cloud repo)")
+		t.Skip("SIGNER_ADMIN_RUNNER is not set (a dev runner binary of this repo)")
 	}
 	dir := t.TempDir()
 	pki, ca, cert, key := clientPKIWith(t, dir)
@@ -254,7 +254,7 @@ func TestAdminFlowDevRunner(t *testing.T) {
 	wantIn(t, mustTool(t, "import", "-conn", filepath.Join(dir, "g1", "cloud.json"), "-order", signed, "-commitments", splitPath,
 		"-shares", seedShares, "-skip-loaded"), "imported 0 shares, skipped 1 already held")
 
-	// The signing leaf's client, as the Dirk fork's.
+	// The signing leaf's client, as the signing client's.
 	conn, err := loadConn(filepath.Join(dir, "lane", "cloud.json"))
 	if err != nil {
 		t.Fatal(err)

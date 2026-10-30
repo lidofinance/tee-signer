@@ -7,7 +7,7 @@
 # BEACON_URL defaults to http://127.0.0.1:33001 (fixed port of the devnet's
 # beacon node). OUT defaults to stdout. The chain fields come from the beacon
 # API. The policy fields (fee recipient, gas limits, exits) are set here with
-# the values of the Dirk fork's devnet mode; override them with the variables
+# the values of the signing client's devnet mode; override them with the variables
 # below.
 #
 # Chain fields, as governance/chains/chain.sh build writes them for Hoodi:

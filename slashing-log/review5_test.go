@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// Tests that reproduce findings of the security review in issue #5 on
-// lidofinance/threshold-signer-poc. Each asserts the behaviour the finding
+// Tests that reproduce findings of an earlier security
+// review. Each asserts the behaviour the finding
 // asks for, so each fails until its fix lands.
 
 // lostReplyLog writes every Create, but the first one with lose set

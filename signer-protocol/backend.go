@@ -1,4 +1,4 @@
-// Package backend is the interface between the Dirk fork and a secure
+// Package backend is the interface between the signing client and a secure
 // signing backend. A backend holds one threshold share per validator and
 // does all signing, slashing protection and policy checks itself; the
 // caller only sends typed messages and gets partial signatures back.
@@ -196,7 +196,7 @@ type Identity struct {
 }
 
 // AttestOnlyClientOID is the extended key usage of the attest-only client
-// role (attestation-prover.md, signer change 7). A client certificate whose
+// role. A client certificate whose
 // leaf, or any CA certificate of its verified chain, lists it next to
 // clientAuth may send HEALTH, PUBLIC_KEYS, ATTEST and IDENTITY only, and
 // gets at most AttestOnlyPerMinute fresh attestations a minute
@@ -229,8 +229,7 @@ var AdminClientOID = asn1.ObjectIdentifier{1, 2, 840, 113556, 1, 8000, 2554,
 var RunnerChainOID = asn1.ObjectIdentifier{1, 2, 840, 113556, 1, 8000, 2554,
 	49247, 57036, 45844, 17649, 38356, 1811430, 10320378, 3}
 
-// AttestOnlyPerMinute is the image constant of attestation-prover.md,
-// signer change 8: the fresh attestations (ATTEST or IDENTITY answers for a
+// AttestOnlyPerMinute is an image constant: the fresh attestations (ATTEST or IDENTITY answers for a
 // new nonce) an attest-only certificate gets in any minute. More get
 // RATE_LIMITED. The prover needs one an hour, the dashboard's proof check
 // two a minute.
@@ -245,8 +244,7 @@ const (
 )
 
 // SetupState is what a runner says about its setup and config in IDENTITY,
-// ATTEST and HEALTH (research/setup-phase.md in the threshold-signer-poc repo,
-// section 4, and research/attestation-prover.md, "Signer changes", item 6):
+// ATTEST and HEALTH:
 // setup_hash, the state of both config groups as the mark log holds it, the
 // hash of the active approver set, the pending order, the key-release hash
 // and the key origin. A runner without a setup (the flag path of tests and
@@ -290,8 +288,7 @@ type Order struct {
 	ActAt uint64 `json:"act_at"` // Unix seconds
 }
 
-// KeyOrigin says where the runner's loaded keys come from
-// (attestation-prover.md, "Signer changes", item 6): how many it made in key
+// KeyOrigin says where the runner's loaded keys come from: how many it made in key
 // generation, how many it imported, and KeygenOrdersHash over the DKG
 // orders the generated ones came from. Generated plus Imported is the
 // number of loaded keys, the ones keys_hash covers. A proof that shows
@@ -537,7 +534,7 @@ type ImportShareRequest struct {
 	Interchange *Watermark
 }
 
-// Backend is what the Dirk fork calls. Implementations are safe for
+// Backend is what the signing client calls. Implementations are safe for
 // concurrent use.
 type Backend interface {
 	PublicKeys(ctx context.Context) ([]ValidatorKey, error)

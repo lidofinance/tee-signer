@@ -79,7 +79,7 @@ cc_for() {
 # builds these, check-deps.sh checks them, test.sh tests them.
 #   runner-azure, runner-aws, runner-gcp   release builds, one per image
 #   runner-dev                             release build with the dev platform only
-#   runner-dev-debugimport                 dev platform and plaintext import (local stack, Dirk fork tests)
+#   runner-dev-debugimport                 dev platform and plaintext import (local stack, signing client tests)
 #   runner-azure-debugimport, runner-aws-debugimport, runner-gcp-debugimport
 #                                          test builds with the fake SNP report, NSM and
 #                                          Google endpoints; the AWS one has the dev
@@ -144,8 +144,7 @@ runner_base_tags() {
 log() { printf '[cloud] %s\n' "$*" >&2; }
 
 # ---- chains -----------------------------------------------------------------
-# The images are generic: the chain config is in each signer's setup
-# (research/setup-phase.md in the threshold-signer-poc repo). The deploy steps name
+# The images are generic: the chain config is in each signer's setup. The deploy steps name
 # the chain in CHAIN and refuse a setup of another chain (check_setup below,
 # with the chain config governance/chains/chain.sh verifies). write_build_chain
 # and check_build_chain are the record of the per-chain images before the

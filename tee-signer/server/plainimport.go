@@ -2,7 +2,7 @@
 
 // Plaintext share import (IMPORT_SHARE) exists only in debug builds
 // (go build -tags debugimport), the way the signer TA keeps IMPORT_KEY to
-// its debug build (DESIGN-INVARIANTS.md, 9). Release builds, and every
+// its debug build. Release builds, and every
 // cloud image, do not compile this file; see noplainimport.go.
 
 package server

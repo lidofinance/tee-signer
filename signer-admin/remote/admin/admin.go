@@ -2,7 +2,7 @@
 // config updates, exit approvals and handovers. A runner
 // answers them only to a client of the admin role (docs/protocol.md,
 // "Client roles"). Client wraps a remote.Client, so it has the signing and
-// attestation calls too; the Dirk fork builds remote without this package.
+// attestation calls too; the signing client builds remote without this package.
 package admin
 
 import (

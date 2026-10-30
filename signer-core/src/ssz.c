@@ -563,8 +563,8 @@ int sc_htr_builder_auth_data(const uint8_t *data, size_t len, uint8_t out[SC_ROO
 }
 
 /* builder-specs gloas builder.md: a plain Container of two fields, so the
- * root is hash(root(data), slot chunk), as go-eth2-client v0.30.3 and the
- * Dirk fork hash it. (go-eth2-client v0.30.1 hashed it as a
+ * root is hash(root(data), slot chunk), as go-eth2-client v0.30.3 and the signing
+ * client hash it. (go-eth2-client v0.30.1 hashed it as a
  * ProgressiveContainer, which gives another root.) */
 int sc_htr_builder_request_auth(const sc_builder_request_auth *v, uint8_t out[SC_ROOT_LEN])
 {

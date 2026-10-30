@@ -266,8 +266,7 @@ func (b *Body) CheckImage(allowed []setupwire.Image, devOK bool) error {
 }
 
 // Wait is how long an order waits from its arrival before it acts: the
-// change delay in force, and at least the images minimum (setup-phase.md,
-// section 9), because it decides which code holds the shares next. dev is
+// change delay in force, and at least the images minimum, because it decides which code holds the shares next. dev is
 // the dev platform, which protects nothing and waits its change delay only,
 // as DKG orders do there.
 func Wait(active *setupwire.Locked, dev bool) uint64 {

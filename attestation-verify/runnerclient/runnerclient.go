@@ -1,6 +1,6 @@
 // Package runnerclient connects to a cloud runner over mutual TLS and checks
-// its attestation before it trusts the connection. The Dirk fork's cloud
-// adapter, its cloud-import tool and share-import build their client here,
+// its attestation before it trusts the connection. The signing
+// client, its cloud-import tool and share-import build their client here,
 // so all of them apply the same checks; the attestation check has no switch.
 //
 // On every new connection, as docs/protocol.md ("Channel binding") says:
@@ -68,7 +68,7 @@ const (
 var verifierList = fmt.Sprintf("%q, %q, %q or %q", VerifierDev, VerifierAzureMAA, VerifierAWSNitro, VerifierGCPCS)
 
 // Attestation says how to check a runner's attestation document. The JSON
-// names are the ones of the Dirk fork's backend.cloud.config. The settings
+// names are the ones of the signing client's backend.cloud.config. The settings
 // of one verifier are refused on any other verifier, and a required one
 // that is missing stops the start.
 //
@@ -99,8 +99,7 @@ type Attestation struct {
 
 	// SetupSHA256 is the setup_hash the runner's identity must carry, 64
 	// hex digits: the setup_sha256 that setup-tool prints for the setup the
-	// operator built (research/setup-phase.md in the threshold-signer-poc repo,
-	// section 11). Required for a runner that reports a setup. A runner
+	// operator built. Required for a runner that reports a setup. A runner
 	// without one (the flag path of tests and local runners, whose
 	// setup_hash is the SHA-256 of its -config file) is accepted without
 	// it, and refused with it unless that hash is the one pinned.
@@ -191,8 +190,8 @@ type Attestation struct {
 	GCPProjectID string `json:"gcp_project_id,omitempty"`
 }
 
-// Connection is everything needed to reach one runner and trust it. The
-// Dirk fork's cloud adapter embeds it in its configuration.
+// Connection is everything needed to reach one runner and trust it. The signing
+// client embeds it in its configuration.
 type Connection struct {
 	// Address is tcp:HOST:PORT. Unix and vsock addresses are refused: this
 	// client dials TCP. A Nitro runner listens on vsock, with mutual TLS
@@ -252,8 +251,8 @@ func WithTimeout(d time.Duration) Option { return func(o *options) { o.timeout =
 func WithHTTPClient(c *http.Client) Option { return func(o *options) { o.http = c } }
 
 // WithVerified calls f with the identity of each new connection once it
-// passed every check, before the client sends a request on it. The Dirk
-// fork logs the runner's setup state with it. f must not keep id.
+// passed every check, before the client sends a request on it. The signing
+// client logs the runner's setup state with it. f must not keep id.
 func WithVerified(f func(id *backend.Identity)) Option {
 	return func(o *options) { o.verified = f }
 }

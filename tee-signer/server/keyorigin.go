@@ -2,8 +2,7 @@ package server
 
 import "github.com/lidofinance/tee-signer/signer-protocol"
 
-// The key origin of the setup state (attestation-prover.md, "Signer
-// changes", item 6; docs/attestation-statement.md, section 5): of the
+// The key origin of the setup state: of the
 // loaded keys, how many this runner made in key generation, how many it
 // imported, and the hash of the DKG orders of the generated ones. A share's
 // origin is in its sealed record (shareRecord), so it holds across

@@ -19,8 +19,7 @@ const (
 	markRefreshEvery = time.Hour
 )
 
-// newConfigUpdates returns the config updates of a runner with a setup
-// (research/setup-phase.md in the threshold-signer-poc repo, sections 4 and 6):
+// newConfigUpdates returns the config updates of a runner with a setup:
 // they take CONFIG_UPDATE, give the core the config in force and report the
 // setup state that IDENTITY, ATTEST and HEALTH carry. That state is
 // setup_hash, per group the update in force (the newest record's state with
@@ -33,8 +32,8 @@ func newConfigUpdates(st *setup.Setup, l server.UpdateLog, clk platform.Clock, p
 		AnyClock: platformName == "dev", Logger: log})
 }
 
-// keyRule is the key release self-check (research/setup-phase.md, section
-// 4, and docs/protocol.md, "Key rule lock"): the platform constructor read
+// keyRule is the key release self-check (docs/protocol.md, "Key rule
+// lock"): the platform constructor read
 // the rule of the key that releases the sealing key before it released
 // anything (platform.Options.ReadKeyRule), and on mainnet already refused
 // a rule that is not locked or not readable. AWS and Azure read the key's

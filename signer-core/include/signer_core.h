@@ -680,8 +680,7 @@ int sc_signer_check_schedule(const sc_signer *s, const sc_schedule *next, uint64
 int sc_signer_set_schedule(sc_signer *s, const sc_schedule *next, uint64_t activate_at);
 
 /*
- * Slot time changes (research/attestation-prover.md, "Signer changes", item
- * 5). The slot time at genesis is cfg.seconds_per_slot. Each change starts
+ * Slot time changes. The slot time at genesis is cfg.seconds_per_slot. Each change starts
  * another slot time at the first slot of its epoch; slots_per_epoch never
  * changes. Time maps to slots piece by piece: piece 0 starts at slot 0 at
  * genesis_time, piece i at slot epoch_i * slots_per_epoch, at the time piece
@@ -974,7 +973,7 @@ int sc_sign_contribution_and_proof(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_
  * For RANDAO, object_root must equal hash_tree_root(epoch) (SC_ERR_ARG
  * otherwise). For the other types the caller computes object_root, so
  * the core does not see their content. Only the cloud runner's generic path
- * uses it (a bare root from Dirk's generic Sign, behind the runner's
+ * uses it (a bare root from a generic Sign, behind the runner's
  * unverified switch); typed requests go through the sign calls above, in the
  * cloud runner and in the signer TA.
  */

@@ -2588,7 +2588,7 @@ static void scn_clockjump(void)
 }
 
 /* 16 keys; the host raises each key's source one by one every epoch while
- * the chain does not finalize (TASKS.md, "16 writes in one epoch"). */
+ * the chain does not finalize. */
 static void scn_raise16(void)
 {
     adv(3 * SPE);
@@ -2855,7 +2855,7 @@ static void nc_clockerr(void)
     }
 }
 
-/* Hostile routing (research/cloud-slashing-ledger.md section 2.4), for any
+/* Hostile routing, for any
  * m of n with n > m: the host stops honest duties, sends vote m1 to signers
  * 0..m-1, rolls back signers 0..m-2 (their disks, and the mark log where
  * its admin can), then sends a vote that surrounds m1 to signers 0..m-2

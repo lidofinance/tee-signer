@@ -7,8 +7,7 @@ import (
 	"math/bits"
 )
 
-// Slot time changes (research/attestation-prover.md, "Signer changes",
-// item 5). The chain part names the genesis slot time; the locked group
+// Slot time changes. The chain part names the genesis slot time; the locked group
 // lists later changes, each from the first slot of an epoch on. Time maps
 // to slots piece by piece: piece i starts at the first slot of its epoch
 // and runs with its seconds per slot until the next piece starts. The C
@@ -166,8 +165,7 @@ func CheckSlotTimeRule(c *Chain, maxAhead uint64, active, next []SlotTimeChange,
 }
 
 // SlotStart is the unix time at which slot begins, the inverse of SlotAt:
-// the T of a beacon block root that the attestation prover asks with
-// (research/attestation-prover.md, "The proof"). ok is false when the time
+// the T of a beacon block root that the attestation prover asks with. ok is false when the time
 // does not fit 64 bits or the slot times are ones CheckSlotTimes refuses.
 func (c SlotClock) SlotStart(slot uint64) (uint64, bool) {
 	if c.SecondsPerSlot == 0 {

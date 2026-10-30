@@ -353,7 +353,7 @@ func TestSetupFlagsAndJSON(t *testing.T) {
 		t.Fatalf("%+v %v", a, err)
 	}
 
-	// The names of the Dirk fork's cloud.json.
+	// The names of the signing client's cloud.json.
 	var j Attestation
 	in := `{"verifier":"dev","setup_sha256":"` + pinOf(testSetupHash) + `","min_locked_version":3,"min_open_version":1}`
 	if err := json.Unmarshal([]byte(in), &j); err != nil {

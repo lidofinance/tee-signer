@@ -1,7 +1,7 @@
 //go:build !verifierselect
 
-// Command identity-check connects to one runner the way the Dirk fork's cloud
-// adapter does and checks its attestation, several times, each time on a new
+// Command identity-check connects to one runner the way the signing
+// client does and checks its attestation, several times, each time on a new
 // connection. It sends no request but IDENTITY, and one HEALTH after the
 // first accepted run, whose version names the runner's build flavour
 // (default, or testnet: a testnet runner is refused unless the config sets

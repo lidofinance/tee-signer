@@ -17,8 +17,7 @@ import (
 	"github.com/lidofinance/tee-signer/slashing-log"
 )
 
-// Config updates (research/setup-phase.md in the threshold-signer-poc repo, "Design
-// v2", sections 6 to 9, review items G and J). A runner with a setup holds
+// Config updates. A runner with a setup holds
 // two config groups, locked and open. Version 0 of each is the setup's;
 // every later version is an approver-signed CONFIG_UPDATE. Every mark log
 // record carries the state (per group the active update and the pending

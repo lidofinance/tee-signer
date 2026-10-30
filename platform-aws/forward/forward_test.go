@@ -110,7 +110,7 @@ func TestMutualTLSRunsEndToEndThroughTheForwarder(t *testing.T) {
 	}
 	caCert, _ := x509.ParseCertificate(caDER)
 	cliKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	cliTmpl := &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "dirk"},
+	cliTmpl := &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "client"},
 		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}
 	cliDER, err := x509.CreateCertificate(rand.Reader, cliTmpl, caCert, &cliKey.PublicKey, caKey)

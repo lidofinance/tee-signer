@@ -12,10 +12,9 @@ import (
 	"github.com/lidofinance/tee-signer/signer-protocol/remote"
 )
 
-// The setup pins (research/setup-phase.md in the threshold-signer-poc repo, section
-// 11). Every verifier this package builds runs them after the platform
-// check, on the setup state of the verified identity. The
-// Dirk fork's adapter, cloud-import (again on the identity it seals each
+// The setup pins. Every verifier this package builds runs them after the platform
+// check, on the setup state of the verified identity. The signing
+// client, cloud-import (again on the identity it seals each
 // share to), proof-check, share-import and the key generation peers
 // (runner/keygen, a policy participant's attestation) build their verifier
 // here, so all of them refuse the same runners:
@@ -141,8 +140,7 @@ func EffectiveVersion(g backend.ConfigGroup, now time.Time) uint64 {
 
 // CheckPending refuses a state in which a locked update waits for its
 // effective activation time, or an order is pending. cloud-import runs it
-// on the identity of each share unless the operator passes -allow-pending
-// (research/setup-phase.md, section 11): a share sent now stays under the
+// on the identity of each share unless the operator passes -allow-pending: a share sent now stays under the
 // approvers, allowed images or handover target that the update or order
 // brings in.
 func CheckPending(s *backend.SetupState, now time.Time) error {

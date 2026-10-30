@@ -27,8 +27,7 @@ type Locker interface {
 // ErrNoLock: the store has no lock that keeps the log safe.
 var ErrNoLock = errors.New("markstore: the mark store is not locked")
 
-// CheckLock is the lock self-check at every start (setup-phase.md,
-// section 5): the store must be locked in compliance mode, with a retention
+// CheckLock is the lock self-check at every start: the store must be locked in compliance mode, with a retention
 // of at least minDays (slashing_log_min_lock_days). Any error stops the start: an
 // unlocked store lets its admin delete the newest records and roll the mark
 // and the config state back.

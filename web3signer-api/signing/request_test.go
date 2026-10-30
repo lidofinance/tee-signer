@@ -370,8 +370,8 @@ func TestWeb3SignerGloasExamples(t *testing.T) {
 		}
 	}
 	// The builder authentication example (data "builder.example.org", slot
-	// 32) has the plain Container root go-eth2-client v0.30.3 gives (the
-	// Dirk fork's builder auth vectors) and the builder domain with
+	// 32) has the plain Container root go-eth2-client v0.30.3 gives (the signing
+	// client's builder auth vectors) and the builder domain with
 	// the genesis fork version 0x00000001 and a zero root.
 	job, err := Parse(fixForkKeys(vectors["BUILDER_REQUEST_AUTH (GLOAS)"]), chain)
 	if err != nil {

@@ -163,9 +163,9 @@ func keep(dir string, raw []byte, b *setupwire.UpdateBody, hash [32]byte) error 
 }
 
 // raiseMin raises min_<group>_version in each signer's cloud.json once every
-// signer has the update in force (setup-phase.md, section 11). From then on
+// signer has the update in force. From then on
 // a runner whose host brought back an older config state gets no
-// connection from the Dirk fork, cloud-import or proof-check.
+// connection from the signing client, cloud-import or proof-check.
 func raiseMin(out io.Writer, c *cluster, states []*cloud.SetupState, b *setupwire.UpdateBody, want ref) error {
 	key := fmt.Sprintf("min_%s_version", b.Group)
 	for i, m := range c.members {

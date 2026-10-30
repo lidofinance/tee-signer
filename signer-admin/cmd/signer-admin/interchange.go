@@ -12,7 +12,7 @@ import (
 )
 
 // interchangeFile is the part of an EIP-3076 slashing protection file
-// (format version 5) that import needs. Ported from the Dirk fork's
+// (format version 5) that import needs. Ported from the signing client's
 // cloud-import.
 type interchangeFile struct {
 	Metadata struct {

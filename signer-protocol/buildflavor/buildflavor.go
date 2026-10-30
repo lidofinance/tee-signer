@@ -1,8 +1,7 @@
 // Package buildflavor holds the constants of the runner's two build
 // flavours:
 //
-//   - default: the design's governance times (research/setup-phase.md in
-//     the threshold-signer-poc repo, section 1, open point 1). Every image for real
+//   - default: the design's governance times. Every image for real
 //     keys is this build.
 //   - testnet (go build -tags testnet): the same code with one minute for
 //     each day of the default, so research on a devnet or a test network can

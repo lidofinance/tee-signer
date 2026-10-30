@@ -11,7 +11,7 @@ import (
 )
 
 // MetadataSetupURL is the instance metadata attribute that holds the setup,
-// base64 of the binary form (research/setup-phase.md, section 3). Not a
+// base64 of the binary form. Not a
 // tee-env-* value: those go into every attestation token's claims. An
 // attribute holds up to 256 KB, a setup at most 64 KB.
 const MetadataSetupURL = "http://metadata.google.internal/computeMetadata/v1/instance/attributes/signer-setup"

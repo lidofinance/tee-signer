@@ -41,7 +41,7 @@ func sample(t *testing.T) (*Order, []byte) {
 	return o, body
 }
 
-// The vector in testdata (for the Dirk fork's signer-config): body, order
+// The vector in testdata (for the signing client's signer-config): body, order
 // hash, signed order. The decoder reads the order back and it verifies
 // under approvers 1 and 2 with k = 2.
 func TestVector(t *testing.T) {

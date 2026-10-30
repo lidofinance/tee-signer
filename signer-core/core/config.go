@@ -56,7 +56,7 @@ type Config struct {
 	// (RootMessage) of every type but RANDAO: selection proof, aggregate and
 	// proof, sync committee message, sync selection proof, contribution and
 	// proof, and from the Gloas fork on PTC vote, payload envelope and
-	// proposer preferences. Dirk's generic Sign sends them for stock clients
+	// proposer preferences. A generic Sign sends them for stock clients
 	// when it cannot find the message behind the root. The runner cannot
 	// check those: each such signature is unverified. They cannot slash. As
 	// bare roots the Gloas ones skip the fee recipient, gas limit and

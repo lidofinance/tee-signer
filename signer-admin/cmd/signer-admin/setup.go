@@ -15,7 +15,7 @@ import (
 )
 
 // The setup file is the human setup format of setupwire ("key = value",
-// setup format 1, the field names of attestation-prover.md) with one
+// setup format 1) with one
 // [signer NAME] section per signer. The lines before the first section
 // belong to every signer: setup_format_version, handover_generation, the
 // chain, the safety settings, max_keys, slashing_log_min_lock_days and both

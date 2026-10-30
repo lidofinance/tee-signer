@@ -8,8 +8,7 @@
 // writes it with the time to -exit-file (default DIR/last-exit.txt) and to
 // its own log.
 //
-// -setup names the signer's binary setup (research/setup-phase.md, section
-// 3). The agent checks it with the runner's decoder at start, logs its
+// -setup names the signer's binary setup. The agent checks it with the runner's decoder at start, logs its
 // setup_hash and hands it to the enclave (SETUP) at every start. The enclave
 // image is the same for every operator; the setup is what makes it this
 // signer. With -proxy-routes the agent only prints the vsock-proxy routes of

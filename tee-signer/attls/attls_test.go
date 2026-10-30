@@ -267,7 +267,7 @@ func TestVsockListenerMutualTLS(t *testing.T) {
 	cfg, keyHash := clk.config(t, root)
 	addr, hs := start(t, cfg)
 
-	st, err := try(t, addr, &tls.Config{Certificates: []tls.Certificate{root.client(t, "dirk", now0.Add(-time.Hour), now0.Add(time.Hour))}})
+	st, err := try(t, addr, &tls.Config{Certificates: []tls.Certificate{root.client(t, "client", now0.Add(-time.Hour), now0.Add(time.Hour))}})
 	if err != nil {
 		t.Fatalf("client with a certificate from the pinned CA: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestVsockListenerRefusals(t *testing.T) {
 	addr, hs := start(t, cfg)
 
 	good := func(c *ca, nb, na time.Time, eku ...x509.ExtKeyUsage) []tls.Certificate {
-		return []tls.Certificate{c.client(t, "dirk", nb, na, eku...)}
+		return []tls.Certificate{c.client(t, "client", nb, na, eku...)}
 	}
 	forced := func(c tls.Certificate) *tls.Config {
 		// Go's client withholds a certificate the server's CA list does not
@@ -367,7 +367,7 @@ func TestClientCertificateValidityUsesTheTrustedClock(t *testing.T) {
 	cfg, _ := clk.config(t, root)
 	addr, hs := start(t, cfg)
 
-	valid := &tls.Config{Certificates: []tls.Certificate{root.client(t, "dirk", now0.Add(-time.Hour), now0.Add(time.Hour))}}
+	valid := &tls.Config{Certificates: []tls.Certificate{root.client(t, "client", now0.Add(-time.Hour), now0.Add(time.Hour))}}
 	expiredBySystem := &tls.Config{Certificates: []tls.Certificate{root.client(t, "old", now0.Add(-day(3)), now0.Add(-day(2)))}}
 
 	check := func(name string, c *tls.Config, want string) {
@@ -406,7 +406,7 @@ func TestNoTrustedTimeGivesNoVerifiedChain(t *testing.T) {
 	root := newRoot(t, "root", now0.Add(-day(365)), now0.Add(day(365)))
 	clk := &testClock{t: now0}
 	cfg, _ := clk.config(t, root)
-	cert := root.client(t, "dirk", now0.Add(-time.Hour), now0.Add(time.Hour))
+	cert := root.client(t, "client", now0.Add(-time.Hour), now0.Add(time.Hour))
 
 	clk.fail(errors.New("clock: last reading is 1m30s old"))
 	if cs := handshake(t, cfg, cert); len(cs.VerifiedChains) != 0 || RoleOf(&cs) != RoleNone {
@@ -438,7 +438,7 @@ func TestPinnedRootWithIntermediate(t *testing.T) {
 		}
 	}
 	short := func(c *ca) tls.Certificate {
-		return c.client(t, "dirk", now0.Add(-5*time.Minute), now0.Add(24*time.Hour))
+		return c.client(t, "client", now0.Add(-5*time.Minute), now0.Add(24*time.Hour))
 	}
 
 	int1 := root.sub(t, "intermediate 1", now0.Add(-day(1)), now0.Add(day(90)))
@@ -458,7 +458,7 @@ func TestPinnedRootWithIntermediate(t *testing.T) {
 
 	// An expired intermediate is refused even with a fresh leaf.
 	oldInt := root.sub(t, "expired intermediate", now0.Add(-day(100)), now0.Add(-day(10)))
-	expect("expired intermediate", oldInt.client(t, "dirk", now0.Add(-time.Hour), now0.Add(time.Hour)), false)
+	expect("expired intermediate", oldInt.client(t, "client", now0.Add(-time.Hour), now0.Add(time.Hour)), false)
 
 	// The same intermediate name under another root.
 	otherRoot := newRoot(t, "root", now0.Add(-day(365)), now0.Add(day(3650)))
@@ -516,7 +516,7 @@ func TestNoSessionResumption(t *testing.T) {
 	cfg, _ := clk.config(t, root)
 	addr, hs := start(t, cfg)
 	c := &tls.Config{
-		Certificates:       []tls.Certificate{root.client(t, "dirk", now0.Add(-time.Hour), now0.Add(time.Hour))},
+		Certificates:       []tls.Certificate{root.client(t, "client", now0.Add(-time.Hour), now0.Add(time.Hour))},
 		ClientSessionCache: tls.NewLRUClientSessionCache(4),
 	}
 	for i := 0; i < 3; i++ {
@@ -609,7 +609,7 @@ func TestRealVsock(t *testing.T) {
 	_ = raw.SetDeadline(time.Now().Add(5 * time.Second))
 	cc := tls.Client(raw, &tls.Config{
 		MinVersion: tls.VersionTLS13, InsecureSkipVerify: true,
-		Certificates: []tls.Certificate{root.client(t, "dirk", now0.Add(-time.Hour), now0.Add(time.Hour))},
+		Certificates: []tls.Certificate{root.client(t, "client", now0.Add(-time.Hour), now0.Add(time.Hour))},
 	})
 	if _, err := cc.Write([]byte{'x'}); err != nil {
 		t.Fatal(err)

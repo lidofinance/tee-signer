@@ -17,7 +17,7 @@
 //	0x45 EXIT  {"text"}           -> {}
 //	0x46 SETUP {}                 -> {"value": base64} or status NOT_FOUND
 //
-// SETUP hands the runner its setup (research/setup-phase.md, section 3) at
+// SETUP hands the runner its setup at
 // every start, before any KMS call: the binary setup the parent keeps in a
 // file (hostagent -setup). It is not secret. A host that hands over other
 // bytes gets a runner with another setup_hash; once key release takes

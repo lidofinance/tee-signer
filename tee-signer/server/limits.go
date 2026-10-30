@@ -17,9 +17,9 @@ import (
 // The defaults, and why:
 //
 //   - DefaultMaxConns 256 open connections, handshakes included: the cap
-//     of the Nitro forwarder (forward.go) on the other route. The Dirk
-//     fork opens at most 16 per runner, so 256 leaves room for a dozen
-//     Dirk forks or gateways plus the prover, the dashboard and admin
+//     of the Nitro forwarder (forward.go) on the other route. The signing
+//     client opens at most 16 per runner, so 256 leaves room for a dozen
+//     signing clients or gateways plus the prover, the dashboard and admin
 //     tools. One idle connection costs a goroutine and the TLS buffers,
 //     some tens of KiB.
 //   - DefaultMaxHandshakes 32 TLS handshakes at once. A handshake takes
@@ -34,7 +34,7 @@ import (
 //     frames of the full 1 MiB at once; with 256 connections times 64 KiB
 //     the frame buffers stay below 80 MiB, against the 1 GiB of the Azure
 //     container.
-//   - DefaultIdleTimeout 0: no limit between frames. The Dirk fork's pool
+//   - DefaultIdleTimeout 0: no limit between frames. The signing client's pool
 //     reuses the connection freed last, so in a quiet hour most of its 16
 //     connections sit idle, and it does not dial again when a request
 //     finds its connection closed: that request fails. An idle timeout on

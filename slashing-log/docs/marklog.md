@@ -1,11 +1,8 @@
 # Mark log
 
 The runner's slashing mark, kept in a locked, append-only log outside the
-host's reach (`slashing-log`, `-mark-store`). Design note:
-threshold-signer-poc `research/cloud-slashing-ledger.md` (option B). A peer design that this does not build:
-threshold-signer-poc `research/peer-mark-quorum.md`. The records, the config
-state, update bodies and the lock and age checks follow
-threshold-signer-poc `research/setup-phase.md`, section 5.
+host's reach (`slashing-log`, `-mark-store`). A peer mark quorum is a
+separate design that this does not build.
 
 ## What is stored
 
@@ -94,8 +91,8 @@ below).
 
 ### Update bodies
 
-The runner stores a config update (`CONFIG_UPDATE`, setup-phase.md
-section 6) as received, signatures included, before the record that
+The runner stores a config update (`CONFIG_UPDATE`) as
+received, signatures included, before the record that
 names it:
 
     config/<setup_hash hex>/<locked|open>/<version, 20 digits>/<copy>
@@ -387,6 +384,5 @@ holds its true mark.
   check, and records written after that get the shorter retention. GCS and
   Azure lock the policy itself.
 - Real cloud stores: the tests use local fakes of the three APIs
-  (`slashing-log/wormfake`). The plan for the real ones is
-  threshold-signer-poc `review/marklog-real-cloud-test-plan.md`. The lock reads
+  (`slashing-log/wormfake`). The lock reads
   are untested against the real APIs.

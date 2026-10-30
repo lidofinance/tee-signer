@@ -10,7 +10,7 @@ import (
 // and the four calls next to it in signer_core.h): the aggregator index
 // against the key's bound index, the selection proof against the validator
 // key, the slot against the clock horizon, the fork domain, and for
-// aggregates the Gloas form. Before these kinds the Dirk adapter hashed the
+// aggregates the Gloas form. Before these kinds the signing client hashed the
 // messages and sent a RootMessage, so the runner never saw the content.
 const (
 	KindAggregateAndProof    Kind = 9  // form:u8 | AggregateAndProof SSZ

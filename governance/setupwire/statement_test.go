@@ -19,7 +19,7 @@ import (
 
 // The golden vectors of the attestation statement
 // (docs/attestation-statement.md and docs/attestation-statement-vectors.json
-// in the cloud repo): a sample GCP setup, its leaves and roots,
+// in attestation-verify): a sample GCP setup, its leaves and roots,
 // platform_commitment and setup_hash, a config update, a SetupState, and
 // the ATTEST user data with the GCP eat_nonce; an Azure signer of the same
 // cluster with its user data, MAA runtime data and report data; a Nitro

@@ -9,7 +9,7 @@
 #                     runs no gcloud, docker or network command at all
 #   preflight         read-only gcloud calls: project number, enabled APIs,
 #                     free names, quota, the newest Confidential Space image
-#   verifier-config   write the gcp-cs settings for the Dirk fork, cloud-import
+#   verifier-config   write the gcp-cs settings for the signing client, cloud-import
 #                     and share-import to a local file (no secrets). Without
 #                     SIGNER_ADDRESS it reads the reserved address, read-only
 #   logs              read-only: the VM's serial console and Cloud Logging
@@ -49,7 +49,7 @@
 #                 base64, into the instance metadata attribute signer-setup
 #   CHAIN         vm-create: the chain of the setup, hoodi, devnet or
 #                 testnet (governance/chains/chain.sh picks its chain config)
-#   OPERATOR_IP   public IPv4 address of the machine that runs the Dirk fork
+#   OPERATOR_IP   public IPv4 address of the machine that runs the signing client
 #                 (firewall-create; one address, /32)
 #   HARDWARE      amd-sev (default, THIS TEST ONLY) or intel-tdx (production)
 #   NETWORK_ENTRY public (default; common.sh). The build overlay
@@ -131,7 +131,7 @@ operator_ip() {
   local ip="${OPERATOR_IP:-}"
   if [ -z "$ip" ]; then
     if [ "$DRY" = 1 ]; then echo "<OPERATOR_IP>"; return 0; fi
-    die "set OPERATOR_IP to the public IPv4 address that runs the Dirk fork"
+    die "set OPERATOR_IP to the public IPv4 address that runs the signing client"
   fi
   [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || die "OPERATOR_IP '$ip' is not one IPv4 address"
   case "$ip" in
@@ -168,7 +168,7 @@ cmd_network_create() {
 }
 
 cmd_address_reserve() {
-  gate address-reserve "reserve the regional external IPv4 address $ADDRESS_NAME, so the Dirk fork's address survives a VM restart (billed while reserved)"
+  gate address-reserve "reserve the regional external IPv4 address $ADDRESS_NAME, so the signing client's address survives a VM restart (billed while reserved)"
   run gcloud compute addresses create "$ADDRESS_NAME" --region="$REGION" --project="$PROJECT_ID"
 }
 
@@ -482,7 +482,7 @@ cmd_verifier_config() {
   # No defaults: the output directory and the client certificate are private
   # files outside the repo.
   [ -n "${GCP_TEST_DIR:-}" ] || die "verifier-config: set GCP_TEST_DIR (a private directory outside the repo for gcp-signer.json)"
-  [ -n "${CLIENT_CERT:-}" ] || die "verifier-config: set CLIENT_CERT (the Dirk fork's client certificate, for example client.pem of make-test-ca.sh)"
+  [ -n "${CLIENT_CERT:-}" ] || die "verifier-config: set CLIENT_CERT (the signing client's client certificate, for example client.pem of make-test-ca.sh)"
   [ -n "${CLIENT_KEY:-}" ] || die "verifier-config: set CLIENT_KEY (the private key of CLIENT_CERT)"
   dir="$GCP_TEST_DIR" cert="$CLIENT_CERT" key="$CLIENT_KEY"
   addr="${SIGNER_ADDRESS:-}"

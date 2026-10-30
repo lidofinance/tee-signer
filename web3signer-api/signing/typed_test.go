@@ -7,9 +7,9 @@ import (
 	"github.com/lidofinance/tee-signer/web3signer-api/eth2"
 )
 
-// Every job without a stock typed Dirk call carries its request data, and
+// Every job without a stock typed signer call carries its request data, and
 // that data hashes to the job's object root, so a signer that sends the
-// data (dirk-fork) signs the same root the gateway verifies.
+// data (the signing client) signs the same root the gateway verifies.
 func TestTypedDataPerType(t *testing.T) {
 	vectors := loadVectors(t)
 	want := map[string]string{

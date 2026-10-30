@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# The generic images of the setup phase (research/setup-phase.md in the
-# threshold-signer-poc repo, "Build plan", phase 1 item 9): one image per cloud for
+# The generic images of the setup phase: one image per cloud for
 # every signer and every chain. They hold the runner and the flags the
 # design keeps fixed; no chain config, no client CA, no key-release name, no
 # store, no signer or network name. Each signer's values come in its setup
@@ -34,7 +33,7 @@
 #          readable); production uses STDIO=disable, another policy
 #   GCP    platform-gcp/deploy/build-image.sh with NETWORK_ENTRY=public;
 #          log_redirect is "always" in this image, a test image
-# This tree has no Azure network entry, so without the private devnet
+# This tree has no Azure network entry, so without a build
 # overlay there is no Azure CCE policy (azure.cce_policy none). With
 # SIGNER_BUILD_OVERLAY_DIR (testnet images only) the overlay sets the
 # network entries of the devnet images (devnet_generic_images_env).

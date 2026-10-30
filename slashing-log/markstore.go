@@ -7,8 +7,7 @@
 //
 // Why: a cloud runner's local state lives on storage the host can roll
 // back, so without an external mark it restarts from the clock floor, and
-// the floor's source bound stalls signing while the chain does not finalize
-// (threshold-signer-poc research/cloud-slashing-ledger.md, section 1). With the log
+// the floor's source bound stalls signing while the chain does not finalize. With the log
 // the runner restarts from its true mark: the source bound comes from the
 // log, and the floor keeps only target and block bounds.
 //

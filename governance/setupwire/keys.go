@@ -7,7 +7,7 @@ import (
 	"math/big"
 )
 
-// Approver key rules (setup-phase.md, section 8), for the setup's first set
+// Approver key rules, for the setup's first set
 // and every rotation: 2 to 8 keys, no duplicates, no small-order keys, no
 // non-canonical encodings, approvals_needed (k) at least 2 and above n/2.
 const (

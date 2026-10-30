@@ -12,7 +12,7 @@
 #
 # The operator's values (chain config, client CA, MAA host, vault and key,
 # mark and state stores, signer name, network entry names) are in the signer's
-# setup (research/setup-phase.md in the threshold-signer-poc repo). It comes in the
+# setup. It comes in the
 # environment value SIGNER_SETUP, base64, from an ARM parameter without a
 # default, which az confcom turns into a wildcard rule. The runner reads it
 # first, checks it with the shared decoder and puts setup_hash in its

@@ -12,8 +12,7 @@
 #                                           (scripts/kms-policy.sh render)
 #   build/nitro/inputs-<arch>.txt           hashes of what went into the image, and the PCRs
 #
-# The image is generic (research/setup-phase.md in the threshold-signer-poc repo,
-# "Design v2", section 1): the runner and the flags of
+# The image is generic: the runner and the flags of
 # platform-aws/deploy/enclave/Dockerfile, nothing of an operator. The chain config,
 # the client CA, the KMS key and region, the mark bucket and the signer name
 # are in the signer's setup, which the parent's host agent hands to the

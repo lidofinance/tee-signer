@@ -595,7 +595,7 @@ func TestGCPTokenRefusals(t *testing.T) {
 }
 
 func TestGCPTokenOfAnotherRunnerImageRefused(t *testing.T) {
-	// Runner 2 runs another image and holds a good token for it. A Dirk
+	// Runner 2 runs another image and holds a good token for it. A client
 	// configured for the digest of runner 1 must not accept it; configured
 	// for runner 2's digest it does.
 	ca := newTestCA(t)
@@ -922,12 +922,12 @@ func TestVerifierNames(t *testing.T) {
 
 func TestResolvePathsJWKSFile(t *testing.T) {
 	c := Connection{ClientCert: "client.pem", ClientKey: "key.pem", Attestation: Attestation{GCPJWKSFile: "keys.json"}}
-	c.ResolvePaths("/etc/dirk")
-	if c.Attestation.GCPJWKSFile != "/etc/dirk/keys.json" {
+	c.ResolvePaths("/etc/client")
+	if c.Attestation.GCPJWKSFile != "/etc/client/keys.json" {
 		t.Fatalf("%q", c.Attestation.GCPJWKSFile)
 	}
 	c.Attestation.GCPJWKSFile = "/abs/keys.json"
-	c.ResolvePaths("/etc/dirk")
+	c.ResolvePaths("/etc/client")
 	if c.Attestation.GCPJWKSFile != "/abs/keys.json" {
 		t.Fatalf("%q", c.Attestation.GCPJWKSFile)
 	}
@@ -995,7 +995,7 @@ func TestFlagsNitroAndGCP(t *testing.T) {
 }
 
 func TestAttestationJSONNames(t *testing.T) {
-	// The names of the Dirk fork's backend.cloud.config.
+	// The names of the signing client's backend.cloud.config.
 	in := `{"verifier":"aws-nitro","nitro_pcrs":{"0":"` + pcrHex(0) + `","1":"` + pcrHex(1) + `","2":"` + pcrHex(2) + `"},"nitro_root_sha256":"` + attest.NitroRootSHA256 + `"}`
 	var a Attestation
 	if err := json.Unmarshal([]byte(in), &a); err != nil {

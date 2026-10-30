@@ -161,8 +161,7 @@ type Platform struct {
 // runner read it inside the TEE: on AWS the KMS key policy and key
 // metadata, on Azure the Key Vault key's release policy and flags.
 type KeyRule struct {
-	// Hash is key_release_hash (backend.KeyReleaseHash,
-	// research/setup-phase.md section 4); zero when unread or none.
+	// Hash is key_release_hash (backend.KeyReleaseHash); zero when unread or none.
 	Hash [32]byte
 	Lock backend.KeyLock
 	// Why says what keeps the rule open, or why it was not read.
@@ -272,8 +271,7 @@ type Options struct {
 	StateDir string            // local state directory (dev, or a host-mounted volume)
 	Params   map[string]string // --platform-opt key=value pairs
 	// SetupHash is the signer's setup_hash; zero on the flag path without a
-	// setup. Every key-release call carries it (research/setup-phase.md in
-	// the threshold-signer-poc repo, section 4): the sealing key and the keys of
+	// setup. Every key-release call carries it: the sealing key and the keys of
 	// Keys differ per setup, so a runner of the same image with another
 	// setup, even under the same key-release key, opens nothing this one
 	// sealed or wrapped.

@@ -145,7 +145,7 @@ const (
 	RootSyncCommitteeMessage              RootType = 4 // SYNC_COMMITTEE_MESSAGE
 	RootSyncCommitteeSelectionProof       RootType = 5 // SYNC_COMMITTEE_SELECTION_PROOF
 	RootSyncCommitteeContributionAndProof RootType = 6 // SYNC_COMMITTEE_CONTRIBUTION_AND_PROOF
-	// Gloas, for stock clients that send them as a generic Sign (Vouch). The
+	// Gloas, for stock clients that send them as a generic Sign. The
 	// core signs them from the Gloas fork epoch on. None is slashable.
 	RootPayloadAttestation  RootType = 7 // PAYLOAD_ATTESTATION (PTC vote), DOMAIN_PTC_ATTESTER
 	RootPayloadEnvelope     RootType = 8 // EXECUTION_PAYLOAD_ENVELOPE, DOMAIN_BEACON_BUILDER
@@ -180,7 +180,7 @@ func (t RootType) DomainType() (DomainType, bool) {
 // Unverified reports whether the backend signs a root of this type without
 // being able to check the object behind it: every type but RANDAO, whose
 // root the core checks against the epoch. Aggregates and contributions
-// reach it as the root the Dirk adapter computed; a selection proof, a sync
+// reach it as the root the signing client computed; a selection proof, a sync
 // committee message and a sync selection proof carry a slot, a block root
 // or a subcommittee the root message does not hold. The Gloas roots skip
 // the typed kinds' checks: one PTC vote and one envelope per slot, the

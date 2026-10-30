@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Makes a local test CA and one client certificate for the Dirk fork, all
+# Makes a local test CA and one client certificate for the signing client, all
 # ECDSA P-256, in a private directory outside the repo (mode 700, key files
 # 600). Only client-ca.pem (public) goes into the image build context.
 #
@@ -8,7 +8,7 @@
 # Files:
 #   client-ca.pem       CA certificate, goes into the runner image (public)
 #   client-ca-key.pem   CA private key, never leaves DIR
-#   client.pem          client certificate for the Dirk fork (public)
+#   client.pem          client certificate for the signing client (public)
 #   client-key.pem      its private key
 #
 # Refuses to overwrite an existing CA. Never prints key material and never
@@ -41,7 +41,7 @@ ec_key "$DIR/client-key.pem"
 csr="$(mktemp "$DIR/client.csr.XXXXXX")"
 ext="$(mktemp "$DIR/client.ext.XXXXXX")"
 trap 'rm -f "$csr" "$ext"' EXIT
-openssl req -new -sha256 -key "$DIR/client-key.pem" -subj "/CN=dirk-fork-test-client" -out "$csr"
+openssl req -new -sha256 -key "$DIR/client-key.pem" -subj "/CN=test-client" -out "$csr"
 printf '%s\n' "basicConstraints=critical,CA:FALSE" "keyUsage=critical,digitalSignature" \
   "extendedKeyUsage=clientAuth" >"$ext"
 openssl x509 -req -sha256 -days "$CLIENT_DAYS" -in "$csr" \

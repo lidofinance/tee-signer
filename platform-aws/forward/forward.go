@@ -1,6 +1,6 @@
 // Package forward is the network entry of an AWS signer: a plain byte
 // forwarder that runs on the parent EC2 instance. It accepts TCP
-// connections (where the Dirk fork connects) and copies each one to a new
+// connections (where the signing client connects) and copies each one to a new
 // connection to the enclave (vsock). It is not trusted and holds no
 // secret: the mutual TLS 1.3 of the runner ends inside the enclave, and
 // the forwarder only sees the TLS records. It never terminates TLS, has no

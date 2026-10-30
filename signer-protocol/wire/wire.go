@@ -1,5 +1,5 @@
 // Package wire is the length-prefixed protocol between the remote backend
-// (in the Dirk process) and the enclave runner. docs/protocol.md is the
+// (in the client process) and the enclave runner. docs/protocol.md is the
 // spec; this file is the reference implementation.
 //
 //	frame   = length:u32 body                  length = len(body)

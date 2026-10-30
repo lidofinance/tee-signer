@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-// Tests that reproduce findings of the security review in issue #4 on
-// lidofinance/threshold-signer-poc. Each asserts the behaviour the finding
+// Tests that reproduce findings of an earlier security
+// review. Each asserts the behaviour the finding
 // asks for, so each fails until its fix lands.
 
 // hostsTransport serves each request from the handler of its host name,

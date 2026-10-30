@@ -1,6 +1,6 @@
 // Package approver loads approver keys and signs what approvers sign:
 // config updates, DKG orders, handover orders, import orders and exit
-// approvals (research/admin-tool.md, section 7). An approver signs one of
+// approvals. An approver signs one of
 // two forms of the same body: the direct form, Ed25519 over the kind's
 // context and the body, or the hashed form, Ed25519 over 32 bytes, the
 // SHA-256 of the kind's hash context and SHA-256 of the direct form

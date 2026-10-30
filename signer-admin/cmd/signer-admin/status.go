@@ -16,7 +16,7 @@ import (
 	cloud "github.com/lidofinance/tee-signer/signer-protocol"
 )
 
-// cmdPin is the first pin (setup-phase.md, section 11). For each signer it
+// cmdPin is the first pin. For each signer it
 // connects with the hash of the setup built for it as setup_sha256, so the
 // attestation check itself refuses a runner the host started with another
 // setup. Only then does setup_sha256 go into the signer's cloud.json. A

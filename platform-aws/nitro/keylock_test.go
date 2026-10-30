@@ -14,8 +14,7 @@ import (
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
-// lockedPolicy is a key policy locked as research/admin-proof-key-release.md
-// section 2.1 describes: the enclave's data keys and reads, nothing that
+// lockedPolicy is a locked key policy: the enclave's data keys and reads, nothing that
 // changes the policy, grants, imports or replicates.
 const lockedPolicy = `{
   "Version": "2012-10-17",

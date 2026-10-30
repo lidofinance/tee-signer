@@ -16,8 +16,7 @@ if [ -n "${CHAIN:-}" ]; then check_chain_name "$CHAIN" || exit 1; fi
 CHAIN_SUFFIX="$(chain_suffix "${CHAIN:-devnet}")"
 OUT="$BUILD/gcp"
 
-# SETUP_FILE: the signer's binary setup (signer-admin/cmd/setup-tool encode;
-# research/setup-phase.md in the threshold-signer-poc repo). It holds the chain
+# SETUP_FILE: the signer's binary setup (signer-admin/cmd/setup-tool encode). It holds the chain
 # config, the client CA, the WIF provider, KMS key and identity audience,
 # the mark and state buckets and the signer name.
 # vm-create puts it, base64, into the instance metadata attribute
@@ -97,7 +96,7 @@ side_by_side() {
 
 
 # ---- network entry and mark log ---------------------------------------------
-# NETWORK_ENTRY: how the Dirk forks reach port 7100 (README, "Network entry").
+# NETWORK_ENTRY: how the signing clients reach port 7100 (README, "Network entry").
 #   public     the VM's external address, firewall TCP 7100 from OPERATOR_IP
 #              (Dockerfile)
 # The build overlay (SIGNER_BUILD_OVERLAY_DIR) adds its own

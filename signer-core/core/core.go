@@ -447,7 +447,7 @@ func (s *Signer) Generation() uint64 {
 
 // checkDomain refuses a typed request whose domain differs from the one
 // this signer's chain config and fork schedule give its message, before the
-// core signs anything, as the OP-TEE TA does (check_domain in the PoC repo's
+// core signs anything, as the OP-TEE TA does (check_domain in
 // ta/trusted-app/signer_ta.c). A caller on another fork, or a signer that
 // missed a fork update, then gets StatusDomainMismatch instead of a
 // signature that is invalid on chain.

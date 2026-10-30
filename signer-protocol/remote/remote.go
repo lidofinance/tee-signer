@@ -44,7 +44,7 @@ type VerifyFunc func(ctx context.Context, nonce []byte, id *backend.Identity) er
 //
 // A caller whose context ends stops waiting at once, whether it waits for
 // its turn or for a dial. Two rules keep the client working when many
-// callers give up while one connection is down, as the Dirk fork's callers
+// callers give up while one connection is down, as the signing client's callers
 // do when a threshold of other signers has answered:
 //
 //   - A dial does not belong to the request that starts it. It runs in its
@@ -399,7 +399,7 @@ func (c *Client) Health(ctx context.Context) (*backend.Health, error) {
 // Real verifiers check the platform's signature chain and measurements
 // (Nitro COSE_Sign1 and PCRs, Confidential Space or MAA JWT claims):
 // Config.Verify in package github.com/lidofinance/tee-signer/attestation-verify/identity does that and has
-// the VerifyFunc signature. The Dirk fork's adapter and the import tools
+// the VerifyFunc signature. The signing client and the import tools
 // pick a verifier by name ("dev" is this one; "azure-maa", "aws-nitro" and
 // "gcp-cs" check an MAA token, an NSM document and a Confidential Space
 // token) with package github.com/lidofinance/tee-signer/attestation-verify/runnerclient.

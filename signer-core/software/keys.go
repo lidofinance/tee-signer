@@ -13,7 +13,7 @@ import (
 // curveOrder is r, the order of the BLS12-381 G1 and G2 subgroups.
 var curveOrder, _ = new(big.Int).SetString("73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001", 16)
 
-// Share is one point of a Shamir split. ID is the x coordinate (Dirk uses 1..n).
+// Share is one point of a Shamir split. ID is the x coordinate (1..n).
 type Share struct {
 	ID     uint64
 	Secret [32]byte
@@ -47,7 +47,7 @@ func NewSecret() ([32]byte, error) {
 }
 
 // Split makes an t-of-n Shamir split of secret with IDs 1..n. Dev and test
-// use only: in production Dirk's distributed key generation makes shares.
+// use only: in production distributed key generation makes shares.
 func Split(secret [32]byte, t, n int) ([]Share, error) {
 	shares, _, err := SplitWithCommitments(secret, t, n)
 	return shares, err
