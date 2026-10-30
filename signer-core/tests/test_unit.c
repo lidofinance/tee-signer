@@ -332,6 +332,55 @@ static void test_attestations(void)
     CHECK_RC(sc_sign_randao_reveal(s, k.pk, E + 3, sig), SC_ERR_POLICY_FUTURE);
 }
 
+/* An attestation whose target epoch is not the epoch of its slot can never
+ * be included: process_attestation asserts target.epoch ==
+ * compute_epoch_at_slot(slot). Signed, it would only raise the target
+ * mark, and the honest vote of the slot's epoch would then be refused. The
+ * signer refuses it before the repeat shortcut and before any mark moves. */
+static void test_attestation_slot(void)
+{
+    host_t h = {0};
+    sc_config cfg;
+    sc_slashing_state st;
+    sc_repeat_roots rr;
+    uint8_t sig[96], root[32], obj[32];
+    make_config(&cfg);
+    set_epoch(&h, E);
+    sc_signer *s = new_signer(&h, &cfg, 8, 4);
+    vkeys k = add_validator(s, 1, 1000);
+
+    sc_attestation_data a = att(E - 1, E, 1);
+    CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_OK);
+    int writes = h.writes;
+
+    /* Target above the slot's epoch, inside the clock horizon. */
+    sc_attestation_data above = att(E, E + 2, 2);
+    above.slot = (E + 1) * 32 + 3;
+    CHECK(sc_sign_attestation(s, k.pk, &above, sig) != SC_OK);
+    /* Target below the slot's epoch. */
+    sc_attestation_data below = att(E, E + 1, 3);
+    below.slot = (E + 2) * 32;
+    CHECK(sc_sign_attestation(s, k.pk, &below, sig) != SC_OK);
+
+    /* Nothing moved: the marks, the write count and the repeat root are
+     * those of the first vote. */
+    CHECK_RC(sc_signer_get_state(s, k.pk, &st), SC_OK);
+    CHECK(st.ram.target_epoch == E && st.ram.source_epoch == E - 1);
+    CHECK(h.writes == writes);
+    sc_htr_attestation_data(&a, obj);
+    root_with(SC_DOMAIN_BEACON_ATTESTER, V_FULU, cfg.genesis_validators_root, obj, root);
+    CHECK_RC(sc_signer_get_repeat_roots(s, k.pk, &rr), SC_OK);
+    CHECK((rr.flags & SC_REPEAT_HAS_ATTESTATION) && memcmp(rr.attestation_root, root, 32) == 0);
+
+    /* The honest votes of those epochs sign, at either edge of the epoch. */
+    a = att(E, E + 1, 1);
+    a.slot = (E + 1) * 32;
+    CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_OK);
+    a = att(E + 1, E + 2, 1);
+    a.slot = (E + 3) * 32 - 1;
+    CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_OK);
+}
+
 /* sc_sign_root: the six domain types that need no slashing protection sign
  * under the fork version of their epoch, within the clock horizon; RANDAO
  * only with hash_tree_root(epoch); every other domain type is refused. */
@@ -2842,6 +2891,7 @@ int main(int argc, char **argv)
     test_domains();
     test_registration_go(data_dir);
     test_attestations();
+    test_attestation_slot();
     test_sign_root();
     test_blocks();
     test_exits();
