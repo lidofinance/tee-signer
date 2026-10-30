@@ -33,7 +33,7 @@ doctest = false
 signer-nts-core = { path = "core" }
 
 # Tests only: the test server of core/tests/common calls aes-siv itself, apart
-# from the client code. Already in the vendored set.
+# from the client code. Already in crates.allow.
 [dev-dependencies]
 aes-siv = { version = "0.7", default-features = false, features = ["alloc"] }
 

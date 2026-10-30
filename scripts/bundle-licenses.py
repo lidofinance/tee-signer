@@ -7,15 +7,20 @@ The bundle is attribution material, not an audit of redistribution obligations.
 
 import argparse
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
+import tarfile
+import tempfile
 
 
 ROOT = Path(__file__).resolve().parent.parent
 FIRST_PARTY = "github.com/lidofinance/tee-signer/"
+CARGO_LOCK = ROOT / "trusted-time/rust/Cargo.lock"
+CARGO_HOME = ROOT / "build/nts/cargo-home"
 NOTICE_NAME = re.compile(r"^(licen[sc]e|copying|copyright|notice|patents)([._-].*)?$", re.I)
 
 
@@ -36,6 +41,47 @@ def add_notices(sections, label, directory):
     for path in files:
         sections.append((f"{label} / {path.relative_to(directory).as_posix()}",
                          path.read_text(encoding="utf-8")))
+
+
+def lock_crates(lock_text):
+    """(name, version, sha256) of each crate in a Cargo.lock that has a checksum."""
+    try:
+        import tomllib
+    except ImportError:  # Python 3.10: Cargo.lock is flat enough to read by line.
+        packages, package = [], None
+        for line in lock_text.splitlines():
+            line = line.strip()
+            if line == "[[package]]":
+                package = {}
+                packages.append(package)
+            elif line.startswith("["):
+                package = None
+            elif package is not None and " = " in line:
+                key, value = line.split(" = ", 1)
+                if value.startswith('"') and value.endswith('"'):
+                    package[key] = value[1:-1]
+    else:
+        packages = tomllib.loads(lock_text).get("package", [])
+    return sorted((p["name"], p["version"], p["checksum"]) for p in packages if "checksum" in p)
+
+
+def add_crate_notices(sections, lock, cargo_home):
+    """Notices of every crates.io crate of the lock, read from its .crate archive
+    in the cargo home after checking the archive against the lock's sha256."""
+    for name, version, checksum in lock_crates(lock.read_text()):
+        archives = sorted((cargo_home / "registry/cache").glob(f"*/{name}-{version}.crate"))
+        if not archives:
+            raise ValueError(f"Rust crate {name} {version}: no archive in {cargo_home}: run scripts/fetch-nts.sh")
+        for archive in archives:
+            data = archive.read_bytes()
+            if hashlib.sha256(data).hexdigest() != checksum:
+                raise ValueError(f"Rust crate {name} {version}: {archive} differs from its sha256 in {lock.name}")
+        with tempfile.TemporaryDirectory() as tmp, tarfile.open(fileobj=io.BytesIO(data)) as tar:
+            if hasattr(tarfile, "data_filter"):
+                tar.extractall(tmp, filter="data")
+            else:
+                tar.extractall(tmp)
+            add_notices(sections, f"Rust crate {name}-{version}", Path(tmp) / f"{name}-{version}")
 
 
 def collect(binary, module_dirs):
@@ -74,10 +120,8 @@ def collect(binary, module_dirs):
                     ROOT / "signer-core/third_party/blst")
     rust = "nts" in settings.get("-tags", "").split(",")
     if rust:
-        # Include the entire pinned vendor set, including build-only crates.
-        for crate in sorted((ROOT / "trusted-time/third_party/nts-vendor").iterdir()):
-            if crate.is_dir():
-                add_notices(sections, f"Rust crate {crate.name}", crate)
+        # Every crates.io crate of Cargo.lock, build-only crates too.
+        add_crate_notices(sections, CARGO_LOCK, CARGO_HOME)
     # A distributor can supply notices for its C runtime, linker runtime or overlay.
     if os.environ.get("SIGNER_EXTRA_LICENSE_DIR"):
         add_notices(sections, "Distributor-supplied notices", Path(os.environ["SIGNER_EXTRA_LICENSE_DIR"]))

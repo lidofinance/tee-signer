@@ -27,6 +27,7 @@ deps: ## apt packages (build tools, cross gcc, qemu-user, clang, cloc, jq)
 check: ## guards: module boundaries, secret scan, release gate self-test, gofmt
 	bash $(ROOT)/scripts/check-imports.sh
 	bash $(ROOT)/scripts/check-forbidden.sh
+	bash $(ROOT)/scripts/fetch-nts.sh --check
 	bash $(ROOT)/scripts/release-gate-test.sh
 	python3 -B $(ROOT)/scripts/bundle-licenses-test.py
 	@for m in */go.mod; do d=$${m%/go.mod}; out=$$(cd $$d && gofmt -l . | grep -v '^third_party/' || true); \
@@ -35,7 +36,7 @@ check: ## guards: module boundaries, secret scan, release gate self-test, gofmt
 core: ## the C signer core and the vendored blst, static libraries for cgo (build/<arch>/lib)
 	bash $(ROOT)/scripts/build-core.sh
 
-nts: ## the Rust NTS library (trusted-time/rust) for both arches, offline in its toolchain image, with its tests
+nts: ## the Rust NTS library (trusted-time/rust) for both arches: crates fetched once (network), then checked and built offline in its toolchain image, with its tests
 	bash $(ROOT)/scripts/build-nts.sh
 
 build: ## static runners (one per cloud), host tools; runs the release gate and the dependency check on each
@@ -81,5 +82,5 @@ loc: ## code lines per module and per runner build (cloc; not recorded in the re
 	bash $(ROOT)/scripts/loc.sh
 	bash $(ROOT)/scripts/loc.sh builds
 
-clean: ## remove build/ and logs/
+clean: ## remove build/ and logs/ (and the Rust crate cache in build/nts/cargo-home)
 	rm -rf $(ROOT)/build $(ROOT)/logs

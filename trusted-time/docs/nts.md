@@ -37,7 +37,7 @@ The parts:
 | `signer-nts-core` | `trusted-time/rust/core/` | All protocol logic. `#![no_std]` with `alloc`, `#![forbid(unsafe_code)]`. No clock reads, no sockets, no random number generator: the caller passes in timestamps, nonces and unique IDs. |
 | `signer-nts-nostd-check` | `trusted-time/rust/nostd-check/` | A `no_std` staticlib with its own panic handler that calls the core. Built only to show the core links without `std`; never linked into anything or run. |
 
-The core's dependencies come from the vendored set, all with default features
+The core's dependencies come from crates.io (see "Crates and where they live"), all with default features
 off: `aes-siv` (`alloc`), `aes` and `cmac` (only to turn on `zeroize`, so the
 expanded AES keys and the CMAC state are wiped on drop), `subtle`, `zeroize`.
 
@@ -168,10 +168,8 @@ has a fixed upper bound:
 ## Files
 
 ```
-trusted-time/rust/Cargo.toml, Cargo.lock    the workspace; the lock holds the 20 vendored crates
-trusted-time/rust/.cargo/config.toml        offline, crates from ../trusted-time/third_party/nts-vendor
+trusted-time/rust/Cargo.toml, Cargo.lock    the workspace; the lock pins the 20 crates.io crates
 trusted-time/rust/crates.allow              the crates Cargo.lock may hold, name and version
-trusted-time/rust/vendor.sha256             digest of the whole vendored tree
 trusted-time/rust/src/                      signer-nts: the C exports (lib.rs), the association
                               (assoc.rs), reason codes (reason.rs), tests (tests.rs)
 trusted-time/rust/include/signer_nts.h      the C header, written by hand
@@ -180,14 +178,14 @@ trusted-time/rust/core/tests/               requests, answers and refusals again
                               randomized garbage and mutations (fixed seeds)
 trusted-time/rust/nostd-check/src/lib.rs    the no_std build check
 trusted-time/toolchain/toolchain.Dockerfile     the toolchain image
-scripts/fetch-nts.sh          vendors the crates and checks them
+scripts/fetch-nts.sh          checks the lock, fetches the crates into build/nts/cargo-home,
+                              checks the archives
+scripts/nts-verify-crates.sh  checks the crate archives against the sha256 in Cargo.lock
 scripts/build-nts.sh          builds libsigner_nts.a for both architectures, runs
                               the Rust tests and the no_std checks of the core
 scripts/nts-container.sh      the part of build-nts.sh that runs in the container
-scripts/nts-lock-test.sh      shows the build refuses changed crates and a std feature
 scripts/build-runner-nts.sh   builds the runners with the build tag nts
 scripts/test-nts.sh           all of it, then the Go test on each architecture
-scripts/nts-repro.sh          two clean builds, compared byte for byte
 scripts/nts-interop.sh        the interop test against the four public operators (network)
 trusted-time/nts/                   the cgo binding, NTS-KE, NTP, pinned roots, tests (tag nts)
 trusted-time/clock/nts*.go          the NTS clock and its tests (tag nts)
@@ -209,8 +207,6 @@ architectures:
 
 1. `cargo tree -p signer-nts-core -e features` has no `feature "std"`
    line (output in `build/nts/<arch>/nostd-check/core-features.txt`).
-   `nts-lock-test.sh` case 5 shows the check fails when `subtle` gets its
-   default features.
 2. `signer-nts-nostd-check` builds: a `#![no_std]` staticlib with its own
    `#[panic_handler]`. If anything in the graph linked `std`, the build would
    fail with a duplicate `panic_impl` lang item.
@@ -225,10 +221,9 @@ architectures:
 ## Commands
 
 ```sh
-make fetch-nts                 # once: crates into trusted-time/third_party/nts-vendor/ (Docker, network)
-make nts                       # build, link, test on x86_64 and on aarch64 under qemu
-bash scripts/nts-repro.sh      # two clean builds, umask 022 and 077, different paths
-make nts-interop               # network: NTS-KE and 3 queries per public operator
+make nts                       # fetch the crates, build for x86_64 and aarch64, Rust tests on x86_64
+bash scripts/test-nts.sh       # also the runners with the tag nts and the Go tests, aarch64 under qemu
+bash scripts/nts-interop.sh    # network: NTS-KE and 3 queries per public operator
 ```
 
 `make nts` and the scripts write to `build/nts/`. They do not touch
@@ -239,7 +234,7 @@ first.
 ## Toolchain
 
 The toolchain is a Docker image, `trusted-time/toolchain/toolchain.Dockerfile`. It starts from
-`rust:1.94.1-bookworm`, pinned by digest, and adds the aarch64 standard
+`rust:1.94.1-slim-bookworm`, pinned by digest, and adds the aarch64 standard
 library with `rustup target add` (rustup checks the sha256 from the release
 manifest). A Rust static library needs no linker, so the image has no aarch64
 compiler. The final link is the Go build's, with the host's
@@ -254,28 +249,52 @@ commit of rustc and the rust-std hash from the release manifest.
 
 ## Crates and where they live
 
-The 20 crates (aes-siv and its dependencies) are vendored into
-`trusted-time/third_party/nts-vendor/`, which git ignores, like `signer-core/third_party/blst`. Nothing
-third-party goes into git, and a fresh clone fetches them with
-`scripts/fetch-nts.sh`. The pin is `trusted-time/rust/Cargo.lock`. On top of cargo's own
-check of each crate's sha256 against the lock, `fetch-nts.sh` checks that:
+The 20 crates (aes-siv and its dependencies) come from crates.io. None is in
+git. The pin is `trusted-time/rust/Cargo.lock`, which holds the version and
+sha256 of each crate archive. `scripts/fetch-nts.sh` first checks that the
+lock holds exactly the crates of `trusted-time/rust/crates.allow`, all from
+crates.io (`make check` runs this part too). The archives live in
+`build/nts/cargo-home` (git ignores `build/`); `cargo fetch --locked`
+downloads the ones that are missing.
 
-- the lock holds exactly the crates of `trusted-time/rust/crates.allow`, all from crates.io,
-- every vendored file has the hash in its `.cargo-checksum.json` and no file
-  is added or missing,
-- the whole tree has the digest in `trusted-time/rust/vendor.sha256`.
+cargo checks an archive's sha256 against the lock only when it downloads it,
+and it takes dependency features from the registry index files, which the
+lock does not cover. So nothing in the cache is trusted:
 
-`build-nts.sh` runs the same checks before it builds, and cargo runs with
-`--locked --offline --frozen`. A new crate in the lock, for example after
+- `fetch-nts.sh` runs `scripts/nts-verify-crates.sh` first: each archive in
+  the cache against its sha256 in the lock. All there and matching: no
+  fetch. Some missing: `cargo fetch`, then the same check again. One that
+  differs (changed, cut short): the script stops and says to remove the
+  cache. It also deletes the extracted sources (`registry/src`).
+- `build-nts.sh` mounts the cache read-only at `/crates` in each build
+  container. `nts-container.sh` copies only the lock's archives out of it,
+  checks the copies with `nts-verify-crates.sh`, and unpacks them into
+  `/tmp/vendor`, a cargo directory source whose `.cargo-checksum.json` per
+  crate names the lock's sha256. cargo builds with crates.io replaced by
+  that directory. The registry index, the extracted sources and every other
+  file of the cache are never read in the build, so features come from the
+  crates' own `Cargo.toml`. A changed archive stops the build.
+
+The first build needs a network once, for the fetch. `make clean` removes
+`build/` and the cache with it; an offline machine can take a copy of
+`build/nts/cargo-home` from another one, since every archive is checked
+anyway.
+
+`build-nts.sh` runs `fetch-nts.sh` first. Apart from building the toolchain
+image, that is the only step with a network. The build containers start
+with `--network none` and run cargo with `--locked --offline --frozen`. A new crate in the lock, for example after
 a version bump, stops the build until someone reviews it and edits
 `crates.allow`. The three workspace crates are in the lock too, without a
 source or checksum; the checks count only the crates.io ones.
 
 ## Same bytes on every build
 
-- Fixed compiler, fixed crates, `--locked --offline --frozen`.
-- `--remap-path-prefix` for the mount point of the sources and the cargo,
-  rustup and target folders. The standard library keeps the `/rustc/<commit>/`
+- Fixed compiler, crate archives checked against the sha256 in Cargo.lock
+  before every build, `--locked --offline --frozen`.
+- The archive holds a few crate source paths (panic locations), remapped
+  to `/vendor/<crate>-<version>/...`, the same for every cargo version.
+- `--remap-path-prefix` for the mount point of the sources, the crates and
+  the cargo, rustup and target folders. The standard library keeps the `/rustc/<commit>/`
   paths it was built with, which are the same for this compiler.
 - `panic = "abort"`, `codegen-units = 1`, fat LTO, `opt-level = "s"`,
   `debug = 0`, no build script of our own. Fat LTO drops the standard library
@@ -296,8 +315,8 @@ a build without the tag neither links Rust nor needs the library. With the
 tag, a runner also answers `runner -nts-selftest` (prints the library
 version, runs the self-test, exits) and has the NTS clock.
 
-`scripts/build-runner.sh` builds the library first (`build-nts.sh --no-test`,
-offline, in the toolchain image) and gives the tag to the cloud runners:
+`scripts/build-runner.sh` builds the library first (`build-nts.sh --no-test`:
+the crates from crates.io, then offline in the toolchain image) and gives the tag to the cloud runners:
 `runner-azure`, `runner-aws`, `runner-gcp`, their `-debugimport` builds and
 their debug builds (`scripts/common.sh`, `runner_tags`). The dev
 runners (`runner-dev`, `runner-dev-debugimport`) stay
