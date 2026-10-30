@@ -1,11 +1,12 @@
 //go:build platform_azure
 
 // Package azlog is the mark log in an Azure Blob Storage container under a
-// locked time-based retention policy (container-level WORM: locked blobs
-// "can't be modified or deleted by any user, not even by users with account
-// administrative privileges"), through the Blob REST API with a small
-// client of its own: Put Blob with If-None-Match: *, Get Blob and List
-// Blobs. Nothing else of the API is used.
+// locked time-based retention policy (container-level WORM, not
+// version-level: locked blobs "can't be modified or deleted by any user,
+// not even by users with account administrative privileges"), through the
+// Blob REST API with a small client of its own: Put Blob with
+// If-None-Match: *, Get Blob and List Blobs. Nothing else of the API is
+// used.
 //
 // Requests carry a Microsoft Entra token for https://storage.azure.com/
 // from the container group's managed identity (IMDS), which only the
@@ -72,35 +73,20 @@ func Open(rest string, env markstore.Env) (markstore.Log, error) {
 // ARMAPIVersion is the api-version of the management-plane read.
 const ARMAPIVersion = "2023-05-01"
 
-// Lock reads the container's time-based retention policy from the
-// management plane (Blob Containers, Get Immutability Policy): the data
-// plane only says whether a container has one (x-ms-has-immutability-policy),
-// not its state or period. The managed identity needs read access to the
-// policy (Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies/read).
+// Lock reads the container (Blob Containers, Get) and its time-based
+// retention policy (Get Immutability Policy) from the management plane:
+// the data plane only says whether a container has a policy
+// (x-ms-has-immutability-policy), not its state or period. The managed
+// identity needs read access to both
+// (Microsoft.Storage/storageAccounts/blobServices/containers/read and
+// .../containers/immutabilityPolicies/read; Reader on the container grants
+// both). A container with version-level immutability does not count as
+// locked (CheckVersions).
 func (l *Log) Lock(ctx context.Context) (markstore.Lock, error) {
-	if l.Subscription == "" || l.ResourceGroup == "" || l.ARMToken == nil {
-		return markstore.Lock{}, errors.New("azlog: the lock check needs subscription=, resource_group= and a management-plane token")
-	}
-	base := "https://management.azure.com"
-	if l.ARMEndpoint != "" {
-		base = strings.TrimSuffix(l.ARMEndpoint, "/")
-	}
-	u := fmt.Sprintf("%s/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Storage/storageAccounts/%s/blobServices/default/containers/%s/immutabilityPolicies/default?api-version=%s",
-		base, url.PathEscape(l.Subscription), url.PathEscape(l.ResourceGroup), url.PathEscape(l.Account), url.PathEscape(l.Container), ARMAPIVersion)
-	resp, err := l.send(ctx, l.ARMToken, l.ARMTokenRefused, "management token", func() (*http.Request, error) {
-		return http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	})
-	if err != nil {
-		return markstore.Lock{}, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		// No policy on the container (or no such container): no lock.
-		return markstore.Lock{Kind: "azure immutability policy", Mode: "none"}, nil
-	}
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return markstore.Lock{}, fmt.Errorf("azlog: immutability policy: %s: %s%s", resp.Status, strings.TrimSpace(string(b)), authHeader(resp))
+	container, found, err := l.container(ctx)
+	if err != nil || !found {
+		// No such container: no lock.
+		return markstore.Lock{Kind: "azure immutability policy", Mode: "none"}, err
 	}
 	var p struct {
 		Properties struct {
@@ -108,14 +94,81 @@ func (l *Log) Lock(ctx context.Context) (markstore.Lock, error) {
 			State string `json:"state"` // Locked or Unlocked
 		} `json:"properties"`
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&p); err != nil {
-		return markstore.Lock{}, fmt.Errorf("azlog: immutability policy: %w", err)
+	if found, err = l.armGet(ctx, container+"/immutabilityPolicies/default", "immutability policy", &p); err != nil || !found {
+		// No policy on the container: no lock.
+		return markstore.Lock{Kind: "azure immutability policy", Mode: "none"}, err
 	}
 	if p.Properties.Days < 0 || p.Properties.Days > 1<<20 {
 		return markstore.Lock{}, fmt.Errorf("azlog: immutability period of %d days", p.Properties.Days)
 	}
 	return markstore.Lock{Kind: "azure immutability policy", Mode: p.Properties.State, Compliance: p.Properties.State == "Locked",
 		Retention: time.Duration(p.Properties.Days) * 24 * time.Hour}, nil
+}
+
+// CheckVersions reads the container from the management plane and fails
+// when it has version-level immutability (immutableStorageWithVersioning
+// enabled, or a migration to it started). There an overwrite makes a new
+// current version and keeps the locked one as a previous version, and List
+// and Get read current versions only, so a storage admin could hide the
+// newest objects and roll the log or the state copy back. A missing
+// container passes: nothing in it to hide.
+func (l *Log) CheckVersions(ctx context.Context) error {
+	_, _, err := l.container(ctx)
+	return err
+}
+
+// container reads the container from the management plane, refuses
+// version-level immutability, and returns the container's ARM URL.
+func (l *Log) container(ctx context.Context) (u string, found bool, err error) {
+	if l.Subscription == "" || l.ResourceGroup == "" || l.ARMToken == nil {
+		return "", false, errors.New("azlog: the lock and version checks need subscription=, resource_group= and a management-plane token")
+	}
+	base := "https://management.azure.com"
+	if l.ARMEndpoint != "" {
+		base = strings.TrimSuffix(l.ARMEndpoint, "/")
+	}
+	u = fmt.Sprintf("%s/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Storage/storageAccounts/%s/blobServices/default/containers/%s",
+		base, url.PathEscape(l.Subscription), url.PathEscape(l.ResourceGroup), url.PathEscape(l.Account), url.PathEscape(l.Container))
+	var c struct {
+		Properties struct {
+			VersionLevel *struct {
+				Enabled        bool   `json:"enabled"`
+				MigrationState string `json:"migrationState"`
+			} `json:"immutableStorageWithVersioning"`
+		} `json:"properties"`
+	}
+	if found, err = l.armGet(ctx, u, "container", &c); err != nil || !found {
+		return u, found, err
+	}
+	if v := c.Properties.VersionLevel; v != nil && (v.Enabled || v.MigrationState != "") {
+		return u, true, fmt.Errorf("%w: azlog: container %s has version-level immutability (enabled %v, migration %q); the client reads current blob versions only and needs a container with a locked container-level policy",
+			markstore.ErrNoLock, l.Container, v.Enabled, v.MigrationState)
+	}
+	return u, true, nil
+}
+
+// armGet reads one management-plane resource at u into v. A 404 is
+// found == false with no error.
+func (l *Log) armGet(ctx context.Context, u, what string, v any) (found bool, err error) {
+	u += "?api-version=" + ARMAPIVersion
+	resp, err := l.send(ctx, l.ARMToken, l.ARMTokenRefused, "management token", func() (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	})
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return false, fmt.Errorf("azlog: %s: %s: %s%s", what, resp.Status, strings.TrimSpace(string(b)), authHeader(resp))
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(v); err != nil {
+		return false, fmt.Errorf("azlog: %s: %w", what, err)
+	}
+	return true, nil
 }
 
 func (l *Log) String() string { return "azblob://" + l.Account + "/" + l.Container }

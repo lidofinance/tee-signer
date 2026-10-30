@@ -232,6 +232,7 @@ func startPlatform(ctx context.Context, a *startArgs, newPlatform platformFunc, 
 		}
 		if s.setup != nil {
 			copyStore.setupHash = s.setup.SHA256
+			copyStore.checkVersions = true
 		}
 		opts.Durable = copyStore.open
 	}

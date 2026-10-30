@@ -171,8 +171,9 @@ roll the mark back.
   S3 must have Object Lock in compliance mode, GCS a locked retention
   policy, Azure a locked container immutability policy. The retention
   must be at least the setup's `slashing_log_min_lock_days`. Otherwise the
-  runner stops. The file log of the dev platform has no lock, and the
-  dev platform skips the check.
+  runner stops. An Azure container with version-level immutability also
+  stops it, even with a locked policy (see "The stores"). The file log of
+  the dev platform has no lock, and the dev platform skips the check.
 - Shares, listed once. The runner lists its stored shares once, before
   the claim. The claim learns from that list whether the node holds
   shares, and the runner loads only that list. A share that a later
@@ -295,12 +296,12 @@ has passed.
 
 | | AWS | GCP | Azure |
 | --- | --- | --- | --- |
-| Store | S3 bucket, versioning on, Object Lock default retention in compliance mode | Cloud Storage bucket with a locked retention policy (Bucket Lock) | Blob Storage container with a locked time-based retention policy |
+| Store | S3 bucket, versioning on, Object Lock default retention in compliance mode | Cloud Storage bucket with a locked retention policy (Bucket Lock) | Blob Storage container with a locked time-based retention policy, container-level (not version-level immutability) |
 | What the admin cannot do | delete or overwrite a locked version ("can't be overwritten or deleted by any user, including the root user") | delete or replace a retained object; reduce or remove the locked policy | modify or delete a locked blob ("not even by users with account administrative privileges") |
 | What the admin can do | add versions and delete markers (the reader lists every version) | create new names | create new names |
 | Client | `platform-aws/s3log`, SigV4 of our own, `platform_aws` | `platform-gcp/gcslog`, JSON API, `platform_gcp` | `platform-azure/azlog`, Blob REST, `platform_azure` |
 | Credentials | the enclave's record credentials (an IAM key the enclave holds, as for DynamoDB) | the workload's federated token (Confidential Space, WIF; the same as for KMS) | the container group's managed identity, resource `https://storage.azure.com/` |
-| Lock check reads | `GET /?object-lock` (GetObjectLockConfiguration); needs `s3:GetBucketObjectLockConfiguration` | `GET /storage/v1/b/B?fields=retentionPolicy`; needs `storage.buckets.get` | the management plane's immutability policy of the container; needs a token for `https://management.azure.com/`, the subscription and the resource group, and read access to the policy |
+| Lock check reads | `GET /?object-lock` (GetObjectLockConfiguration); needs `s3:GetBucketObjectLockConfiguration` | `GET /storage/v1/b/B?fields=retentionPolicy`; needs `storage.buckets.get` | the management plane's container (`immutableStorageWithVersioning`) and its immutability policy; needs a token for `https://management.azure.com/`, the subscription and the resource group, and read access to the policy |
 | `-mark-store` | `s3:bucket=B,region=R[,endpoint=URL]` | `gcs:bucket=B[,endpoint=URL]` | `azblob:account=A,container=C[,endpoint=URL][,subscription=S,resource_group=G[,arm_endpoint=URL]]` |
 
 `file:DIR` is a write-once file log for tests and the dev platform; the
@@ -314,10 +315,29 @@ subscription, the resource group and the token. An Azure store in a setup
 names `subscription` and `resource_group` next to `account` and
 `container`; the runner puts them into the store spec, and the platform
 gives the managed identity's token for `https://management.azure.com/`.
-The identity needs read access to the container's immutability policy:
-Reader on the container scope (`platform-azure/deploy/deploy.sh store-role N`).
+The identity needs read access to the container and its immutability
+policy: Reader on the container scope (`platform-azure/deploy/deploy.sh store-role N`).
 The account name is unique across Azure, so a wrong subscription or group
-in the setup finds no policy (404), and the check fails closed.
+in the setup finds no container (404), and the check fails closed.
+
+The Azure check refuses a container with version-level immutability
+(`immutableStorageWithVersioning` enabled, or a migration to it under way),
+locked policy or not. In such a container an overwrite makes a new current
+version and keeps the locked one as a previous version. The client lists
+and reads current versions only, so a storage admin could overwrite the
+newest records, and a runner without its local hint would start from an
+older record: an older config state and an older source bound. Version-level
+immutability cannot be turned off again, so a log container migrated to it
+stops its runner at the next start, and the signer needs a new container
+and a new setup. The state copy runs the same container check at start
+(`markstore.CheckVersions`, `docs/durable-state.md`).
+
+The check reads the container only, not the storage account. It relies on
+a container in an account with account-level version-level immutability
+reporting `immutableStorageWithVersioning.enabled`; that is not yet
+confirmed on Azure. Reading the account would need Reader on the account.
+A custom role with only `immutabilityPolicies/read` now fails the check;
+Reader on the container covers both reads.
 
 ### Bearer tokens
 

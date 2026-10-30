@@ -499,7 +499,10 @@ This tree implements none of these.
 
 `-mark-store azblob:account=A,container=C` keeps the runner's mark in a
 Blob Storage container with a locked time-based retention policy
-(`slashing-log/docs/marklog.md`). The client takes a token for
+(`slashing-log/docs/marklog.md`). Use container-level immutability: do not
+enable version-level immutability on the account or the container, and do
+not migrate the container to it. The lock check refuses such a container,
+and the change cannot be undone. The client takes a token for
 `https://storage.azure.com/` from the container group's managed identity
 (the same identity as for Key Vault) and sends `x-ms-version: 2021-08-06`
 and `If-None-Match: *`. The identity needs the data action to create and
@@ -509,7 +512,11 @@ storage account through the group's outbound path, not through the
 network entry. The setup's `slashing_log_store` (account, container,
 subscription and resource group) and `signer_name` name the log. The lock
 check takes a token for `https://management.azure.com/` from the same
-identity and needs Reader on the container (`deploy.sh store-role N`).
+identity, reads the container and its immutability policy, and needs
+Reader on the container (`deploy.sh store-role N`). A custom role with only
+`immutabilityPolicies/read` is not enough: the check also reads the
+container (`containers/read`) and stops the runner on a 403. The state
+copy's container gets the same version-level check at start.
 
 ## State copy and handover
 
@@ -664,8 +671,8 @@ retail price estimates for West Europe.
 9. `acr-role 1`, `2`, `3`. Free. Then `store-role 1`, `2`, `3` (needs
    `SETUP_FILE_N`): Storage Blob Data Contributor and Reader on the
    setup's containers, free. Reader is for the lock check, which reads the
-   container's immutability policy at every start; without it the runner
-   stops.
+   container and its immutability policy at every start; without it the
+   runner stops.
 10. `group-deploy 1`, `2`, `3`, with the network entry's settings. It re-runs
     `policy` and stops if the hash is not the one in the key's release
     policy. About 0.10 USD per hour per group (1.5 CPUs at 0.0579 USD and

@@ -365,11 +365,11 @@ cmd_key_role() {
 
 # store-role N: the mark log's container (and the state copy's, when it is
 # another one) of SETUP_FILE_N. Records need the data role. The lock check
-# at every start reads the container's immutability policy from the
+# at every start reads the container and its immutability policy from the
 # management plane (platform-azure/azlog Lock), which needs
-# Microsoft.Storage/.../containers/immutabilityPolicies/read: Reader on the
-# container scope grants that read and no write. Without it the runner
-# stops at the lock check.
+# Microsoft.Storage/.../containers/read and .../immutabilityPolicies/read:
+# Reader on the container scope grants those reads and no write. Without
+# it the runner stops at the lock check.
 cmd_store_role() {
   local n="$1" principal scope scopes
   check_signer "$n"

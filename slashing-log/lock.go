@@ -24,6 +24,27 @@ type Locker interface {
 	Lock(ctx context.Context) (Lock, error)
 }
 
+// VersionChecker is a Log whose store can keep overwritten objects as
+// previous versions that List and Get do not read (Azure version-level
+// immutability). CheckVersions fails, with ErrNoLock, when it does.
+type VersionChecker interface {
+	CheckVersions(ctx context.Context) error
+}
+
+// CheckVersions runs l's CheckVersions, if l has one. The state copy runs
+// it at every start: in such a store an admin could hide the newest
+// commits, and the restore would take an older one.
+func CheckVersions(ctx context.Context, l Log) error {
+	vc, ok := l.(VersionChecker)
+	if !ok {
+		return nil
+	}
+	if err := vc.CheckVersions(ctx); err != nil {
+		return fmt.Errorf("store %s: version check: %w", l, err)
+	}
+	return nil
+}
+
 // ErrNoLock: the store has no lock that keeps the log safe.
 var ErrNoLock = errors.New("markstore: the mark store is not locked")
 

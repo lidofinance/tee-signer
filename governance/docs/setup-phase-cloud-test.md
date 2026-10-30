@@ -395,7 +395,7 @@ them after a rollback.
 
 ## Not checked offline
 
-- Reader on the container scope grants
+- Reader on the container scope grants `containers/read` and
   `immutabilityPolicies/read` for the lock check (Azure RBAC docs; not run).
 - `roles/storage.legacyBucketReader` holds `storage.buckets.get` (GCP role
   reference; not run).

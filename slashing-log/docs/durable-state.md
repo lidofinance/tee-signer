@@ -114,10 +114,14 @@ and a chunk must hash to the name its commit holds.
 The names are created once (S3 `If-None-Match: *`, GCS
 `ifGenerationMatch=0`, Azure `If-None-Match: *`) through the mark log's
 clients (`markstore.Log`), so the copy works on the locked bucket of the
-mark log as well as on a plain one. A commit name taken by a valid commit
-of another process means a clone: that process changes no durable state
-from then on (`ErrLost`). Objects that are not commits cost a skip each,
-as in the mark log.
+mark log as well as on a plain one. On the setup path the runner refuses
+a store that keeps overwritten objects as previous versions the client
+does not read (`markstore.CheckVersions`: an Azure container with
+version-level immutability), since an admin could hide the newest commits
+there and the restore would take an older one. A commit name taken by a
+valid commit of another process means a clone: that process changes no
+durable state from then on (`ErrLost`). Objects that are not commits cost
+a skip each, as in the mark log.
 
 ### All or nothing
 
