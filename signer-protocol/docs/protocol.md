@@ -400,8 +400,8 @@ setup state above does not carry them: its layout is the statement the
 circuits prove, and IDENTITY shares its version byte with ATTEST. So
 `key_lock` is not attested, and neither is `single_key`: the acceptance
 sits in the private part of the setup, which a verifier sees only as
-`platform_commitment`. The prover reads it on the connection whose IDENTITY it
-verified and pushes it along with the proof; the watchdog shows "key rule
+`platform_commitment`. The prover reads `key_lock` on the connection whose
+IDENTITY it verified and pushes it along with the proof; the watchdog shows "key rule
 locked: yes, no, not possible (GCP) or unread" per signer and warns on no
 or unread for a mainnet cluster. A zero `key_release_hash` in the proof
 counts as unread whatever HEALTH says.
