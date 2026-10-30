@@ -1,4 +1,4 @@
-package hostagent
+package agentclient
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lidofinance/tee-signer/platform-aws/hostagent"
 	"github.com/lidofinance/tee-signer/platform/filestore"
 )
 
@@ -24,7 +25,7 @@ func TestSetupChannel(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	serve := func(name string, srv *Server) string {
+	serve := func(name string, srv *hostagent.Server) string {
 		sock := filepath.Join(dir, name)
 		l, err := net.Listen("unix", sock)
 		if err != nil {
@@ -35,7 +36,7 @@ func TestSetupChannel(t *testing.T) {
 	}
 	setupBytes := []byte("S\x02 the setup bytes, whatever they are")
 	exitFile := filepath.Join(dir, "last-exit.txt")
-	addr := serve("agent.sock", &Server{Store: st, Exit: ExitFile(exitFile, nil),
+	addr := serve("agent.sock", &hostagent.Server{Store: st, Exit: hostagent.ExitFile(exitFile, nil),
 		Setup: func() ([]byte, error) { return setupBytes, nil }})
 
 	ch := &SetupChannel{Addr: addr}
@@ -53,7 +54,7 @@ func TestSetupChannel(t *testing.T) {
 	}
 
 	// An agent without a setup: a clear error at once, no retries.
-	none := serve("none.sock", &Server{Store: st})
+	none := serve("none.sock", &hostagent.Server{Store: st})
 	start := time.Now()
 	if _, err := (&SetupChannel{Addr: none, Retry: time.Hour}).Read(ctx); err == nil || !strings.Contains(err.Error(), "-setup FILE") {
 		t.Fatalf("agent without setup: %v", err)
@@ -62,7 +63,7 @@ func TestSetupChannel(t *testing.T) {
 		t.Fatal("waited for an agent that answered")
 	}
 	// An agent whose setup source fails: its error, no retries.
-	failing := serve("failing.sock", &Server{Store: st, Setup: func() ([]byte, error) { return nil, errors.New("disk gone") }})
+	failing := serve("failing.sock", &hostagent.Server{Store: st, Setup: func() ([]byte, error) { return nil, errors.New("disk gone") }})
 	if _, err := (&SetupChannel{Addr: failing, Retry: time.Hour}).Read(ctx); err == nil || !strings.Contains(err.Error(), "disk gone") {
 		t.Fatalf("failing agent: %v", err)
 	}
@@ -75,7 +76,7 @@ func TestSetupChannel(t *testing.T) {
 		if err != nil {
 			return
 		}
-		go (&Server{Store: st, Setup: func() ([]byte, error) { return setupBytes, nil }}).Serve(ctx, l)
+		go (&hostagent.Server{Store: st, Setup: func() ([]byte, error) { return setupBytes, nil }}).Serve(ctx, l)
 	}()
 	rctx, rcancel := context.WithTimeout(ctx, 20*time.Second)
 	defer rcancel()

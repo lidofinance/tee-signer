@@ -19,8 +19,10 @@
 #      verifierselect): attestation-verify/azureid with platform_azure,
 #      github.com/lidofinance/tee-signer/attestation-verify with any cloud
 #      platform, none in the dev build.
-#   2. No package of another cloud: the nitro platform and the host agent
-#      only in AWS builds, azure and gcp only in theirs.
+#   2. No package of another cloud: the nitro platform and the host agent's
+#      client and messages (hostagent/agentclient, hostagent/agentwire) only
+#      in AWS builds, azure and gcp only in theirs. No other package below
+#      platform-aws/hostagent, the host agent itself included, in a runner.
 #   3. The build's own platform package is there, so a tag that stopped
 #      working does not pass as a clean build.
 #   4. The NTS clock (github.com/lidofinance/tee-signer/trusted-time/nts, tag nts) is in the cloud builds
@@ -86,8 +88,13 @@ package_cloud() {
     github.com/lidofinance/tee-signer/platform/dev) echo dev ;;
     # Operator tools, adapters and development helpers are never runner dependencies.
     github.com/lidofinance/tee-signer/devkit|github.com/lidofinance/tee-signer/devkit/*|github.com/lidofinance/tee-signer/tests|github.com/lidofinance/tee-signer/tests/*|github.com/lidofinance/tee-signer/signer-admin|github.com/lidofinance/tee-signer/signer-admin/*|github.com/lidofinance/tee-signer/web3signer-api|github.com/lidofinance/tee-signer/web3signer-api/*|github.com/lidofinance/tee-signer/signer-core/software|github.com/lidofinance/tee-signer/signer-core/software/*) echo none ;;
+    # The host agent runs on the parent instance. The enclave links its
+    # client and its messages; every other package below hostagent, the
+    # agent itself included, is in no runner.
+    github.com/lidofinance/tee-signer/platform-aws/hostagent/agentclient|github.com/lidofinance/tee-signer/platform-aws/hostagent/agentwire) echo aws ;;
+    github.com/lidofinance/tee-signer/platform-aws/hostagent|github.com/lidofinance/tee-signer/platform-aws/hostagent/*) echo none ;;
     # The UDP relay: its client is the Nitro enclave's NTP path.
-    github.com/lidofinance/tee-signer/platform-aws/nitro|github.com/lidofinance/tee-signer/platform-aws/nitro/*|github.com/lidofinance/tee-signer/platform-aws/hostagent|github.com/lidofinance/tee-signer/platform-aws/hostagent/*|github.com/lidofinance/tee-signer/platform-aws/udprelay) echo aws ;;
+    github.com/lidofinance/tee-signer/platform-aws/nitro|github.com/lidofinance/tee-signer/platform-aws/nitro/*|github.com/lidofinance/tee-signer/platform-aws/udprelay) echo aws ;;
     # The human form of setups and updates: for the operator tools only.
     github.com/lidofinance/tee-signer/governance/setuptext|github.com/lidofinance/tee-signer/governance/setuptext/*) echo none ;;
     # NTS test servers never belong in a binary.

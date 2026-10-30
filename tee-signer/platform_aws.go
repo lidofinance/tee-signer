@@ -3,7 +3,7 @@
 package main
 
 import (
-	"github.com/lidofinance/tee-signer/platform-aws/hostagent"
+	"github.com/lidofinance/tee-signer/platform-aws/hostagent/agentclient"
 	"github.com/lidofinance/tee-signer/platform-aws/nitro"
 	_ "github.com/lidofinance/tee-signer/platform-aws/s3log" // the S3 mark log
 	"github.com/lidofinance/tee-signer/platform/setup"
@@ -15,5 +15,5 @@ import (
 // vsock address of the image, before any KMS call.
 func init() {
 	register("nitro", nitro.New)
-	registerSetup("nitro", func() setup.Channel { return &hostagent.SetupChannel{Addr: setup.NitroAgent} })
+	registerSetup("nitro", func() setup.Channel { return &agentclient.SetupChannel{Addr: setup.NitroAgent} })
 }

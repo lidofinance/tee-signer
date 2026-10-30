@@ -9,7 +9,9 @@
 #      replaced in its go.mod, so the module builds on its own;
 #   5. outside _test.go files, only the operator tools (signer-admin) and
 #      tests/ import governance/setuptext, the human form of setups, so no
-#      runner package can.
+#      runner package can;
+#   6. outside _test.go files, the host and tool side packages of host_only
+#      only from the folders it names, so no runner package imports them.
 # Reads the sources only; exits non-zero on the first kind of violation.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -17,6 +19,17 @@ P=github.com/lidofinance/tee-signer
 cd "$ROOT"
 fail=0
 bad() { echo "check-imports: $*" >&2; fail=1; }
+
+# host_only <package path below the repo>: for a package that runs on the
+# host or in a tool, never in a runner, the folders whose code may import it
+# (space-separated prefixes). Nothing for any other package.
+host_only() {
+  case "$1" in
+    # The enclave's side of the host agent.
+    platform-aws/hostagent/agentclient|platform-aws/hostagent/agentwire) ;;
+    platform-aws/hostagent|platform-aws/hostagent/*) echo "platform-aws/cmd/" ;;
+  esac
+}
 
 mods=()
 for m in */go.mod; do mods+=("${m%/go.mod}"); done
@@ -39,6 +52,15 @@ for m in "${mods[@]}"; do
     esac
     rest="${imp#"$P"/}"
     other="${rest%%/*}"
+    allow="$(host_only "$rest")"
+    case "$f" in
+      *_test.go) allow="" ;;
+    esac
+    if [ -n "$allow" ]; then
+      ok=0
+      for a in $allow; do [ "${f#"$a"}" = "$f" ] || ok=1; done
+      [ "$ok" = 1 ] || bad "$f imports $imp, host or tool code (only $allow may import it)"
+    fi
     [ "$other" != "$m" ] || continue
     case "/$rest/" in */internal/*) bad "$f imports $imp, an internal package of module $other" ;; esac
     case "$f" in

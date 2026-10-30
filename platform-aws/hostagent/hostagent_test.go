@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/lidofinance/tee-signer/platform"
+	"github.com/lidofinance/tee-signer/platform-aws/hostagent/agentclient"
+	"github.com/lidofinance/tee-signer/platform-aws/hostagent/agentwire"
 	"github.com/lidofinance/tee-signer/platform/filestore"
 )
 
@@ -27,12 +29,12 @@ func TestAgentStoreOverUnixSocket(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	srv := &Server{Store: st, Creds: func(context.Context) (Credentials, error) {
-		return Credentials{AccessKeyID: "AKIDEXAMPLE", SecretAccessKey: "x", SessionToken: "y"}, nil
+	srv := &Server{Store: st, Creds: func(context.Context) (agentwire.Credentials, error) {
+		return agentwire.Credentials{AccessKeyID: "AKIDEXAMPLE", SecretAccessKey: "x", SessionToken: "y"}, nil
 	}}
 	go srv.Serve(ctx, l)
 
-	c, err := NewClient("unix:" + sock)
+	c, err := agentclient.NewClient("unix:" + sock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,8 +65,8 @@ func TestAgentStoreOverUnixSocket(t *testing.T) {
 }
 
 // The runner's fatal error line reaches the parent as one printable line of
-// at most MaxExitText bytes, in the exit file and nowhere else; an agent
-// without a sink refuses EXIT.
+// at most agentwire.MaxExitText bytes, in the exit file and nowhere else;
+// an agent without a sink refuses EXIT.
 func TestExitReport(t *testing.T) {
 	dir := t.TempDir()
 	st, err := filestore.New(filepath.Join(dir, "blobs"))
@@ -81,7 +83,7 @@ func TestExitReport(t *testing.T) {
 	exitFile := filepath.Join(dir, "last-exit.txt")
 	srv := &Server{Store: st, Exit: ExitFile(exitFile, nil)}
 	go srv.Serve(ctx, l)
-	c, err := NewClient("unix:" + sock)
+	c, err := agentclient.NewClient("unix:" + sock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +99,7 @@ func TestExitReport(t *testing.T) {
 	got := strings.TrimSuffix(string(b), "\n")
 	_, text, _ := strings.Cut(got, " ")
 	if !strings.HasPrefix(text, "runner: mark log s3://b: claim: s3log: 403 Forbidden AccessDenied: Access Denied??[2Jnext") ||
-		len(text) != MaxExitText || strings.ContainsAny(got, "\n\x1b") {
+		len(text) != agentwire.MaxExitText || strings.ContainsAny(got, "\n\x1b") {
 		t.Fatalf("exit file %q", b)
 	}
 	if fi, _ := os.Stat(exitFile); fi.Mode().Perm() != 0o600 {
@@ -114,7 +116,7 @@ func TestExitReport(t *testing.T) {
 		t.Fatal(err)
 	}
 	go (&Server{Store: st}).Serve(ctx, l2)
-	c2, _ := NewClient("unix:" + sock2)
+	c2, _ := agentclient.NewClient("unix:" + sock2)
 	if err := c2.ReportExit("runner: x"); err == nil {
 		t.Fatal("EXIT accepted without a sink")
 	}
