@@ -3,11 +3,9 @@
 package server
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,7 +15,6 @@ import (
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-core/software"
-	"github.com/lidofinance/tee-signer/signer-core/threshold"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/sealedimport"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
@@ -292,82 +289,4 @@ func hasKey(keys []backend.ValidatorKey, pk backend.Pubkey) bool {
 		}
 	}
 	return false
-}
-
-// curveOrder is r, the order of the BLS12-381 G1 subgroup.
-var curveOrder, _ = new(big.Int).SetString("73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001", 16)
-
-// pubkeyOfScalar is the public key of the scalar x mod r (not zero).
-func pubkeyOfScalar(t *testing.T, x *big.Int) backend.Pubkey {
-	t.Helper()
-	var sk [32]byte
-	new(big.Int).Mod(x, curveOrder).FillBytes(sk[:])
-	pk, err := core.PubkeyOf(sk)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return pk
-}
-
-// A split whose share at this runner's index is the whole key is refused.
-// With commitments [pk, infinity] every share of a 2-of-3 split is the
-// key, so a runner would hold the key alone under a 2-of-3 order, on GCP
-// too, where a 1 of 1 order is refused without the setup's acceptance.
-// With t = 3 and commitments [pk, a*G, b*G], a*i + b*i^2 = 0, share i is
-// the key. checkSplit refuses a commitment at infinity, and a share equal
-// to the validator key in a split with n >= 2.
-func TestImportDegenerateSplit(t *testing.T) {
-	b, _ := rand.Int(rand.Reader, curveOrder)
-	b.Add(b, big.NewInt(1))
-	a := new(big.Int).Mul(b, big.NewInt(-2)) // a*2 + b*4 = 0 at index 2
-	for _, c := range []struct {
-		name, setup string
-		t, n        uint8
-		commits     func(pk backend.Pubkey) []backend.Pubkey
-		want        string
-	}{
-		{"infinity", "setup-dev", 2, 3, func(pk backend.Pubkey) []backend.Pubkey { return []backend.Pubkey{pk, {0xc0}} }, "point at infinity"},
-		{"infinity on gcp", "setup-gcp", 2, 3, func(pk backend.Pubkey) []backend.Pubkey { return []backend.Pubkey{pk, {0xc0}} }, "point at infinity"},
-		{"zero at index 2", "setup-dev", 3, 4, func(pk backend.Pubkey) []backend.Pubkey {
-			return []backend.Pubkey{pk, pubkeyOfScalar(t, a), pubkeyOfScalar(t, b)}
-		}, "is the validator key"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			raw, err := os.ReadFile(filepath.Join("..", "..", "governance", "setupwire", "testdata", c.setup+".bin"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			g, err := setupwire.DecodeSetup(raw)
-			if err != nil {
-				t.Fatal(err)
-			}
-			e := newTgtEnv(t, "dev", func(s *setupwire.Setup) { s.Platform = g.Platform })
-			sk, pk := newKey(t)
-			commitments := c.commits(pk)
-			if got, err := threshold.FeldmanEval(commitments, 2); err != nil || got != pk {
-				t.Fatalf("the split is not degenerate at index 2: %v", err)
-			}
-			order := e.importOrder([]byte{1, 2}, pk, func(b *importorder.Body) {
-				b.T, b.N, b.ShareIndex = c.t, c.n, 2
-				b.Validators[0].CommitmentsHash = importorder.CommitmentsHash(commitments)
-			})
-			req := backend.SealedImportRequest{Pubkey: pk, SharePubkey: pk, Index: 5, Order: order,
-				T: c.t, N: c.n, ShareIndex: 2, Commitments: commitments}
-			if req.Sealed, err = sealedimport.Seal(e.sealTo(), &req, &sk); err != nil {
-				t.Fatal(err)
-			}
-			p, err := wireadmin.EncodeImportSealed(&req)
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, err = e.srv.dispatch(ctx, wire.Frame{Type: wireadmin.TypeImportSealed, Payload: p})
-			var r *backend.RefusedError
-			if err == nil || !errors.As(err, &r) || r.Code != backend.StatusBadKey || !strings.Contains(err.Error(), c.want) {
-				t.Fatalf("%v, want a BAD_KEY refusal with %q", err, c.want)
-			}
-			if hasKey(e.srv.Signer.Keys(), pk) {
-				t.Fatal("the whole key loaded")
-			}
-		})
-	}
 }

@@ -162,7 +162,7 @@ setup = 'S' public_values public_salts locked_values locked_salts open_values op
         platform_salt[32] private
 ```
 
-`X_values` is the concatenation of the leaf values of group X in leaf order (section 1), and `X_salts` the concatenation of its salts in the same order (16, 19 and 2 salts). `public_values` is 142 bytes and starts with the format byte 1, so the setup's first two bytes are `0x53 0x01`. The decoder refuses trailing bytes, counts above a cap, presence bytes other than 0 or 1, unknown enum values, unsorted lists, any value the rules refuse, a zero salt, and any input that does not encode back to the same bytes. A setup larger than 64 KiB is refused, and so is one whose private part is above 2560 bytes (section 2).
+`X_values` is the concatenation of the leaf values of group X in leaf order (section 1), and `X_salts` the concatenation of its salts in the same order (17, 19 and 2 salts). `public_values` is 147 bytes and starts with the format byte 2, so the setup's first two bytes are `0x53 0x02`. The decoder refuses trailing bytes, counts above a cap, presence bytes other than 0 or 1, unknown enum values, unsorted lists, any value the rules refuse, a zero salt, and any input that does not encode back to the same bytes. A setup larger than 64 KiB is refused, and so is one whose private part is above 2560 bytes (section 2).
 
 
 ## 4. Config updates

@@ -235,7 +235,7 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 		clear(rec.Secret)
 		if err := s.checkWholeKey(pk, &sec); err != nil {
 			clear(sec[:])
-			errs = append(errs, fmt.Errorf("%s: %w", k, err))
+			errs = append(errs, fmt.Errorf("%s: %w; the record stays in the store and is not loaded: remove it (a handover from this runner refuses until then)", k, err))
 			continue
 		}
 		s.Hooks.ExpectRecord(pk)
@@ -860,14 +860,16 @@ func (s *Server) checkShare(pk backend.Pubkey, secret *[32]byte, keys []backend.
 	return s.checkWholeKeyOf(pk, got)
 }
 
-// checkWholeKey refuses, under a setup with signing_mode = single, a key
-// whose public key is not the validator key pk: such a signer holds whole
-// keys only, never a share of a split. The sealed import reaches the same
-// result through checkSplit (t = n = 1, so share_pubkey is commitment 0,
-// the validator key); this check covers every way a key is stored or
-// loaded (a handover import, a restart).
+// checkWholeKey checks a key against the setup's signing_mode. Under
+// signing_mode = single it refuses a key whose public key is not the
+// validator key pk: such a signer holds whole keys only. Under
+// signing_mode = threshold it refuses a key whose public key is pk: such
+// a signer holds shares of splits only, and a share equal to the whole
+// key comes from a degenerate split (for an honest one the chance is
+// about 1 in r). It runs wherever a key is stored or loaded: the sealed
+// import, the handover import, the debug plain import and a restart.
 func (s *Server) checkWholeKey(pk backend.Pubkey, secret *[32]byte) error {
-	if !s.singleMode() {
+	if s.Updates == nil {
 		return nil
 	}
 	got, err := core.PubkeyOf(*secret)
@@ -880,16 +882,18 @@ func (s *Server) checkWholeKey(pk backend.Pubkey, secret *[32]byte) error {
 // checkWholeKeyOf is checkWholeKey for a key whose public key got is
 // known already.
 func (s *Server) checkWholeKeyOf(pk, got backend.Pubkey) error {
-	if s.singleMode() && got != pk {
+	if s.Updates == nil {
+		return nil
+	}
+	switch single := s.Updates.SetupWire().SigningMode == setupwire.SigningModeSingle; {
+	case single && got != pk:
 		return backend.Refused(backend.StatusBadKey, "the setup says signing_mode = single, so this signer holds whole keys only: the key is not the validator key %s",
+			pk.String()[:18])
+	case !single && got == pk:
+		return backend.Refused(backend.StatusBadKey, "the setup says signing_mode = threshold, so this signer holds shares of splits only: the key is the whole validator key %s",
 			pk.String()[:18])
 	}
 	return nil
-}
-
-// singleMode reports whether this runner's setup says signing_mode = single.
-func (s *Server) singleMode() bool {
-	return s.Updates != nil && s.Updates.SetupWire().SigningMode == setupwire.SigningModeSingle
 }
 
 // sealRecord seals a share record for the store.

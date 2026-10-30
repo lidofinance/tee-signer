@@ -650,8 +650,7 @@ func TestHandoverImportNeedsAnEmptyTarget(t *testing.T) {
 
 	// A key imported before.
 	e := newShareTgtEnv(t, "dev", nil)
-	sk, _ := software.NewSecret()
-	pk, _ := core.PubkeyOf(sk)
+	sk, pk := newSecret(t), newPubkey(t) // a share of the validator pk
 	if _, err := e.srv.addShare(pk, &sk, 1, nil, "sealed"); err != nil {
 		t.Fatal(err)
 	}

@@ -285,7 +285,7 @@ key_origin: reserved[4] imported_keys:u32 reserved[32]
 ```
 
 - `setup_hash`: SHA-256 over the context `signer-setup-v1`, `policy_root`
-  and `platform_commitment` (setup format 1, `attestation-verify/docs/attestation-statement.md`).
+  and `platform_commitment` (setup format 2, `attestation-verify/docs/attestation-statement.md`).
   A runner without a setup (the flag path of tests and local runners) puts the SHA-256 of its `-config` file here and zeros in the
   rest.
 - Per group, the state in force: the active version and the hash of the
@@ -357,12 +357,17 @@ so: `signing_mode`, a leaf of the public part of the setup (setup format
 t = n = 1 only and refuses any share of a split with n > 1; a
 threshold-mode runner refuses t = n = 1 and applies the threshold rule
 (2t > n, and 2t - n >= 2 on mainnet) to every other split. Both
-refusals are `BAD_KEY` and name the setup's mode. A single-mode runner
-also refuses to store a key whose public key is not the validator key, on
-every import path (sealed, handover, the debug plain import), with
-`BAD_KEY`, and does not load such a key at restart: the record stays in
-the store, the key is not loaded, the start goes on and logs "some stored
-shares did not load" with the key's name. Single mode is allowed
+refusals are `BAD_KEY` and name the setup's mode. The runner also checks
+each key against the mode on every import path (sealed, handover, the
+debug plain import) and at restart: a single-mode runner refuses a key
+whose public key is not the validator key, a threshold-mode runner one
+whose public key is the validator key (a share of a degenerate split is
+the whole key). An import is refused with `BAD_KEY`, and so is a split
+with a commitment at the point at infinity. At restart the record stays
+in the store, the key is not loaded, the start goes on and logs "some
+stored shares did not load" with the key's name and a request to remove
+the record; a handover from this runner refuses until it is removed,
+because the stored and loaded key sets differ. Single mode is allowed
 on every chain, mainnet included, on AWS and Azure. A handover keeps the
 mode: the source refuses a target whose published `signing_mode` differs
 from its own, as it refuses any other public value that differs.
@@ -401,7 +406,8 @@ single-node signer is not a split, so the mainnet overlap rule
 Tests: TestThresholdOn, TestSigningMode, TestSigningModeAcceptance,
 TestSampleSigningModes, TestUnsafeSingleKeyAccepted (setupwire),
 TestImportSigningMode, TestImportSampleSigningModes,
-TestSingleModeRefusesAnotherKey, TestHealthSingleKey,
+TestSingleModeRefusesAnotherKey, TestThresholdModeRefusesAWholeKey,
+TestImportDegenerateSplit, TestHealthSingleKey,
 TestHandoverKeepsSigningMode (tee-signer/server),
 TestImportDraftSigningMode,
 TestSetupSingleSignerOnEveryPlatform, TestSetupAllowGCPSingleFlagScope,
