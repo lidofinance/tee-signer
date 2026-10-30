@@ -210,22 +210,6 @@ static void registration_go(const char *dir)
 
 /* ---- built inputs ---------------------------------------------------------- */
 
-static void records(void)
-{
-    uint8_t enc[SC_REPEAT_ROOTS_ENCODED_LEN];
-    char name[32];
-
-    for (uint32_t flags = 0; flags < 4; flags++) {
-        sc_repeat_roots r;
-        r.flags = flags;
-        memset(r.attestation_root, 0x5a + (int)flags, 32);
-        memset(r.block_root, 0xa5 - (int)flags, 32);
-        sc_repeat_roots_encode(&r, enc);
-        snprintf(name, sizeof name, "rr-%u", flags);
-        put("repeat_roots", name, enc, SC_REPEAT_ROOTS_ENCODED_LEN);
-    }
-}
-
 /* As tests/test_unit.c contribution_ssz, behind a preset byte. */
 static void contributions(void)
 {
@@ -354,7 +338,7 @@ static size_t op_block(uint8_t *in, size_t n, int op, int v, const uint8_t *args
 
 static void signer_seeds(void)
 {
-    static const uint8_t flag_sets[] = {0, F_PERSIST, F_DEVICE, F_DEVICE | F_PERSIST | F_VERIFY};
+    static const uint8_t flag_sets[] = {0, F_VERIFY, F_DEVICE, F_DEVICE | F_VERIFY};
     static const uint8_t add[] = {0}, gloas[] = {0x40, 20}, next[] = {0x40, 1};
     for (size_t fs = 0; fs < sizeof flag_sets; fs++) {
         for (int op = 0; op < OP_COUNT; op++) {
@@ -398,7 +382,6 @@ int main(int argc, char **argv)
     gloas_go(argv[2]);
     builder_auth_go(argv[2]);
     registration_go(argv[2]);
-    records();
     contributions();
     aggregates();
     if (bls_vectors(argv[4], 0) == 0) {

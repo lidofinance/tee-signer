@@ -94,9 +94,7 @@ sc_host_ops ops = { .ctx = ctx, .now = now,
                     /* cfg.mark_scope = SC_MARKS_PER_VALIDATOR */
                     .load_watermark = load_wm, .store_watermark = store_wm,
                     /* cfg.mark_scope = SC_MARKS_PER_DEVICE */
-                    .load_device_mark = load_dev, .store_device_mark = store_dev,
-                    /* cfg.persist_repeat_root = 1 */
-                    .load_repeat_roots = load_rr, .store_repeat_roots = store_rr };
+                    .load_device_mark = load_dev, .store_device_mark = store_dev };
 sc_signer *s;
 sc_signer_init(mem, need, max_validators, hash_cache_entries, &cfg, &ops, &s);
 sc_signer_add_validator(s, validator_pubkey, share_secret, validator_index, share_pubkey_out);
@@ -143,7 +141,7 @@ that key; the signature is then a partial signature that verifies under
 `share_pubkey_out`. `tests/test_unit.c` (`make_config`, `new_signer`,
 `host_ops`) shows a full config and host callbacks. `sc_signer_init`
 refuses a config whose callbacks are missing: a host sets only the ones its
-`mark_scope` and `persist_repeat_root` need.
+`mark_scope` needs.
 
 Lower layers are public too, so a TA or host can reuse them:
 `sc_htr_*`, `sc_ssz_encode_*` / `sc_ssz_decode_*`, `sc_compute_domain`,
@@ -172,7 +170,7 @@ These are the `sc_slashing_*` rules, and there an exact repeat is refused
 too: the EIP-3076 tests expect that from a minimal strategy. The signer
 (`sc_sign_attestation`, `sc_sign_block`) adds exact repeats on top, below.
 
-### Exact repeats and `persist_repeat_root`
+### Exact repeats
 
 The signer keeps the signing root of each validator's last attestation and
 last block (`sc_repeat_roots`). A request with one of these roots is signed
@@ -181,22 +179,16 @@ same signature, and no new slashable message exists. Policy checks still
 run. Only those two roots qualify; an older vote, or another message at the
 same target or slot, goes through the slashing rules and is refused.
 
-`cfg.persist_repeat_root` decides whether the roots survive a restart:
+The roots live in RAM only and cost no write. `sc_signer_add_validator`
+starts a validator with none, and `sc_signer_import` drops them, so after a
+restart, a new load or an import the marks refuse the repeat. A validator
+client retry right after a restart fails; that is the accepted cost.
 
-| Setting | Writes | After a restart | Backend default |
-| --- | --- | --- | --- |
-| 0 | none for repeats | the marks refuse the repeat (a validator client retry right after a restart fails, the accepted cost) | OP-TEE board TA (the only value it accepts, invariant 4); cloud runner by default |
-| 1 | `store_repeat_roots` before every new attestation or block: one write per vote | `load_repeat_roots` with the validator; the repeat signs | cloud runner with `-persist-repeat-root` |
-
-With 1, the floor and any other refusal still apply to every message that
-is not an exact repeat of the stored root. A failed root write does not
-refuse the vote: the root stays in RAM and a repeat after a restart is then
-refused, the safe direction. A rolled-back root record only holds an older
-root that the validator signed. The host must bind each record to its
-pubkey (storage key or authenticated data): validators of one committee sign
-the same attestation root, so a root moved to another validator would let it
-sign a vote it never cast. `sc_repeat_roots_encode` / `decode` give a fixed
-72-byte record.
+Earlier versions could store the roots through the host
+(`persist_repeat_root`, `load_repeat_roots` / `store_repeat_roots`). That
+saved one retry after a restart, but a host can roll back any record it
+keeps, and an old root record would then sign again below the marks or
+against imported history. The option is gone.
 
 ### Commit ahead
 
@@ -386,7 +378,7 @@ validator, `sc_slashing_cover_device` per device, one write); after a restart
 both kinds start from it. With per-device marks the first vote of an epoch
 already moves the block bound to the end of the commit-ahead window, so a
 device that votes every epoch writes nothing more for Gloas. Their exact
-repeat roots stay in RAM, also with `persist_repeat_root` 1, so a repeat
+repeat roots stay in RAM, as all repeat roots do, so a repeat
 right after a restart is refused and the other signers of the threshold sign
 it. The envelope's block binding also lives in RAM: after a restart between
 a block and its envelope, this node refuses the envelope.
@@ -420,8 +412,8 @@ URLs are in `scripts/common.sh`.
 | `test_unit` Gloas part | `tests/data/gloas_go.txt` from `tools/xcheck-gloas` (go-eth2-client v0.30.3, `scripts/xcheck-gloas.sh` regenerates and compares) | PayloadAttestationData, ProposerPreferences and full ExecutionPayloadEnvelope roots; progressive merkleization by hand; fork gate, equivocation, exact repeats, envelope block binding, preference policy, restart from the block bound with both mark scopes. |
 | `test_bls_sign` | consensus-spec-tests general/phase0/bls/sign | Signature bytes equal, verify passes, cached hash path gives the same bytes; zero key refused. |
 | `test_eip3076` | slashing-protection-interchange-tests | All 38 tests, using `should_succeed` (the minimal-strategy field), in four modes: no window, window, restart before every op, window plus restart. |
-| `test_unit` | this repo | Builder domain known answer, ValidatorRegistrationV1 against go-builder-client, policy refusals, policy replacement with `sc_signer_set_policy`, fork schedule updates with `sc_signer_set_schedule` (the epoch limit, `activate_at`, started forks, Gloas state, saturation), slot time changes (`sc_slot_at` piece by piece, the value rules, the clock horizon of `sc_signer_init_ext`, the rule of `sc_signer_set_slot_times`), marks that refuse a vote and a block signed again under another fork version, commit-ahead write counts, restart behaviour, storage failure, import, cache hits, validator table errors, fork version selection, exact repeats in one run and across a restart with `persist_repeat_root` 0 and 1 (both mark scopes), failing and corrupt root records, per-device marks, `sc_signer_cover_epoch`, write counts for 1, 16 and 1,000 keys with both settings, and randomized restart-safety property tests for per-validator and per-device marks. |
-| fuzz targets | `fuzz/`, seeds from the vectors above | One target per decoder entry point with ASan and UBSan: SSZ decoders, stored mark and repeat root records, AggregateAndProof (all forms) and ContributionAndProof against a second merkleization, BuilderRequestAuth, BLS inputs, config and update readers, and the signer driven through every request kind with a slashing-safety oracle. `scripts/test.sh` runs 5 s per target; `scripts/fuzz.sh long` runs 30 min (fuzz/README.md). |
+| `test_unit` | this repo | Builder domain known answer, ValidatorRegistrationV1 against go-builder-client, policy refusals, policy replacement with `sc_signer_set_policy`, fork schedule updates with `sc_signer_set_schedule` (the epoch limit, `activate_at`, started forks, Gloas state, saturation), slot time changes (`sc_slot_at` piece by piece, the value rules, the clock horizon of `sc_signer_init_ext`, the rule of `sc_signer_set_slot_times`), marks that refuse a vote and a block signed again under another fork version, commit-ahead write counts, restart behaviour, import, cache hits, validator table errors, fork version selection, exact repeats in one run and across a restart with `persist_repeat_root` 0 and 1 (both mark scopes), failing and corrupt root records, per-device marks, `sc_signer_cover_epoch`, write counts for 1, 16 and 1,000 keys with both settings, and randomized restart-safety property tests for per-validator and per-device marks. |
+| fuzz targets | `fuzz/`, seeds from the vectors above | One target per decoder entry point with ASan and UBSan: SSZ decoders, stored mark records, AggregateAndProof (all forms) and ContributionAndProof against a second merkleization, BuilderRequestAuth, BLS inputs, config and update readers, and the signer driven through every request kind with a slashing-safety oracle. `scripts/test.sh` runs 5 s per target; `scripts/fuzz.sh long` runs 30 min (fuzz/README.md). |
 
 ValidatorRegistrationV1 is a builder-specs container, so consensus-spec-tests
 has no vectors for it. `tests/data/registration_go.txt` holds 64 registrations

@@ -1,6 +1,6 @@
 /*
  * The signer as the runner drives it over cgo: a config, validators with
- * their stored marks and repeat roots, and a stream of requests of every
+ * their stored marks, and a stream of requests of every
  * kind (1 to 14 on the wire, plus import, policy, schedule and slot time
  * updates, restarts and storage or clock failures).
  *
@@ -16,8 +16,7 @@
  *  - with flag F_VERIFY, attestation and block signatures verify under the
  *    share key over the signing root sc_signer_signing_root gives.
  * Stored records only change through the core, so rollback is out of scope;
- * preloaded marks and repeat roots come only before a validator's first
- * signature.
+ * preloaded marks come only before a validator's first signature.
  */
 #include "../tests/markformat_host.h"
 #include "base_config.h"
@@ -33,8 +32,6 @@ static uint8_t g_scratch[SC_TYPED_SCRATCH_LEN];
 typedef struct {
     uint8_t enc[SC_WATERMARK_ENCODED_LEN];
     int has_wm;
-    uint8_t rr[SC_REPEAT_ROOTS_ENCODED_LEN];
-    int has_rr;
 } record_t;
 
 typedef struct {
@@ -45,7 +42,7 @@ typedef struct {
     uint8_t fail; /* FAIL_* bits */
 } host_t;
 
-enum { FAIL_STORE = 1, FAIL_CLOCK = 2, FAIL_LOAD = 4, FAIL_ROOTS = 8, FAIL_DEVICE = 16 };
+enum { FAIL_STORE = 1, FAIL_CLOCK = 2, FAIL_LOAD = 4, FAIL_DEVICE = 16 };
 
 typedef struct {
     uint64_t a, b; /* attestation: source, target; others: slot */
@@ -150,31 +147,6 @@ static int h_store_dev(void *ctx, const sc_watermark *wm)
     return SC_OK;
 }
 
-static int h_load_rr(void *ctx, const uint8_t pk[48], sc_repeat_roots *out)
-{
-    host_t *h = ctx;
-    int i = key_of(pk);
-    FUZZ_CHECK(i >= 0);
-    if (h->fail & FAIL_LOAD)
-        return SC_ERR_STORAGE;
-    if (!h->rec[i].has_rr)
-        return SC_ERR_UNKNOWN_VALIDATOR;
-    return sc_repeat_roots_decode(h->rec[i].rr, sizeof h->rec[i].rr, out) == SC_OK ? SC_OK
-                                                                                 : SC_ERR_STORAGE;
-}
-
-static int h_store_rr(void *ctx, const uint8_t pk[48], const sc_repeat_roots *r)
-{
-    host_t *h = ctx;
-    int i = key_of(pk);
-    FUZZ_CHECK(i >= 0);
-    if (h->fail & FAIL_ROOTS)
-        return SC_ERR_STORAGE;
-    sc_repeat_roots_encode(r, h->rec[i].rr);
-    h->rec[i].has_rr = 1;
-    return SC_OK;
-}
-
 /* ---- signer lifecycle ---------------------------------------------------- */
 
 static int start_signer(void)
@@ -184,9 +156,7 @@ static int start_signer(void)
                        .load_watermark = h_load,
                        .store_watermark = h_store,
                        .load_device_mark = h_load_dev,
-                       .store_device_mark = h_store_dev,
-                       .load_repeat_roots = h_load_rr,
-                       .store_repeat_roots = h_store_rr};
+                       .store_device_mark = h_store_dev};
     size_t need = sc_signer_mem_size(W.maxv, W.cache);
     int rc;
     FUZZ_CHECK(need > 0);
@@ -748,7 +718,6 @@ static void op_query(fz_in *in, int v)
 
 static void op_preload(fz_in *in, int v, int what)
 {
-    uint8_t rec[SC_REPEAT_ROOTS_ENCODED_LEN];
     if (W.loaded[v])
         return;
     if (what == OP_PRELOAD_DEVICE) {
@@ -758,15 +727,6 @@ static void op_preload(fz_in *in, int v, int what)
             if (W.loaded[i])
                 return; /* the core reads the device mark with the first validator */
     } else if (W.signed_any[v]) {
-        return;
-    }
-    if (what == OP_PRELOAD_ROOTS) {
-        /* Header bytes from the input; the roots never match a real signing
-         * root, since a forged repeat root is a rollback (out of scope). */
-        memset(rec, 0xee, sizeof rec);
-        fz_bytes(in, rec, 8);
-        memcpy(W.host.rec[v].rr, rec, sizeof rec);
-        W.host.rec[v].has_rr = fz_u8(in) & 1;
         return;
     }
     {
@@ -827,7 +787,6 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
         W.host.now = FZ_GENESIS_TIME + FZ_E * FZ_EPOCH_SECONDS + fz_u8(&h);
         fz_base_config(&W.cfg0);
         W.cfg0.mark_scope = flags & F_DEVICE ? SC_MARKS_PER_DEVICE : SC_MARKS_PER_VALIDATOR;
-        W.cfg0.persist_repeat_root = flags & F_PERSIST ? 1 : 0;
         if (flags & F_NO_GLOAS)
             W.cfg0.gloas_scheduled = 0;
         W.verify = flags & F_VERIFY ? 1 : 0;
@@ -874,8 +833,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
         case OP_RESTART: restart(); break;
         case OP_FAIL: W.host.fail = fz_u8(&a) & 0x1f; break;
         case OP_PRELOAD_MARK:
-        case OP_PRELOAD_DEVICE:
-        case OP_PRELOAD_ROOTS: op_preload(&a, v, op); break;
+        case OP_PRELOAD_DEVICE: op_preload(&a, v, op); break;
         case OP_ATTESTATION: op_attestation(&a, v); break;
         case OP_BLOCK: op_block(&a, v); break;
         case OP_RANDAO: {

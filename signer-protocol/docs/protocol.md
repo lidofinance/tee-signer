@@ -264,9 +264,7 @@ the clock and the epoch horizon), then the core signs the same root
 again (BLS is deterministic, so the signature is the same) without the
 slashing check and without a watermark or record write. Anything else at that target or
 slot is refused by the slashing rules, and so is a repeat of an older
-message. With `-persist-repeat-root` (off by default) the runner seals the last roots per
-validator in the platform store, so the repeat also signs after a
-restart; off, they live in RAM and the restart floor refuses the first
+message. The roots live in RAM, so the restart floor refuses the first
 repeat after a restart.
 
 ### Setup state

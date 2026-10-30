@@ -327,7 +327,7 @@ func TestResponses(t *testing.T) {
 // without them (a backend without counters) still decodes, with no stats.
 func TestHealthStatsRoundTrip(t *testing.T) {
 	in := &backend.Health{Platform: "dev", Validators: 3, Stats: &backend.SignerStats{
-		Signatures: 10, HashCacheHits: 7, HashCacheMisses: 3, WatermarkWrites: 2, RepeatRootWrites: 4,
+		Signatures: 10, HashCacheHits: 7, HashCacheMisses: 3, WatermarkWrites: 2, ExactRepeats: 4,
 	}}
 	b, err := EncodeHealth(in)
 	if err != nil {

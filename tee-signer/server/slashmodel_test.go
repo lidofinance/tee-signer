@@ -38,8 +38,7 @@ import (
 //
 // FuzzSlashingModel takes the operations as bytes; TestSlashingModel runs
 // seeded sequences (SLASHMODEL_SEED picks one seed, SLASHMODEL_RUNS the
-// number of seeds, SLASHMODEL_OPS the length). Even seeds, and fuzz inputs
-// of even length, run with persisted repeat roots.
+// number of seeds, SLASHMODEL_OPS the length).
 
 // faultLog makes the next Create fail before it applies (failNext) or
 // apply and then fail (dropNext), as wormfake's fault plan does over HTTP.
@@ -70,9 +69,8 @@ type modelRunner struct {
 
 // startRunner starts a runner on base's setup, store, clock and log
 // directory, as tgtEnv.start does, but returns a start error instead of
-// failing the test: a runner that refuses to start signs nothing. roots
-// turns on persisted repeat roots (-persist-repeat-root).
-func startRunner(base *tgtEnv, roots bool) (*modelRunner, error) {
+// failing the test: a runner that refuses to start signs nothing.
+func startRunner(base *tgtEnv) (*modelRunner, error) {
 	r := &modelRunner{e: *base}
 	e := &r.e
 	ms, err := markstore.SetupOf(e.setup, e.hash)
@@ -105,8 +103,7 @@ func startRunner(base *tgtEnv, roots bool) (*modelRunner, error) {
 		return r, err
 	}
 	cfg.DeviceMark = true
-	cfg.PersistRepeatRoot = roots
-	mode := state.Mode{Floor: true, FloorMargin: state.DefaultFloorMargin(cfg), MarkLog: true, RepeatRoots: roots}
+	mode := state.Mode{Floor: true, FloorMargin: state.DefaultFloorMargin(cfg), MarkLog: true}
 	if e.hooks, err = state.New(cfg, mode, e.clock, e.store, e.sealer, quiet); err != nil {
 		return r, err
 	}
@@ -186,15 +183,14 @@ func (o *oracle) block(pk backend.Pubkey, slot uint64, root byte) error {
 }
 
 // runModel runs ops (one byte each, with argument bytes) and fails t on a
-// violation of the oracle, with a trace of the operations. roots: the
-// runners persist repeat roots.
-func runModel(t *testing.T, ops []byte, roots bool) (signed int) {
+// violation of the oracle, with a trace of the operations.
+func runModel(t *testing.T, ops []byte) (signed int) {
 	base := newTgtEnv(t, "dev", nil)
 	base.signer.Close() // the model starts its own runners on the same state
 	const spe = 8
 	e0 := base.signer.EpochAt(base.now())
 	o := &oracle{votes: map[backend.Pubkey][]modelVote{}, blocks: map[backend.Pubkey]map[uint64]byte{}}
-	first, err := startRunner(base, roots)
+	first, err := startRunner(base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +203,7 @@ func runModel(t *testing.T, ops []byte, roots bool) (signed int) {
 	active := 0
 	var keys []modelKey
 	// Votes each key signed, returned or not, in order; and the last one
-	// per runner slot (since its start, or across restarts with roots).
+	// per runner slot since its start.
 	sent := map[backend.Pubkey][]modelVote{}
 	last := map[int]map[backend.Pubkey]modelVote{}
 	var trace []string
@@ -315,10 +311,8 @@ func runModel(t *testing.T, ops []byte, roots bool) (signed int) {
 			trace = append(trace, fmt.Sprintf("clock +%d s", d))
 		case 9: // restart the active runner
 			r.close()
-			if !roots {
-				delete(last, active)
-			}
-			nr, err := startRunner(base, roots)
+			delete(last, active)
+			nr, err := startRunner(base)
 			trace = append(trace, fmt.Sprintf("runner %d: restart: %v", active, err))
 			if nr != nil {
 				runners[active] = nr
@@ -333,7 +327,7 @@ func runModel(t *testing.T, ops []byte, roots bool) (signed int) {
 			if len(runners) >= 3 {
 				continue
 			}
-			nr, err := startRunner(base, roots)
+			nr, err := startRunner(base)
 			trace = append(trace, fmt.Sprintf("clone runner %d: %v", len(runners), err))
 			if nr != nil {
 				runners = append(runners, nr)
@@ -462,7 +456,7 @@ func TestSlashingModel(t *testing.T) {
 	}
 	total := 0
 	for _, seed := range seeds {
-		t.Run(fmt.Sprintf("seed %d", seed), func(t *testing.T) { total += runModel(t, modelOps(seed, n), seed%2 == 0) })
+		t.Run(fmt.Sprintf("seed %d", seed), func(t *testing.T) { total += runModel(t, modelOps(seed, n)) })
 	}
 	// Liveness smoke check: the sequences sign something at all.
 	t.Logf("%d runs of %d operations: %d signatures", len(seeds), n, total)
@@ -479,6 +473,6 @@ func FuzzSlashingModel(f *testing.F) {
 		if len(ops) > 400 {
 			ops = ops[:400]
 		}
-		runModel(t, ops, len(ops)%2 == 0)
+		runModel(t, ops)
 	})
 }

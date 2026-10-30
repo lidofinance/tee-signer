@@ -27,30 +27,6 @@
 
 #define WM_FLAGS_MASK (SC_WM_HAS_BLOCK | SC_WM_HAS_ATTESTATION)
 
-#define REPEAT_FLAGS_MASK (SC_REPEAT_HAS_ATTESTATION | SC_REPEAT_HAS_BLOCK)
-
-static const uint8_t RR_MAGIC[4] = {'S', 'C', 'R', '1'};
-
-void sc_repeat_roots_encode(const sc_repeat_roots *r, uint8_t out[SC_REPEAT_ROOTS_ENCODED_LEN])
-{
-    memcpy(out, RR_MAGIC, 4);
-    out[4] = (uint8_t)(r->flags & REPEAT_FLAGS_MASK);
-    out[5] = out[6] = out[7] = 0;
-    memcpy(out + 8, r->attestation_root, SC_ROOT_LEN);
-    memcpy(out + 8 + SC_ROOT_LEN, r->block_root, SC_ROOT_LEN);
-}
-
-int sc_repeat_roots_decode(const uint8_t *in, size_t len, sc_repeat_roots *out)
-{
-    if (!in || !out || len != SC_REPEAT_ROOTS_ENCODED_LEN || memcmp(in, RR_MAGIC, 4) != 0 ||
-        (in[4] & ~REPEAT_FLAGS_MASK) || in[5] || in[6] || in[7])
-        return SC_ERR_DECODE;
-    out->flags = in[4];
-    memcpy(out->attestation_root, in + 8, SC_ROOT_LEN);
-    memcpy(out->block_root, in + 8 + SC_ROOT_LEN, SC_ROOT_LEN);
-    return SC_OK;
-}
-
 void sc_slashing_restore(sc_slashing_state *st, const sc_watermark *persisted)
 {
     memset(st, 0, sizeof *st);

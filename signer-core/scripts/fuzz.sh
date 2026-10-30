@@ -45,7 +45,7 @@ max_len() {
     aggregate_and_proof) echo 17100 ;;
     builder_request_auth) echo 4200 ;;
     signer) echo 8192 ;;
-    ssz_*|payload_envelope|repeat_roots|contribution_and_proof|bls) echo 1024 ;;
+    ssz_*|payload_envelope|contribution_and_proof|bls) echo 1024 ;;
     *) echo 4096 ;;
   esac
 }

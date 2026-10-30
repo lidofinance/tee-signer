@@ -128,7 +128,6 @@ func run() (err error) {
 		floor         = flag.Bool("restart-floor", true, "on load, refuse everything at or below clock epoch + floor margin")
 		floorMargin   = flag.Int64("floor-margin", -1, "epochs added to the clock epoch for the floor, at least max_epochs_ahead + 1; -1 = max_epochs_ahead + 1")
 		persist       = flag.Bool("persist-watermarks", false, "persist commit-ahead watermarks (safe only on rollback-proof storage)")
-		persistRoots  = flag.Bool("persist-repeat-root", false, "store the roots of each validator's last attestation and block on every vote, so an exact repeat after a restart signs (off by default, as the OP-TEE TA: no store write per vote)")
 		clockKind     = flag.String("clock", "platform", "platform (the platform's default) or https-date")
 		clockURLs     = flag.String("clock-urls", "", "comma-separated https URLs for -clock https-date")
 		clockMin      = flag.Int("clock-min", 0, "answers needed for -clock https-date; 0 = majority")
@@ -278,15 +277,13 @@ func run() (err error) {
 		}
 		cfgHash = sha256.Sum256(raw)
 	}
-	cfg.PersistRepeatRoot = *persistRoots
-
 	margin := state.DefaultFloorMargin(cfg)
 	if *floorMargin >= 0 {
 		margin = uint64(*floorMargin)
 	}
 	markOn := boot.markSpec != "" && boot.markSpec != "none"
 	cfg.DeviceMark = markOn
-	mode := state.Mode{Floor: *floor, Persist: *persist, FloorMargin: margin, RepeatRoots: *persistRoots, MarkLog: markOn}
+	mode := state.Mode{Floor: *floor, Persist: *persist, FloorMargin: margin, MarkLog: markOn}
 	hooks, err := state.New(cfg, mode, plat.Clock, plat.Store, plat.Sealer, log)
 	if err != nil {
 		return err
@@ -407,7 +404,7 @@ func run() (err error) {
 	}
 	log.Info("runner started", "platform", plat.Name, "version", server.Version, "config_sha256", fmt.Sprintf("%x", cfgHash),
 		"setup", boot.setup != nil,
-		"restart_mode", mode.String(), "floor_margin", margin, "persist_repeat_root", cfg.PersistRepeatRoot,
+		"restart_mode", mode.String(), "floor_margin", margin,
 		"clock", plat.Clock.Source(), "clock_trusted", plat.Clock.Trusted(),
 		"record", hooks.GuardStatus(), "state_copy", copyStore.status(), "shares_loaded", n, "plaintext_import", plainImportStatus(), "sealed_import", *sealedImport,
 		"tls_key_sha256", fmt.Sprintf("%x", srv.TLSKeyHash), "image_check", imageState,

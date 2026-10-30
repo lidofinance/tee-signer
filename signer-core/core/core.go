@@ -51,21 +51,6 @@ type Hooks interface {
 	Now() (uint64, error)
 }
 
-// RepeatRootHooks store the roots of each validator's last attestation and
-// block (the core's sc_repeat_roots, in its 72-byte encoding). Hooks must
-// implement them when Config.PersistRepeatRoot is set; the core then writes
-// the record before every new attestation or block and loads it with the
-// validator, so an exact repeat after a restart signs. The store must bind
-// each record to its pubkey: validators of one committee sign the same
-// attestation root, so a record moved to another validator would let that
-// validator sign a vote it never cast.
-type RepeatRootHooks interface {
-	// LoadRepeatRoots returns the stored record; found=false: none.
-	LoadRepeatRoots(pubkey backend.Pubkey) (rec []byte, found bool, err error)
-	// StoreRepeatRoots must return nil only once rec is durable.
-	StoreRepeatRoots(pubkey backend.Pubkey, rec []byte) error
-}
-
 // DeviceMarkHooks keep one mark for every validator of the signer (the
 // core's SC_MARKS_PER_DEVICE). Hooks must implement them when
 // Config.DeviceMark is set. LoadDeviceMark returns the mark to start from;
@@ -91,12 +76,11 @@ type SlashingState struct {
 
 // Stats are the core's counters.
 type Stats struct {
-	Signatures       uint64 `json:"signatures"`
-	HashCacheHits    uint64 `json:"hash_cache_hits"`
-	HashCacheMisses  uint64 `json:"hash_cache_misses"`
-	WatermarkWrites  uint64 `json:"watermark_writes"`
-	ExactRepeats     uint64 `json:"exact_repeats"`
-	RepeatRootWrites uint64 `json:"repeat_root_writes"`
+	Signatures      uint64 `json:"signatures"`
+	HashCacheHits   uint64 `json:"hash_cache_hits"`
+	HashCacheMisses uint64 `json:"hash_cache_misses"`
+	WatermarkWrites uint64 `json:"watermark_writes"`
+	ExactRepeats    uint64 `json:"exact_repeats"`
 	// UnverifiedSignatures counts bare roots of types 2 to 6 signed
 	// through allow_unverified_nonslashable.
 	UnverifiedSignatures uint64 `json:"unverified_signatures"`
@@ -152,9 +136,6 @@ func NewSigner(cfg Config, maxValidators, cacheEntries uint32, hooks Hooks) (*Si
 	}
 	if _, ok := hooks.(DeviceMarkHooks); cfg.DeviceMark && !ok {
 		return nil, errors.New("core: a device mark needs hooks that keep one")
-	}
-	if _, ok := hooks.(RepeatRootHooks); cfg.PersistRepeatRoot && !ok {
-		return nil, errors.New("core: persist_repeat_root needs hooks that store repeat roots")
 	}
 	need := C.sc_signer_mem_size(C.uint32_t(maxValidators), C.uint32_t(cacheEntries))
 	if need == 0 {
@@ -226,10 +207,6 @@ func fillConfig(cc *C.sc_config, c *Config) {
 	cc.mark_scope = C.SC_MARKS_PER_VALIDATOR
 	if c.DeviceMark {
 		cc.mark_scope = C.SC_MARKS_PER_DEVICE
-	}
-	cc.persist_repeat_root = 0
-	if c.PersistRepeatRoot {
-		cc.persist_repeat_root = 1
 	}
 	if c.GloasForkEpoch != nil {
 		cc.gloas_scheduled = 1
@@ -597,7 +574,7 @@ func (s *Signer) statsLocked() Stats {
 	var st C.sc_signer_stats
 	C.sc_signer_get_stats(s.s, &st)
 	return Stats{uint64(st.signatures), uint64(st.hash_cache_hits), uint64(st.hash_cache_misses),
-		uint64(st.watermark_writes), uint64(st.exact_repeats), uint64(st.repeat_root_writes), s.unverified}
+		uint64(st.watermark_writes), uint64(st.exact_repeats), s.unverified}
 }
 
 // Sign signs one message through slashing protection and policy.
@@ -611,8 +588,7 @@ func (s *Signer) Sign(req backend.SignRequest) (backend.Signature, error) {
 // decides that (sc_repeat_roots): the same signing root as the last one, so
 // the same deterministic BLS signature, signed again without the slashing
 // check; policy checks still run. Anything else at that target or slot is
-// refused there. With Config.PersistRepeatRoot the roots survive a restart
-// through RepeatRootHooks; without it they live in this process only.
+// refused there. The roots live in this process only.
 func (s *Signer) SignDetailed(req backend.SignRequest) (backend.Signature, bool, error) {
 	return s.signGuarded(req, nil)
 }
@@ -876,15 +852,6 @@ func fromC(c C.sc_watermark) backend.Watermark {
 		HasBlock:       c.flags&C.SC_WM_HAS_BLOCK != 0,
 		HasAttestation: c.flags&C.SC_WM_HAS_ATTESTATION != 0,
 	}
-}
-
-// NoRepeatRoots is the RepeatRootHooks record of a validator with no
-// repeat roots: an exact repeat of nothing signs.
-func NoRepeatRoots() []byte {
-	var r C.sc_repeat_roots
-	out := make([]byte, C.SC_REPEAT_ROOTS_ENCODED_LEN)
-	C.sc_repeat_roots_encode(&r, u8(out))
-	return out
 }
 
 // StatusName returns the core's name for a status code (sc_status_name).

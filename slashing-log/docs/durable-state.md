@@ -31,20 +31,13 @@ The platform store (`-state-dir`) holds, by prefix:
 | `sealing/` | the sealing data key, wrapped by key release (Azure: RSA-OAEP to the released Key Vault key; GCP: Cloud KMS) | yes |
 | `shares/` | the sealed shares | yes |
 | `mark-hint/` | the mark log's hint, written with every record | no |
-| `rr/` | repeat roots, written with every vote | no |
+| `rr/` | repeat roots of builds with `-persist-repeat-root` (removed); never read, can be deleted | no |
 | `wm/` | persisted marks (not used with the mark log) | no |
 
-Without the hint a restart compares nothing; without the repeat
-roots an exact repeat after the restart is refused. Neither is a safety
-loss, and both change on every vote, so a copy of them would cost a write
-per vote.
-
-The repeat roots go to the local store only. With `-persist-repeat-root`
-(off by default) the runner writes them on every vote
-(`state.Hooks.StoreRepeatRoots`)
-through the same store, but `statestore.Durable` is false for `rr/`, so `Put`
-writes no object (`TestPerVoteKeysStayLocal`). That is one local write with
-an fsync per vote, and no upload.
+Without the hint a restart compares nothing. That is no safety loss, and
+the hint changes on every mark record, so a copy of it would cost a write
+per record. `statestore.Durable` is false for `mark-hint/`, so `Put` writes
+no object (`TestPerVoteKeysStayLocal`).
 
 AWS keeps its store on the parent instance through the host agent; it
 survives an enclave restart, so the AWS build does not call the copy (the
@@ -450,7 +443,7 @@ CCE policy hash or the image digest.
   upload per batch flat, every object under 1 MiB, one small change one
   small object (`TestWriteCostPerSessionIsFlat`); a lost
   chunk (fallback to an older commit, then refusal); a delete finished at
-  start; repeat roots and hints never uploaded; refresh compacting.
+  start; hints never uploaded; refresh compacting.
 - `platform/filestore`: `PutMany`, `Delete`, `List` by folder.
 - `slashing-log` `TestHandOverTombstone`, `TestUntargetedTombstone`,
   `TestAppendMerges`; `tee-signer/handover` and the handover tests of
@@ -466,8 +459,7 @@ CCE policy hash or the image digest.
 - `attestation-verify/runnerclient` `TestE2EAzureRunnerDurable`: the Azure debug build
   with fake SNP, MAA and Key Vault; the file system lost and restored.
 - Fuzzer (threshold-signer-poc `signer-core/sim`): `OP_WIPE` covers the restored
-  share (the copy holds neither hint nor repeat roots, which the event
-  wipes); `OP_HANDOVER` hands a signer over to a new instance with a log of
+  share (the copy does not hold the hint, which the event wipes); `OP_HANDOVER` hands a signer over to a new instance with a log of
   its own, the old one staying up in the clone slot. Negative controls:
   handover with the tombstone 0 violations, with the old log left open
   violations.

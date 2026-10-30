@@ -4,7 +4,6 @@
 
 /* Header byte 0. */
 #define F_DEVICE 0x01     /* SC_MARKS_PER_DEVICE */
-#define F_PERSIST 0x02    /* persist_repeat_root = 1 */
 #define F_NO_GLOAS 0x04   /* gloas_scheduled = 0 */
 #define F_VERIFY 0x08     /* verify attestation and block signatures */
 #define F_SLOT_TIMES 0x10 /* slot time changes follow the patches */
@@ -20,7 +19,6 @@ enum {
     OP_FAIL,
     OP_PRELOAD_MARK,
     OP_PRELOAD_DEVICE,
-    OP_PRELOAD_ROOTS,
     OP_ATTESTATION,    /* kind 1 */
     OP_BLOCK,          /* kind 2 */
     OP_EXIT,           /* kind 3 */

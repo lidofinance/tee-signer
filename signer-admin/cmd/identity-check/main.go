@@ -20,8 +20,8 @@
 // -gcp-image-digest replaces the expected digest, to see a refusal for a
 // wrong image. -health asks HEALTH once more on a verified connection and
 // prints the answer as JSON: clock, number of keys and the signer core's
-// counters (signatures, hash-to-curve cache hits and misses, watermark and
-// repeat-root writes). The exit status is 0 only if every run was accepted.
+// counters (signatures, hash-to-curve cache hits and misses, watermark
+// writes, exact repeats). The exit status is 0 only if every run was accepted.
 package main
 
 import (

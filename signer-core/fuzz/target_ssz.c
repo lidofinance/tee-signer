@@ -66,11 +66,6 @@
 #define DEC sc_decode_payload_envelope
 #define ENC sc_encode_payload_envelope
 #define HTR sc_htr_payload_envelope
-#elif defined(T_REPEAT_ROOTS)
-#define TYPE sc_repeat_roots
-#define LEN SC_REPEAT_ROOTS_ENCODED_LEN
-#define DEC sc_repeat_roots_decode
-#define ENC sc_repeat_roots_encode
 #else
 #error "define one T_<NAME>"
 #endif

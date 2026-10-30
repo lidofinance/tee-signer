@@ -1,34 +1,25 @@
 package software
 
 import (
-	"errors"
 	"sync"
 	"time"
 
-	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
-var errStoreFailed = errors.New("memhooks: store failed (FailRoots)")
-
-// MemHooks keeps watermarks and repeat roots in memory and reads the system
+// MemHooks keeps watermarks in memory and reads the system
 // clock unless Clock is set. For tests and the software backend only:
 // nothing survives the process, unless a test hands the same MemHooks to a
 // second Signer to play a restart.
 type MemHooks struct {
-	mu         sync.Mutex
-	marks      map[backend.Pubkey]backend.Watermark
-	roots      map[backend.Pubkey][]byte
-	Writes     int // watermark writes
-	RootWrites int // repeat root writes
-	FailRoots  bool
-	Clock      func() (uint64, error)
+	mu     sync.Mutex
+	marks  map[backend.Pubkey]backend.Watermark
+	Writes int // watermark writes
+	Clock  func() (uint64, error)
 }
 
-var _ core.RepeatRootHooks = (*MemHooks)(nil)
-
 func NewMemHooks() *MemHooks {
-	return &MemHooks{marks: map[backend.Pubkey]backend.Watermark{}, roots: map[backend.Pubkey][]byte{}}
+	return &MemHooks{marks: map[backend.Pubkey]backend.Watermark{}}
 }
 
 func (m *MemHooks) LoadWatermark(pk backend.Pubkey) (backend.Watermark, bool, error) {
@@ -43,24 +34,6 @@ func (m *MemHooks) StoreWatermark(pk backend.Pubkey, wm backend.Watermark) error
 	defer m.mu.Unlock()
 	m.marks[pk] = wm
 	m.Writes++
-	return nil
-}
-
-func (m *MemHooks) LoadRepeatRoots(pk backend.Pubkey) ([]byte, bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	rec, ok := m.roots[pk]
-	return append([]byte(nil), rec...), ok, nil
-}
-
-func (m *MemHooks) StoreRepeatRoots(pk backend.Pubkey, rec []byte) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.FailRoots {
-		return errStoreFailed
-	}
-	m.roots[pk] = append([]byte(nil), rec...)
-	m.RootWrites++
 	return nil
 }
 

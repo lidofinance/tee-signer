@@ -14,24 +14,21 @@
 
 /* ---- fake host ---------------------------------------------------------- */
 
-/* Per validator: the encoded mark and the encoded repeat roots, each only
- * once written. One device mark. Writes are counted per kind. */
+/* Per validator: the encoded mark, only once written. One device mark.
+ * Mark writes are counted. */
 #define HOST_MAX 512
 typedef struct {
     struct {
         uint8_t pk[48];
         uint8_t enc[SC_WATERMARK_ENCODED_LEN];
         int has_wm;
-        uint8_t rr[SC_REPEAT_ROOTS_ENCODED_LEN];
-        int has_rr;
     } rec[HOST_MAX];
     int n;
     uint8_t device[SC_WATERMARK_ENCODED_LEN];
     int has_device;
     uint64_t now;
-    int fail_store, fail_clock, fail_load, fail_roots;
-    int writes;      /* mark writes, per validator or device */
-    int root_writes; /* repeat root writes */
+    int fail_store, fail_clock, fail_load;
+    int writes; /* mark writes, per validator or device */
 } host_t;
 
 static int h_find(host_t *h, const uint8_t pk[48], int create)
@@ -102,31 +99,6 @@ static int h_store_device(void *ctx, const sc_watermark *wm)
     return SC_OK;
 }
 
-static int h_load_roots(void *ctx, const uint8_t pk[48], sc_repeat_roots *out)
-{
-    host_t *h = ctx;
-    int i = h_find(h, pk, 0);
-    if (h->fail_load)
-        return SC_ERR_STORAGE;
-    if (i < 0 || !h->rec[i].has_rr)
-        return SC_ERR_UNKNOWN_VALIDATOR;
-    return sc_repeat_roots_decode(h->rec[i].rr, SC_REPEAT_ROOTS_ENCODED_LEN, out) == SC_OK
-               ? SC_OK
-               : SC_ERR_STORAGE;
-}
-
-static int h_store_roots(void *ctx, const uint8_t pk[48], const sc_repeat_roots *r)
-{
-    host_t *h = ctx;
-    int i;
-    if (h->fail_roots || (i = h_find(h, pk, 1)) < 0)
-        return SC_ERR_STORAGE;
-    sc_repeat_roots_encode(r, h->rec[i].rr);
-    h->rec[i].has_rr = 1;
-    h->root_writes++;
-    return SC_OK;
-}
-
 static sc_host_ops host_ops(host_t *h)
 {
     sc_host_ops ops = {.ctx = h,
@@ -134,9 +106,7 @@ static sc_host_ops host_ops(host_t *h)
                        .store_watermark = h_store,
                        .now = h_now,
                        .load_device_mark = h_load_device,
-                       .store_device_mark = h_store_device,
-                       .load_repeat_roots = h_load_roots,
-                       .store_repeat_roots = h_store_roots};
+                       .store_device_mark = h_store_device};
     return ops;
 }
 
@@ -886,9 +856,6 @@ static void test_table_and_errors(void)
     badcfg = cfg;
     badcfg.mark_scope = 2;
     CHECK_RC(sc_signer_init(mem, sz, 2, 2, &badcfg, &ops, &tmp), SC_ERR_ARG);
-    badcfg = cfg;
-    badcfg.persist_repeat_root = 2;
-    CHECK_RC(sc_signer_init(mem, sz, 2, 2, &badcfg, &ops, &tmp), SC_ERR_ARG);
     sc_host_ops part = ops;
     part.load_device_mark = NULL;
     badcfg = cfg;
@@ -899,26 +866,7 @@ static void test_table_and_errors(void)
     part.store_watermark = NULL;
     CHECK_RC(sc_signer_init(mem, sz, 2, 2, &cfg, &part, &tmp), SC_ERR_ARG);
     CHECK_RC(sc_signer_init(mem, sz, 2, 2, &badcfg, &part, &tmp), SC_OK); /* per device: not needed */
-    part = ops;
-    part.store_repeat_roots = NULL;
-    badcfg = cfg;
-    badcfg.persist_repeat_root = 1;
-    CHECK_RC(sc_signer_init(mem, sz, 2, 2, &badcfg, &part, &tmp), SC_ERR_ARG);
-    CHECK_RC(sc_signer_init(mem, sz, 2, 2, &cfg, &part, &tmp), SC_OK);
     free(mem);
-
-    /* repeat root encoding */
-    sc_repeat_roots rr = {SC_REPEAT_HAS_ATTESTATION, {0}, {0}}, rr2;
-    uint8_t rrenc[SC_REPEAT_ROOTS_ENCODED_LEN];
-    memset(rr.attestation_root, 0x5a, 32);
-    memset(rr.block_root, 0xa5, 32);
-    sc_repeat_roots_encode(&rr, rrenc);
-    CHECK_RC(sc_repeat_roots_decode(rrenc, sizeof rrenc, &rr2), SC_OK);
-    CHECK(rr2.flags == SC_REPEAT_HAS_ATTESTATION && !memcmp(rr2.attestation_root, rr.attestation_root, 32) &&
-          !memcmp(rr2.block_root, rr.block_root, 32));
-    CHECK_RC(sc_repeat_roots_decode(rrenc, sizeof rrenc - 1, &rr2), SC_ERR_DECODE);
-    rrenc[4] = 0x4;
-    CHECK_RC(sc_repeat_roots_decode(rrenc, sizeof rrenc, &rr2), SC_ERR_DECODE);
 }
 
 static void test_fork_versions(void)
@@ -945,7 +893,7 @@ static void test_fork_versions(void)
     CHECK(memcmp(got, want, 32) == 0);
 }
 
-/* ---- exact repeats and persist_repeat_root ------------------------------ */
+/* ---- exact repeats ------------------------------------------------------ */
 
 static sc_beacon_block_header blk(uint64_t slot, uint8_t tag)
 {
@@ -973,7 +921,7 @@ static void test_repeats_in_run(void)
     CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig1), SC_OK);
     int writes = h.writes;
     CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig2), SC_OK);
-    CHECK(memcmp(sig1, sig2, 96) == 0 && h.writes == writes && h.root_writes == 0);
+    CHECK(memcmp(sig1, sig2, 96) == 0 && h.writes == writes);
     sc_attestation_data other = att(E - 1, E, 2);
     CHECK_RC(sc_sign_attestation(s, k.pk, &other, sig), SC_ERR_SLASH_TARGET);
     sc_attestation_data next = att(E, E + 1, 1);
@@ -993,127 +941,54 @@ static void test_repeats_in_run(void)
     CHECK_RC(sc_sign_attestation(s, k.pk, &next, sig), SC_ERR_POLICY_FUTURE);
     set_epoch(&h, E + 1);
     sc_signer_get_stats(s, &st);
-    CHECK(st.exact_repeats == 3 && st.repeat_root_writes == 0 && h.root_writes == 0);
+    CHECK(st.exact_repeats == 3);
 }
 
 /*
- * Restart with persist_repeat_root off and on, for per-validator and
- * per-device marks. Off: the repeat is refused after the restart (the marks)
- * and no root was written. On: it signs with the same signature; another
- * root at that target or slot is still refused.
+ * Restart, for per-validator and per-device marks: the validator loads with
+ * no repeat roots, so the repeat is refused after the restart (the marks),
+ * as is another root at that target or slot.
  */
-static void repeat_restart_case(uint32_t scope, uint32_t persist)
+static void repeat_restart_case(uint32_t scope)
 {
     host_t h = {0};
     sc_config cfg;
     sc_signer_stats st;
     sc_repeat_roots rr;
-    uint8_t asig[96], bsig[96], sig[96];
+    uint8_t sig[96];
     int slash_code = scope == SC_MARKS_PER_DEVICE ? SC_ERR_SLASH_TARGET : SC_ERR_SLASH_SOURCE;
     make_config(&cfg);
     cfg.mark_scope = scope;
-    cfg.persist_repeat_root = persist;
     set_epoch(&h, E);
     sc_signer *s1 = new_signer(&h, &cfg, 2, 0);
     vkeys k = add_validator(s1, 21, SC_INDEX_UNKNOWN);
     sc_attestation_data a = att(E - 1, E, 1), other = att(E - 1, E, 2);
     sc_beacon_block_header b = blk(E * 32 + 2, 1), b2 = blk(E * 32 + 2, 2);
-    CHECK_RC(sc_sign_attestation(s1, k.pk, &a, asig), SC_OK);
-    CHECK_RC(sc_sign_block(s1, k.pk, &b, bsig), SC_OK);
-    CHECK(h.root_writes == (persist ? 2 : 0));
+    CHECK_RC(sc_sign_attestation(s1, k.pk, &a, sig), SC_OK);
+    CHECK_RC(sc_sign_block(s1, k.pk, &b, sig), SC_OK);
 
     sc_signer_wipe(s1);
     sc_signer *s2 = new_signer(&h, &cfg, 2, 0);
     add_validator(s2, 21, SC_INDEX_UNKNOWN);
     CHECK_RC(sc_signer_get_repeat_roots(s2, k.pk, &rr), SC_OK);
-    CHECK(rr.flags == (persist ? (SC_REPEAT_HAS_ATTESTATION | SC_REPEAT_HAS_BLOCK) : 0u));
-    if (persist) {
-        CHECK_RC(sc_sign_attestation(s2, k.pk, &a, sig), SC_OK);
-        CHECK(memcmp(sig, asig, 96) == 0);
-        CHECK_RC(sc_sign_block(s2, k.pk, &b, sig), SC_OK);
-        CHECK(memcmp(sig, bsig, 96) == 0);
-    } else {
-        /* Per validator the marks start at source E, target E+1: (E-1, E)
-         * is below both. The device mark's source bound is the signed source
-         * E-1, so there the target refuses it. */
-        CHECK_RC(sc_sign_attestation(s2, k.pk, &a, sig), slash_code);
-        CHECK_RC(sc_sign_block(s2, k.pk, &b, sig), SC_ERR_SLASH_BLOCK);
-    }
+    CHECK(rr.flags == 0u);
+    /* Per validator the marks start at source E, target E+1: (E-1, E)
+     * is below both. The device mark's source bound is the signed source
+     * E-1, so there the target refuses it. */
+    CHECK_RC(sc_sign_attestation(s2, k.pk, &a, sig), slash_code);
+    CHECK_RC(sc_sign_block(s2, k.pk, &b, sig), SC_ERR_SLASH_BLOCK);
     CHECK_RC(sc_sign_attestation(s2, k.pk, &other, sig), slash_code);
     CHECK_RC(sc_sign_block(s2, k.pk, &b2, sig), SC_ERR_SLASH_BLOCK);
     sc_signer_get_stats(s2, &st);
-    CHECK(st.exact_repeats == (persist ? 2u : 0u));
-    printf("repeat after restart: marks %s, persist_repeat_root %u -> attestation %s, block %s, "
-           "root writes before the restart %d\n",
-           scope == SC_MARKS_PER_DEVICE ? "per device" : "per validator", persist,
-           persist ? "signed" : "refused", persist ? "signed" : "refused", h.root_writes);
-
-    if (!persist || scope != SC_MARKS_PER_VALIDATOR)
-        return;
-    /* A floor on load, like the cloud runner's restart floor or clone record:
-     * the stored repeat still signs, nothing new at or below the floor does. */
-    sc_watermark floor = {(E + 4) * 32 - 1, E + 3, E + 3, SC_WM_HAS_BLOCK | SC_WM_HAS_ATTESTATION};
-    CHECK_RC(h_store(&h, k.pk, &floor), SC_OK);
-    set_epoch(&h, E + 2);
-    sc_signer_wipe(s2);
-    sc_signer *s3 = new_signer(&h, &cfg, 2, 0);
-    add_validator(s3, 21, SC_INDEX_UNKNOWN);
-    CHECK_RC(sc_sign_attestation(s3, k.pk, &a, sig), SC_OK);
-    CHECK(memcmp(sig, asig, 96) == 0);
-    sc_attestation_data fresh = att(E + 3, E + 3, 3);
-    CHECK_RC(sc_sign_attestation(s3, k.pk, &fresh, sig), SC_ERR_SLASH_TARGET);
-    fresh = att(E + 3, E + 4, 3);
-    CHECK_RC(sc_sign_attestation(s3, k.pk, &fresh, sig), SC_OK);
+    CHECK(st.exact_repeats == 0u);
+    printf("repeat after restart: marks %s -> attestation refused, block refused\n",
+           scope == SC_MARKS_PER_DEVICE ? "per device" : "per validator");
 }
 
 static void test_repeat_restart(void)
 {
-    repeat_restart_case(SC_MARKS_PER_VALIDATOR, 0);
-    repeat_restart_case(SC_MARKS_PER_VALIDATOR, 1);
-    repeat_restart_case(SC_MARKS_PER_DEVICE, 0);
-    repeat_restart_case(SC_MARKS_PER_DEVICE, 1);
-}
-
-/* persist_repeat_root on, failing or bad root storage. */
-static void test_repeat_root_storage(void)
-{
-    host_t h = {0};
-    sc_config cfg;
-    sc_signer_stats st;
-    uint8_t sig[96], sig2[96];
-    make_config(&cfg);
-    cfg.persist_repeat_root = 1;
-    set_epoch(&h, E + 1);
-    sc_signer *s = new_signer(&h, &cfg, 2, 0);
-    vkeys k = add_validator(s, 22, SC_INDEX_UNKNOWN);
-
-    /* The first root is stored; the write of the second fails: the vote is
-     * still signed and repeats in this run, but after a restart only the
-     * first (an older vote, so refused by the marks) is on record. */
-    sc_attestation_data a1 = att(E - 1, E, 1), a2 = att(E, E + 1, 1);
-    CHECK_RC(sc_sign_attestation(s, k.pk, &a1, sig), SC_OK);
-    h.fail_roots = 1;
-    CHECK_RC(sc_sign_attestation(s, k.pk, &a2, sig), SC_OK);
-    CHECK_RC(sc_sign_attestation(s, k.pk, &a2, sig2), SC_OK);
-    CHECK(memcmp(sig, sig2, 96) == 0);
-    sc_signer_get_stats(s, &st);
-    CHECK(st.repeat_root_writes == 1 && h.root_writes == 1 && st.exact_repeats == 1);
-    h.fail_roots = 0;
-    sc_signer_wipe(s);
-    s = new_signer(&h, &cfg, 2, 0);
-    add_validator(s, 22, SC_INDEX_UNKNOWN);
-    CHECK_RC(sc_sign_attestation(s, k.pk, &a2, sig), SC_ERR_SLASH_TARGET);
-    CHECK_RC(sc_sign_attestation(s, k.pk, &a1, sig), SC_OK); /* stored root: signed again */
-
-    /* A root record that does not decode refuses the validator. */
-    int i = h_find(&h, k.pk, 0);
-    CHECK(i >= 0 && h.rec[i].has_rr);
-    h.rec[i].rr[0] ^= 1;
-    sc_signer_wipe(s);
-    s = new_signer(&h, &cfg, 2, 0);
-    uint8_t share[32];
-    secret_for(10000 + 22, share);
-    CHECK_RC(sc_signer_add_validator(s, k.pk, share, SC_INDEX_UNKNOWN, NULL), SC_ERR_STORAGE);
+    repeat_restart_case(SC_MARKS_PER_VALIDATOR);
+    repeat_restart_case(SC_MARKS_PER_DEVICE);
 }
 
 /* Per-device marks: one write covers every validator and both message types. */
@@ -1434,7 +1309,7 @@ static void test_nonfinality_restart(uint64_t ahead)
 /* A host that stores nothing and counts writes. */
 typedef struct {
     uint64_t now;
-    long marks, roots;
+    long marks;
 } chost_t;
 
 static int c_load(void *ctx, const uint8_t pk[48], sc_watermark *out)
@@ -1464,26 +1339,13 @@ static int c_store_device(void *ctx, const sc_watermark *wm)
     ((chost_t *)ctx)->marks++;
     return SC_OK;
 }
-static int c_load_roots(void *ctx, const uint8_t pk[48], sc_repeat_roots *out)
-{
-    (void)ctx, (void)pk, (void)out;
-    return SC_ERR_UNKNOWN_VALIDATOR;
-}
-static int c_store_roots(void *ctx, const uint8_t pk[48], const sc_repeat_roots *r)
-{
-    (void)pk, (void)r;
-    ((chost_t *)ctx)->roots++;
-    return SC_OK;
-}
-
 #define BIG_KEYS 1000
 static uint8_t g_big_pk[BIG_KEYS][48];
 
 /* Every validator signs one attestation per epoch, the way a node does, with
- * source t-1 (finality) or a fixed source (none); returns the mark and root
- * writes. */
-static void vote_writes(uint32_t scope, uint32_t persist, uint64_t ahead, uint32_t nkeys,
-                        int epochs, int finality, long *marks, long *roots)
+ * source t-1 (finality) or a fixed source (none); returns the mark writes. */
+static void vote_writes(uint32_t scope, uint64_t ahead, uint32_t nkeys, int epochs, int finality,
+                        long *marks)
 {
     chost_t h = {0};
     sc_config cfg;
@@ -1492,9 +1354,7 @@ static void vote_writes(uint32_t scope, uint32_t persist, uint64_t ahead, uint32
                        .store_watermark = c_store,
                        .now = c_now,
                        .load_device_mark = c_load_device,
-                       .store_device_mark = c_store_device,
-                       .load_repeat_roots = c_load_roots,
-                       .store_repeat_roots = c_store_roots};
+                       .store_device_mark = c_store_device};
     sc_signer *s = NULL;
     uint8_t share[32], sig[96];
     size_t sz = sc_signer_mem_size(nkeys, 16);
@@ -1503,7 +1363,6 @@ static void vote_writes(uint32_t scope, uint32_t persist, uint64_t ahead, uint32
 
     make_config(&cfg);
     cfg.mark_scope = scope;
-    cfg.persist_repeat_root = persist;
     cfg.commit_ahead.source_epochs = cfg.commit_ahead.target_epochs = ahead;
     CHECK(mem != NULL);
     CHECK_RC(sc_signer_init(mem, sz, nkeys, 16, &cfg, &ops, &s), SC_OK);
@@ -1520,31 +1379,28 @@ static void vote_writes(uint32_t scope, uint32_t persist, uint64_t ahead, uint32
     }
     CHECK(signed_ok == (int)nkeys * epochs);
     *marks = h.marks;
-    *roots = h.roots;
     sc_signer_wipe(s);
     free(mem);
 }
 
 /* One row: runs vote_writes and checks the expected counts. */
-static void write_row(const char *who, uint32_t scope, uint32_t persist, uint64_t ahead,
-                      uint32_t nkeys, int epochs, int finality)
+static void write_row(const char *who, uint32_t scope, uint64_t ahead, uint32_t nkeys, int epochs,
+                      int finality)
 {
-    long marks, roots;
+    long marks;
     long windows = (epochs + (long)ahead) / ((long)ahead + 1); /* writes per mark */
     long want_marks = (long)nkeys * windows;
-    long want_roots = persist ? (long)nkeys * epochs : 0;
     /* One device mark; its source bound has no window, so a source that moves
      * every epoch writes it every epoch. */
     if (scope == SC_MARKS_PER_DEVICE)
         want_marks = finality ? epochs : windows;
-    vote_writes(scope, persist, ahead, nkeys, epochs, finality, &marks, &roots);
-    printf("write counts: %-6s %4u keys, %d epochs, %-12s marks %-13s commit-ahead %llu, "
-           "persist_repeat_root %u -> %ld mark + %ld root writes = %.2f per epoch\n",
+    vote_writes(scope, ahead, nkeys, epochs, finality, &marks);
+    printf("write counts: %-6s %4u keys, %d epochs, %-12s marks %-13s commit-ahead %llu "
+           "-> %ld mark writes = %.2f per epoch\n",
            who, nkeys, epochs, finality ? "finality," : "no finality,",
            scope == SC_MARKS_PER_DEVICE ? "per device," : "per validator,",
-           (unsigned long long)ahead, persist, marks, roots, (double)(marks + roots) / epochs);
+           (unsigned long long)ahead, marks, (double)marks / epochs);
     CHECK(marks == want_marks);
-    CHECK(roots == want_roots);
 }
 
 static void test_write_counts(void)
@@ -1558,23 +1414,18 @@ static void test_write_counts(void)
     for (size_t j = 0; j < sizeof keys / sizeof keys[0]; j++) {
         uint32_t n = keys[j];
         int epochs = n == BIG_KEYS ? 3 : 6;
-        /* Board (OP-TEE): one mark per device, roots in RAM. With finality
+        /* Board (OP-TEE): one mark per device. With finality
          * the source moves every epoch: one write per epoch, window or not.
          * Without finality: one per epoch with no target window (the TA's
          * mainnet.conf), one per three epochs with a target window of 2. */
-        write_row("board", SC_MARKS_PER_DEVICE, 0, 0, n, epochs, 1);
-        write_row("board", SC_MARKS_PER_DEVICE, 0, 2, n, epochs, 1);
-        write_row("board", SC_MARKS_PER_DEVICE, 0, 0, n, epochs, 0);
-        write_row("board", SC_MARKS_PER_DEVICE, 0, 2, n, epochs, 0);
-        /* Cloud runner: marks per validator, each vote's root stored. */
-        write_row("cloud", SC_MARKS_PER_VALIDATOR, 1, 1, n, epochs, 1);
-        if (n == BIG_KEYS)
-            continue;
-        /* The other two combinations: the board with persist on (one write
-         * per vote per key), and per-key marks without roots (the TA before
-         * the write-rate change: N/2 writes per epoch with a window of 1). */
-        write_row("other", SC_MARKS_PER_DEVICE, 1, 0, n, epochs, 1);
-        write_row("other", SC_MARKS_PER_VALIDATOR, 0, 1, n, epochs, 1);
+        write_row("board", SC_MARKS_PER_DEVICE, 0, n, epochs, 1);
+        write_row("board", SC_MARKS_PER_DEVICE, 2, n, epochs, 1);
+        write_row("board", SC_MARKS_PER_DEVICE, 0, n, epochs, 0);
+        write_row("board", SC_MARKS_PER_DEVICE, 2, n, epochs, 0);
+        /* Marks per validator (the cloud runner without the mark log, and the
+         * TA before the write-rate change): N/2 writes per epoch with a
+         * window of 1. */
+        write_row("cloud", SC_MARKS_PER_VALIDATOR, 1, n, epochs, 1);
     }
 }
 
@@ -2650,7 +2501,6 @@ static void test_fork_change_marks(void)
         uint8_t sig[96];
         make_config(&cfg);
         cfg.mark_scope = scope ? SC_MARKS_PER_DEVICE : SC_MARKS_PER_VALIDATOR;
-        cfg.persist_repeat_root = scope ? 0 : 1;
         set_epoch(&h, E);
         sc_signer *s = new_signer(&h, &cfg, 1, 0);
         vkeys k = add_validator(s, 13, 1000);
@@ -3006,7 +2856,6 @@ int main(int argc, char **argv)
     test_fork_versions();
     test_repeats_in_run();
     test_repeat_restart();
-    test_repeat_root_storage();
     test_device_marks();
     test_cover_epoch();
     test_nonfinality_restart(0);

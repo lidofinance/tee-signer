@@ -46,25 +46,13 @@ static int h_store_dev(void *ctx, const sc_watermark *wm)
     return SC_OK;
 }
 
-static int h_load_rr(void *ctx, const uint8_t pk[48], sc_repeat_roots *out)
-{
-    (void)ctx, (void)pk, (void)out;
-    return SC_ERR_UNKNOWN_VALIDATOR;
-}
-
-static int h_store_rr(void *ctx, const uint8_t pk[48], const sc_repeat_roots *r)
-{
-    (void)ctx, (void)pk, (void)r;
-    return SC_OK;
-}
-
 static int surely_bad(const sc_config *c, const sc_slot_times *t)
 {
     return c->seconds_per_slot == 0 || c->slots_per_epoch == 0 ||
            c->fork_count > SC_MAX_FORKS || c->exit_allowlist_count > SC_MAX_EXIT_ALLOWLIST ||
            c->fee_recipient_count > SC_MAX_FEE_RECIPIENTS ||
            c->builder_auth_root_count > SC_MAX_BUILDER_AUTH_ROOTS || c->mark_scope > 1 ||
-           c->persist_repeat_root > 1 || c->gloas_scheduled > 1 ||
+           c->gloas_scheduled > 1 ||
            c->gas_limit_min > c->gas_limit_max || t->count > SC_MAX_SLOT_TIMES;
 }
 
@@ -249,7 +237,6 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     if (!(flags & 1)) ops.load_watermark = h_load;
     if (!(flags & 2)) ops.store_watermark = h_store;
     if (!(flags & 4)) ops.load_device_mark = h_load_dev, ops.store_device_mark = h_store_dev;
-    if (!(flags & 8)) ops.load_repeat_roots = h_load_rr, ops.store_repeat_roots = h_store_rr;
 
     need = sc_signer_mem_size(maxv, cache);
     if (need == 0 || need > (64u << 20))

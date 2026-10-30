@@ -189,8 +189,8 @@ func TestExactRepeat(t *testing.T) {
 	if err != nil || !rep || again != first {
 		t.Fatalf("repeat: rep=%v err=%v same=%v", rep, err, again == first)
 	}
-	if st := s.Stats(); h.Writes != writes || h.RootWrites != 0 || st.ExactRepeats != 1 || st.RepeatRootWrites != 0 {
-		t.Fatalf("repeat must not write: writes %d->%d, root writes %d, %+v", writes, h.Writes, h.RootWrites, st)
+	if st := s.Stats(); h.Writes != writes || st.ExactRepeats != 1 {
+		t.Fatalf("repeat must not write: writes %d->%d, %+v", writes, h.Writes, st)
 	}
 	other := att(18, 19)
 	other.BeaconBlockRoot = backend.Root{0xcc}
@@ -217,116 +217,46 @@ func TestExactRepeat(t *testing.T) {
 	wantStatus(t, err, backend.StatusSlashBlock)
 }
 
-// persist_repeat_root across a restart (a second Signer on the same hooks).
-// On: one root write per vote, and the repeat signs after the restart with
-// the same signature, while another root at that target is refused. Off: no
-// root writes, and the repeat is refused after the restart.
+// Repeat roots live in RAM only: after a restart (a second Signer on the
+// same hooks) the repeat of the last vote and block is refused by the marks,
+// as is another root at that target.
 func TestRepeatAfterRestart(t *testing.T) {
-	for _, persist := range []bool{true, false} {
-		h := software.NewMemHooks()
-		h.Clock = clockAtEpoch(20)
-		cfg := software.DevConfig(genesis, 12, 32)
-		cfg.PersistRepeatRoot = persist
-		sk, _ := software.NewSecret()
-		pk, _ := core.PubkeyOf(sk)
-		start := func() *core.Signer {
-			s, err := core.NewSigner(cfg, 4, 4, h)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := s.AddValidator(pk, sk, 7, nil); err != nil {
-				t.Fatal(err)
-			}
-			return s
-		}
-		s1 := start()
-		first, err := s1.Sign(signReq(s1, pk, att(18, 19)))
-		if err != nil {
-			t.Fatal(err)
-		}
-		blk := &backend.BeaconBlockHeader{Slot: 19*32 + 1, ProposerIndex: 7, BodyRoot: backend.Root{4}}
-		bsig, err := s1.Sign(signReq(s1, pk, blk))
-		if err != nil {
-			t.Fatal(err)
-		}
-		wantRoots := 0
-		if persist {
-			wantRoots = 2
-		}
-		if h.RootWrites != wantRoots || s1.Stats().RepeatRootWrites != uint64(wantRoots) {
-			t.Fatalf("persist=%v: root writes %d, stats %+v", persist, h.RootWrites, s1.Stats())
-		}
-		s1.Close()
-
-		s2 := start()
-		again, rep, err := s2.SignDetailed(signReq(s2, pk, att(18, 19)))
-		bagain, brep, berr := s2.SignDetailed(signReq(s2, pk, blk))
-		if persist {
-			if err != nil || !rep || again != first || berr != nil || !brep || bagain != bsig {
-				t.Fatalf("persist on: repeat after restart: %v %v %v %v", rep, err, brep, berr)
-			}
-		} else if !backend.StatusOf(err).IsSlashing() || !backend.StatusOf(berr).IsSlashing() {
-			t.Fatalf("persist off: repeat after restart must be refused: %v %v", err, berr)
-		}
-		other := att(18, 19)
-		other.BeaconBlockRoot = backend.Root{0xcc}
-		if _, err := s2.Sign(signReq(s2, pk, other)); !backend.StatusOf(err).IsSlashing() {
-			t.Fatalf("persist=%v: another root at target 19 after restart: %v", persist, err)
-		}
-		s2.Close()
-	}
-
-	// Without hooks that store roots the setting is refused.
-	cfg := software.DevConfig(genesis, 12, 32)
-	cfg.PersistRepeatRoot = true
-	if _, err := core.NewSigner(cfg, 4, 4, marksOnly{software.NewMemHooks()}); err == nil {
-		t.Fatal("persist_repeat_root accepted without RepeatRootHooks")
-	}
-}
-
-// marksOnly hides MemHooks' repeat root methods.
-type marksOnly struct{ m *software.MemHooks }
-
-func (h marksOnly) LoadWatermark(pk backend.Pubkey) (backend.Watermark, bool, error) {
-	return h.m.LoadWatermark(pk)
-}
-func (h marksOnly) StoreWatermark(pk backend.Pubkey, wm backend.Watermark) error {
-	return h.m.StoreWatermark(pk, wm)
-}
-func (h marksOnly) Now() (uint64, error) { return h.m.Now() }
-
-// A failed root write does not refuse the vote; after a restart the repeat
-// is then refused (the root was in RAM only).
-func TestRepeatRootWriteFailure(t *testing.T) {
 	h := software.NewMemHooks()
 	h.Clock = clockAtEpoch(20)
-	h.FailRoots = true
 	cfg := software.DevConfig(genesis, 12, 32)
-	cfg.PersistRepeatRoot = true
 	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
-	s, err := core.NewSigner(cfg, 4, 4, h)
-	if err != nil {
+	start := func() *core.Signer {
+		s, err := core.NewSigner(cfg, 4, 4, h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.AddValidator(pk, sk, 7, nil); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	s1 := start()
+	if _, err := s1.Sign(signReq(s1, pk, att(18, 19))); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.AddValidator(pk, sk, 7, nil); err != nil {
+	blk := &backend.BeaconBlockHeader{Slot: 19*32 + 1, ProposerIndex: 7, BodyRoot: backend.Root{4}}
+	if _, err := s1.Sign(signReq(s1, pk, blk)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Sign(signReq(s, pk, att(18, 19))); err != nil {
-		t.Fatalf("vote refused because the root write failed: %v", err)
+	s1.Close()
+
+	s2 := start()
+	defer s2.Close()
+	_, _, err := s2.SignDetailed(signReq(s2, pk, att(18, 19)))
+	_, _, berr := s2.SignDetailed(signReq(s2, pk, blk))
+	if !backend.StatusOf(err).IsSlashing() || !backend.StatusOf(berr).IsSlashing() {
+		t.Fatalf("repeat after restart must be refused: %v %v", err, berr)
 	}
-	if _, rep, err := s.SignDetailed(signReq(s, pk, att(18, 19))); err != nil || !rep {
-		t.Fatalf("repeat in the same run: %v %v", rep, err)
-	}
-	s.Close()
-	h.FailRoots = false
-	s, _ = core.NewSigner(cfg, 4, 4, h)
-	defer s.Close()
-	if _, err := s.AddValidator(pk, sk, 7, nil); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Sign(signReq(s, pk, att(18, 19))); !backend.StatusOf(err).IsSlashing() {
-		t.Fatalf("repeat after restart with no stored root: %v", err)
+	other := att(18, 19)
+	other.BeaconBlockRoot = backend.Root{0xcc}
+	if _, err := s2.Sign(signReq(s2, pk, other)); !backend.StatusOf(err).IsSlashing() {
+		t.Fatalf("another root at target 19 after restart: %v", err)
 	}
 }
 

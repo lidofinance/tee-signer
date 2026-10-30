@@ -170,12 +170,11 @@ type ClockNTS struct {
 
 // SignerStats are the counters of the signer core (sc_signer_stats).
 type SignerStats struct {
-	Signatures       uint64 `json:"signatures"`
-	HashCacheHits    uint64 `json:"hash_cache_hits"`
-	HashCacheMisses  uint64 `json:"hash_cache_misses"`
-	WatermarkWrites  uint64 `json:"watermark_writes"`
-	ExactRepeats     uint64 `json:"exact_repeats"`
-	RepeatRootWrites uint64 `json:"repeat_root_writes"`
+	Signatures      uint64 `json:"signatures"`
+	HashCacheHits   uint64 `json:"hash_cache_hits"`
+	HashCacheMisses uint64 `json:"hash_cache_misses"`
+	WatermarkWrites uint64 `json:"watermark_writes"`
+	ExactRepeats    uint64 `json:"exact_repeats"`
 }
 
 // Identity is what a runner proves about one boot: its setup and config

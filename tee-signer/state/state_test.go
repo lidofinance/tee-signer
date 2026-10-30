@@ -1,8 +1,8 @@
 package state
 
 import (
-	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -325,11 +325,12 @@ func TestFloorOnlyWritesNothing(t *testing.T) {
 	}
 }
 
-// DropRepeatRoots leaves the empty record: after a restart the last vote no
-// longer signs as a repeat.
-func TestDropRepeatRoots(t *testing.T) {
-	n := newNode(t, Mode{Floor: true, FloorMargin: 2, RepeatRoots: true})
-	n.cfg.PersistRepeatRoot = true
+// Builds before this one could store a validator's last roots under rr/
+// (-persist-repeat-root). The runner never reads them now: with an older
+// build's record for the last vote in the store, a restart that adds the key
+// again without history refuses that vote below the floor.
+func TestOldRepeatRootRecordIgnored(t *testing.T) {
+	n := newNode(t, Mode{Floor: true, FloorMargin: 2})
 	n.clk.set(at(10, 5))
 	if err := n.start(t); err != nil {
 		t.Fatal(err)
@@ -338,80 +339,30 @@ func TestDropRepeatRoots(t *testing.T) {
 	if err := n.attest(14, 15, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := n.hooks.DropRepeatRoots(n.pk); err != nil {
+	// The record an older build wrote for that vote: magic, flags, roots.
+	a := &backend.AttestationData{Slot: 15 * 32, BeaconBlockRoot: backend.Root{1},
+		Source: backend.Checkpoint{Epoch: 14}, Target: backend.Checkpoint{Epoch: 15}}
+	obj, err := backend.HashTreeRoot(a)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if rec, found, err := n.hooks.LoadRepeatRoots(n.pk); err != nil || !found || !bytes.Equal(rec, core.NoRepeatRoots()) {
-		t.Fatalf("stored roots after the drop: %x %v %v", rec, found, err)
+	root := backend.SigningRoot(obj, n.req(a).Domain)
+	rec := append([]byte{'S', 'C', 'R', '1', 1, 0, 0, 0}, root[:]...)
+	rec = append(rec, make([]byte, 32)...)
+	blob, err := dev.NewDevSealer().Seal(rec, append([]byte("signer-repeat-roots-v1|"), n.pk[:]...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := n.store.Put("rr/"+hex.EncodeToString(n.pk[:]), blob); err != nil {
+		t.Fatal(err)
 	}
 	n.clk.set(at(15, 300))
 	if err := n.start(t); err != nil {
 		t.Fatal(err)
 	}
 	wantSlashing(t, n.attest(14, 15, 1))
-}
-
-// The runner's default: floor only, repeat roots persisted. One sealed write
-// per vote (no marks); after a restart the exact repeat of the last vote
-// signs and everything else at or below the floor is refused. A rolled-back
-// store only gives back an older root this validator already signed, and a
-// record moved to another validator does not unseal.
-func TestRepeatRootsWithFloor(t *testing.T) {
-	n := newNode(t, Mode{Floor: true, FloorMargin: 2, RepeatRoots: true})
-	n.cfg.PersistRepeatRoot = true
-	n.clk.set(at(10, 5))
-	if err := n.start(t); err != nil {
-		t.Fatal(err)
-	}
-	var snap map[string][]byte
-	for e := uint64(13); e <= 15; e++ {
-		n.clk.set(at(e, 5))
-		if err := n.attest(e-1, e, 1); err != nil {
-			t.Fatal(err)
-		}
-		if e == 13 {
-			snap = n.store.snapshot()
-		}
-	}
-	keys, _ := n.store.List("")
-	if n.store.puts != 3 || len(keys) != 1 || !strings.HasPrefix(keys[0], "rr/") {
-		t.Fatalf("want one sealed root write per vote and no marks: %d puts, keys %v", n.store.puts, keys)
-	}
-
-	n.clk.set(at(15, 300)) // floor 17
-	if err := n.start(t); err != nil {
-		t.Fatal(err)
-	}
-	if err := n.attest(14, 15, 1); err != nil {
-		t.Fatalf("exact repeat after restart: %v", err)
-	}
-	wantSlashing(t, n.attest(14, 15, 2))
-	wantSlashing(t, n.attest(13, 14, 1)) // an older vote is not the stored root
-	if st := n.signer.Stats(); st.ExactRepeats != 1 {
+	if st := n.signer.Stats(); st.ExactRepeats != 0 {
 		t.Fatalf("stats %+v", st)
-	}
-
-	// Rollback to the record written at epoch 13.
-	n.store.restore(snap)
-	if err := n.start(t); err != nil {
-		t.Fatal(err)
-	}
-	if err := n.attest(12, 13, 1); err != nil {
-		t.Fatalf("repeat of the rolled-back root (signed at epoch 13): %v", err)
-	}
-	wantSlashing(t, n.attest(14, 15, 1))
-
-	// The record of validator A under validator B's key.
-	skB, _ := software.NewSecret()
-	pkB, _ := core.PubkeyOf(skB)
-	blob, _ := n.store.Get(rrKey(n.pk))
-	_ = n.store.Put(rrKey(pkB), blob)
-	h, _ := New(n.cfg, n.mode, n.clk, n.store, dev.NewDevSealer(), quiet)
-	s, _ := core.NewSigner(n.cfg, 1, 0, h)
-	defer s.Close()
-	if _, err := s.AddValidator(pkB, skB, 8, nil); backend.StatusOf(err) != backend.StatusStorage ||
-		!strings.Contains(err.Error(), "repeat roots") {
-		t.Fatalf("moved record: %v", err)
 	}
 }
 
