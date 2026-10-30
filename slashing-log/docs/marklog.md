@@ -80,6 +80,14 @@ the gate once the log's source reaches the floor. Which validator has its
 own history is in its sealed share record (`history`), set when an import
 with attestation maxima stored it.
 
+The gate covers only votes cast before the log started. A validator that
+comes in later without vote history may have voted elsewhere since, so
+its import sets a source floor of its own: the restart floor epoch of the
+clock at the import (SLBOUND-01). The share record keeps it
+(`source_floor`), and a restart sets it again. The validator signs no
+vote with a source below the higher of the two floors, also after the
+log's gate has dropped.
+
 A record is about 420 bytes on the dev platform, 60 more for each
 pending update, and 150 to 250 more with a cloud KMS ciphertext in the
 key blob.

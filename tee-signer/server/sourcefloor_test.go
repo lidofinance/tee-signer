@@ -91,3 +91,44 @@ func TestSSIHISTORY01HistoryLiftsTheGateForItsKeyOnly(t *testing.T) {
 		t.Errorf("after a restart: B at its own history's source %d: %v", start-3, err)
 	}
 }
+
+// SLBOUND-01: the source gate is set once, when the log starts. A validator
+// imported later without vote history may have voted elsewhere since, with
+// sources above that gate. Its import sets a source floor of its own at the
+// import's clock epoch, kept in its sealed share record, so neither this
+// process nor a restart signs it a vote that surrounds those votes, also
+// after the log's gate has dropped.
+func TestSLBOUND01LateImportGetsItsOwnSourceFloor(t *testing.T) {
+	e := newTgtEnv(t, "dev", nil)
+	gate := e.floorOf()
+	ska, pka := newKey(t)
+	if err := e.importSealed(pka, ska, 5, nil); err != nil {
+		t.Fatal(err)
+	}
+	// The runner sits idle while B votes elsewhere, then B comes in
+	// without its history.
+	e.clock.add(20 * testEpoch)
+	late := e.floorOf()
+	skb, pkb := newKey(t)
+	if err := e.importSealed(pkb, skb, 6, nil); err != nil {
+		t.Fatal(err)
+	}
+	e.clock.add((late - e.signer.EpochAt(e.now())) * testEpoch)
+	wantSlashSource(t, e.signMsg(pkb, vote(gate, late+1)), "same process: B at the log's gate, below its import")
+	// A's vote at the gate puts the gate's floor into the log's source, so
+	// a restart drops the gate.
+	if err := e.signMsg(pka, vote(gate, late+1)); err != nil {
+		t.Fatalf("A at the gate: %v", err)
+	}
+	e.clock.add(5 * testEpoch)
+	e.restart()
+	if _, on := e.marks.SourceGate(); on {
+		t.Fatal("the gate is still on after the log's source reached it")
+	}
+	f2 := e.floorOf()
+	e.clock.add((f2 - e.signer.EpochAt(e.now())) * testEpoch)
+	wantSlashSource(t, e.signMsg(pkb, vote(gate, f2+1)), "after a restart: B below its import floor")
+	if err := e.signMsg(pkb, vote(late, f2+1)); err != nil {
+		t.Fatalf("after a restart: B at its import floor %d: %v", late, err)
+	}
+}

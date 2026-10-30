@@ -75,7 +75,11 @@ func lastClaim(t *testing.T, text string) string {
 // run signs three epochs with source s0, stops, wipes the state directory,
 // starts again and checks: the claim continues the log, the share is gone,
 // after a new import a vote with a source below s0 (a surround of the
-// votes before) is refused at every epoch while one with source s0 signs.
+// votes before) is refused at every epoch while one with the source an
+// honest node sends (s0, or the epoch before the target once that is
+// higher) signs. A new import without history gates sources below its
+// import's restart floor epoch (SLBOUND-01), so the source s0 alone no
+// longer signs after it.
 // It returns s0 and the last target signed before the restart.
 func (ls lostState) run(t *testing.T, pk backend.Pubkey) (uint64, uint64) {
 	t.Helper()
@@ -131,8 +135,9 @@ func (ls lostState) run(t *testing.T, pk backend.Pubkey) (uint64, uint64) {
 	for e := start; e < start+6; e++ {
 		c.waitEpoch(t, e)
 		errS := sign(cl, att(s0-2, e, 0x30))
-		errN := sign(cl, att(s0, e, 0x20))
-		t.Logf("after the restart, target %d: source %d (below the log's) %s | source %d %s", e, s0-2, short(errS), s0, short(errN))
+		ns := max(s0, e-1)
+		errN := sign(cl, att(ns, e, 0x20))
+		t.Logf("after the restart, target %d: source %d (below the log's) %s | source %d %s", e, s0-2, short(errS), ns, short(errN))
 		if errS == nil {
 			surround++
 		}
@@ -141,7 +146,7 @@ func (ls lostState) run(t *testing.T, pk backend.Pubkey) (uint64, uint64) {
 		}
 	}
 	if surround != 0 || signed == 0 {
-		t.Fatalf("after the restart: %d votes with a lower source signed, %d with the log's source", surround, signed)
+		t.Fatalf("after the restart: %d votes with a lower source signed, %d with an honest source", surround, signed)
 	}
 	return s0, last
 }
