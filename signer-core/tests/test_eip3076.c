@@ -36,6 +36,12 @@
  * same. Imported roots never count: the resign tests send imported messages
  * again, and those must be refused.
  *
+ * An import the test expects to succeed may still be refused when the data
+ * is slashable (contains_slashable_data). The README then ends the test:
+ * the step's ops and all later steps are skipped. These are counted as
+ * slashable_skips. The core's max-merge import never refuses today, so the
+ * count is 0.
+ *
  * usage: test_eip3076 <converted.txt from eip3076_convert.py>
  */
 #include "testutil.h"
@@ -165,7 +171,7 @@ typedef struct {
 } mode_cfg_t;
 
 typedef struct {
-    int tests, tests_pass, ops, ops_match, unsafe, extra_refusals, writes, repeats;
+    int tests, tests_pass, ops, ops_match, unsafe, extra_refusals, slashable_skips, writes, repeats;
 } result_t;
 
 static int g_writes;
@@ -220,22 +226,29 @@ static int collect_maxima(size_t from, size_t to, import_t imp[MAX_KEYS])
     return nimp;
 }
 
-/* Imports one step's interchange data (lines [from, to)). */
+/*
+ * Imports one step's interchange data (lines [from, to)). All or nothing:
+ * per-key maxima are collected first, and if the core refuses any key the
+ * db is put back as it was, so a refused import leaves nothing half applied.
+ */
 static int import_step(db_t *db, const line_t *step, size_t from, size_t to)
 {
+    static db_t before;
     import_t imp[MAX_KEYS];
     int nimp;
     if (!step->root_ok || !step->version_ok)
         return SC_ERR_ARG;
     if ((nimp = collect_maxima(from, to, imp)) < 0)
         return SC_ERR_NOMEM;
+    before = *db;
     for (int j = 0; j < nimp; j++) {
         keyrec_t *k = find_key(db, imp[j].pk, 1);
-        if (!k)
-            return SC_ERR_NOMEM;
-        int rc = sc_slashing_import(&k->st, &imp[j].wm, counting_store, db, k->pk);
-        if (rc != SC_OK)
+        int rc = k ? sc_slashing_import(&k->st, &imp[j].wm, counting_store, db, k->pk)
+                   : SC_ERR_NOMEM;
+        if (rc != SC_OK) {
+            *db = before;
             return rc;
+        }
     }
     return SC_OK;
 }
@@ -268,7 +281,16 @@ static result_t run_mode(const mode_cfg_t *m, int verbose)
             while (i < nlines && is_import(&lines[i]))
                 i++;
             int imported = import_step(&db, step, from, i) == SC_OK;
-            if (imported != step->expect && !(step->slashable && !imported)) {
+            if (!imported && step->expect && step->slashable) {
+                /* Allowed by the README; the rest of the test is skipped. */
+                r.slashable_skips++;
+                if (verbose)
+                    printf("  %s: slashable import refused, rest of test skipped\n", name);
+                while (i < nlines && strcmp(lines[i].kind, "E") != 0)
+                    i++;
+                break;
+            }
+            if (imported != step->expect) {
                 test_ok = 0;
                 if (verbose)
                     printf("  %s: import %s, expected %s\n", name, imported ? "ok" : "refused",
@@ -541,7 +563,17 @@ static result_t run_signer_mode(const mode_cfg_t *m, int verbose)
             while (i < nlines && is_import(&lines[i]))
                 i++;
             int imported = signer_import_step(&h, s, step, from, i) == SC_OK;
-            if (imported != step->expect && !(step->slashable && !imported)) {
+            if (!imported && step->expect && step->slashable) {
+                /* Allowed by the README; the rest of the test is skipped,
+                 * so a partly applied import is never signed against. */
+                r.slashable_skips++;
+                if (verbose)
+                    printf("  %s: slashable import refused, rest of test skipped\n", name);
+                while (i < nlines && strcmp(lines[i].kind, "E") != 0)
+                    i++;
+                break;
+            }
+            if (imported != step->expect) {
                 test_ok = 0;
                 if (verbose)
                     printf("  %s: import %s, expected %s\n", name, imported ? "ok" : "refused",
@@ -652,18 +684,18 @@ int main(int argc, char **argv)
     for (size_t m = 0; m < sizeof modes / sizeof modes[0]; m++) {
         result_t r = run_mode(&modes[m], 1);
         printf("EIP3076 mode=%s tests=%d pass=%d fail=%d ops=%d match=%d unsafe_accepts=%d "
-               "extra_refusals=%d watermark_writes=%d\n",
+               "extra_refusals=%d slashable_skips=%d watermark_writes=%d\n",
                modes[m].name, r.tests, r.tests_pass, r.tests - r.tests_pass, r.ops, r.ops_match,
-               r.unsafe, r.extra_refusals, r.writes);
+               r.unsafe, r.extra_refusals, r.slashable_skips, r.writes);
         if (r.tests_pass != r.tests || r.unsafe || r.tests == 0)
             bad = 1;
     }
     for (size_t m = 0; m < sizeof signer_modes / sizeof signer_modes[0]; m++) {
         result_t r = run_signer_mode(&signer_modes[m], 1);
         printf("EIP3076 mode=%s tests=%d pass=%d fail=%d ops=%d match=%d unsafe_accepts=%d "
-               "extra_refusals=%d watermark_writes=%d exact_repeats=%d\n",
+               "extra_refusals=%d slashable_skips=%d watermark_writes=%d exact_repeats=%d\n",
                signer_modes[m].name, r.tests, r.tests_pass, r.tests - r.tests_pass, r.ops,
-               r.ops_match, r.unsafe, r.extra_refusals, r.writes, r.repeats);
+               r.ops_match, r.unsafe, r.extra_refusals, r.slashable_skips, r.writes, r.repeats);
         /* Every signed op was sent again, so the shortcut ran. */
         if (r.tests_pass != r.tests || r.unsafe || r.tests == 0 || r.repeats == 0)
             bad = 1;
