@@ -203,8 +203,14 @@ shares it holds, never in a mark:
 - The mark the runner signs under comes from the locked mark log, read at
   the claim after the restore. No commit holds a mark (the hint is not in
   the copy, and the hint can only make the claim refuse).
-- A share carries no slashing state. An older commit has fewer shares, or
-  the shares before a later import of the same validator: the runner then
+- A share record holds one bound: a share imported without vote history
+  keeps its source floor (`source_floor`, `marklog.md`). The host stores
+  the record, so an older commit can bring back an older import's lower
+  floor, or none. Until a follow-up change anchors these floors in the mark
+  log, the log's mark is the only bound the host cannot roll back.
+- Apart from that floor, a share carries no slashing state. An older
+  commit has fewer shares, or the shares before a later import of the same
+  validator: the runner then
   holds less, which costs liveness, and signs every message under the
   log's mark either way.
 - The sealing key in an older commit is the one the shares of that commit

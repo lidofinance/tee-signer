@@ -269,11 +269,11 @@ func (h *Hooks) ImportFloor() (floor uint64, on bool, err error) {
 	if !h.mode.Floor || !h.mode.MarkLog || h.marks == nil {
 		return 0, false, nil
 	}
-	now, err := h.clock.Now()
+	now, err := h.Now()
 	if err != nil {
 		return 0, false, fmt.Errorf("import source floor needs the clock: %w", err)
 	}
-	return satAdd(h.epochAt(uint64(now.Unix())), h.mode.FloorMargin), true, nil
+	return satAdd(h.epochAt(now), h.mode.FloorMargin), true, nil
 }
 
 // NoteImportFloor gates pk's vote sources below floor (ImportFloor, or the
