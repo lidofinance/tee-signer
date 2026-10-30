@@ -44,7 +44,7 @@ func TestSHO02CapacityCheckedUnderTheLock(t *testing.T) {
 	src.clock.add(srcDelay)
 	src.srv.Platform.Store = &listHookStore{shareStore: src.store, onList: func() {
 		sec, pk := newSecret(t), newPubkey(t)
-		if _, err := src.srv.addShareOf(pk, &sec, 300, nil, "sealed", nil); err != nil {
+		if _, err := src.srv.addShareOf(pk, &sec, 300, nil, "sealed", nil, nil); err != nil {
 			t.Errorf("the share added meanwhile: %v", err)
 		}
 	}}

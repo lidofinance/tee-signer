@@ -361,6 +361,9 @@ func (im *importer) importShares(ctx context.Context, payload []byte) ([]byte, e
 		if err := s.checkHandoverMark(page.Shares[i].Interchange); err != nil {
 			return nil, err
 		}
+		if err := s.checkSourceFloor(page.Shares[i].SourceFloor); err != nil {
+			return nil, err
+		}
 	}
 
 	// Which shares this runner holds already. A validator held with
@@ -483,7 +486,10 @@ func (im *importer) importShares(ctx context.Context, payload []byte) ([]byte, e
 	stored := 0
 	for _, i := range fresh {
 		sh := &page.Shares[i]
-		k, err := s.addShareOf(sh.Pubkey, &secrets[i], sh.Index, sh.Interchange, "handover", keys)
+		// The mark is the source's device mark: the page says whether this
+		// key had its own history there (HSH-01).
+		handed := &handedState{history: sh.History, floor: sh.SourceFloor}
+		k, err := s.addShareOf(sh.Pubkey, &secrets[i], sh.Index, sh.Interchange, "handover", handed, keys)
 		var r *backend.RefusedError
 		switch {
 		case errors.As(err, &r) && r.Code == backend.StatusDuplicate:

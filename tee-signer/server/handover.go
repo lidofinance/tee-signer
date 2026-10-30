@@ -28,6 +28,9 @@ func (s *Server) readShare(pk backend.Pubkey, f func(rec *shareRecord, secret *[
 	if err != nil {
 		return err
 	}
+	if err := s.checkShareBlob(pk, blob); err != nil {
+		return err
+	}
 	plain, err := s.Platform.Sealer.Unseal(blob, s.shareAAD(pk))
 	if err != nil {
 		return fmt.Errorf("unseal share: %w", err)

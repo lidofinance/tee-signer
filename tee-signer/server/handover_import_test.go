@@ -71,6 +71,9 @@ type tgtEnv struct {
 	upd      *Updates
 	signer   *core.Signer
 	srv      *Server
+	// looseLoad: a start logs LoadListedShares' error, as main does,
+	// rather than failing the test.
+	looseLoad bool
 }
 
 // newTgtEnv starts a target with the dev sample setup at handover
@@ -153,7 +156,7 @@ func (e *tgtEnv) start() {
 	if e.srv.ImportKey, err = sealedimport.Generate(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.srv.LoadListedShares(stored); err != nil {
+	if _, err := e.srv.LoadListedShares(stored); err != nil && !e.looseLoad {
 		t.Fatal(err)
 	}
 	// As main does it: the source side first, then the import.

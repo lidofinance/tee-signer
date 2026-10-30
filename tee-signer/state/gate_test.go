@@ -42,6 +42,9 @@ func (l *gateLog) SourceGate() (uint64, bool) {
 	}
 	return *l.gate, true
 }
+func (l *gateLog) ShareSet() *markstore.ShareSet                             { return nil }
+func (l *gateLog) SetShareSet(*markstore.ShareSet)                           {}
+func (l *gateLog) RecordShareSet(context.Context, *markstore.ShareSet) error { return nil }
 func (l *gateLog) SetSourceGate(f uint64, on bool) {
 	l.gate = nil
 	if on {

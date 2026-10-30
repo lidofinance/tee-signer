@@ -85,7 +85,7 @@ func (e *tgtEnv) addKeys(n int, mark *backend.Watermark) []backend.Pubkey {
 		if i == 0 {
 			ic = mark
 		}
-		if _, err := e.srv.addShareOf(pk, &sk, uint64(200+i), ic, "sealed", nil); err != nil {
+		if _, err := e.srv.addShareOf(pk, &sk, uint64(200+i), ic, "sealed", nil, nil); err != nil {
 			e.t.Fatal(err)
 		}
 		out = append(out, pk)

@@ -218,6 +218,12 @@ type MarkLog interface {
 	// one the next record carries.
 	SourceGate() (uint64, bool)
 	SetSourceGate(floor uint64, on bool)
+	// ShareSet is the share set commitment the log holds (nil: the empty
+	// set); SetShareSet sets the one the next record carries, and
+	// RecordShareSet writes a record with it.
+	ShareSet() *markstore.ShareSet
+	SetShareSet(s *markstore.ShareSet)
+	RecordShareSet(ctx context.Context, s *markstore.ShareSet) error
 	Status() string
 }
 
@@ -336,6 +342,31 @@ func (h *Hooks) decideGate() error {
 			"floor_epoch", floor, "log_source", h.mark.SourceEpoch, "log_has_vote", h.mark.HasAttestation)
 	}
 	return nil
+}
+
+// ShareSet is the mark log's share set commitment (nil: the empty set);
+// ok is false without a mark log, where stored share records are not
+// committed.
+func (h *Hooks) ShareSet() (set *markstore.ShareSet, ok bool) {
+	if h.marks == nil {
+		return nil, false
+	}
+	return h.marks.ShareSet(), true
+}
+
+// SetShareSet sets the commitment the mark log's next record carries.
+func (h *Hooks) SetShareSet(s *markstore.ShareSet) {
+	if h.marks != nil {
+		h.marks.SetShareSet(s)
+	}
+}
+
+// RecordShareSet writes a mark log record with commitment s.
+func (h *Hooks) RecordShareSet(ctx context.Context, s *markstore.ShareSet) error {
+	if h.marks == nil {
+		return ErrNoMarkLog
+	}
+	return h.marks.RecordShareSet(ctx, s)
 }
 
 // HandOverTo ends the mark log for a handover to the runner of target's

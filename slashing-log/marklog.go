@@ -177,7 +177,10 @@ type MarkLog struct {
 	exits   *ExitDay // the day's exits the newest record carries
 	// gate is the source gate the next record carries (SetSourceGate); at
 	// Claim the newest record's.
-	gate    *uint64
+	gate *uint64
+	// shares is the share set commitment the next record carries
+	// (SetShareSet, RecordShareSet); at Claim the newest record's.
+	shares  *ShareSet
 	state   ConfigState
 	bodies  map[bodyKey]*bodyEntry
 	found   bool // a record with a mark existed at Claim
@@ -525,6 +528,7 @@ func (m *MarkLog) Claim(ctx context.Context, expect bool) (backend.Watermark, bo
 		m.logID, m.written = logIDOf(r, enc), time.Unix(int64(r.Time), 0)
 		m.state, m.target, m.exits = r.State.Clone(), r.Target, r.Exits.Clone()
 		m.gate = cloneGate(r.SourceGate)
+		m.shares = r.Shares.Clone()
 		m.found = r.Mark.HasAttestation || r.Mark.HasBlock
 		if err := m.readBodies(ctx, r); err != nil {
 			return backend.Watermark{}, false, fmt.Errorf("mark log %s: update bodies: %w", m.log, err)
@@ -810,7 +814,8 @@ func (m *MarkLog) appendLocked(ctx context.Context, wm backend.Watermark, target
 		}
 		rec := Record{Setup: m.setup, Signer: m.signer, Version: v, PrevVersion: prevV, PrevHash: prevH, LogID: logID,
 			Owner: m.owner, KeyBlob: m.blob, Mark: wm, Time: uint64(now.Unix()), State: m.state.Clone(),
-			Copies: m.copiesLocked(), Target: target, Exits: m.exits.Clone(), SourceGate: cloneGate(m.gate)}
+			Copies: m.copiesLocked(), Target: target, Exits: m.exits.Clone(), SourceGate: cloneGate(m.gate),
+			Shares: m.shares.Clone()}
 		if err := rec.check(); err != nil {
 			return fmt.Errorf("markstore: record not written: %w", err)
 		}
@@ -880,7 +885,7 @@ func (m *MarkLog) appendLocked(ctx context.Context, wm backend.Watermark, target
 					return m.lost
 				}
 				if Merge(r.Mark, wm) == r.Mark && r.State.Equal(m.state) && sameTarget(r.Target, target) && exitsEqual(r.Exits, m.exits) &&
-					sameGate(r.SourceGate, m.gate) {
+					sameGate(r.SourceGate, m.gate) && sameShares(r.Shares, m.shares) {
 					return nil
 				}
 				// It does not hold what this call writes: write that on top.
@@ -955,6 +960,40 @@ func (m *MarkLog) SetSourceGate(floor uint64, on bool) {
 	if on {
 		m.gate = &floor
 	}
+}
+
+// ShareSet is the share set commitment of the newest record this process
+// read or wrote, or the one SetShareSet set since (nil: the empty set).
+func (m *MarkLog) ShareSet() *ShareSet {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.shares.Clone()
+}
+
+// SetShareSet sets the share set commitment the next record carries. It
+// writes nothing itself.
+func (m *MarkLog) SetShareSet(s *ShareSet) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.shares = s.Clone()
+}
+
+// RecordShareSet writes a record that carries s, with the mark unchanged.
+// It returns only once the record is durable. On a failure the commitment
+// the next record carries stays the one before.
+func (m *MarkLog) RecordShareSet(ctx context.Context, s *ShareSet) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.claimed {
+		return errors.New("markstore: not claimed")
+	}
+	old := m.shares
+	m.shares = s.Clone()
+	if err := m.appendLocked(ctx, m.mark, nil); err != nil {
+		m.shares = old
+		return err
+	}
+	return nil
 }
 
 // Exits returns the day's exits the newest record carries (nil: none).
