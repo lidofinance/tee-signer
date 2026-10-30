@@ -17,7 +17,7 @@ import (
 // differ in activate_at only.
 func reviewBodies(t *testing.T) ([]byte, []byte) {
 	t.Helper()
-	s, err := setupwire.DecodeSetup(mustRead(t, filepath.Join("..", "..", "..", "governance", "setupwire", "testdata", "setup-dev.bin")))
+	s, err := setupwire.DecodeSetup(mustRead(t, filepath.Join("..", "..", "..", "governance", "setupwire", "testdata", "setup-dev-single.bin")))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-protocol"
@@ -232,6 +233,11 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 		var sec [32]byte
 		copy(sec[:], rec.Secret)
 		clear(rec.Secret)
+		if err := s.checkWholeKey(pk, &sec); err != nil {
+			clear(sec[:])
+			errs = append(errs, fmt.Errorf("%s: %w", k, err))
+			continue
+		}
 		s.Hooks.ExpectRecord(pk)
 		_, err = s.Signer.AddValidator(pk, sec, rec.Index, nil)
 		clear(sec[:])
@@ -847,10 +853,43 @@ func (s *Server) checkShare(pk backend.Pubkey, secret *[32]byte, keys []backend.
 			return &backend.RefusedError{Code: backend.StatusDuplicate, Detail: "validator already loaded"}
 		}
 	}
-	if _, err := core.PubkeyOf(*secret); err != nil {
+	got, err := core.PubkeyOf(*secret)
+	if err != nil {
 		return &backend.RefusedError{Code: backend.StatusBadKey, Detail: "share secret"}
 	}
+	return s.checkWholeKeyOf(pk, got)
+}
+
+// checkWholeKey refuses, under a setup with signing_mode = single, a key
+// whose public key is not the validator key pk: such a signer holds whole
+// keys only, never a share of a split. The sealed import reaches the same
+// result through checkSplit (t = n = 1, so share_pubkey is commitment 0,
+// the validator key); this check covers every way a key is stored or
+// loaded (a handover import, a restart).
+func (s *Server) checkWholeKey(pk backend.Pubkey, secret *[32]byte) error {
+	if !s.singleMode() {
+		return nil
+	}
+	got, err := core.PubkeyOf(*secret)
+	if err != nil {
+		return backend.Refused(backend.StatusBadKey, "share secret")
+	}
+	return s.checkWholeKeyOf(pk, got)
+}
+
+// checkWholeKeyOf is checkWholeKey for a key whose public key got is
+// known already.
+func (s *Server) checkWholeKeyOf(pk, got backend.Pubkey) error {
+	if s.singleMode() && got != pk {
+		return backend.Refused(backend.StatusBadKey, "the setup says signing_mode = single, so this signer holds whole keys only: the key is not the validator key %s",
+			pk.String()[:18])
+	}
 	return nil
+}
+
+// singleMode reports whether this runner's setup says signing_mode = single.
+func (s *Server) singleMode() bool {
+	return s.Updates != nil && s.Updates.SetupWire().SigningMode == setupwire.SigningModeSingle
 }
 
 // sealRecord seals a share record for the store.

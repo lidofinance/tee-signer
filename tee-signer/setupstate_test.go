@@ -74,7 +74,7 @@ func TestKeyRuleAtStart(t *testing.T) {
 // platform's refusal stops the start; a test network's setup does not set
 // it. The dev platform, which has no lock, passes on mainnet.
 func TestStartMainnetKeyRule(t *testing.T) {
-	st, err := setupwire.DecodeSetup(sampleSetup(t, "dev"))
+	st, err := setupwire.DecodeSetup(sampleSetup(t, "dev-single"))
 	if err != nil {
 		t.Fatal(err)
 	}

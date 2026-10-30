@@ -73,7 +73,7 @@ const (
 // are a wrong kind, format or size.
 func TestDecodeSetupBytes(t *testing.T) {
 	ss := samples(t)
-	for _, name := range []string{"setup-nitro", "setup-azure", "setup-gcp", "setup-dev", "setup-nitro-peers"} {
+	for _, name := range []string{"setup-nitro", "setup-azure", "setup-gcp", "setup-gcp-single", "setup-dev-single", "setup-dev-threshold", "setup-nitro-peers"} {
 		b, err := ss[name].Encode()
 		if err != nil {
 			t.Fatal(err)
@@ -276,12 +276,12 @@ func setupRefusals(t testing.TB) []setupRefusal {
 		{"maa endpoint with scheme", "setup-azure", func(s *Setup) { s.Platform.SealingKeyRelease.MAAEndpoint = "https://maa.example" }, "maa_endpoint", ""},
 		{"kid with path", "setup-azure", func(s *Setup) { s.Platform.SealingKeyRelease.KID = "keys/signer" }, "sealing_key_release.kid", ""},
 		{"gcp field on azure", "setup-azure", func(s *Setup) { s.Platform.SealingKeyRelease.KMSKey = "k" }, "sealing_key_release.kms_key does not apply to azure", "skip"},
-		{"dev dir relative", "setup-dev", func(s *Setup) { s.Platform.SlashingLogStore.Dir = "marks" }, "not an absolute, clean path", ""},
-		{"dev dir not clean", "setup-dev", func(s *Setup) { s.Platform.EncryptedStateStore.Dir = "/var/lib/../x" }, "not an absolute, clean path", ""},
-		{"dev dir trailing slash", "setup-dev", func(s *Setup) { s.Platform.SlashingLogStore.Dir = "/var/lib/marks/" }, "not an absolute, clean path", ""},
-		{"dev dir with space", "setup-dev", func(s *Setup) { s.Platform.SlashingLogStore.Dir = "/var/lib/my marks" }, "slashing_log_store.dir", ""},
-		{"bucket on dev", "setup-dev", func(s *Setup) { s.Platform.SlashingLogStore.Bucket = "b" }, "slashing_log_store.bucket does not apply to dev", "skip"},
-		{"key release on dev", "setup-dev", func(s *Setup) { s.Platform.SealingKeyRelease.Region = "eu-west-1" }, "sealing_key_release.region does not apply to dev", "skip"},
+		{"dev dir relative", "setup-dev-single", func(s *Setup) { s.Platform.SlashingLogStore.Dir = "marks" }, "not an absolute, clean path", ""},
+		{"dev dir not clean", "setup-dev-single", func(s *Setup) { s.Platform.EncryptedStateStore.Dir = "/var/lib/../x" }, "not an absolute, clean path", ""},
+		{"dev dir trailing slash", "setup-dev-single", func(s *Setup) { s.Platform.SlashingLogStore.Dir = "/var/lib/marks/" }, "not an absolute, clean path", ""},
+		{"dev dir with space", "setup-dev-single", func(s *Setup) { s.Platform.SlashingLogStore.Dir = "/var/lib/my marks" }, "slashing_log_store.dir", ""},
+		{"bucket on dev", "setup-dev-single", func(s *Setup) { s.Platform.SlashingLogStore.Bucket = "b" }, "slashing_log_store.bucket does not apply to dev", "skip"},
+		{"key release on dev", "setup-dev-single", func(s *Setup) { s.Platform.SealingKeyRelease.Region = "eu-west-1" }, "sealing_key_release.region does not apply to dev", "skip"},
 		{"peer hosts on azure", "setup-azure", func(s *Setup) { s.Platform.PeerAttestationHosts = []string{"a.example:443"} }, "peer_attestation_hosts is for nitro and dev", ""},
 		{"peer hosts on gcp", "setup-gcp", func(s *Setup) { s.Platform.PeerAttestationHosts = []string{"a.example:443"} }, "peer_attestation_hosts is for nitro and dev", ""},
 		{"single key accepted on azure", "setup-azure", func(s *Setup) { s.Platform.SealingKeyRelease.UnsafeSingleKeyAccepted = true }, "unsafe_single_key_accepted does not apply to azure", "skip"},
@@ -459,7 +459,7 @@ func TestPeerAttestationHosts(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(got.Platform.PeerAttestationHosts, c.Platform.PeerAttestationHosts) {
 		t.Fatalf("16 peer_attestation_hosts: %v", err)
 	}
-	d := ss["setup-dev"]
+	d := ss["setup-dev-threshold"]
 	d.Platform.PeerAttestationHosts = []string{"127.0.0.1:8443"}
 	if _, err := DecodeSetup(must(d.Encode())); err != nil {
 		t.Fatalf("dev with peer_attestation_hosts: %v", err)

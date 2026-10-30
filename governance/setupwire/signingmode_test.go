@@ -97,3 +97,29 @@ func TestSigningModeAcceptance(t *testing.T) {
 		t.Errorf("single gcp setup with the acceptance: %v", err)
 	}
 }
+
+// The samples cover both modes: setup-dev-single and setup-gcp-single
+// take whole keys only, setup-gcp-single with the acceptance on GCP; the
+// others take shares of splits only.
+func TestSampleSigningModes(t *testing.T) {
+	for name, s := range samples(t) {
+		single := name == "setup-dev-single" || name == "setup-gcp-single"
+		want := SigningModeThreshold
+		if single {
+			want = SigningModeSingle
+		}
+		if s.SigningMode != want {
+			t.Errorf("%s: signing_mode %s, want %s", name, s.SigningMode, want)
+		}
+		if err := s.Check(); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+		whole, split := CheckThresholdOn(s, 1, 1), CheckThresholdOn(s, 2, 3)
+		if single != (whole == nil) || single == (split == nil) {
+			t.Errorf("%s: 1 of 1 %v, 2 of 3 %v", name, whole, split)
+		}
+	}
+	if !samples(t)["setup-gcp-single"].Platform.SealingKeyRelease.UnsafeSingleKeyAccepted {
+		t.Error("setup-gcp-single lacks unsafe_single_key_accepted")
+	}
+}

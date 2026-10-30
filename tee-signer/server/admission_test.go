@@ -24,7 +24,7 @@ import (
 // second is refused before it is stored, and a restart loads the share
 // that was reported.
 func TestSSIStorage01SecondShareDoesNotReplaceTheFirst(t *testing.T) {
-	e := newTgtEnv(t, "dev", nil)
+	e := newShareTgtEnv(t, "dev", nil)
 	stale := oneKey(t, e) // the list a request read before either share
 	pk := newPubkey(t)
 	a, b := newSecret(t), newSecret(t)
@@ -46,7 +46,7 @@ func TestSSIStorage01SecondShareDoesNotReplaceTheFirst(t *testing.T) {
 // validator, each with its own share. One wins; the stored record and the
 // loaded share name the winner, and the key origin counts two keys.
 func TestShareAdmissionConcurrent(t *testing.T) {
-	e := newTgtEnv(t, "dev", nil)
+	e := newShareTgtEnv(t, "dev", nil)
 	stale := oneKey(t, e)
 	pk := newPubkey(t)
 	const n = 8
@@ -100,7 +100,7 @@ func TestShareAdmissionConcurrent(t *testing.T) {
 // and the runner blocked the validator from signing until a restart. Now
 // such a page is refused, and the validator signs once the import ends.
 func TestAPSTATE02RepeatedShareInAPage(t *testing.T) {
-	e := newTgtEnv(t, "dev", nil)
+	e := newShareTgtEnv(t, "dev", nil)
 	src := newSource(t, 4, testMark)
 	order, hash := e.order([]byte{1, 2}, nil)
 	pages := src.pages(e.sealTo(), hash, 2)

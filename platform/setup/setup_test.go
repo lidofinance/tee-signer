@@ -16,19 +16,26 @@ import (
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 )
 
-// The sample setups of backend/setupwire, one per platform.
-func sample(t *testing.T, platform string) []byte {
+// sample is the sample setup setup-<name> of governance/setupwire. The
+// name starts with the platform: nitro, gcp-single, dev-threshold.
+func sample(t *testing.T, name string) []byte {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join("..", "..", "governance", "setupwire", "testdata", "setup-"+platform+".bin"))
+	b, err := os.ReadFile(filepath.Join("..", "..", "governance", "setupwire", "testdata", "setup-"+name+".bin"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return b
 }
 
-func load(t *testing.T, platform string) *Setup {
+// platformOf is the platform of sample name.
+func platformOf(name string) string {
+	p, _, _ := strings.Cut(name, "-")
+	return p
+}
+
+func load(t *testing.T, name string) *Setup {
 	t.Helper()
-	s, err := Load(sample(t, platform), platform)
+	s, err := Load(sample(t, name), platformOf(name))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,14 +43,15 @@ func load(t *testing.T, platform string) *Setup {
 }
 
 func TestLoad(t *testing.T) {
-	for _, p := range []string{"nitro", "azure", "gcp", "dev"} {
-		raw := sample(t, p)
+	for _, name := range []string{"nitro", "azure", "gcp", "gcp-single", "dev-single", "dev-threshold"} {
+		p := platformOf(name)
+		raw := sample(t, name)
 		s, err := Load(raw, p)
 		if err != nil {
-			t.Fatalf("%s: %v", p, err)
+			t.Fatalf("%s: %v", name, err)
 		}
 		if h, _ := setupwire.SetupHash(raw); s.SHA256 != h || s.HashHex() == "" || s.Wire.Platform.Platform.String() != p {
-			t.Fatalf("%s: hash or platform", p)
+			t.Fatalf("%s: hash or platform", name)
 		}
 		// A setup for another platform is refused, whatever the image.
 		for _, other := range []string{"nitro", "azure", "gcp", "dev"} {
@@ -51,7 +59,7 @@ func TestLoad(t *testing.T) {
 				continue
 			}
 			if _, err := Load(raw, other); err == nil || !strings.Contains(err.Error(), "this image is "+other) {
-				t.Fatalf("%s setup on a %s image: %v", p, other, err)
+				t.Fatalf("%s setup on a %s image: %v", name, other, err)
 			}
 		}
 	}
@@ -87,7 +95,7 @@ func TestValuesFromTheSetup(t *testing.T) {
 	if g.SlashingLogStore() != "gcs:bucket=signer-marks-gcp" || g.EncryptedStateStore() != "gcs:bucket=signer-state_gcp" {
 		t.Fatalf("gcp stores: %q %q", g.SlashingLogStore(), g.EncryptedStateStore())
 	}
-	d := load(t, "dev")
+	d := load(t, "dev-single")
 	if d.SlashingLogStore() != "file:/var/lib/signer/marks" || d.EncryptedStateStore() != "file:/var/lib/signer/state-copy" {
 		t.Fatalf("dev stores: %q %q", d.SlashingLogStore(), d.EncryptedStateStore())
 	}
@@ -218,7 +226,7 @@ func TestEnvChannel(t *testing.T) {
 
 func TestFileChannel(t *testing.T) {
 	dir := t.TempDir()
-	raw := sample(t, "dev")
+	raw := sample(t, "dev-single")
 	p := filepath.Join(dir, "setup.bin")
 	if err := os.WriteFile(p, raw, 0o600); err != nil {
 		t.Fatal(err)
@@ -253,11 +261,11 @@ func TestParseSource(t *testing.T) {
 	}
 }
 
-// withPeers is the sample setup of platform p with the peer endpoints e,
-// encoded again.
-func withPeers(t *testing.T, p string, e ...string) []byte {
+// withPeers is the sample setup name with the peer endpoints e, encoded
+// again.
+func withPeers(t *testing.T, name string, e ...string) []byte {
 	t.Helper()
-	s, err := setupwire.DecodeSetup(sample(t, p))
+	s, err := setupwire.DecodeSetup(sample(t, name))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +347,7 @@ func TestNitroPeerRoutes(t *testing.T) {
 // (option egress); without them, and on Azure and GCP, egress is not
 // limited.
 func TestDevAttestationEgress(t *testing.T) {
-	d, err := Load(withPeers(t, "dev", "127.0.0.1:8443", "maa.test:443"), "dev")
+	d, err := Load(withPeers(t, "dev-single", "127.0.0.1:8443", "maa.test:443"), "dev")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,12 +357,12 @@ func TestDevAttestationEgress(t *testing.T) {
 	if e, limited := AttestationEgress(d.Wire); !limited || len(e) != 2 {
 		t.Fatalf("dev with peers: %v %v", e, limited)
 	}
-	for _, p := range []string{"dev", "azure", "gcp"} {
+	for _, p := range []string{"dev-single", "azure", "gcp"} {
 		if e, limited := AttestationEgress(load(t, p).Wire); limited || e != nil {
 			t.Fatalf("%s: %v %v", p, e, limited)
 		}
 	}
-	if o := load(t, "dev").Options(); len(o) != 0 {
+	if o := load(t, "dev-single").Options(); len(o) != 0 {
 		t.Fatalf("dev options without peers %v", o)
 	}
 }

@@ -357,7 +357,12 @@ so: `signing_mode`, a leaf of the public part of the setup (setup format
 t = n = 1 only and refuses any share of a split with n > 1; a
 threshold-mode runner refuses t = n = 1 and applies the threshold rule
 (2t > n, and 2t - n >= 2 on mainnet) to every other split. Both
-refusals are `BAD_KEY` and name the setup's mode. Single mode is allowed
+refusals are `BAD_KEY` and name the setup's mode. A single-mode runner
+also refuses to store a key whose public key is not the validator key, on
+every import path (sealed, handover, the debug plain import), with
+`BAD_KEY`, and does not load such a key at restart: the record stays in
+the store, the key is not loaded, the start goes on and logs "some stored
+shares did not load" with the key's name. Single mode is allowed
 on every chain, mainnet included, on AWS and Azure. A handover keeps the
 mode: the source refuses a target whose published `signing_mode` differs
 from its own, as it refuses any other public value that differs.
@@ -394,8 +399,10 @@ with `-allow-gcp-unsafe-single-key` and prints the WARNING line, and
 single-node signer is not a split, so the mainnet overlap rule
 (2t - n >= 2) does not apply to it; it applies to every real split.
 Tests: TestThresholdOn, TestSigningMode, TestSigningModeAcceptance,
-TestUnsafeSingleKeyAccepted (setupwire), TestImportSigningMode,
-TestHealthSingleKey, TestHandoverKeepsSigningMode (tee-signer/server),
+TestSampleSigningModes, TestUnsafeSingleKeyAccepted (setupwire),
+TestImportSigningMode, TestImportSampleSigningModes,
+TestSingleModeRefusesAnotherKey, TestHealthSingleKey,
+TestHandoverKeepsSigningMode (tee-signer/server),
 TestImportDraftSigningMode,
 TestSetupSingleSignerOnEveryPlatform, TestSetupAllowGCPSingleFlagScope,
 TestSetupMainnetGCPSingleNeedsNoLockAccepted, TestImportDraftSingleGCP
