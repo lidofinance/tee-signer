@@ -412,14 +412,18 @@ func (k Keys) dataKey(ctx context.Context, store platform.Store) ([]byte, error)
 // sealing/datakey.kms.ignored-<first 8 bytes of its SHA-256, hex> before
 // the new key overwrites it. If the shares were only missing from the
 // listing (a partial restore, a late mount), the operator can put the
-// copy back by hand. The name follows the blob, so restarts do not pile
-// up copies.
+// copy back by hand (platform-aws/deploy/README.md). Every start without
+// a share sets aside the blob the start before it made, so each such
+// restart leaves one more copy; only a blob set aside a second time (the
+// start failed after setAside) keeps its name.
 func setAside(store platform.Store, blob []byte) error {
 	sum := sha256.Sum256(blob)
 	aside := fmt.Sprintf("%s.ignored-%x", dataKeyBlob, sum[:8])
 	if err := store.Put(aside, blob); err != nil {
 		return fmt.Errorf("nitro: keep the ignored sealing key blob as %s: %w", aside, err)
 	}
+	// The runner's own logger does not reach the platform: this goes to
+	// the default logger, and the copy on the parent is the lasting trace.
 	slog.Warn("nitro: no stored share, so the stored sealing key blob is not used; a new key replaces it (AWS-KMS-02)",
 		"blob", dataKeyBlob, "copy", aside)
 	return nil

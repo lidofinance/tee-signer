@@ -66,12 +66,28 @@ SETUP=signer-2.bin platform-aws/deploy/parent-run.sh               # on the pare
   `sealing/datakey.kms`. The runner uses a stored sealing blob only when
   the store also lists an object under `shares/`. On a store without
   one it copies the blob to `sealing/datakey.kms.ignored-<hash>`, logs a
-  warning and makes a new key. If shares were only missing at that start
-  (a partial restore, a late mount), put the copy back as
-  `sealing/datakey.kms` next to them. The share check is weak on its
-  own: any object under `shares/` passes it. The barrier behind it is
-  the mark log, whose claim refuses stored shares without a record that
-  opens, but before the lock the admin can plant such a record too
+  warning and makes a new key. `<hash>` is the first 8 bytes of the
+  blob's SHA-256. Each start without a share leaves one more copy: it
+  sets aside the blob the start before it made. A production enclave has
+  no console, so look for `.ignored-` files on the parent rather than for
+  the log line.
+- If shares were only missing at such a start (a partial restore, a late
+  mount), the blob they were sealed under is one of those copies: the
+  oldest copy whose file time is after the newest file under `shares/`
+  (the first start that found no shares set it aside). The other copies
+  hold keys made for an empty store, or a planted blob, and can be
+  deleted once the shares open. To restore, first move the current
+  `sealing/datakey.kms` aside by hand. Shares imported since that start
+  were sealed under it and open only with it; the runner opens one
+  sealing key, so keep those shares and that blob together, apart from
+  the old set. Then put the copy back as `sealing/datakey.kms` with the
+  old shares and start. The runner uses it only if `shares/` lists
+  something at that start. A wrong copy shows as shares that do not
+  unseal: move the current blob aside again and try the next copy.
+- The share check is weak on its own: any object under `shares/` passes
+  it. The barrier behind it is the mark log, whose claim refuses stored
+  shares without a record that opens, but before the lock the admin can
+  plant such a record too
   (`kms:Encrypt` under a mark log key's context). So for mainnet, create
   the key with its final, locked policy, or, if the key had a mutable
   phase, check its CloudTrail history before the first start: no
