@@ -1,6 +1,6 @@
 //go:build nts
 
-package nts
+package ntscore
 
 import (
 	"bytes"
@@ -75,23 +75,23 @@ func mutate(rng *testRng, good []byte) []byte {
 // checkKE runs both parsers on buf and reports whether it parsed.
 func checkKE(t testing.TB, buf []byte) bool {
 	t.Helper()
-	if n, done, err := keResponseLength(buf); err == nil && done && (n > len(buf) || n > KEMaxResponseLen) {
+	if n, done, err := KEComplete(buf); err == nil && done && (n > len(buf) || n > KEMaxResponseLen) {
 		t.Fatalf("response length %d of %d octets", n, len(buf))
 	}
-	r, err := parseKEResponse(buf)
+	r, err := ParseKEResponse(buf)
 	if err != nil {
 		return false
 	}
-	if len(r.cookies) < 1 || len(r.cookies) > MaxCookies {
-		t.Fatalf("%d cookies", len(r.cookies))
+	if len(r.Cookies) < 1 || len(r.Cookies) > MaxCookies {
+		t.Fatalf("%d cookies", len(r.Cookies))
 	}
-	for _, c := range r.cookies {
-		if len(c) < 1 || len(c) > maxCookieLen {
+	for _, c := range r.Cookies {
+		if len(c) < 1 || len(c) > MaxCookieLen {
 			t.Fatalf("cookie of %d octets", len(c))
 		}
 	}
-	if len(r.server) > maxServerName {
-		t.Fatalf("server name of %d octets", len(r.server))
+	if len(r.Server) > MaxServerName {
+		t.Fatalf("server name of %d octets", len(r.Server))
 	}
 	return true
 }
@@ -118,12 +118,12 @@ func TestKEGarbageAndMutations(t *testing.T) {
 	t.Logf("NTS-KE: %d garbage and %d mutated responses, %d mutated ones still valid", rounds, rounds, accepted)
 }
 
-func randomRequest(t testing.TB, rng *testRng, placeholders int) ([]byte, *pendingRequest) {
+func randomRequest(t testing.TB, rng *testRng, placeholders int) ([]byte, *PendingRequest) {
 	t.Helper()
-	in := requestInput{transmit: ntpTimestamp(rng.next()), cookie: rep(0xc0, 100), placeholders: placeholders}
-	copy(in.uniqueID[:], rng.bytes(uniqueIDLen))
-	copy(in.nonce[:], rng.bytes(nonceLen))
-	packet, req, err := buildRequest(testKey(t, testC2S), &in)
+	in := RequestInput{Transmit: NTPTimestamp(rng.next()), Cookie: rep(0xc0, 100), Placeholders: placeholders}
+	copy(in.UniqueID[:], rng.bytes(UniqueIDLen))
+	copy(in.Nonce[:], rng.bytes(NonceLen))
+	packet, req, err := BuildRequest(testKey(t, testC2S), &in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,22 +154,22 @@ func TestNTPGarbageAndMutations(t *testing.T) {
 		if round%2 == 0 && len(g) >= 48 {
 			copy(g[:48], good[:48])
 		}
-		if v, err := req.verify(s2c, g); err == nil && v.time != nil {
+		if v, err := req.Verify(s2c, g); err == nil && v.Time != nil {
 			t.Fatalf("round %d: garbage accepted", round)
 		}
 
 		m := mutate(&rng, good)
-		v, err := req.verify(s2c, m)
+		v, err := req.Verify(s2c, m)
 		switch {
-		case err == nil && v.time != nil:
+		case err == nil && v.Time != nil:
 			// Only a change that changed nothing, or octets added after the
 			// end, may leave a response valid: those octets are
 			// unauthenticated fields and are discarded.
 			if len(m) < len(good) || !bytes.Equal(m[:len(good)], good) {
 				t.Fatalf("round %d: a changed response was accepted", round)
 			}
-			if len(v.time.cookies) > placeholders+1 {
-				t.Fatalf("round %d: %d cookies", round, len(v.time.cookies))
+			if len(v.Time.Cookies) > placeholders+1 {
+				t.Fatalf("round %d: %d cookies", round, len(v.Time.Cookies))
 			}
 			accepted++
 		case err == nil:
@@ -179,8 +179,8 @@ func TestNTPGarbageAndMutations(t *testing.T) {
 			kod++
 		}
 		// The real response still works after the refused ones.
-		if !req.answered {
-			if v, err := req.verify(s2c, good); err != nil || v.time == nil {
+		if !req.Answered() {
+			if v, err := req.Verify(s2c, good); err != nil || v.Time == nil {
 				t.Fatalf("round %d: the real response refused after a mutated one: %v", round, err)
 			}
 		}

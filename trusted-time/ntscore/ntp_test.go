@@ -1,6 +1,6 @@
 //go:build nts
 
-package nts
+package ntscore
 
 import (
 	"bytes"
@@ -36,9 +36,9 @@ const (
 
 var testNonce = bytes.Repeat([]byte{0x4e}, 16)
 
-func testKey(t testing.TB, raw []byte) *sivKey {
+func testKey(t testing.TB, raw []byte) *SIVKey {
 	t.Helper()
-	k, err := newSIVKey(raw)
+	k, err := NewSIVKey(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,8 +47,8 @@ func testKey(t testing.TB, raw []byte) *sivKey {
 
 func rep(b byte, n int) []byte { return bytes.Repeat([]byte{b}, n) }
 
-func uid(seed byte) [uniqueIDLen]byte {
-	var u [uniqueIDLen]byte
+func uid(seed byte) [UniqueIDLen]byte {
+	var u [UniqueIDLen]byte
 	for i := range u {
 		u[i] = seed*31 + byte(i)
 	}
@@ -211,11 +211,11 @@ func kissOfDeath(req *clientRequest, code string, withUniqueID bool) []byte {
 
 // requestWith is a request with a 100-octet cookie. The same arguments
 // give the same bytes and an equal pending state.
-func requestWith(t testing.TB, placeholders int, transmit uint64, uniqueID [uniqueIDLen]byte) ([]byte, *pendingRequest) {
+func requestWith(t testing.TB, placeholders int, transmit uint64, uniqueID [UniqueIDLen]byte) ([]byte, *PendingRequest) {
 	t.Helper()
-	in := requestInput{transmit: ntpTimestamp(transmit), uniqueID: uniqueID, cookie: rep(0xc0, 100), placeholders: placeholders}
-	copy(in.nonce[:], testNonce)
-	packet, req, err := buildRequest(testKey(t, testC2S), &in)
+	in := RequestInput{Transmit: NTPTimestamp(transmit), UniqueID: uniqueID, Cookie: rep(0xc0, 100), Placeholders: placeholders}
+	copy(in.Nonce[:], testNonce)
+	packet, req, err := BuildRequest(testKey(t, testC2S), &in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +224,7 @@ func requestWith(t testing.TB, placeholders int, transmit uint64, uniqueID [uniq
 
 // request is the standard request (one placeholder), its pending state,
 // and what the test server reads from it.
-func request(t testing.TB) ([]byte, *pendingRequest, *clientRequest) {
+func request(t testing.TB) ([]byte, *PendingRequest, *clientRequest) {
 	t.Helper()
 	packet, req := requestWith(t, 1, testTransmit, uid(1))
 	read := serverReadRequest(testC2S, packet)
@@ -234,36 +234,36 @@ func request(t testing.TB) ([]byte, *pendingRequest, *clientRequest) {
 	return packet, req, read
 }
 
-func pending(t testing.TB) *pendingRequest {
+func pending(t testing.TB) *PendingRequest {
 	_, req, _ := request(t)
 	return req
 }
 
-func verify(t testing.TB, packet []byte) (verdict, error) {
-	return pending(t).verify(testKey(t, testS2C), packet)
+func verify(t testing.TB, packet []byte) (Verdict, error) {
+	return pending(t).Verify(testKey(t, testS2C), packet)
 }
 
-// timeOf is the time response of a verdict, or a failure.
-func timeOf(t testing.TB, v verdict, err error) *timeResponse {
+// timeOf is the time response of a Verdict, or a failure.
+func timeOf(t testing.TB, v Verdict, err error) *TimeResponse {
 	t.Helper()
-	if err != nil || v.time == nil {
+	if err != nil || v.Time == nil {
 		t.Fatalf("expected a time sample, got %+v, %v", v, err)
 	}
-	return v.time
+	return v.Time
 }
 
 // mustTime verifies packet against a fresh standard request and returns
 // its time response.
-func mustTime(t testing.TB, packet []byte) *timeResponse {
+func mustTime(t testing.TB, packet []byte) *TimeResponse {
 	t.Helper()
 	v, err := verify(t, packet)
 	return timeOf(t, v, err)
 }
 
 // mustTimeReq is mustTime against req with s2c.
-func mustTimeReq(t testing.TB, req *pendingRequest, s2c *sivKey, packet []byte) *timeResponse {
+func mustTimeReq(t testing.TB, req *PendingRequest, s2c *SIVKey, packet []byte) *TimeResponse {
 	t.Helper()
-	v, err := req.verify(s2c, packet)
+	v, err := req.Verify(s2c, packet)
 	return timeOf(t, v, err)
 }
 
@@ -283,37 +283,20 @@ func wantErr(t testing.TB, what string, err, want error) {
 func TestPlaceholdersFitIn1280Octets(t *testing.T) {
 	// 48 + 36 + 40 + 8 * (4 + 104) = 988: a cookie of the RFC's suggested
 	// size leaves room for all seven.
-	if maxPlaceholders(104) != 7 || requestLen(104, 7) != 988 {
-		t.Fatalf("104: %d placeholders, %d octets", maxPlaceholders(104), requestLen(104, 7))
+	if MaxPlaceholdersFor(104) != 7 || RequestLen(104, 7) != 988 {
+		t.Fatalf("104: %d placeholders, %d octets", MaxPlaceholdersFor(104), RequestLen(104, 7))
 	}
 	// 48 + 36 + 40 + (p + 1) * (4 + 1024) <= 1280 only for p = 0.
-	if maxPlaceholders(maxCookieLen) != 0 || requestLen(maxCookieLen, 0) != 1152 {
-		t.Fatalf("1024: %d placeholders, %d octets", maxPlaceholders(maxCookieLen), requestLen(maxCookieLen, 0))
+	if MaxPlaceholdersFor(MaxCookieLen) != 0 || RequestLen(MaxCookieLen, 0) != 1152 {
+		t.Fatalf("1024: %d placeholders, %d octets", MaxPlaceholdersFor(MaxCookieLen), RequestLen(MaxCookieLen, 0))
 	}
 	// 48 + 36 + 40 + 4 * 288 = 1276.
-	if maxPlaceholders(284) != 3 {
-		t.Fatalf("284: %d placeholders", maxPlaceholders(284))
+	if MaxPlaceholdersFor(284) != 3 {
+		t.Fatalf("284: %d placeholders", MaxPlaceholdersFor(284))
 	}
 	// A tiny cookie still makes a 16-octet field (RFC 7822 section 7.5.1.4).
-	if fieldLen(1) != 16 || fieldLen(12) != 16 || fieldLen(13) != 20 {
-		t.Fatalf("field lengths %d %d %d", fieldLen(1), fieldLen(12), fieldLen(13))
-	}
-}
-
-func TestHeaderFields(t *testing.T) {
-	b := make([]byte, ntpHeaderLen)
-	b[0] = 0b10_100_100
-	b[1] = 2
-	b[3] = 0xe9
-	copy(b[4:8], []byte{0, 1, 0, 0})
-	copy(b[12:16], "GPS\x00")
-	binary.BigEndian.PutUint64(b[24:32], 7)
-	h := parseHeader(b)
-	if h.leap != 2 || h.version != 4 || h.mode != 4 || h.stratum != 2 || h.precision != -23 {
-		t.Fatalf("header %+v", h)
-	}
-	if h.rootDelay != 0x0001_0000 || string(h.referenceID[:]) != "GPS\x00" || h.origin != 7 {
-		t.Fatalf("header %+v", h)
+	if FieldLen(1) != 16 || FieldLen(12) != 16 || FieldLen(13) != 20 {
+		t.Fatalf("field lengths %d %d %d", FieldLen(1), FieldLen(12), FieldLen(13))
 	}
 }
 
@@ -336,12 +319,12 @@ func TestRequestLayout(t *testing.T) {
 	if !bytes.Equal(read.uniqueID, u[:]) || !bytes.Equal(read.cookie, rep(0xc0, 100)) || read.placeholders != 1 || read.placeholderLen != 100 {
 		t.Fatalf("the server read %+v", read)
 	}
-	if req.transmit != testTransmit || req.answered {
+	if req.Transmit() != testTransmit || req.Answered() {
 		t.Fatalf("pending %+v", req)
 	}
 	// Field order and types: UID, cookie, placeholder, authenticator.
 	for i, at := range []int{48, 84, 188, 292} {
-		want := []uint16{extUniqueID, extCookie, extPlaceholder, extAuth}[i]
+		want := []uint16{ExtUniqueID, ExtCookie, ExtPlaceholder, ExtAuth}[i]
 		if got := binary.BigEndian.Uint16(packet[at:]); got != want {
 			t.Fatalf("field at %d: type %#04x, want %#04x", at, got, want)
 		}
@@ -378,48 +361,48 @@ func TestRequestIsDeterministicAndDependsOnEveryInput(t *testing.T) {
 
 func TestRequestLimits(t *testing.T) {
 	c2s := testKey(t, testC2S)
-	in := requestInput{transmit: testTransmit, uniqueID: uid(1), cookie: rep(1, 100), placeholders: 8}
-	copy(in.nonce[:], testNonce)
-	_, _, err := buildRequest(c2s, &in)
-	wantErr(t, "8 placeholders", err, errTooManyPlaceholders)
-	in.placeholders = 7
-	p, _, err := buildRequest(c2s, &in)
+	in := RequestInput{Transmit: testTransmit, UniqueID: uid(1), Cookie: rep(1, 100), Placeholders: 8}
+	copy(in.Nonce[:], testNonce)
+	_, _, err := BuildRequest(c2s, &in)
+	wantErr(t, "8 placeholders", err, ErrTooManyPlaceholders)
+	in.Placeholders = 7
+	p, _, err := BuildRequest(c2s, &in)
 	if err != nil || len(p) != 48+36+8*104+40 {
-		t.Fatalf("7 placeholders: %d octets, %v", len(p), err)
+		t.Fatalf("7 Placeholders: %d octets, %v", len(p), err)
 	}
 	if read := serverReadRequest(testC2S, p); read == nil || read.placeholders != 7 {
 		t.Fatalf("the server read %+v", read)
 	}
 
-	in.cookie = rep(1, maxCookieLen)
-	in.placeholders = 1
-	_, _, err = buildRequest(c2s, &in)
-	wantErr(t, "1024-octet cookie with a placeholder", err, errRequestTooLong)
-	in.placeholders = 0
-	if p, _, err = buildRequest(c2s, &in); err != nil || len(p) > NTPMaxRequestLen {
+	in.Cookie = rep(1, MaxCookieLen)
+	in.Placeholders = 1
+	_, _, err = BuildRequest(c2s, &in)
+	wantErr(t, "1024-octet cookie with a placeholder", err, ErrRequestTooLong)
+	in.Placeholders = 0
+	if p, _, err = BuildRequest(c2s, &in); err != nil || len(p) > NTPMaxRequestLen {
 		t.Fatalf("1024-octet cookie alone: %d octets, %v", len(p), err)
 	}
-	in.cookie = nil
-	_, _, err = buildRequest(c2s, &in)
-	wantErr(t, "no cookie", err, errBadCookie)
-	in.cookie = rep(1, maxCookieLen+1)
-	_, _, err = buildRequest(c2s, &in)
-	wantErr(t, "1025-octet cookie", err, errBadCookie)
+	in.Cookie = nil
+	_, _, err = BuildRequest(c2s, &in)
+	wantErr(t, "no cookie", err, ErrBadCookie)
+	in.Cookie = rep(1, MaxCookieLen+1)
+	_, _, err = BuildRequest(c2s, &in)
+	wantErr(t, "1025-octet cookie", err, ErrBadCookie)
 
 	// A cookie whose length is not a multiple of 4 is padded, and so is
 	// each placeholder.
-	in.cookie = rep(9, 101)
-	in.placeholders = 2
-	p, _, err = buildRequest(c2s, &in)
+	in.Cookie = rep(9, 101)
+	in.Placeholders = 2
+	p, _, err = BuildRequest(c2s, &in)
 	if err != nil {
 		t.Fatal(err)
 	}
 	read := serverReadRequest(testC2S, p)
 	if read == nil || len(read.cookie) != 104 || !bytes.Equal(read.cookie[:101], rep(9, 101)) || !allZero(read.cookie[101:]) {
-		t.Fatalf("odd cookie: %+v", read)
+		t.Fatalf("odd Cookie: %+v", read)
 	}
 	if read.placeholders != 2 || read.placeholderLen != 104 {
-		t.Fatalf("odd cookie placeholders: %+v", read)
+		t.Fatalf("odd cookie Placeholders: %+v", read)
 	}
 }
 
@@ -431,19 +414,19 @@ func TestRoundTrip(t *testing.T) {
 	r.cookies = [][]byte{rep(0xaa, 100), rep(0xbb, 104)}
 	packet := serverResponse(testS2C, read, &r)
 	s := mustTimeReq(t, req, testKey(t, testS2C), packet)
-	if s.leap != 1 || s.stratum != 3 || s.precision != -24 {
+	if s.Leap != 1 || s.Stratum != 3 || s.Precision != -24 {
 		t.Fatalf("sample %+v", s)
 	}
-	if s.rootDelay != 0x0001_8000 || s.rootDelay.nanos() != 1_500_000_000 || s.rootDispersion != 0x0000_0042 {
+	if s.RootDelay != 0x0001_8000 || s.RootDelay.Nanos() != 1_500_000_000 || s.RootDispersion != 0x0000_0042 {
 		t.Fatalf("root values %+v", s)
 	}
-	if uint64(s.reference) != r.reference || uint64(s.origin) != testTransmit || uint64(s.receive) != r.receive || uint64(s.transmit) != r.transmit {
+	if uint64(s.Reference) != r.reference || uint64(s.Origin) != testTransmit || uint64(s.Receive) != r.receive || uint64(s.Transmit) != r.transmit {
 		t.Fatalf("timestamps %+v", s)
 	}
-	if len(s.cookies) != 2 || !bytes.Equal(s.cookies[0], rep(0xaa, 100)) || !bytes.Equal(s.cookies[1], rep(0xbb, 104)) {
-		t.Fatalf("cookies %v", s.cookies)
+	if len(s.Cookies) != 2 || !bytes.Equal(s.Cookies[0], rep(0xaa, 100)) || !bytes.Equal(s.Cookies[1], rep(0xbb, 104)) {
+		t.Fatalf("cookies %v", s.Cookies)
 	}
-	if !req.answered {
+	if !req.Answered() {
 		t.Fatal("not answered")
 	}
 }
@@ -452,7 +435,7 @@ func TestLeapIndicatorValues(t *testing.T) {
 	for _, leap := range []uint8{0, 1, 2} {
 		r := goodReply()
 		r.leap = leap
-		if got := mustTime(t, replyWith(t, r)).leap; got != leap {
+		if got := mustTime(t, replyWith(t, r)).Leap; got != leap {
 			t.Fatalf("leap %d read as %d", leap, got)
 		}
 	}
@@ -475,11 +458,11 @@ func TestCookiesUpToPlaceholdersPlusOne(t *testing.T) {
 		}
 		r := goodReply()
 		r.cookies = cookies(placeholders + 2)
-		_, err := req.verify(s2c, serverResponse(testS2C, read, &r))
-		wantErr(t, "too many cookies", err, errTooManyCookies)
+		_, err := req.Verify(s2c, serverResponse(testS2C, read, &r))
+		wantErr(t, "too many cookies", err, ErrTooManyCookies)
 		r.cookies = cookies(placeholders + 1)
-		if got := len(mustTimeReq(t, req, s2c, serverResponse(testS2C, read, &r)).cookies); got != placeholders+1 {
-			t.Fatalf("%d placeholders: %d cookies", placeholders, got)
+		if got := len(mustTimeReq(t, req, s2c, serverResponse(testS2C, read, &r)).Cookies); got != placeholders+1 {
+			t.Fatalf("%d Placeholders: %d cookies", placeholders, got)
 		}
 	}
 }
@@ -498,17 +481,17 @@ func TestEveryChangedOctetIsRefused(t *testing.T) {
 		for _, mask := range []byte{0x01, 0x02, 0x04, 0x10, 0x40, 0x80, 0xff} {
 			m := append([]byte(nil), good...)
 			m[i] ^= mask
-			v, err := pending(t).verify(s2c, m)
+			v, err := pending(t).Verify(s2c, m)
 			switch {
 			case err != nil:
 				refused++
-			case v.kiss != "":
+			case v.Kiss != "":
 				if i != 1 || m[1] != 0 {
 					t.Fatalf("octet %d xor %#02x: a KoD, but only stratum 0 makes one", i, mask)
 				}
 				// The reference ID 192.0.2.7 is not printable: shown as "????".
-				if v.kiss != "????" {
-					t.Fatalf("KoD code %q", v.kiss)
+				if v.Kiss != "????" {
+					t.Fatalf("KoD code %q", v.Kiss)
 				}
 				kod++
 			default:
@@ -529,26 +512,26 @@ func TestWrongUniqueID(t *testing.T) {
 	other := *read
 	u := uid(9)
 	other.uniqueID = u[:]
-	_, err := req.verify(s2c, serverResponse(testS2C, &other, &r))
-	wantErr(t, "other Unique Identifier", err, errUniqueIDMismatch)
+	_, err := req.Verify(s2c, serverResponse(testS2C, &other, &r))
+	wantErr(t, "other Unique Identifier", err, ErrUniqueIDMismatch)
 	// A shorter or longer echo is not ours either.
 	for _, n := range []int{16, 31, 36} {
 		u := uid(1)
 		echo := make([]byte, n)
 		copy(echo, u[:])
 		other.uniqueID = echo
-		_, err := req.verify(s2c, serverResponse(testS2C, &other, &r))
-		wantErr(t, "echo of "+string(rune('0'+n/10))+string(rune('0'+n%10))+" octets", err, errUniqueIDMismatch)
+		_, err := req.Verify(s2c, serverResponse(testS2C, &other, &r))
+		wantErr(t, "echo of "+string(rune('0'+n/10))+string(rune('0'+n%10))+" octets", err, ErrUniqueIDMismatch)
 	}
 	missing := goodReply()
 	missing.noUniqueID = true
-	_, err = req.verify(s2c, serverResponse(testS2C, read, &missing))
-	wantErr(t, "missing", err, errMissingUniqueID)
+	_, err = req.Verify(s2c, serverResponse(testS2C, read, &missing))
+	wantErr(t, "missing", err, ErrMissingUniqueID)
 	u1 := uid(1)
 	twice := goodReply()
-	twice.plainFields = [][]byte{testField(extUniqueID, u1[:])}
-	_, err = req.verify(s2c, serverResponse(testS2C, read, &twice))
-	wantErr(t, "twice", err, errDuplicateUniqueID)
+	twice.plainFields = [][]byte{testField(ExtUniqueID, u1[:])}
+	_, err = req.Verify(s2c, serverResponse(testS2C, read, &twice))
+	wantErr(t, "twice", err, ErrDuplicateUniqueID)
 	// After all of these the real response is still accepted.
 	mustTimeReq(t, req, s2c, serverResponse(testS2C, read, &r))
 }
@@ -558,8 +541,8 @@ func TestWrongOrigin(t *testing.T) {
 	other := *read
 	binary.BigEndian.PutUint64(other.transmit[:], testTransmit^1)
 	r := goodReply()
-	_, err := req.verify(testKey(t, testS2C), serverResponse(testS2C, &other, &r))
-	wantErr(t, "other origin", err, errOriginMismatch)
+	_, err := req.Verify(testKey(t, testS2C), serverResponse(testS2C, &other, &r))
+	wantErr(t, "other origin", err, ErrOriginMismatch)
 }
 
 func TestReplayedResponse(t *testing.T) {
@@ -568,20 +551,20 @@ func TestReplayedResponse(t *testing.T) {
 	r := goodReply()
 	packet := serverResponse(testS2C, read, &r)
 	// A refused packet first does not use up the request.
-	if _, err := req.verify(s2c, packet[:60]); err == nil {
+	if _, err := req.Verify(s2c, packet[:60]); err == nil {
 		t.Fatal("a cut packet was accepted")
 	}
 	mustTimeReq(t, req, s2c, packet)
-	_, err := req.verify(s2c, packet)
-	wantErr(t, "replay", err, errAlreadyAnswered)
+	_, err := req.Verify(s2c, packet)
+	wantErr(t, "replay", err, ErrAlreadyAnswered)
 	// The same response against a later request: other transmit timestamp,
 	// other Unique Identifier.
 	_, next := requestWith(t, 1, testTransmit+1, uid(2))
-	_, err = next.verify(s2c, packet)
-	wantErr(t, "later request", err, errOriginMismatch)
+	_, err = next.Verify(s2c, packet)
+	wantErr(t, "later request", err, ErrOriginMismatch)
 	_, sameTransmit := requestWith(t, 1, testTransmit, uid(2))
-	_, err = sameTransmit.verify(s2c, packet)
-	wantErr(t, "same transmit, other identifier", err, errUniqueIDMismatch)
+	_, err = sameTransmit.Verify(s2c, packet)
+	wantErr(t, "same transmit, other identifier", err, ErrUniqueIDMismatch)
 }
 
 func TestTruncatedPackets(t *testing.T) {
@@ -591,29 +574,29 @@ func TestTruncatedPackets(t *testing.T) {
 		if err == nil {
 			t.Fatalf("length %d accepted", n)
 		}
-		if n < 48 && !errors.Is(err, errTooShort) {
+		if n < 48 && !errors.Is(err, ErrTooShort) {
 			t.Fatalf("length %d: %v", n, err)
 		}
 	}
 	// The header alone: no Unique Identifier.
 	_, err := verify(t, packet[:48])
-	wantErr(t, "header alone", err, errMissingUniqueID)
+	wantErr(t, "header alone", err, ErrMissingUniqueID)
 }
 
 func TestOversizedAndMalformedFields(t *testing.T) {
 	good := replyWith(t, goodReply())
 	long := append(append([]byte(nil), good...), make([]byte, NTPMaxResponseLen+1-len(good))...)
 	_, err := verify(t, long)
-	wantErr(t, "2049 octets", err, errTooLong)
+	wantErr(t, "2049 octets", err, ErrTooLong)
 
 	// Cookies: too long, empty.
 	r := goodReply()
-	r.cookies = [][]byte{rep(1, maxCookieLen+4)}
+	r.cookies = [][]byte{rep(1, MaxCookieLen+4)}
 	_, err = verify(t, replyWith(t, r))
-	wantErr(t, "long cookie", err, errBadCookie)
+	wantErr(t, "long cookie", err, ErrBadCookie)
 	r.cookies = [][]byte{{}}
 	_, err = verify(t, replyWith(t, r))
-	wantErr(t, "empty cookie", err, errBadCookie)
+	wantErr(t, "empty cookie", err, ErrBadCookie)
 
 	// Plain fields: length not a multiple of 4, under 16, past the end.
 	for _, bad := range [][]byte{
@@ -625,13 +608,13 @@ func TestOversizedAndMalformedFields(t *testing.T) {
 		r := goodReply()
 		r.plainFields = [][]byte{bad}
 		_, err := verify(t, replyWith(t, r))
-		wantErr(t, "bad plain field", err, errBadExtensionField)
+		wantErr(t, "bad plain field", err, ErrBadExtensionField)
 	}
 	r = goodReply()
 	r.noAuthenticator = true
 	pastEnd := append(replyWith(t, r), 0x7f, 0x00, 0x01, 0x00, 0, 0, 0, 0)
 	_, err = verify(t, pastEnd)
-	wantErr(t, "field past the end", err, errBadExtensionField)
+	wantErr(t, "field past the end", err, ErrBadExtensionField)
 
 	// Encrypted fields: a length that is not a multiple of 4, too short,
 	// past the end.
@@ -644,20 +627,20 @@ func TestOversizedAndMalformedFields(t *testing.T) {
 		r := goodReply()
 		r.rawPlaintext = raw
 		_, err := verify(t, replyWith(t, r))
-		wantErr(t, "bad encrypted field", err, errBadEncryptedField)
+		wantErr(t, "bad encrypted field", err, ErrBadEncryptedField)
 	}
 }
 
 func TestOtherEncryptedFieldsAreSkipped(t *testing.T) {
 	// A 4-octet unknown field and an encrypted placeholder, then a cookie.
 	raw := []byte{0x7e, 0x00, 0x00, 0x04}
-	raw = append(raw, testField(extPlaceholder, make([]byte, 8))...)
-	raw = append(raw, testField(extCookie, rep(0xcc, 100))...)
+	raw = append(raw, testField(ExtPlaceholder, make([]byte, 8))...)
+	raw = append(raw, testField(ExtCookie, rep(0xcc, 100))...)
 	r := goodReply()
 	r.rawPlaintext = raw
 	s := mustTime(t, replyWith(t, r))
-	if len(s.cookies) != 1 || !bytes.Equal(s.cookies[0], rep(0xcc, 100)) {
-		t.Fatalf("cookies %v", s.cookies)
+	if len(s.Cookies) != 1 || !bytes.Equal(s.Cookies[0], rep(0xcc, 100)) {
+		t.Fatalf("cookies %v", s.Cookies)
 	}
 }
 
@@ -667,16 +650,16 @@ func TestKissOfDeathPackets(t *testing.T) {
 	for _, code := range []string{"RATE", "NTSN", "DENY", "RSTR", "STEP"} {
 		req := pending(t)
 		packet := kissOfDeath(read, code, true)
-		v, err := req.verify(s2c, packet)
-		if err != nil || v.kiss != code {
+		v, err := req.Verify(s2c, packet)
+		if err != nil || v.Kiss != code {
 			t.Fatalf("%s: %+v, %v", code, v, err)
 		}
-		if req.answered || v.kissAuthentic {
-			t.Fatalf("a KoD without an authenticator: answered %v, authentic %v", req.answered, v.kissAuthentic)
+		if req.Answered() || v.KissAuthentic {
+			t.Fatalf("a KoD without an authenticator: answered %v, authentic %v", req.Answered(), v.KissAuthentic)
 		}
 		// The same KoD again is a KoD again, and the real response is still
 		// taken after it: a forged KoD cannot close the request.
-		if v, err := req.verify(s2c, packet); err != nil || v.kiss != code {
+		if v, err := req.Verify(s2c, packet); err != nil || v.Kiss != code {
 			t.Fatalf("%s again: %+v, %v", code, v, err)
 		}
 		r := goodReply()
@@ -685,25 +668,25 @@ func TestKissOfDeathPackets(t *testing.T) {
 	// Without our Unique Identifier, with another one, or with another
 	// origin: refused.
 	_, err := verify(t, kissOfDeath(read, "DENY", false))
-	wantErr(t, "KoD without identifier", err, errMissingUniqueID)
+	wantErr(t, "KoD without identifier", err, ErrMissingUniqueID)
 	other := *read
 	u := uid(7)
 	other.uniqueID = u[:]
 	_, err = verify(t, kissOfDeath(&other, "DENY", true))
-	wantErr(t, "KoD with another identifier", err, errUniqueIDMismatch)
+	wantErr(t, "KoD with another identifier", err, ErrUniqueIDMismatch)
 	other = *read
 	other.transmit = [8]byte{}
 	_, err = verify(t, kissOfDeath(&other, "DENY", true))
-	wantErr(t, "KoD with another origin", err, errOriginMismatch)
+	wantErr(t, "KoD with another origin", err, ErrOriginMismatch)
 	// A KoD with an authenticator that verifies is an authentic KoD; with
 	// one that does not verify it is a KoD, but not an authentic one.
 	r := goodReply()
 	r.stratum = 0
 	copy(r.referenceID[:], "RATE")
-	if v, err := verify(t, replyWith(t, r)); err != nil || v.kiss != "RATE" || !v.kissAuthentic {
+	if v, err := verify(t, replyWith(t, r)); err != nil || v.Kiss != "RATE" || !v.KissAuthentic {
 		t.Fatalf("authenticated KoD: %+v, %v", v, err)
 	}
-	if v, err := verify(t, serverResponse(testC2S, read, &r)); err != nil || v.kiss != "RATE" || v.kissAuthentic {
+	if v, err := verify(t, serverResponse(testC2S, read, &r)); err != nil || v.Kiss != "RATE" || v.KissAuthentic {
 		t.Fatalf("KoD with a bad authenticator: %+v, %v", v, err)
 	}
 }
@@ -712,17 +695,17 @@ func TestUnsynchronizedOrBadStratumIsRefused(t *testing.T) {
 	r := goodReply()
 	r.leap = 3
 	_, err := verify(t, replyWith(t, r))
-	wantErr(t, "leap 3", err, errUnsynchronized)
+	wantErr(t, "leap 3", err, ErrUnsynchronized)
 	for _, stratum := range []uint8{16, 17, 255} {
 		r := goodReply()
 		r.stratum = stratum
 		_, err := verify(t, replyWith(t, r))
-		wantErr(t, "high stratum", err, errBadStratum)
+		wantErr(t, "high stratum", err, ErrBadStratum)
 	}
 	for _, stratum := range []uint8{1, 15} {
 		r := goodReply()
 		r.stratum = stratum
-		if got := mustTime(t, replyWith(t, r)).stratum; got != stratum {
+		if got := mustTime(t, replyWith(t, r)).Stratum; got != stratum {
 			t.Fatalf("stratum %d read as %d", stratum, got)
 		}
 	}
@@ -732,12 +715,12 @@ func TestVersionAndMode(t *testing.T) {
 	r := goodReply()
 	r.version = 3
 	_, err := verify(t, replyWith(t, r))
-	wantErr(t, "version 3", err, errBadVersion)
+	wantErr(t, "version 3", err, ErrBadVersion)
 	for _, mode := range []uint8{0, 1, 2, 3, 5, 6, 7} {
 		r := goodReply()
 		r.mode = mode
 		_, err := verify(t, replyWith(t, r))
-		wantErr(t, "mode", err, errBadMode)
+		wantErr(t, "mode", err, ErrBadMode)
 	}
 }
 
@@ -745,14 +728,14 @@ func TestVersionAndMode(t *testing.T) {
 // fields, the ones after the authenticator. They do not change the result.
 func TestFieldsAfterTheAuthenticatorAreDiscarded(t *testing.T) {
 	u := uid(5)
-	after := testField(extCookie, rep(0xee, 100))
-	after = append(after, testField(extUniqueID, u[:])...)
+	after := testField(ExtCookie, rep(0xee, 100))
+	after = append(after, testField(ExtUniqueID, u[:])...)
 	after = append(after, 0xde, 0xad, 0xbe)
 	r := goodReply()
 	r.afterAuth = after
 	s := mustTime(t, replyWith(t, r))
-	if len(s.cookies) != 1 || !bytes.Equal(s.cookies[0], rep(0xc1, 100)) {
-		t.Fatalf("cookies %v", s.cookies)
+	if len(s.Cookies) != 1 || !bytes.Equal(s.Cookies[0], rep(0xc1, 100)) {
+		t.Fatalf("cookies %v", s.Cookies)
 	}
 }
 
@@ -760,10 +743,10 @@ func TestFieldsAfterTheAuthenticatorAreDiscarded(t *testing.T) {
 // before the authenticator, is skipped.
 func TestACookieInTheClearIsNotUsed(t *testing.T) {
 	r := goodReply()
-	r.plainFields = [][]byte{testField(extCookie, rep(0xdd, 100))}
+	r.plainFields = [][]byte{testField(ExtCookie, rep(0xdd, 100))}
 	s := mustTime(t, replyWith(t, r))
-	if len(s.cookies) != 1 || !bytes.Equal(s.cookies[0], rep(0xc1, 100)) {
-		t.Fatalf("cookies %v", s.cookies)
+	if len(s.Cookies) != 1 || !bytes.Equal(s.Cookies[0], rep(0xc1, 100)) {
+		t.Fatalf("cookies %v", s.Cookies)
 	}
 }
 
@@ -772,17 +755,17 @@ func TestAuthenticatorChecks(t *testing.T) {
 	// Signed with the wrong key.
 	r := goodReply()
 	_, err := verify(t, serverResponse(testC2S, read, &r))
-	wantErr(t, "wrong key", err, errNotAuthentic)
+	wantErr(t, "wrong key", err, ErrNotAuthentic)
 	// No authenticator.
 	r = goodReply()
 	r.noAuthenticator = true
 	_, err = verify(t, replyWith(t, r))
-	wantErr(t, "no authenticator", err, errMissingAuthenticator)
+	wantErr(t, "no authenticator", err, ErrMissingAuthenticator)
 	// No cookie.
 	r = goodReply()
 	r.cookies = nil
 	_, err = verify(t, replyWith(t, r))
-	wantErr(t, "no cookie", err, errNoCookies)
+	wantErr(t, "no cookie", err, ErrNoCookies)
 	// Server nonces of other lengths, padded with zeros.
 	for _, n := range []int{1, 12, 13, 24, 32} {
 		r := goodReply()
@@ -793,81 +776,16 @@ func TestAuthenticatorChecks(t *testing.T) {
 	r = goodReply()
 	r.nonce, r.padByte = rep(0x77, 13), 1
 	_, err = verify(t, replyWith(t, r))
-	wantErr(t, "nonce padding", err, errBadAuthenticator)
+	wantErr(t, "nonce padding", err, ErrBadAuthenticator)
 	r = goodReply()
 	r.additionalPadding = make([]byte, 8)
 	mustTime(t, replyWith(t, r))
 	r.additionalPadding = []byte{0, 0, 0, 1}
 	_, err = verify(t, replyWith(t, r))
-	wantErr(t, "additional padding", err, errBadAuthenticator)
+	wantErr(t, "additional padding", err, ErrBadAuthenticator)
 	// A zero-length nonce (RFC 5297 section 6.1: at least 1 octet).
 	r = goodReply()
 	r.nonce = []byte{}
 	_, err = verify(t, replyWith(t, r))
-	wantErr(t, "empty nonce", err, errBadAuthenticator)
-}
-
-// The association's cookie jar: each cookie goes out once, the request
-// asks for enough placeholders to refill the jar, and the response's
-// cookies come in newest last, the oldest beyond MaxCookies dropped.
-func TestCookieJar(t *testing.T) {
-	a := &Association{c2s: testKey(t, testC2S), s2c: testKey(t, testS2C)}
-	for i := 0; i < 8; i++ {
-		a.cookies = append(a.cookies, rep(byte(i+1), 100))
-	}
-	random := make([]byte, RequestRandomLen)
-	for i, want := range []int{0, 1, 2} {
-		// The jar loses a cookie each time nothing comes back.
-		packet, req, cookie, err := a.newRequest(random)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !bytes.Equal(cookie, read(packet).cookie) {
-			t.Fatal("the cookie returned is not the one in the request")
-		}
-		read := serverReadRequest(testC2S, packet)
-		if read == nil || read.placeholders != want || !bytes.Equal(read.cookie, rep(byte(i+1), 100)) || req.placeholders != want {
-			t.Fatalf("request %d: %+v", i, read)
-		}
-	}
-	if a.Cookies() != 5 {
-		t.Fatalf("%d cookies held", a.Cookies())
-	}
-	if held := a.keepCookies([][]byte{rep(0xa1, 100), rep(0xa2, 100), rep(0xa3, 100), rep(0xa4, 100)}); held != MaxCookies {
-		t.Fatalf("%d held after a refill", held)
-	}
-	if !bytes.Equal(a.cookies[0], rep(5, 100)) || !bytes.Equal(a.cookies[7], rep(0xa4, 100)) {
-		t.Fatalf("jar %x", a.cookies)
-	}
-	// A request that never left the process gives its cookie back, at the
-	// front of the jar.
-	_, _, c, err := a.newRequest(random)
-	if err != nil {
-		t.Fatal(err)
-	}
-	a.returnCookie(c)
-	if a.Cookies() != MaxCookies || !bytes.Equal(a.cookies[0], c) {
-		t.Fatalf("returned cookie: %d held", a.Cookies())
-	}
-	for i := 0; i < 8; i++ {
-		if _, _, _, err := a.newRequest(random); err != nil {
-			t.Fatal(err)
-		}
-	}
-	_, _, _, err = a.newRequest(random)
-	if !errors.Is(err, &Error{Code: CodeNoCookie}) {
-		t.Fatalf("empty jar: %v", err)
-	}
-	if _, _, _, err := a.newRequest(random[:3]); err == nil {
-		t.Fatal("short random accepted")
-	}
-}
-
-// read is serverReadRequest with the test C2S key, or a failure.
-func read(packet []byte) *clientRequest {
-	r := serverReadRequest(testC2S, packet)
-	if r == nil {
-		return &clientRequest{}
-	}
-	return r
+	wantErr(t, "empty nonce", err, ErrBadAuthenticator)
 }

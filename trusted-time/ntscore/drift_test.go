@@ -1,6 +1,6 @@
 //go:build nts
 
-package nts
+package ntscore
 
 import (
 	"math"

@@ -30,7 +30,7 @@ func TestNTSInteropPublicServers(t *testing.T) {
 	}
 	n := &NTS{Coarse: &coarseClock{}, Interval: 33 * time.Second}
 	for _, s := range nts.PublicServers {
-		pool, err := nts.RootPool(s.Roots)
+		pool, err := nts.RootsPEM(s.Roots)
 		if err != nil {
 			t.Fatal(err)
 		}

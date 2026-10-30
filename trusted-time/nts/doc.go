@@ -1,28 +1,31 @@
-// Package nts is the signer's NTS time client (RFC 8915) on the Go standard
-// library alone: the port of the Rust core that the runner linked before,
-// with the sockets and the clock in Go.
+// Package nts is the Go wrapper of the signer's NTS time client (RFC
+// 8915): the host operations of the C core in trusted-time/ntscore, and
+// the client that trusted-time/clock.NTS drives.
 //
-//   - siv.go: AES-SIV-CMAC-256 (RFC 5297) on crypto/aes, the one AEAD offered.
-//   - ke.go: NTS-KE over crypto/tls (TLS 1.3, ALPN ntske/1), the records,
-//     the keys from the exporter, with a caller-given clock for certificates
-//     and pinned roots.
-//   - ntp.go: the NTP time formats with era-safe conversion (RFC 5905
-//     section 6); the NTPv4 request with the Unique Identifier, cookie,
-//     placeholders and authenticator, and the check of the response
-//     (RFC 8915 section 5, RFC 7822). Untrusted bytes are read with length
-//     checks only; a refused response leaves the request open for the
-//     real one.
-//   - query.go: one NTP query over UDP, T1 and T4 on Monotonic; answers
-//     that fail the check are dropped until the real one comes or the
-//     time runs out.
-//   - sample.go: offset, delay and error bound of a response and the
-//     RFC 5905 checks, in big.Int.
-//   - quorum.go: the time from several servers, one of which may be wrong.
-//   - roots.go, roots/: the pinned roots per operator and the public servers.
+// The core holds everything the time rests on: the records of NTS-KE, the
+// keys and the cookies, the request with its random values, the check of
+// every response, the measurement, the quorum, the drift and coarse checks
+// and the time it serves. This package gives it what it asks for:
+//
+//   - hooks.go: random bytes (crypto/rand), the monotonic clock
+//     (Monotonic, CLOCK_MONOTONIC_RAW), the TLS 1.3 session of NTS-KE over
+//     crypto/tls (ALPN ntske/1, the operator's pinned roots, the
+//     certificate dated by the core's time) with the keys from the
+//     exporter, and the sockets: TCP for NTS-KE, UDP for NTP, both through
+//     the platform's DialFunc.
+//   - client.go: Client, the core with those operations.
+//   - roots.go, roots/: the pinned roots per operator and the public
+//     servers.
+//   - selftest.go: the AES-SIV self-test of the runner's -nts-selftest.
 //   - ntstest/: a loopback NTS-KE and NTP server for tests, with its own
 //     AES-SIV.
 //
-// trusted-time/clock.NTS builds the runner's clock on this package.
+// The wrapper is the network, nothing more: whatever it hands the core is
+// something an attacker on the wire could hand it too. If the sockets lie,
+// delay or drop, the client gets no time, never a wrong one. On the cloud
+// runners the whole process is inside the TEE, so the random bytes, the
+// clock and the TLS session are the TEE's as well; in an OP-TEE trusted
+// application those three move inside and the sockets stay out.
 //
 // The package has code only in a build with the tag nts; the cloud runners
 // carry it, the dev runners do not (scripts/common.sh, runner_tags).

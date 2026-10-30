@@ -12,6 +12,7 @@ import (
 
 	"github.com/lidofinance/tee-signer/trusted-time/nts"
 	"github.com/lidofinance/tee-signer/trusted-time/nts/ntstest"
+	"github.com/lidofinance/tee-signer/trusted-time/ntscore"
 )
 
 // coarseClock plays the HTTPS-date quorum: the host clock plus Skew, or Err.
@@ -40,7 +41,7 @@ func newServers(t *testing.T, opts map[string]ntstest.NTPOptions, order ...strin
 	t.Helper()
 	var out []*fakeServer
 	for _, op := range order {
-		cert, pool, err := ntstest.Certificate("nts.test", time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+		cert, pool, err := ntstest.CertificatePEM("nts.test", time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -185,8 +186,8 @@ func TestNTSClockCoarseCheck(t *testing.T) {
 			}
 		}
 	}
-	if !coarseRefused(31*time.Second, NTSMaxCoarseDiff, NTSCoarseResolution) || coarseRefused(30999*time.Millisecond, NTSMaxCoarseDiff, NTSCoarseResolution) ||
-		!coarseRefused(-30001*time.Millisecond, NTSMaxCoarseDiff, NTSCoarseResolution) || coarseRefused(-30*time.Second, NTSMaxCoarseDiff, NTSCoarseResolution) {
+	if !ntscore.CoarseRefused(31*time.Second, NTSMaxCoarseDiff, NTSCoarseResolution) || ntscore.CoarseRefused(30999*time.Millisecond, NTSMaxCoarseDiff, NTSCoarseResolution) ||
+		!ntscore.CoarseRefused(-30001*time.Millisecond, NTSMaxCoarseDiff, NTSCoarseResolution) || ntscore.CoarseRefused(-30*time.Second, NTSMaxCoarseDiff, NTSCoarseResolution) {
 		t.Fatal("limits of the coarse check")
 	}
 	// No coarse time at all: no NTS-KE, no time.

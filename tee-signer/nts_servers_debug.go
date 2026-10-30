@@ -28,8 +28,7 @@ func ntsServers() ([]clock.NTSServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("RUNNER_NTS_TEST_ROOTS: %w", err)
 	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(pem) {
+	if !x509.NewCertPool().AppendCertsFromPEM(pem) {
 		return nil, errors.New("RUNNER_NTS_TEST_ROOTS: no certificate")
 	}
 	var out []clock.NTSServer
@@ -39,7 +38,7 @@ func ntsServers() ([]clock.NTSServer, error) {
 			return nil, fmt.Errorf("RUNNER_NTS_TEST_SERVERS: %q: want op=host[@ke-host:port]", part)
 		}
 		host, ke, _ := strings.Cut(rest, "@")
-		out = append(out, clock.NTSServer{Host: host, Operator: op, Roots: pool, KEAddr: ke})
+		out = append(out, clock.NTSServer{Host: host, Operator: op, Roots: pem, KEAddr: ke})
 	}
 	return out, nil
 }

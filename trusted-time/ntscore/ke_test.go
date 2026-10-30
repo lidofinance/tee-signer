@@ -1,6 +1,6 @@
 //go:build nts
 
-package nts
+package ntscore
 
 import (
 	"bytes"
@@ -17,21 +17,21 @@ import (
 // keRec is one record: critical bit and type, body length, body.
 func keRec(critical bool, typ uint16, body []byte) []byte {
 	if critical {
-		typ |= recCritical
+		typ |= RecCritical
 	}
 	r := binary.BigEndian.AppendUint16(nil, typ)
 	r = binary.BigEndian.AppendUint16(r, uint16(len(body)))
 	return append(r, body...)
 }
 
-func keEOM() []byte { return keRec(true, recEOM, nil) }
+func keEOM() []byte { return keRec(true, RecEOM, nil) }
 
 // goodKERecords is the records of a good response, without End of
 // Message: next protocol NTPv4, AEAD 15, then the cookies.
 func goodKERecords(cookies [][]byte) [][]byte {
-	r := [][]byte{keRec(true, recNextProtocol, []byte{0, 0}), keRec(true, recAEAD, []byte{0, aeadSIVCMAC256})}
+	r := [][]byte{keRec(true, RecNextProtocol, []byte{0, 0}), keRec(true, RecAEAD, []byte{0, aeadSIVCMAC256})}
 	for _, c := range cookies {
-		r = append(r, keRec(false, recCookie, c))
+		r = append(r, keRec(false, RecCookie, c))
 	}
 	return r
 }
@@ -68,14 +68,14 @@ func splitRecords(t testing.TB, buf []byte) []splitRecord {
 		if len(buf) < 4+n {
 			t.Fatal("record body cut")
 		}
-		out = append(out, splitRecord{typ&recCritical != 0, typ &^ recCritical, buf[4 : 4+n]})
+		out = append(out, splitRecord{typ&RecCritical != 0, typ &^ RecCritical, buf[4 : 4+n]})
 		buf = buf[4+n:]
 	}
 	return out
 }
 
-func parseRecords(records ...[]byte) (*keResponse, error) {
-	return parseKEResponse(bytes.Join(records, nil))
+func parseRecords(records ...[]byte) (*KEResponse, error) {
+	return ParseKEResponse(bytes.Join(records, nil))
 }
 
 // with is a good response (one cookie) with extra records added before
@@ -96,7 +96,7 @@ func wantKEErr(t testing.TB, what string, err, want error, inMessage string) {
 func TestKERequestAsTheServerReadsIt(t *testing.T) {
 	req := KERequest()
 	got := splitRecords(t, req)
-	want := []splitRecord{{true, recNextProtocol, []byte{0, 0}}, {true, recAEAD, []byte{0, 15}}, {true, recEOM, []byte{}}}
+	want := []splitRecord{{true, RecNextProtocol, []byte{0, 0}}, {true, RecAEAD, []byte{0, 15}}, {true, RecEOM, []byte{}}}
 	if len(got) != len(want) {
 		t.Fatalf("%d records", len(got))
 	}
@@ -105,38 +105,38 @@ func TestKERequestAsTheServerReadsIt(t *testing.T) {
 			t.Fatalf("record %d: %+v", i, got[i])
 		}
 	}
-	if n, done, err := keResponseLength(req); err != nil || !done || n != len(req) {
+	if n, done, err := KEComplete(req); err != nil || !done || n != len(req) {
 		t.Fatalf("length %d %v %v", n, done, err)
 	}
 }
 
 func TestKERoundTrip(t *testing.T) {
 	records := goodKERecords(eightCookies())
-	records = append(records, keRec(true, recServer, []byte("ntp1.example.net")), keRec(false, recPort, []byte{0x04, 0xd2}), keEOM())
+	records = append(records, keRec(true, RecServer, []byte("ntp1.example.net")), keRec(false, RecPort, []byte{0x04, 0xd2}), keEOM())
 	buf := bytes.Join(records, nil)
-	r, err := parseKEResponse(buf)
+	r, err := ParseKEResponse(buf)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(r.cookies) != 8 || r.dropped != 0 {
-		t.Fatalf("%d cookies, %d dropped", len(r.cookies), r.dropped)
+	if len(r.Cookies) != 8 || r.Dropped != 0 {
+		t.Fatalf("%d cookies, %d dropped", len(r.Cookies), r.Dropped)
 	}
-	for i, c := range r.cookies {
+	for i, c := range r.Cookies {
 		if !bytes.Equal(c, rep(byte(i+1), 100)) {
 			t.Fatalf("cookie %d: %x", i, c)
 		}
 	}
-	if r.server != "ntp1.example.net" || r.port != 1234 {
-		t.Fatalf("server %q port %d", r.server, r.port)
+	if r.Server != "ntp1.example.net" || r.Port != 1234 {
+		t.Fatalf("server %q port %d", r.Server, r.Port)
 	}
-	if n, done, err := keResponseLength(buf); err != nil || !done || n != len(buf) {
+	if n, done, err := KEComplete(buf); err != nil || !done || n != len(buf) {
 		t.Fatalf("length %d %v %v", n, done, err)
 	}
 }
 
 func TestKEDefaultsWithoutServerAndPort(t *testing.T) {
-	r, err := parseKEResponse(goodKEResponse())
-	if err != nil || r.port != 0 || r.server != "" {
+	r, err := ParseKEResponse(goodKEResponse())
+	if err != nil || r.Port != 0 || r.Server != "" {
 		t.Fatalf("%+v %v", r, err)
 	}
 }
@@ -148,7 +148,7 @@ func TestKERecordsInAnyOrder(t *testing.T) {
 		records[i], records[j] = records[j], records[i]
 	}
 	r, err := parseRecords(append(records, keEOM())...)
-	if err != nil || len(r.cookies) != 2 {
+	if err != nil || len(r.Cookies) != 2 {
 		t.Fatalf("%+v %v", r, err)
 	}
 }
@@ -156,34 +156,34 @@ func TestKERecordsInAnyOrder(t *testing.T) {
 func TestKEResponseLengthWaitsForEndOfMessage(t *testing.T) {
 	buf := goodKEResponse()
 	for n := 0; n < len(buf); n++ {
-		if l, done, err := keResponseLength(buf[:n]); l != 0 || done || err != nil {
+		if l, done, err := KEComplete(buf[:n]); l != 0 || done || err != nil {
 			t.Fatalf("prefix %d: %d %v %v", n, l, done, err)
 		}
-		if _, err := parseKEResponse(buf[:n]); !errors.Is(err, errKETruncated) {
+		if _, err := ParseKEResponse(buf[:n]); !errors.Is(err, ErrKETruncated) {
 			t.Fatalf("prefix %d: %v", n, err)
 		}
 	}
 	more := append(append([]byte(nil), buf...), 1, 2, 3)
-	if l, done, err := keResponseLength(more); l != len(buf) || !done || err != nil {
+	if l, done, err := KEComplete(more); l != len(buf) || !done || err != nil {
 		t.Fatalf("with trailing octets: %d %v %v", l, done, err)
 	}
-	_, err := parseKEResponse(more)
-	wantKEErr(t, "trailing octets", err, errKETrailingData, "after End of Message")
+	_, err := ParseKEResponse(more)
+	wantKEErr(t, "trailing octets", err, ErrKETrailingData, "after End of Message")
 }
 
 func TestKEErrorAndWarningRecords(t *testing.T) {
 	for _, code := range []uint16{0, 1, 2, 0x1234} {
 		body := binary.BigEndian.AppendUint16(nil, code)
-		_, err := parseRecords(with(keRec(true, recError, body))...)
-		wantKEErr(t, "error record", err, errKEServerError, "server error "+itoa(int(code)))
-		_, err = parseRecords(with(keRec(true, recWarning, body))...)
-		wantKEErr(t, "warning record", err, errKEServerWarning, "server warning "+itoa(int(code)))
+		_, err := parseRecords(with(keRec(true, RecError, body))...)
+		wantKEErr(t, "error record", err, ErrKEServerError, "server error "+itoa(int(code)))
+		_, err = parseRecords(with(keRec(true, RecWarning, body))...)
+		wantKEErr(t, "warning record", err, ErrKEServerWarning, "server warning "+itoa(int(code)))
 	}
 	// An Error record alone, as a server sends it.
-	_, err := parseRecords(keRec(true, recError, []byte{0, 1}), keEOM())
-	wantKEErr(t, "error alone", err, errKEServerError, "server error 1")
-	_, err = parseRecords(with(keRec(true, recError, []byte{0}))...)
-	wantKEErr(t, "error with a 1-octet body", err, errKEBadRecordBody, "record 2")
+	_, err := parseRecords(keRec(true, RecError, []byte{0, 1}), keEOM())
+	wantKEErr(t, "error alone", err, ErrKEServerError, "server error 1")
+	_, err = parseRecords(with(keRec(true, RecError, []byte{0}))...)
+	wantKEErr(t, "error with a 1-octet body", err, ErrKEBadRecordBody, "record 2")
 }
 
 func itoa(n int) string {
@@ -199,115 +199,115 @@ func itoa(n int) string {
 
 func TestKEUnknownRecords(t *testing.T) {
 	_, err := parseRecords(with(keRec(true, 0x1234, []byte("x")))...)
-	wantKEErr(t, "unknown critical", err, errKEUnknownCritical, "4660")
+	wantKEErr(t, "unknown critical", err, ErrKEUnknownCritical, "4660")
 	if _, err := parseRecords(with(keRec(false, 0x1234, []byte("x")), keRec(false, 0x7fff, nil))...); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestKEMissingRecords(t *testing.T) {
-	np := keRec(true, recNextProtocol, []byte{0, 0})
-	aead := keRec(true, recAEAD, []byte{0, 15})
-	cookie := keRec(false, recCookie, rep(1, 16))
+	np := keRec(true, RecNextProtocol, []byte{0, 0})
+	aead := keRec(true, RecAEAD, []byte{0, 15})
+	cookie := keRec(false, RecCookie, rep(1, 16))
 	eom := keEOM()
 	_, err := parseRecords(aead, cookie, eom)
-	wantKEErr(t, "no protocol", err, errKEMissingRecord, "Next Protocol")
+	wantKEErr(t, "no protocol", err, ErrKEMissingRecord, "Next Protocol")
 	_, err = parseRecords(np, cookie, eom)
-	wantKEErr(t, "no AEAD", err, errKEMissingRecord, "AEAD")
+	wantKEErr(t, "no AEAD", err, ErrKEMissingRecord, "AEAD")
 	_, err = parseRecords(np, aead, eom)
-	wantKEErr(t, "no cookie", err, errKEMissingRecord, "cookie")
+	wantKEErr(t, "no cookie", err, ErrKEMissingRecord, "cookie")
 	_, err = parseRecords(np, aead, cookie)
-	wantKEErr(t, "no End of Message", err, errKETruncated, "before End of Message")
-	_, err = parseKEResponse(nil)
-	wantKEErr(t, "empty", err, errKETruncated, "")
+	wantKEErr(t, "no End of Message", err, ErrKETruncated, "before End of Message")
+	_, err = ParseKEResponse(nil)
+	wantKEErr(t, "empty", err, ErrKETruncated, "")
 }
 
 func TestKEWrongProtocolOrAEAD(t *testing.T) {
 	response := func(np, aead []byte) error {
-		_, err := parseRecords(keRec(true, recNextProtocol, np), keRec(true, recAEAD, aead), keRec(false, recCookie, rep(1, 16)), keEOM())
+		_, err := parseRecords(keRec(true, RecNextProtocol, np), keRec(true, RecAEAD, aead), keRec(false, RecCookie, rep(1, 16)), keEOM())
 		return err
 	}
 	if err := response([]byte{0, 0}, []byte{0, 15}); err != nil {
 		t.Fatal(err)
 	}
-	wantKEErr(t, "protocol 1", response([]byte{0, 1}, []byte{0, 15}), errKEWrongProtocol, "protocol 1")
-	wantKEErr(t, "protocol 0x8000", response([]byte{0, 0, 0x80, 0}, []byte{0, 15}), errKEWrongProtocol, "protocol 32768")
-	wantKEErr(t, "no protocol", response(nil, []byte{0, 15}), errKENoCommonProtocol, "")
-	wantKEErr(t, "odd protocol body", response([]byte{0}, []byte{0, 15}), errKEBadRecordBody, "record 1")
-	wantKEErr(t, "AEAD 16", response([]byte{0, 0}, []byte{0, 16}), errKEWrongAEAD, "AEAD 16")
-	wantKEErr(t, "AEAD 30", response([]byte{0, 0}, []byte{0, 30}), errKEWrongAEAD, "AEAD 30")
-	wantKEErr(t, "no AEAD", response([]byte{0, 0}, nil), errKENoCommonAEAD, "")
-	wantKEErr(t, "two AEADs", response([]byte{0, 0}, []byte{0, 15, 0, 15}), errKEBadRecordBody, "record 4")
-	wantKEErr(t, "odd AEAD body", response([]byte{0, 0}, []byte{0, 15, 0}), errKEBadRecordBody, "record 4")
+	wantKEErr(t, "protocol 1", response([]byte{0, 1}, []byte{0, 15}), ErrKEWrongProtocol, "protocol 1")
+	wantKEErr(t, "protocol 0x8000", response([]byte{0, 0, 0x80, 0}, []byte{0, 15}), ErrKEWrongProtocol, "protocol 32768")
+	wantKEErr(t, "no protocol", response(nil, []byte{0, 15}), ErrKENoCommonProtocol, "")
+	wantKEErr(t, "odd protocol body", response([]byte{0}, []byte{0, 15}), ErrKEBadRecordBody, "record 1")
+	wantKEErr(t, "AEAD 16", response([]byte{0, 0}, []byte{0, 16}), ErrKEWrongAEAD, "AEAD 16")
+	wantKEErr(t, "AEAD 30", response([]byte{0, 0}, []byte{0, 30}), ErrKEWrongAEAD, "AEAD 30")
+	wantKEErr(t, "no AEAD", response([]byte{0, 0}, nil), ErrKENoCommonAEAD, "")
+	wantKEErr(t, "two AEADs", response([]byte{0, 0}, []byte{0, 15, 0, 15}), ErrKEBadRecordBody, "record 4")
+	wantKEErr(t, "odd AEAD body", response([]byte{0, 0}, []byte{0, 15, 0}), ErrKEBadRecordBody, "record 4")
 }
 
 func TestKECriticalBits(t *testing.T) {
 	// Next Protocol and End of Message MUST have it (sections 4.1.2, 4.1.1).
 	r := goodKERecords([][]byte{rep(1, 16)})
-	r[0] = keRec(false, recNextProtocol, []byte{0, 0})
+	r[0] = keRec(false, RecNextProtocol, []byte{0, 0})
 	_, err := parseRecords(append(r, keEOM())...)
-	wantKEErr(t, "Next Protocol without the bit", err, errKECriticalBitMissing, "Next Protocol")
+	wantKEErr(t, "Next Protocol without the bit", err, ErrKECriticalBitMissing, "Next Protocol")
 	r = goodKERecords([][]byte{rep(1, 16)})
-	_, err = parseRecords(append(r, keRec(false, recEOM, nil))...)
-	wantKEErr(t, "End of Message without the bit", err, errKEBadEOM, "")
+	_, err = parseRecords(append(r, keRec(false, RecEOM, nil))...)
+	wantKEErr(t, "End of Message without the bit", err, ErrKEBadEOM, "")
 	r = goodKERecords([][]byte{rep(1, 16)})
-	_, err = parseRecords(append(r, keRec(true, recEOM, []byte{0, 0}))...)
-	wantKEErr(t, "End of Message with a body", err, errKEBadEOM, "")
+	_, err = parseRecords(append(r, keRec(true, RecEOM, []byte{0, 0}))...)
+	wantKEErr(t, "End of Message with a body", err, ErrKEBadEOM, "")
 	// AEAD, cookie, server and port may come with or without it.
-	_, err = parseRecords(keRec(true, recNextProtocol, []byte{0, 0}), keRec(false, recAEAD, []byte{0, 15}),
-		keRec(true, recCookie, rep(1, 16)), keRec(true, recServer, []byte("192.0.2.1")), keRec(true, recPort, []byte{0, 123}), keEOM())
+	_, err = parseRecords(keRec(true, RecNextProtocol, []byte{0, 0}), keRec(false, RecAEAD, []byte{0, 15}),
+		keRec(true, RecCookie, rep(1, 16)), keRec(true, RecServer, []byte("192.0.2.1")), keRec(true, RecPort, []byte{0, 123}), keEOM())
 	if err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestKEDuplicateRecords(t *testing.T) {
-	for _, dup := range [][]byte{keRec(true, recNextProtocol, []byte{0, 0}), keRec(true, recAEAD, []byte{0, 15})} {
+	for _, dup := range [][]byte{keRec(true, RecNextProtocol, []byte{0, 0}), keRec(true, RecAEAD, []byte{0, 15})} {
 		_, err := parseRecords(with(dup)...)
-		wantKEErr(t, "duplicate", err, errKEDuplicateRecord, "repeated")
+		wantKEErr(t, "duplicate", err, ErrKEDuplicateRecord, "repeated")
 	}
-	server := keRec(false, recServer, []byte("a.example"))
+	server := keRec(false, RecServer, []byte("a.example"))
 	_, err := parseRecords(with(server, server)...)
-	wantKEErr(t, "two servers", err, errKEDuplicateRecord, "record 6")
-	port := keRec(false, recPort, []byte{0, 123})
+	wantKEErr(t, "two servers", err, ErrKEDuplicateRecord, "record 6")
+	port := keRec(false, RecPort, []byte{0, 123})
 	_, err = parseRecords(with(port, port)...)
-	wantKEErr(t, "two ports", err, errKEDuplicateRecord, "record 7")
+	wantKEErr(t, "two ports", err, ErrKEDuplicateRecord, "record 7")
 }
 
 func TestKEBadBodies(t *testing.T) {
-	_, err := parseRecords(with(keRec(false, recCookie, nil))...)
-	wantKEErr(t, "empty cookie", err, errKEBadRecordBody, "cookie of 0 octets")
+	_, err := parseRecords(with(keRec(false, RecCookie, nil))...)
+	wantKEErr(t, "empty cookie", err, ErrKEBadRecordBody, "cookie of 0 octets")
 	for _, name := range []string{"", "fe80::1%eth0", "a b", "x\x00y", "time.example.com/"} {
-		_, err := parseRecords(with(keRec(false, recServer, []byte(name)))...)
-		wantKEErr(t, "server name "+name, err, errKEBadRecordBody, "record 6")
+		_, err := parseRecords(with(keRec(false, RecServer, []byte(name)))...)
+		wantKEErr(t, "server name "+name, err, ErrKEBadRecordBody, "record 6")
 	}
-	_, err = parseRecords(with(keRec(false, recServer, rep('a', 256)))...)
-	wantKEErr(t, "256-octet server name", err, errKEBadRecordBody, "record 6")
-	if _, err := parseRecords(with(keRec(false, recServer, rep('a', 255)))...); err != nil {
+	_, err = parseRecords(with(keRec(false, RecServer, rep('a', 256)))...)
+	wantKEErr(t, "256-octet server name", err, ErrKEBadRecordBody, "record 6")
+	if _, err := parseRecords(with(keRec(false, RecServer, rep('a', 255)))...); err != nil {
 		t.Fatal(err)
 	}
 	for _, good := range []string{"192.0.2.1", "2001:db8::1", "time.example.com", "xn--bcher-kva.example"} {
-		if r, err := parseRecords(with(keRec(false, recServer, []byte(good)))...); err != nil || r.server != good {
+		if r, err := parseRecords(with(keRec(false, RecServer, []byte(good)))...); err != nil || r.Server != good {
 			t.Fatalf("server name %q: %v", good, err)
 		}
 	}
 	for _, port := range [][]byte{{0, 0}, {1}, {0, 1, 2}} {
-		_, err := parseRecords(with(keRec(false, recPort, port))...)
-		wantKEErr(t, "bad port", err, errKEBadRecordBody, "record 7")
+		_, err := parseRecords(with(keRec(false, RecPort, port))...)
+		wantKEErr(t, "bad port", err, ErrKEBadRecordBody, "record 7")
 	}
 }
 
 func TestKECaps(t *testing.T) {
 	// A cookie or any record body over 1024 octets.
-	_, err := parseRecords(with(keRec(false, recCookie, rep(1, 1025)))...)
-	wantKEErr(t, "1025-octet cookie", err, errKERecordTooLong, "at most 1024")
+	_, err := parseRecords(with(keRec(false, RecCookie, rep(1, 1025)))...)
+	wantKEErr(t, "1025-octet cookie", err, ErrKERecordTooLong, "at most 1024")
 	_, err = parseRecords(with(keRec(false, 0x2222, rep(1, 1025)))...)
-	wantKEErr(t, "1025-octet unknown record", err, errKERecordTooLong, "record 8738")
-	if _, err := parseRecords(with(keRec(false, recCookie, rep(1, 1024)))...); err != nil {
+	wantKEErr(t, "1025-octet unknown record", err, ErrKERecordTooLong, "record 8738")
+	if _, err := parseRecords(with(keRec(false, RecCookie, rep(1, 1024)))...); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = keResponseLength(keRec(false, 0x2222, rep(1, 1025)))
-	wantKEErr(t, "length of a long record", err, errKERecordTooLong, "")
+	_, _, err = KEComplete(keRec(false, 0x2222, rep(1, 1025)))
+	wantKEErr(t, "length of a long record", err, ErrKERecordTooLong, "")
 
 	// More than 64 records: 4 in with, plus 61 unknown ones.
 	filler := func(n int) [][]byte {
@@ -321,24 +321,24 @@ func TestKECaps(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = parseRecords(with(filler(61)...)...)
-	wantKEErr(t, "65 records", err, errKETooManyRecords, "")
-	_, _, err = keResponseLength(bytes.Join(with(filler(61)...), nil))
-	wantKEErr(t, "length of 65 records", err, errKETooManyRecords, "")
+	wantKEErr(t, "65 records", err, ErrKETooManyRecords, "")
+	_, _, err = KEComplete(bytes.Join(with(filler(61)...), nil))
+	wantKEErr(t, "length of 65 records", err, ErrKETooManyRecords, "")
 
 	// More than 65536 octets: 64 records of 1028 octets are 65792.
-	_, err = parseKEResponse(make([]byte, KEMaxResponseLen+1))
-	wantKEErr(t, "65537 octets", err, errKETooLong, "")
+	_, err = ParseKEResponse(make([]byte, KEMaxResponseLen+1))
+	wantKEErr(t, "65537 octets", err, ErrKETooLong, "")
 	var long []byte
 	for i := 0; i < 64; i++ {
 		long = append(long, keRec(false, 0x2222, rep(1, 1024))...)
 	}
-	if l, done, err := keResponseLength(long[:KEMaxResponseLen-1]); l != 0 || done || err != nil {
+	if l, done, err := KEComplete(long[:KEMaxResponseLen-1]); l != 0 || done || err != nil {
 		t.Fatalf("one octet under the cap, incomplete: %d %v %v", l, done, err)
 	}
-	_, _, err = keResponseLength(long)
-	wantKEErr(t, "65792 octets", err, errKETooLong, "")
-	_, _, err = keResponseLength(long[:KEMaxResponseLen])
-	wantKEErr(t, "the cap, incomplete", err, errKETooLong, "")
+	_, _, err = KEComplete(long)
+	wantKEErr(t, "65792 octets", err, ErrKETooLong, "")
+	_, _, err = KEComplete(long[:KEMaxResponseLen])
+	wantKEErr(t, "the cap, incomplete", err, ErrKETooLong, "")
 
 	// Twenty cookies: eight kept, twelve counted.
 	var cookies [][]byte
@@ -346,7 +346,7 @@ func TestKECaps(t *testing.T) {
 		cookies = append(cookies, rep(byte(i+1), 32))
 	}
 	r, err := parseRecords(append(goodKERecords(cookies), keEOM())...)
-	if err != nil || len(r.cookies) != 8 || r.dropped != 12 || !bytes.Equal(r.cookies[7], rep(8, 32)) {
+	if err != nil || len(r.Cookies) != 8 || r.Dropped != 12 || !bytes.Equal(r.Cookies[7], rep(8, 32)) {
 		t.Fatalf("%+v %v", r, err)
 	}
 }
@@ -364,11 +364,11 @@ func TestKEExporterValues(t *testing.T) {
 // core's keys.rs: only 32 octets make a key).
 func TestSIVKeyLength(t *testing.T) {
 	for _, n := range []int{0, 16, 31, 33, 64} {
-		if _, err := newSIVKey(make([]byte, n)); err == nil {
+		if _, err := NewSIVKey(make([]byte, n)); err == nil {
 			t.Fatalf("a %d-octet key was accepted", n)
 		}
 	}
-	if _, err := newSIVKey(make([]byte, 32)); err != nil {
+	if _, err := NewSIVKey(make([]byte, 32)); err != nil {
 		t.Fatal(err)
 	}
 }

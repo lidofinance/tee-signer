@@ -7,12 +7,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+
+	"github.com/lidofinance/tee-signer/trusted-time/ntscore"
 )
 
 // AESSIVSelfTest runs the AES-SIV-CMAC-256 test vectors of RFC 5297
-// appendix A: A.1 (the deterministic form, one associated data string) and
-// A.2 (the nonce-based form NTS uses, two associated data strings and a
-// nonce). It returns nil if both match.
+// appendix A through the core: A.1 (the deterministic form, one associated
+// data string) and A.2 (the nonce-based form NTS uses, two associated data
+// strings and a nonce). It returns nil if both match.
 func AESSIVSelfTest() error {
 	h := func(s string) []byte { b, _ := hex.DecodeString(s); return b }
 	cases := []struct {
@@ -33,7 +35,7 @@ func AESSIVSelfTest() error {
 			h("7bdb6e3b432667eb06f4d14bff2fbd0fcb900f2fddbe404326601965c889bf17dba77ceb094fa663b7a3f748ba8af829ea64ad544a272e9c485b62a3fd5c0d")},
 	}
 	for _, c := range cases {
-		k, err := newSIVKey(c.key)
+		k, err := ntscore.NewSIVKey(c.key)
 		if err != nil {
 			return err
 		}
