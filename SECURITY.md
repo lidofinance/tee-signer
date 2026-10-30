@@ -22,7 +22,8 @@ Please include:
 
 Please refer to the [Lido Bug Bounty page on Immunefi](https://immunefi.com/bounty/lido) for details on what is considered within the bug bounty program's scope.
 
-In this repo, bugs that let untrusted input past the modules marked PERIMETER in [SECURITY-SCOPE.md](SECURITY-SCOPE.md) matter most: key custody, slashing safety and approval checks.
+Issues affecting key custody, slashing safety or approval checks are especially
+important in this repository.
 
 This code is not audited and not for production use yet. Test keys and test networks only.
 
