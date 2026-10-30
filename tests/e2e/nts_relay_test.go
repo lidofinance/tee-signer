@@ -154,7 +154,7 @@ func TestE2ENTSClockThroughRelay(t *testing.T) {
 	t.Setenv("RUNNER_NTS_CLOCK", "")
 	c := newChain(t)
 	sock := filepath.Join(dir, "r.sock")
-	args := []string{"-platform", "nitro", "-record", "none",
+	args := []string{"-platform", "nitro", "-mark-store", "none",
 		"-platform-opt", "test_nsm_url=http://127.0.0.1:1/",
 		"-platform-opt", "proxy=" + strings.Join(routes, ","),
 		"-platform-opt", fmt.Sprintf("ntp_relay=tcp:127.0.0.1:%d", relayPort),
@@ -291,7 +291,7 @@ func TestE2ENTSRelayInterop(t *testing.T) {
 	t.Setenv("RUNNER_NTS_TEST_SERVERS", "")
 	c := newChain(t)
 	sock := filepath.Join(dir, "r.sock")
-	r := newRunnerOn(t, bin, "runner-nts-interop", c, "unix:"+sock, "-platform", "nitro", "-record", "none",
+	r := newRunnerOn(t, bin, "runner-nts-interop", c, "unix:"+sock, "-platform", "nitro", "-mark-store", "none",
 		"-platform-opt", "test_nsm_url=http://127.0.0.1:1/",
 		"-platform-opt", "proxy="+strings.Join(routes, ","),
 		"-platform-opt", fmt.Sprintf("ntp_relay=tcp:127.0.0.1:%d", relayPort),

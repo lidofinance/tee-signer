@@ -432,7 +432,7 @@ func launchAzureRunner(t *testing.T, bin string, ca *testCA, fakes *azureFakes, 
 		"-platform-opt", "kid=signer-kek-1",
 		"-platform-opt", "test_snp_hostdata=" + hostData, "-platform-opt", "test_imds_url=" + fakes.imds.URL + "/token",
 		"-config", "../../governance/chains/chain.testnet.json", "-state-dir", filepath.Join(dir, "state"),
-		"-listen", listen, "-tls-client-ca", caFile, "-record", "none"}
+		"-listen", listen, "-tls-client-ca", caFile, "-mark-store", "none"}
 	cmd := exec.Command(bin, append(args, extra...)...)
 	cmd.Env = append(os.Environ(), "UVM_SECURITY_CONTEXT_DIR="+fakes.ctxDir, "SSL_CERT_FILE="+fakes.certFile)
 	cmd.Stdout, cmd.Stderr = logFile, logFile

@@ -23,12 +23,11 @@
 #
 # Restart floor margin: max_epochs_ahead + 1 of the setup. Shares arrive
 # only sealed to the enclave's attested HPKE key (no -allow-import). The
-# mark log of the setup (S3 with Object Lock) is the clone protection; the
-# DynamoDB clone guard and -record-key are gone (-record none). The S3
-# writer credentials are KMS-encrypted to this enclave and kept by the
+# mark log of the setup (S3 with Object Lock) is the clone protection. The
+# S3 writer credentials are KMS-encrypted to this enclave and kept by the
 # parent at record/writer-credentials.kms (platform-aws/deploy/README.md).
-# -mark-create, -state-create and -record-create stay off: the runner
-# refuses them with -setup.
+# -mark-create and -state-create stay off: the runner refuses them with
+# -setup.
 #
 # Clock: the NTS clock (-nts-clock; runner-aws is built with the tag nts).
 # The enclave has no network. Fixed vsock port map on the parent (CID 3):
@@ -62,7 +61,6 @@ ENTRYPOINT ["/runner", \
   "-listen", "vsock:any:7100", \
   "-state-dir", "/tmp/unused", \
   "-restart-floor=true", "-persist-watermarks=false", \
-  "-record", "none", \
   "-nts-clock", \
   "-nts-coarse-urls", "https://kms.{region}.amazonaws.com/,https://sts.{region}.amazonaws.com/,https://www.cloudflare.com/", \
   "-log-json"]

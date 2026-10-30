@@ -23,7 +23,7 @@ func TestE2EEachBinaryHasItsOwnPlatformOnly(t *testing.T) {
 			if p == b.has {
 				continue
 			}
-			args := []string{"-platform", p, "-config", c.path, "-state-dir", filepath.Join(t.TempDir(), "s"), "-record", "none"}
+			args := []string{"-platform", p, "-config", c.path, "-state-dir", filepath.Join(t.TempDir(), "s"), "-mark-store", "none"}
 			out, err := runnerCmd(bin, args...).CombinedOutput()
 			var ee *exec.ExitError
 			want := "platform \"" + p + "\" is not built into this binary (it has: " + b.has + ")"

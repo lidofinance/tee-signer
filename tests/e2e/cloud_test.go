@@ -1,9 +1,8 @@
 package e2e
 
 // End-to-end tests for the cloud task round: sealed share import, mutual
-// TLS bound to the attested identity, the clone guard with two runner
-// processes from one sealed state, and the start-up refusals of cloud
-// images.
+// TLS bound to the attested identity, and the start-up refusals of cloud
+// images. The clone tests of the mark log are in marklog_test.go.
 
 import (
 	"bytes"
@@ -335,90 +334,6 @@ func TestE2EClientCertificateUsesTheRunnerClock(t *testing.T) {
 	}
 }
 
-// TestE2ECloneSharedRecord: two runner processes from one binary and one
-// sealed state (a copy of the first runner's state directory, as a host
-// would feed both enclaves the same sealed blob) share one record. The host
-// asks each for a different vote in every epoch. Without the record both
-// sign; with it at most one signs per target, and the first runner refuses
-// once the second has claimed the record.
-func TestE2ECloneSharedRecord(t *testing.T) {
-	c := newChain(t)
-	sk, _ := software.NewSecret()
-	pk, _ := core.PubkeyOf(sk)
-
-	type result struct{ aSigned, bSigned, doubles int }
-	run := func(name string, guard []string) (result, *runner) {
-		addrA := fmt.Sprintf("tcp:127.0.0.1:%d", freePort(t))
-		addrB := fmt.Sprintf("tcp:127.0.0.1:%d", freePort(t))
-		a := newRunner(t, name+"-a", c, addrA, guard...)
-		a.start()
-		ca := client(t, addrA)
-		waitReady(t, ca)
-		if _, err := adminOf(ca).ImportShare(ctx, backend.ImportShareRequest{Pubkey: pk, Secret: sk, Index: 7}); err != nil {
-			t.Fatal(err)
-		}
-		e0 := c.stableEpoch(t)
-		c.waitEpoch(t, e0+3)
-		if _, err := ca.Sign(ctx, c.req(pk, att(e0+2, e0+3, 0xa0))); err != nil {
-			t.Fatal(err)
-		}
-		// The clone: same binary, same flags, a copy of a's sealed state.
-		b := newRunner(t, name+"-b", c, addrB, guard...)
-		if out, err := exec.Command("cp", "-a", a.stateDir, b.stateDir).CombinedOutput(); err != nil {
-			t.Fatalf("copy state: %v %s", err, out)
-		}
-		b.start()
-		cb := client(t, addrB)
-		if h := waitReady(t, cb); h.Validators != 1 {
-			t.Fatalf("clone loaded %d validators", h.Validators)
-		}
-		var res result
-		start := c.stableEpoch(t)
-		for e := start; e < start+6; e++ {
-			c.waitEpoch(t, e)
-			first, second := ca, cb
-			if e%2 == 1 {
-				first, second = cb, ca
-			}
-			_, e1 := first.Sign(ctx, c.req(pk, att(e-1, e, byte(0xa0+e%2))))
-			_, e2 := second.Sign(ctx, c.req(pk, att(e-1, e, byte(0xb0+e%2))))
-			errA, errB := e1, e2
-			if first == cb {
-				errA, errB = e2, e1
-			}
-			if errA == nil {
-				res.aSigned++
-			}
-			if errB == nil {
-				res.bSigned++
-			}
-			if errA == nil && errB == nil {
-				res.doubles++
-			}
-			t.Logf("%s target %d: a: %v | b: %v", name, e, short(errA), short(errB))
-		}
-		return res, a
-	}
-
-	ctl, _ := run("no-record", nil)
-	t.Logf("without the record: a signed %d, b signed %d, targets signed twice with different votes: %d", ctl.aSigned, ctl.bSigned, ctl.doubles)
-	if ctl.doubles == 0 {
-		t.Fatal("control: expected double votes without the record")
-	}
-
-	recDir := t.TempDir()
-	res, a := run("record", []string{"-record", "file:" + recDir, "-record-key", "node-1"})
-	t.Logf("with the shared record: a signed %d, b signed %d, targets signed twice: %d", res.aSigned, res.bSigned, res.doubles)
-	if res.doubles != 0 || res.bSigned == 0 {
-		t.Fatalf("with the record: %+v", res)
-	}
-	if !strings.Contains(a.logText(), "record taken over by another instance") {
-		t.Fatal("runner a does not report losing the record")
-	}
-	b, _ := os.ReadFile(filepath.Join(recDir, "node-1.rec"))
-	t.Logf("record file after the run: %d bytes, %s", len(b), strings.SplitN(string(b), ",", 2)[0])
-}
-
 func short(err error) string {
 	if err == nil {
 		return "signed"
@@ -458,22 +373,21 @@ func TestE2ECloudFlagChecks(t *testing.T) {
 		args  []string
 		want  string
 	}{
-		{"nitro on vsock without mutual TLS", "aws", []string{"-platform", "nitro", "-listen", "vsock:any:7100", "-record", "none"}, "-tls-client-ca"},
-		{"nitro on TCP without mutual TLS", "aws", []string{"-platform", "nitro", "-listen", "tcp:0.0.0.0:7100", "-record", "none"}, "-tls-client-ca"},
-		{"nitro on vsock without mutual TLS (debug build)", "aws-debug", []string{"-platform", "nitro", "-listen", "vsock:any:7100", "-record", "none"}, "-tls-client-ca"},
+		{"nitro on vsock without mutual TLS", "aws", []string{"-platform", "nitro", "-listen", "vsock:any:7100", "-mark-store", "none"}, "-tls-client-ca"},
+		{"nitro on TCP without mutual TLS", "aws", []string{"-platform", "nitro", "-listen", "tcp:0.0.0.0:7100", "-mark-store", "none"}, "-tls-client-ca"},
+		{"nitro on vsock without mutual TLS (debug build)", "aws-debug", []string{"-platform", "nitro", "-listen", "vsock:any:7100", "-mark-store", "none"}, "-tls-client-ca"},
 		{"plain vsock in the release build", "dev", []string{"-platform", "dev", "-listen", "vsock:any:7100"}, "mutual TLS only"},
 		{"plain vsock next to a TCP listener in the release build", "dev", []string{"-platform", "dev", "-listen", devTCP + ",vsock:any:7100"}, "mutual TLS only"},
 		{"client CA file with a private key", "dev", []string{"-platform", "dev", "-listen", devTCP, "-tls-client-ca", keyInCA}, "private key"},
-		{"gcp on TCP without mutual TLS", "gcp", []string{"-platform", "gcp", "-listen", fmt.Sprintf("tcp:0.0.0.0:%d", port), "-record", "none"}, "-tls-client-ca"},
-		{"azure on TCP without mutual TLS", "azure", []string{"-platform", "azure", "-listen", fmt.Sprintf("tcp:0.0.0.0:%d", port), "-record", "none"}, "-tls-client-ca"},
+		{"gcp on TCP without mutual TLS", "gcp", []string{"-platform", "gcp", "-listen", fmt.Sprintf("tcp:0.0.0.0:%d", port), "-mark-store", "none"}, "-tls-client-ca"},
+		{"azure on TCP without mutual TLS", "azure", []string{"-platform", "azure", "-listen", fmt.Sprintf("tcp:0.0.0.0:%d", port), "-mark-store", "none"}, "-tls-client-ca"},
 		{"plaintext import flag in the release build", "dev", []string{"-platform", "dev", "-listen", devTCP, "-allow-import"}, "flag provided but not defined: -allow-import"},
-		{"plaintext import flag in the Nitro release build", "aws", []string{"-platform", "nitro", "-listen", "vsock:any:7100", "-allow-import", "-record", "none"}, "flag provided but not defined: -allow-import"},
-		{"plaintext import flag in the Azure release build", "azure", []string{"-platform", "azure", "-listen", fmt.Sprintf("tcp:0.0.0.0:%d", port), "-allow-import", "-record", "none"}, "flag provided but not defined: -allow-import"},
-		{"plaintext import flag in the GCP release build", "gcp", []string{"-platform", "gcp", "-listen", fmt.Sprintf("tcp:0.0.0.0:%d", port), "-allow-import", "-record", "none"}, "flag provided but not defined: -allow-import"},
-		{"plaintext import on a cloud platform (debug build)", "aws-debug", []string{"-platform", "nitro", "-listen", "vsock:any:7100", "-allow-import", "-record", "none"}, "dev platform only"},
-		{"plaintext import on Azure (debug build)", "azure-debug", []string{"-platform", "azure", "-listen", fmt.Sprintf("tcp:0.0.0.0:%d", port), "-allow-import", "-record", "none"}, "dev platform only"},
-		{"cloud platform without a clone guard choice", "aws", []string{"-platform", "nitro", "-listen", "vsock:any:7100", "-tls-client-ca", caFile}, "set -mark-store"},
-		{"mark log and clone guard record together", "aws", []string{"-platform", "nitro", "-listen", "vsock:any:7100", "-tls-client-ca", caFile, "-mark-store", "s3:bucket=b,region=r", "-record", "dynamodb:table=t,region=r"}, "-mark-store replaces -record"},
+		{"plaintext import flag in the Nitro release build", "aws", []string{"-platform", "nitro", "-listen", "vsock:any:7100", "-allow-import", "-mark-store", "none"}, "flag provided but not defined: -allow-import"},
+		{"plaintext import flag in the Azure release build", "azure", []string{"-platform", "azure", "-listen", fmt.Sprintf("tcp:0.0.0.0:%d", port), "-allow-import", "-mark-store", "none"}, "flag provided but not defined: -allow-import"},
+		{"plaintext import flag in the GCP release build", "gcp", []string{"-platform", "gcp", "-listen", fmt.Sprintf("tcp:0.0.0.0:%d", port), "-allow-import", "-mark-store", "none"}, "flag provided but not defined: -allow-import"},
+		{"plaintext import on a cloud platform (debug build)", "aws-debug", []string{"-platform", "nitro", "-listen", "vsock:any:7100", "-allow-import", "-mark-store", "none"}, "dev platform only"},
+		{"plaintext import on Azure (debug build)", "azure-debug", []string{"-platform", "azure", "-listen", fmt.Sprintf("tcp:0.0.0.0:%d", port), "-allow-import", "-mark-store", "none"}, "dev platform only"},
+		{"cloud platform without a mark store choice", "aws", []string{"-platform", "nitro", "-listen", "vsock:any:7100", "-tls-client-ca", caFile}, "set -mark-store"},
 		{"network state flag in the release build", "dev", []string{"-platform", "dev", "-listen", devTCP, "-net-state-dir", "/tmp/ts"}, "flag provided but not defined: -net-state-dir"},
 		{"floor margin max_epochs_ahead", "dev", []string{"-platform", "dev", "-listen", devTCP, "-floor-margin", "1"}, "max_epochs_ahead + 1"},
 	}

@@ -10,7 +10,6 @@ import (
 	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/slashing-log"
 	"github.com/lidofinance/tee-signer/slashing-log/statestore"
-	"github.com/lidofinance/tee-signer/tee-signer/record"
 )
 
 // durableCopy is -state-store: the platform calls open once its key release
@@ -27,7 +26,7 @@ type durableCopy struct {
 
 func newDurableCopy(spec, signer string, create bool, log *slog.Logger) (*durableCopy, error) {
 	if signer == "" {
-		return nil, errors.New("-state-store needs -mark-signer (or -record-key): the copy is kept per signer")
+		return nil, errors.New("-state-store needs -mark-signer: the copy is kept per signer")
 	}
 	if err := markstore.CheckSigner(signer); err != nil {
 		return nil, err
@@ -45,7 +44,7 @@ func (d *durableCopy) open(ctx context.Context, p *platform.Platform) (platform.
 		env.Token, env.TokenRefused = c.Token, c.Invalidate
 	}
 	if p.Name == "dev" && env.AWSCreds == nil {
-		env.AWSCreds = record.EnvCredentials()
+		env.AWSCreds = envCredentials()
 	}
 	l, err := markstore.Open(d.spec, env)
 	if err != nil {

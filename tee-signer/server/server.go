@@ -509,7 +509,7 @@ func (s *Server) lostRefusal() error {
 	}
 	if s.lostLogged.CompareAndSwap(false, true) {
 		s.Log.Error("mark log lost to another runner instance: this runner signs, imports and hands over nothing until it is replaced",
-			"err", lost, "record", s.Hooks.GuardStatus())
+			"err", lost, "record", s.Hooks.MarkLogStatus())
 	}
 	return backend.Refused(backend.StatusNotReady, "mark log: %v", lost)
 }
@@ -925,7 +925,7 @@ func (s *Server) health() (*backend.Health, error) {
 		ClockTrusted: s.Platform.Clock.Trusted(),
 		RestartMode:  s.Hooks.Mode().String(),
 		StartedUnix:  uint64(s.started.Unix()),
-		Record:       s.Hooks.GuardStatus(),
+		Record:       s.Hooks.MarkLogStatus(),
 
 		AllowUnverifiedNonslashable: s.Signer.Config().AllowUnverifiedNonslashable,
 		UnverifiedSignatures:        s.Signer.Stats().UnverifiedSignatures,

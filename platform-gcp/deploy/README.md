@@ -133,7 +133,7 @@ the supported-configurations page names Milan for N2D with SEV.
   image holds no chain config and no client CA.
 - Flags: `-platform gcp`, `-setup platform`, `-listen tcp:0.0.0.0:7100`,
   `-state-dir /var/lib/signer`, `-restart-floor=true`,
-  `-persist-watermarks=false`, `-record none`, `-nts-clock` (the NTS clock,
+  `-persist-watermarks=false`, `-nts-clock` (the NTS clock,
   runner built with the tag nts, `trusted-time/docs/nts.md`) with the
   coarse-check URLs `cloudkms.googleapis.com`, `sts.googleapis.com` and
   `www.cloudflare.com` (`-nts-coarse-urls`), `-log-json`. The clock reaches
@@ -574,8 +574,8 @@ assumes the launcher's log is named `confidential-space-launcher`).
   shares, and run `HARDWARE=intel-tdx deploy.sh`. The verifier accepts every
   model on the list, so a list that names an AMD model would let a runner on
   AMD hardware pass. The default `amd-sev` setting does not meet that.
-- The image runs `-record none`. The setup's mark log is the clone
-  protection.
+- The setup's mark log is the clone protection; the runner has no other
+  clone guard.
 - Whether the value of a `tee-env-` variable appears in the token does not
   matter here: the image allows none.
 - Physical attacks (TEE.Fail, Battering RAM) are outside Google's stated

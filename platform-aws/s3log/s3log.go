@@ -6,8 +6,7 @@
 // ListObjectVersions. Nothing else of the S3 API is used.
 //
 // Requests are signed with credentials only the enclave holds
-// (platform.Platform.RecordCredentials, the same path as the clone guard's
-// DynamoDB record). The bucket's Object Lock default retention locks every
+// (platform.Platform.RecordCredentials). The bucket's Object Lock default retention locks every
 // record when it is written, so the client sends no retention headers; S3
 // requires Content-MD5 on a put to such a bucket, which it does send.
 // Every header the client sets is signed, as the AWS SDKs do (the S3 SigV4

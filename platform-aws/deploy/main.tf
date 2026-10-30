@@ -12,10 +12,8 @@
 # The EIF is generic: its
 # PCRs are the same for every signer and chain, so the key policy and the
 # bucket policy are set once per image. A new chain or signer is a new setup
-# on the parent (parent-run.sh SETUP), not a change here. The DynamoDB clone
-# guard below is the per-chain images'; the generic image does not use it
-# (the setup's mark log is the clone protection). It stays here because the
-# table has deletion protection.
+# on the parent (parent-run.sh SETUP), not a change here. The setup's mark
+# log is the clone protection.
 
 terraform {
   required_providers {
@@ -49,7 +47,7 @@ variable "pcr3" {
 }
 variable "admin_role_arn" { description = "role that administers the key (can change its policy!)" }
 variable "node_key" {
-  description = "this node's record key, the runner's -record-key"
+  description = "this node's name in the record writer's user name"
   default     = "node-1"
 }
 variable "entry_cidrs" {
@@ -175,54 +173,15 @@ resource "aws_kms_key" "enclave" {
   })
 }
 
-# Clone guard: one item per node, written only with a condition on its
-# version (tee-signer/record). The writer is an IAM user whose access key the
-# enclave alone can decrypt; the parent role may not write the table.
-resource "aws_dynamodb_table" "records" {
-  name                        = "signer-records"
-  billing_mode                = "PAY_PER_REQUEST"
-  hash_key                    = "node"
-  deletion_protection_enabled = true
-  attribute {
-    name = "node"
-    type = "S"
-  }
-}
-
+# The record writer: the IAM user the mark log writes S3 with. Its access
+# key only the enclave can decrypt, so the parent cannot write the log.
+# Create the access key out of band (not in Terraform state), encrypt the
+# JSON {"access_key_id","secret_access_key"} with this KMS key, and put the
+# ciphertext in the host store as record/writer-credentials.kms. The user
+# has no IAM policy of its own: the mark bucket's policy below grants it
+# what it needs.
 resource "aws_iam_user" "record_writer" {
   name = "signer-record-writer-${var.node_key}"
-}
-
-# Create its access key out of band (not in Terraform state), encrypt the
-# JSON {"access_key_id","secret_access_key"} with this KMS key, and put the
-# ciphertext in the host store as record/writer-credentials.kms.
-resource "aws_iam_user_policy" "record_writer" {
-  name = "signer-record-writer"
-  user = aws_iam_user.record_writer.name
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["dynamodb:GetItem", "dynamodb:PutItem"]
-      Resource = aws_dynamodb_table.records.arn
-      Condition = {
-        "ForAllValues:StringEquals" = { "dynamodb:LeadingKeys" = [var.node_key] }
-      }
-    }]
-  })
-}
-
-resource "aws_iam_role_policy" "parent_no_record_writes" {
-  name = "signer-parent-no-record-writes"
-  role = aws_iam_role.parent.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Deny"
-      Action   = ["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:BatchWriteItem"]
-      Resource = aws_dynamodb_table.records.arn
-    }]
-  })
 }
 
 # The mark log's bucket policy (variable mark_bucket). The runner writes
@@ -312,7 +271,7 @@ locals {
   pcr1 = jsondecode(length(local.pcr_lists[1]) == 1 ? jsonencode(local.pcr_lists[1][0]) : jsonencode(local.pcr_lists[1]))
   pcr2 = jsondecode(length(local.pcr_lists[2]) == 1 ? jsonencode(local.pcr_lists[2][0]) : jsonencode(local.pcr_lists[2]))
 
-  # Egress: HTTPS (KMS, STS, DynamoDB, S3, the clock URLs, an overlay
+  # Egress: HTTPS (KMS, STS, S3, the clock URLs, an overlay
   # network entry's coordination and relays over TCP), the NTS clock's
   # NTS-KE and NTP when nts_egress is set.
   egress_rules = concat(
@@ -387,7 +346,6 @@ resource "aws_instance" "node" {
 
 output "kms_key_arn" { value = aws_kms_key.enclave.arn }
 output "parent_role_arn" { value = aws_iam_role.parent.arn }
-output "records_table" { value = aws_dynamodb_table.records.name }
 output "instance_id" { value = aws_instance.node.id }
 output "public_ip" { value = aws_instance.node.public_ip }
 output "record_writer_user" { value = aws_iam_user.record_writer.name }

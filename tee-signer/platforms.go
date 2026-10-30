@@ -8,7 +8,7 @@ package main
 // reaches a binary only through its tag:
 //
 //	platform_dev    -platform dev     local tests, no hardware, protects nothing
-//	platform_aws    -platform nitro   AWS Nitro Enclaves (also vsock and the DynamoDB record)
+//	platform_aws    -platform nitro   AWS Nitro Enclaves (also vsock and the S3 mark log)
 //	platform_azure  -platform azure   Azure confidential containers (SEV-SNP)
 //	platform_gcp    -platform gcp     Google Confidential Space
 //

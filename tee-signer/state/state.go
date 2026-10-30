@@ -20,13 +20,8 @@
 // past the old mark. At start the runner reads the newest record and the
 // core restores from it. The log is authoritative for the source bound, so
 // the restart floor then bounds targets and blocks only; that removes the
-// floor's stall while the chain does not finalize. The log also does the
-// clone guard's job (a second instance's write conflicts), so -record is
-// not used with it.
-//
-// A third, optional floor comes from the clone guard (package record):
-// the epoch the record's previous owner may have signed up to. Every floor
-// bounds sources as well as targets.
+// floor's stall while the chain does not finalize. The log is also the
+// clone protection: a second instance's write conflicts.
 //
 // Repeat roots stay in the core's RAM. Older builds could store them under
 // rr/ (-persist-repeat-root); the runner never reads those records, and they
@@ -71,18 +66,8 @@ type Mode struct {
 // DefaultFloorMargin is max_epochs_ahead + 1.
 func DefaultFloorMargin(cfg core.Config) uint64 { return satAdd(cfg.MaxEpochsAhead, 1) }
 
-// Guard is the clone guard (package record): an external single-writer
-// record per node.
-type Guard interface {
-	// Floor is the epoch the record's previous owner may have signed up to.
-	Floor() (uint64, bool)
-	// Cover must succeed before anything for epoch e is signed.
-	Cover(ctx context.Context, e uint64) error
-	Status() string
-}
-
-// guardTimeout bounds one record write; the core waits for it.
-const guardTimeout = 10 * time.Second
+// markTimeout bounds one mark log write; the core waits for it.
+const markTimeout = 10 * time.Second
 
 func (m Mode) String() string {
 	switch {
@@ -112,7 +97,6 @@ type Hooks struct {
 	store   platform.Store
 	sealer  platform.Sealer
 	log     *slog.Logger
-	guard   Guard
 	marks   MarkLog
 	// mark is the newest mark the log held at start; found says one existed.
 	mark      backend.Watermark
@@ -173,10 +157,6 @@ func (h *Hooks) UseClock(epochAt func(uint64) uint64) { h.epochAt = epochAt }
 
 // Mode returns the active protections.
 func (h *Hooks) Mode() Mode { return h.mode }
-
-// UseGuard adds the clone guard. Call it after the guard has claimed its
-// record and before any validator is loaded.
-func (h *Hooks) UseGuard(g Guard) { h.guard = g }
 
 // MarkLog is the mark log as the hooks use it (markstore.MarkLog).
 type MarkLog interface {
@@ -343,15 +323,12 @@ func (h *Hooks) HandedOver() bool {
 	return ok
 }
 
-// GuardStatus describes the clone guard or the mark log, or "none".
-func (h *Hooks) GuardStatus() string {
-	if h.marks != nil {
-		return h.marks.Status()
-	}
-	if h.guard == nil {
+// MarkLogStatus describes the mark log, or "none".
+func (h *Hooks) MarkLogStatus() string {
+	if h.marks == nil {
 		return "none"
 	}
-	return h.guard.Status()
+	return h.marks.Status()
 }
 
 // ExpectRecord tells LoadWatermark that pk was restored from storage, so a
@@ -462,17 +439,6 @@ func (h *Hooks) LoadWatermark(pk backend.Pubkey) (backend.Watermark, bool, error
 			"clock_source", h.clock.Source(), "clock_epoch", e, "floor_margin", h.mode.FloorMargin, "floor_epoch", f,
 			"refuse_target_lte", wm.TargetEpoch, "refuse_source_lt", wm.SourceEpoch, "refuse_block_slot_lte", wm.BlockSlot)
 	}
-	if h.guard != nil {
-		if r, ok := h.guard.Floor(); ok {
-			wm = Merge(wm, FloorWatermark(h.cfg, r))
-			found = true
-			if !hasFloor || r > floor {
-				floor, hasFloor = r, true
-			}
-			h.log.Info("record floor", "pubkey", pk.String()[:18], "record_epoch", r,
-				"refuse_target_lte", wm.TargetEpoch, "refuse_source_lt", wm.SourceEpoch, "refuse_block_slot_lte", wm.BlockSlot)
-		}
-	}
 	if hasFloor {
 		h.mu.Lock()
 		h.floors[pk] = floor
@@ -530,38 +496,16 @@ func (h *Hooks) StoreDeviceMark(wm backend.Watermark) error {
 	if h.marks == nil {
 		return errors.New("state: no mark log")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), guardTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), markTimeout)
 	defer cancel()
 	return h.marks.Append(ctx, wm)
 }
 
-// markEpoch is the highest epoch a watermark reaches.
-func (h *Hooks) markEpoch(wm backend.Watermark) uint64 {
-	var e uint64
-	if wm.HasAttestation {
-		e = max(wm.SourceEpoch, wm.TargetEpoch)
-	}
-	if wm.HasBlock {
-		e = max(e, wm.BlockSlot/h.cfg.SlotsPerEpoch)
-	}
-	return e
-}
-
-// StoreWatermark runs before the core signs past its commit-ahead mark.
-// With a clone guard it first makes the record cover the new mark, so the
-// runner refuses to sign if it cannot advance the record. Then it persists
-// the mark, or does nothing more in floor-only mode: there the in-memory
-// state is authoritative while the process lives, and the floor covers
-// restarts.
+// StoreWatermark runs before the core signs past its commit-ahead mark. It
+// persists the mark, or does nothing in floor-only mode: there the
+// in-memory state is authoritative while the process lives, and the floor
+// covers restarts.
 func (h *Hooks) StoreWatermark(pk backend.Pubkey, wm backend.Watermark) error {
-	if h.guard != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), guardTimeout)
-		err := h.guard.Cover(ctx, h.markEpoch(wm))
-		cancel()
-		if err != nil {
-			return err
-		}
-	}
 	if !h.mode.Persist {
 		return nil
 	}

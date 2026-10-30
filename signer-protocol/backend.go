@@ -115,8 +115,8 @@ type Health struct {
 	// Restart protection in force: "floor", "persisted" or "floor+persisted".
 	RestartMode string `json:"restart_mode"`
 	StartedUnix uint64 `json:"started_unix"`
-	// Record describes the clone guard (external single-writer record), or
-	// "none".
+	// Record describes the mark log (store, signer, owner, newest
+	// record), or "none".
 	Record string `json:"record,omitempty"`
 	// AllowUnverifiedNonslashable is the config switch of that name: the
 	// runner signs bare roots it cannot check (root types 2 to 6).

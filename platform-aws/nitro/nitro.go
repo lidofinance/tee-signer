@@ -276,13 +276,13 @@ func (k Keys) keyContext(aad []byte) map[string]string {
 	return map[string]string{keyContext: hex.EncodeToString(aad), ctxSetup: k.setupHex()}
 }
 
-// recordCredentials decrypts the DynamoDB or S3 writer credentials inside
+// recordCredentials decrypts the S3 writer credentials inside
 // the enclave. The blob under key in the host store (the images use
 // record/writer-credentials.kms) is JSON {"access_key_id",
 // "secret_access_key"} that the key admin encrypted with `aws kms encrypt
 // --encryption-context purpose=record-creds` under the enclave's KMS key.
 // The key policy lets only the measured enclave decrypt, so the parent
-// never sees the credentials and cannot write the record itself.
+// never sees the credentials and cannot write the mark log itself.
 // UNTESTED: needs an enclave and KMS.
 func (k Keys) recordCredentials(ctx context.Context, store platform.Store, key string) (platform.Credentials, error) {
 	blob, err := store.Get(key)
@@ -404,8 +404,8 @@ func (k Keys) OpenKey(ctx context.Context, blob, aad []byte) ([]byte, error) {
 //	ntp_relay=vsock:3:7102                   the UDP relay on the parent, for
 //	                                         the NTS clock's NTP (udprelay)
 //	clock=system|nsm
-//	record_creds=record/writer-credentials.kms   store key of the clone
-//	                                             guard's KMS-encrypted credentials
+//	record_creds=record/writer-credentials.kms   store key of the mark log's
+//	                                             KMS-encrypted S3 credentials
 func New(o platform.Options) (*platform.Platform, error) {
 	if p, ok, err := debugPlatform(o); ok || err != nil {
 		return p, err

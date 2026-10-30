@@ -47,7 +47,7 @@ checks() {
       vet_builds || return 1
       local tags
       for tags in "" platform_dev platform_aws platform_azure platform_gcp; do go test $RACE -count=1 -tags "$tags" . || return 1; done
-      go test $RACE -count=1 -tags platform_dev,platform_azure,platform_gcp ./record ./attls || return 1
+      go test $RACE -count=1 -tags platform_dev,platform_azure,platform_gcp ./attls || return 1
       go test $RACE -count=1 -v -tags "$ALL_TAGS" ./... || return 1
       go test $RACE -count=1 -tags "$ALL_TAGS,lockcheck" ./server ./state || return 1
       go test $RACE -count=1 -v -tags platform_dev,testnet . ./attls || return 1

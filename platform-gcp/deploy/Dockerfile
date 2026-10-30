@@ -19,8 +19,7 @@
 # certificates from the setup's client CA. Shares arrive sealed to the
 # attested HPKE key (no -allow-import). Only port 7100 listens. The network
 # entry (README, "Network entry") is outside the image: a firewall rule on
-# the VM's external address. The setup's mark log is the clone protection
-# (-record none).
+# the VM's external address. The setup's mark log is the clone protection.
 # Clock: the NTS clock (-nts-clock, runner built with the tag nts), NTS-KE on
 # TCP 4460 and NTP on UDP 123 and 4123 to the four operators of
 # runner/nts.PublicServers, straight out through the VM's external address
@@ -58,7 +57,6 @@ ENTRYPOINT ["/runner", \
   "-listen", "tcp:0.0.0.0:7100", \
   "-state-dir", "/var/lib/signer", \
   "-restart-floor=true", "-persist-watermarks=false", \
-  "-record", "none", \
   "-nts-clock", \
   "-nts-coarse-urls", "https://cloudkms.googleapis.com/,https://sts.googleapis.com/,https://www.cloudflare.com/", \
   "-log-json"]
