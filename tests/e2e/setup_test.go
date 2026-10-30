@@ -22,11 +22,19 @@ import (
 	"github.com/lidofinance/tee-signer/signer-protocol/sealedimport"
 )
 
-// setupForTest is the dev sample setup of backend/setupwire with its
-// stores in dir and the CA of caFile as its client CA.
+// setupForTest is the single-mode dev sample setup of governance/setupwire
+// (setup-dev-single) with its stores in dir and the CA of caFile as its
+// client CA.
 func setupForTest(t *testing.T, dir, caFile string) []byte {
 	t.Helper()
-	sample, err := os.ReadFile(filepath.Join("..", "..", "governance", "setupwire", "testdata", "setup-dev.bin"))
+	return setupFromSample(t, "setup-dev-single", dir, caFile)
+}
+
+// setupFromSample is setupForTest with the dev sample setup of that name:
+// setup-dev-single or setup-dev-threshold.
+func setupFromSample(t *testing.T, name, dir, caFile string) []byte {
+	t.Helper()
+	sample, err := os.ReadFile(filepath.Join("..", "..", "governance", "setupwire", "testdata", name+".bin"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,13 +84,20 @@ func startSetupRunner(t *testing.T, logPath string, env []string, args ...string
 
 // TestE2ESetup: a dev runner with -setup takes its chain config, client CA,
 // mark log and state copy from the setup. Its identity
-// carries setup_hash. The setup comes from a file or from SIGNER_SETUP.
+// carries setup_hash, and HEALTH its signing_mode. The setup comes from a
+// file or from SIGNER_SETUP, and is the dev sample of either mode.
 func TestE2ESetup(t *testing.T) {
+	type tc struct{ via, sample, mode string }
+	var cases []tc
 	for _, via := range []string{"file", "env"} {
-		t.Run(via, func(t *testing.T) {
+		cases = append(cases, tc{via, "setup-dev-single", "single"}, tc{via, "setup-dev-threshold", "threshold"})
+	}
+	for _, c := range cases {
+		via := c.via
+		t.Run(via+" "+c.sample, func(t *testing.T) {
 			dir := t.TempDir()
 			caFile, cliCfg := testPKI(t, dir, "setup")
-			raw := setupForTest(t, dir, caFile)
+			raw := setupFromSample(t, c.sample, dir, caFile)
 			hash, _ := setupwire.SetupHash(raw)
 			addr := fmt.Sprintf("tcp:127.0.0.1:%d", freePort(t))
 			args := []string{"-platform", "dev", "-state-dir", filepath.Join(dir, "state"), "-listen", addr}
@@ -123,6 +138,9 @@ func TestE2ESetup(t *testing.T) {
 			if h.Setup == nil || *h.Setup != want || h.ConfigHash != hash {
 				t.Fatalf("health setup state %+v (config_hash %x), want %+v", h.Setup, h.ConfigHash, want)
 			}
+			if h.SigningMode != c.mode {
+				t.Fatalf("health signing_mode %q, want %q", h.SigningMode, c.mode)
+			}
 			// The mark log is in the setup's directory; the state copy opens
 			// there and writes its first commit with the first change.
 			if ents, err := os.ReadDir(filepath.Join(dir, "marks")); err != nil || len(ents) == 0 {
@@ -135,7 +153,7 @@ func TestE2ESetup(t *testing.T) {
 					t.Fatalf("the log lacks %s", want)
 				}
 			}
-			t.Logf("setup via %s: setup_hash %x in the identity, mutual TLS with the setup's CA, mark log and state copy in the setup's directories", via, hash[:8])
+			t.Logf("%s setup via %s: setup_hash %x in the identity, mutual TLS with the setup's CA, mark log and state copy in the setup's directories", c.mode, via, hash[:8])
 		})
 	}
 }
@@ -147,13 +165,12 @@ func TestE2ESetup(t *testing.T) {
 func TestE2ESetupSharesStayWithTheSetup(t *testing.T) {
 	dir := t.TempDir()
 	caFile, cliCfg := testPKI(t, dir, "setup")
-	s, err := setupwire.DecodeSetup(setupForTest(t, dir, caFile))
+	// The threshold sample, which takes the 2-of-3 share below; approvers
+	// 1 to 3 (configApprover), k = 2, to sign the import order.
+	s, err := setupwire.DecodeSetup(setupFromSample(t, "setup-dev-threshold", dir, caFile))
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A threshold setup, which takes the 2-of-3 share below; approvers 1
-	// to 3 (configApprover), k = 2, to sign the import order.
-	s.SigningMode = setupwire.SigningModeThreshold
 	s.Locked.Approvers = setupwire.ApproverSet{ApprovalsNeeded: 2}
 	for id := byte(1); id <= 3; id++ {
 		s.Locked.Approvers.Keys = append(s.Locked.Approvers.Keys, [32]byte(configApprover(id).Public().(ed25519.PublicKey)))

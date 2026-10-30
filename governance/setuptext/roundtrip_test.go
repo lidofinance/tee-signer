@@ -97,9 +97,7 @@ func TestNoLockAccepted(t *testing.T) {
 // only for a setup that sets it.
 func TestUnsafeSingleKeyAccepted(t *testing.T) {
 	plain := setups(t)["setup-gcp"]
-	accepted := setups(t)["setup-gcp"]
-	accepted.SigningMode = setupwire.SigningModeSingle
-	accepted.Platform.SealingKeyRelease.UnsafeSingleKeyAccepted = true
+	accepted := setups(t)["setup-gcp-single"]
 	text, err := FormatSetup(accepted)
 	want := "# UNSAFE: " + setupwire.UnsafeSingleKeyWarning + "\nsealing_key_release.unsafe_single_key_accepted = true\n"
 	if err != nil || !strings.Contains(string(text), want) {

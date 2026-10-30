@@ -29,7 +29,7 @@ const srcDelay = 60
 // newSrcEnv is a source at handover generation 1, changed by change.
 func newSrcEnv(t *testing.T, change func(s *setupwire.Setup)) *tgtEnv {
 	t.Helper()
-	return newTgtEnv(t, "dev", func(s *setupwire.Setup) {
+	return newShareTgtEnv(t, "dev", func(s *setupwire.Setup) {
 		s.HandoverGeneration = 1
 		s.Locked.ChangeDelaySeconds = u64(srcDelay)
 		if change != nil {
@@ -43,7 +43,7 @@ func newSrcEnv(t *testing.T, change func(s *setupwire.Setup)) *tgtEnv {
 // force), new salts; then change.
 func newTargetOf(t *testing.T, src *tgtEnv, l *setupwire.Locked, o *setupwire.Open, change func(s *setupwire.Setup)) *tgtEnv {
 	t.Helper()
-	tgt := newTgtEnv(t, "dev", func(s *setupwire.Setup) {
+	tgt := newShareTgtEnv(t, "dev", func(s *setupwire.Setup) {
 		fresh, err := setupwire.DecodeSetup(src.raw)
 		if err != nil {
 			t.Fatal(err)
@@ -79,7 +79,12 @@ func (e *tgtEnv) addKeys(n int, mark *backend.Watermark) []backend.Pubkey {
 	var out []backend.Pubkey
 	for i := range n {
 		sk, _ := software.NewSecret()
+		// A share of another key, or the key itself in a single-mode
+		// setup, which holds whole keys only.
 		other, _ := software.NewSecret()
+		if e.setup.SigningMode == setupwire.SigningModeSingle {
+			other = sk
+		}
 		pk, _ := core.PubkeyOf(other)
 		var ic *backend.Watermark
 		if i == 0 {
@@ -203,9 +208,16 @@ var srcMark = testMark
 // that names the target and carries the mark, the key origin and the day's
 // exits; the source signs nothing after it, also after a restart, takes no
 // other order and answers no other target; the target signs above the mark
-// and keeps the exits.
+// and keeps the exits. In both signing modes: a single-mode pair hands
+// over whole keys, a threshold pair shares.
 func TestHandoverSource(t *testing.T) {
-	src := newSrcEnv(t, nil)
+	for _, mode := range []setupwire.SigningMode{setupwire.SigningModeThreshold, setupwire.SigningModeSingle} {
+		t.Run(mode.String(), func(t *testing.T) { handoverSourceIn(t, mode) })
+	}
+}
+
+func handoverSourceIn(t *testing.T, mode setupwire.SigningMode) {
+	src := newSrcEnv(t, func(s *setupwire.Setup) { s.SigningMode = mode })
 	keys := src.addKeys(300, &srcMark)
 	tgt := newTargetOf(t, src, nil, nil, nil)
 	src.clock.add(8 * testEpoch) // past the imported mark
@@ -468,7 +480,7 @@ func TestHandoverSourceRefusals(t *testing.T) {
 			return e
 		}, "holds 1 keys"},
 		{"another signing_mode", func() *tgtEnv {
-			return newTargetOf(t, src, nil, nil, func(s *setupwire.Setup) { s.SigningMode = setupwire.SigningModeThreshold })
+			return newTargetOf(t, src, nil, nil, func(s *setupwire.Setup) { s.SigningMode = setupwire.SigningModeSingle })
 		}, "public.signing_mode"},
 		{"too small", func() *tgtEnv {
 			return newTargetOf(t, src, nil, nil, func(s *setupwire.Setup) { s.MaxKeys = 2 })

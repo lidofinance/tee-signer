@@ -149,7 +149,7 @@ func TestImportSplit(t *testing.T) {
 // without it the setup itself is refused, so no runner starts from it.
 func TestImportSigningMode(t *testing.T) {
 	single, threshold := setupwire.SigningModeSingle, setupwire.SigningModeThreshold
-	for _, name := range []string{"setup-dev", "setup-nitro", "setup-azure", "setup-gcp"} {
+	for _, name := range []string{"setup-dev-single", "setup-nitro", "setup-azure", "setup-gcp"} {
 		raw, err := os.ReadFile(filepath.Join("..", "..", "governance", "setupwire", "testdata", name+".bin"))
 		if err != nil {
 			t.Fatal(err)
@@ -248,12 +248,12 @@ func TestHealthSingleKey(t *testing.T) {
 		accepted bool
 		want     string
 	}{
-		{"setup-dev", single, false, "n/a"},
-		{"setup-dev", threshold, false, "n/a"},
+		{"setup-dev-single", single, false, "n/a"},
+		{"setup-dev-threshold", threshold, false, "n/a"},
 		{"setup-nitro", threshold, false, "n/a"},
 		{"setup-azure", single, false, "n/a"},
 		{"setup-gcp", threshold, false, "refused"},
-		{"setup-gcp", single, true, "accepted"},
+		{"setup-gcp-single", single, true, "accepted"},
 	} {
 		raw, err := os.ReadFile(filepath.Join("..", "..", "governance", "setupwire", "testdata", c.setup+".bin"))
 		if err != nil {

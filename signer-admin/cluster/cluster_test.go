@@ -40,8 +40,11 @@ func copySetup(t *testing.T, dir, from, to string) {
 
 func TestLoad(t *testing.T) {
 	dir := t.TempDir()
-	copySetup(t, dir, "setup-dev.bin", "a.setup")
-	copySetup(t, dir, "setup-dev.bin", "b.setup")
+	copySetup(t, dir, "setup-dev-threshold.bin", "a.setup")
+	copySetup(t, dir, "setup-dev-threshold.bin", "b.setup")
+	// The same signer in single mode: the other setup differs in
+	// signing_mode only.
+	copySetup(t, dir, "setup-dev-single.bin", "single.setup")
 	signer := func(name, setup string) map[string]string {
 		return map[string]string{"name": name, "cloud": name + "/cloud.json", "setup": setup}
 	}
@@ -60,6 +63,10 @@ func TestLoad(t *testing.T) {
 	}
 	if _, err := Load(path, []string{"c"}); err == nil || !strings.Contains(err.Error(), `"c" is not a signer`) {
 		t.Fatalf("-signers c: %v", err)
+	}
+	writeJSON(t, path, map[string]any{"signers": []any{signer("a", "a.setup"), signer("s", "single.setup")}})
+	if _, err := Load(path, nil); err == nil || !strings.Contains(err.Error(), "different signing_mode (threshold, single)") {
+		t.Fatalf("a threshold and a single signer: %v", err)
 	}
 	writeJSON(t, path, map[string]any{"signers": []any{signer("a", "a.setup"), signer("a", "b.setup")}})
 	if _, err := Load(path, nil); err == nil || !strings.Contains(err.Error(), "listed twice") {

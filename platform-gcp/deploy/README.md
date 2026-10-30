@@ -13,7 +13,8 @@ config, client CA, WIF provider, KMS key, identity audience
 (`sealing_key_release`), mark log (required) and state copy buckets, signer
 name, and optional network entry names. `signer-admin/cmd/setup-tool encode`
 makes the binary setup from a human `key = value` file
-(`governance/setuptext/testdata/setup-gcp.conf` is an example).
+(`governance/setuptext/testdata/setup-gcp.conf` is an example of a signer
+in a threshold cluster, `setup-gcp-single.conf` of a single-node signer).
 
 > **A single-node (1 of 1) signer on GCP is unsafe, and the runner refuses
 > it unless the setup accepts the risk.** Cloud KMS has no lock on the rule

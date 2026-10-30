@@ -45,7 +45,7 @@ func TestUnsafeSingleKeyAccepted(t *testing.T) {
 	if err := CheckThresholdOn(accepted, 1, 1); err != nil {
 		t.Fatalf("1 of 1 on gcp with the acceptance: %v", err)
 	}
-	for _, name := range []string{"setup-nitro", "setup-azure", "setup-dev"} {
+	for _, name := range []string{"setup-nitro", "setup-azure", "setup-dev-single"} {
 		s := samples(t)[name]
 		s.SigningMode = SigningModeSingle
 		s.Platform.SealingKeyRelease.UnsafeSingleKeyAccepted = true
