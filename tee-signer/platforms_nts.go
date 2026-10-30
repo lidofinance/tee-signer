@@ -22,8 +22,7 @@ package main
 //
 // The clock dials through the platform (platform.Platform.Dial): on Nitro,
 // NTS-KE goes through vsock-proxy routes and NTP through the parent's UDP
-// relay. With the NTS clock on, -clock must be platform (the default): the
-// runner refuses -clock https-date, which would replace the NTS clock.
+// relay.
 //
 // If no quorum forms in the wait the runner starts anyway and every signing
 // request is refused until one forms (the clock's Now fails).
@@ -68,9 +67,6 @@ func ntsSwitch(f platformFunc) platformFunc {
 	return func(o platform.Options) (*platform.Platform, error) {
 		if !ntsOn() {
 			return f(o)
-		}
-		if c := flag.Lookup("clock"); c != nil && c.Value.String() != "platform" {
-			return nil, fmt.Errorf("nts clock: -clock %s would replace it; leave -clock out (platform) with -nts-clock", c.Value.String())
 		}
 		return withNTSClock(f)(o)
 	}
@@ -139,9 +135,7 @@ func newNTSClock(client *http.Client, dial nts.DialFunc, region string, log *slo
 	// clock's local time, so the coarse check compares two times aged on
 	// the same counter. Go's monotonic clock (CLOCK_MONOTONIC) is slewed
 	// by timesyncd in WSL, 39,000 to 56,000 ppm slow: 15 to 40 s between
-	// readings put the coarse time up to 2.2 s behind. Only this coarse
-	// clock changes; -clock https-date in main.go stays as in the default
-	// build.
+	// readings put the coarse time up to 2.2 s behind.
 	coarse := &clock.Anchored{Src: q, Interval: clock.DefaultInterval, TrustedSrc: true, Local: rawLocal}
 	maxBound, err := ntsDuration(*ntsMaxBoundFlag, "RUNNER_NTS_MAX_BOUND", clock.NTSMaxBound)
 	if err != nil {

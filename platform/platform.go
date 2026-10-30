@@ -47,7 +47,7 @@ type Store interface {
 // Clock is the time source the signer core and the restart rule use.
 type Clock interface {
 	Now() (time.Time, error)
-	// Source names the clock, e.g. "system", "anchored(https-date x3)".
+	// Source names the clock, e.g. "system", "nts(a,b,c,d)".
 	Source() string
 	// Trusted is true only if the design says the host cannot move it.
 	Trusted() bool

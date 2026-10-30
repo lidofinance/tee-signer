@@ -18,7 +18,6 @@ concurrency:
 env:
   GOWORK: "off"
   GOTOOLCHAIN: local
-  NO_NETWORK: "1"
 
 jobs:
   guards:

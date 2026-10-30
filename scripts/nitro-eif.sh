@@ -173,7 +173,7 @@ build_eif() { # build_eif <tag>
     grep -qF -- "$want" <<<"$ep" || die "the image's command lacks $want"
   done
   for not in '"-config"' '"-tls-client-ca"' '"-platform-opt"' '"-mark-store"' '"-mark-signer"' '"-record-key"' \
-    'dynamodb' ':8003' '"-mark-create"' '"-state-create"' '"-record-create"' '"https-date"'; do
+    'dynamodb' ':8003' '"-mark-create"' '"-state-create"' '"-record-create"'; do
     ! grep -qF -- "$not" <<<"$ep" || die "the image's command has $not"
   done
   log "image holds runner-aws $(sha256sum <"$RUNNER" | cut -c1-16)... as built here, with the Dockerfile's mode, and no operator value"
