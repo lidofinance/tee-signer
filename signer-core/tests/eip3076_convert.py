@@ -9,9 +9,13 @@ Line format (space separated, integers in decimal, bytes in hex):
   S <should_succeed> <contains_slashable_data> <interchange_gvr> <format_version>
   IB <pubkey> <slot>                       imported signed block
   IA <pubkey> <source> <target>            imported signed attestation
-  B <pubkey> <slot> <should_succeed>       block to sign after the import
-  A <pubkey> <source> <target> <should_succeed>
+  B <pubkey> <slot> <should_succeed> <signing_root>   block to sign after the import
+  A <pubkey> <source> <target> <should_succeed> <signing_root>
   E                                        end of test
+
+The signing root of a block or attestation to sign is "-" when the test
+gives none. The roots of imported messages are not needed: the import
+takes per-validator maxima only.
 """
 import json
 import os
@@ -24,6 +28,11 @@ def b(v):
 
 def strip(h):
     return h[2:] if h.startswith("0x") else h
+
+
+def root(op):
+    r = op.get("signing_root")
+    return strip(r) if r else "-"
 
 
 def main():
@@ -47,10 +56,11 @@ def main():
                 for att in rec.get("signed_attestations", []):
                     print("IA", pk, int(att["source_epoch"]), int(att["target_epoch"]))
             for blk in st.get("blocks", []):
-                print("B", strip(blk["pubkey"]), int(blk["slot"]), b(blk["should_succeed"]))
+                print("B", strip(blk["pubkey"]), int(blk["slot"]), b(blk["should_succeed"]),
+                      root(blk))
             for att in st.get("attestations", []):
                 print("A", strip(att["pubkey"]), int(att["source_epoch"]),
-                      int(att["target_epoch"]), b(att["should_succeed"]))
+                      int(att["target_epoch"]), b(att["should_succeed"]), root(att))
         print("E")
 
 
