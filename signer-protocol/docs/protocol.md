@@ -932,7 +932,8 @@ attested import key:
 - each share's own vote history state, from the share's sealed record
   (`history:u8 source_floor:u64` after the origin and its reserved bytes
   in the share header, HSH-01). A key has history if an import with vote
-  history stored it. The mark is the device mark of every key, so it does
+  history stored it, or once the source signed it a vote with a source at
+  or above its floor. The mark is the device mark of every key, so it does
   not say that one key has history. The target exempts a key from the
   source gate only if `history` is 1, which needs a mark with a vote and
   no floor. Any other key gets a source floor of the higher of

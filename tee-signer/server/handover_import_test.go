@@ -153,6 +153,8 @@ func (e *tgtEnv) start() {
 	e.srv = &Server{Signer: e.signer, Hooks: e.hooks, Log: quiet, Updates: e.upd, State: e.upd.SetupState,
 		Platform:  &platform.Platform{Name: e.platName, Store: e.store, Sealer: e.sealer, Clock: e.clock, Attester: devDocAttester{}},
 		SetupHash: e.hash, LogID: m.LogID()}
+	srv := e.srv
+	t.Cleanup(srv.promotions.Wait) // before the temporary directory goes
 	if e.srv.ImportKey, err = sealedimport.Generate(); err != nil {
 		t.Fatal(err)
 	}
@@ -170,6 +172,7 @@ func (e *tgtEnv) start() {
 
 func (e *tgtEnv) restart() {
 	e.t.Helper()
+	e.srv.promotions.Wait()
 	e.signer.Close()
 	e.start()
 }
@@ -437,7 +440,9 @@ func TestHandoverImport(t *testing.T) {
 	if err := e.attest(pk, startEpoch+7, startEpoch+8); err != nil {
 		t.Fatalf("above the mark: %v", err)
 	}
-	// The pages again: every share held, nothing written.
+	// The pages again: every share held, nothing written (after the
+	// promotion that vote wrote).
+	e.srv.promotions.Wait()
 	n := len(e.records())
 	for _, p := range pages {
 		r := e.mustImp(order, p, 0)

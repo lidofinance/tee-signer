@@ -107,6 +107,24 @@ at the import, and the target's record keeps it. With trusted clocks the
 target's floor is the higher one, as it is read later; the source's floor
 keeps a target clock that reads behind the source's from lowering it.
 
+A key earns history of its own by signing. The first time the runner
+signs it a vote with a source at or above every floor that holds for it,
+the runner sets `history` in its share record and drops the floor, once
+per key, after the signature: the core wrote that source into the mark
+before it signed. Every vote the key may have cast before its import has
+a target below its floor, and no later vote, here or at a handover
+target, has a source below the mark's, so none can surround those votes.
+A handover then sends the key with history, and the target sets no floor
+for it. A failed write, or a record the host rolls back, leaves the key
+without history: it waits for its floor again after a handover, which
+costs liveness, not safety. After a failed write the runner tries again
+in a later epoch, at most 3 times per process, since each try writes a
+log record. The promotion fixes the clock reading taken
+at the import for the key's whole life: without it, each handover target
+would floor the key again from its own, later clock reading. A key
+without a floor of its own (a record stored before floors) earns
+nothing.
+
 A record is about 420 bytes on the dev platform, 60 more for each
 pending update, and 150 to 250 more with a cloud KMS ciphertext in the
 key blob.
@@ -312,7 +330,7 @@ Each record carries the share set: the root of the stored share records
 order, each validator key and the sha256 of its sealed record as
 stored), and, while a write is under way, the root of the set after it.
 
-- A share write (an import, a handover's share) first writes
+- A share write (an import, a handover's share, a promotion) first writes
   a log record whose current root is the set before and whose pending
   root is the set after, then the share record. Share writes go one at a
   time. The next record carries the set after as its current root.
@@ -339,7 +357,7 @@ stored), and, while a write is under way, the root of the set after it.
   in the newest record does not mean a write was cut. It also vouches
   for the set before, which holds no more history.
 - While the runner runs it keeps the sha256 of each record it loaded or
-  wrote. A handover's read refuses a record the host
+  wrote. A handover's read and a promotion refuse a record the host
   changed since; after a restart that record goes through the rule
   above.
 - A log record written before share sets (`SMARK1`), or one with no share

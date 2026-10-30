@@ -345,10 +345,11 @@ under an approver-signed handover order (`signer-protocol/docs/protocol.md`,
   restart, it answers that target only, with the same mark.
 - Each share's header adds its key origin (always imported) to the
   sealed import's header, and the key's own vote history state from its
-  sealed record: whether it has history (an import with vote history),
-  and else its source floor (HSH-01, HANDOVER version 2; marklog.md,
-  "Source gate"). The handed-over mark is the device mark of every key
-  and does not say that one key has history. The page carries the carry: the key set handed over and the
+  sealed record: whether it has history (an import with vote history, or
+  a vote this runner signed at or above its source floor), and else its
+  source floor (HSH-01, HANDOVER version 2; marklog.md, "Source gate").
+  The handed-over mark is the device mark of every key and does not say
+  that one key has history. The page carries the carry: the key set handed over and the
   day's exits of the mark log. Each share is sealed under the HPKE
   associated data `signer-handover-share-v1` over its header and the
   carry's hash. The runner signs each header with an origin key it makes
