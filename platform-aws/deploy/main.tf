@@ -164,11 +164,12 @@ resource "aws_kms_key" "enclave" {
         # The runner reads the key's metadata and this policy at start and
         # hashes them into key_release_hash of its attested setup state
         # (platform-aws/nitro ReleaseHash), so a verifier sees whether
-        # the policy is locked. Reads only; the parent could make them too.
+        # the policy is locked. It also lists the key's grants: a key with
+        # any grant is not locked. Reads only; the parent could make them too.
         Sid       = "EnclaveReadsItsKeyPolicy"
         Effect    = "Allow"
         Principal = { AWS = aws_iam_role.parent.arn }
-        Action    = ["kms:DescribeKey", "kms:GetKeyPolicy"]
+        Action    = ["kms:DescribeKey", "kms:GetKeyPolicy", "kms:ListGrants"]
         Resource  = "*"
       }
     ]

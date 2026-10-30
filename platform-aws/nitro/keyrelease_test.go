@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -14,16 +15,21 @@ import (
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
-// keyPolicyKMS answers DescribeKey and GetKeyPolicy for one key, as KMS
-// does in the JSON 1.1 protocol.
+// keyPolicyKMS answers DescribeKey, GetKeyPolicy and ListGrants for one
+// key, as KMS does in the JSON 1.1 protocol.
 type keyPolicyKMS struct {
 	arn, origin, policy string
 	multiRegion         bool
 	denyPolicy          bool
+	grants              []map[string]any
+	pageSize            int // grants per ListGrants page; 0: all on one
+	denyGrants          bool
+	grantCalls          int
+	grantKeyIDs         []string // the KeyId of each ListGrants call
 }
 
 func (f *keyPolicyKMS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	var in struct{ KeyId, PolicyName string }
+	var in struct{ KeyId, PolicyName, Marker string }
 	_ = json.NewDecoder(r.Body).Decode(&in)
 	w.Header().Set("Content-Type", "application/x-amz-json-1.1")
 	switch r.Header.Get("X-Amz-Target") {
@@ -37,6 +43,29 @@ func (f *keyPolicyKMS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		json.NewEncoder(w).Encode(map[string]any{"Policy": f.policy, "PolicyName": "default"})
+	case "TrentService.ListGrants":
+		f.grantCalls++
+		f.grantKeyIDs = append(f.grantKeyIDs, in.KeyId)
+		if !strings.HasPrefix(in.KeyId, "arn:aws:kms:") || strings.Contains(in.KeyId, ":alias/") {
+			w.WriteHeader(http.StatusBadRequest) // ListGrants takes a key ID or key ARN only
+			json.NewEncoder(w).Encode(map[string]string{"__type": "NotFoundException", "message": "alias not accepted"})
+			return
+		}
+		if f.denyGrants {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"__type": "AccessDeniedException", "message": "not allowed"})
+			return
+		}
+		from, _ := strconv.Atoi(in.Marker)
+		to := len(f.grants)
+		if f.pageSize > 0 {
+			to = min(from+f.pageSize, to)
+		}
+		out := map[string]any{"Grants": f.grants[from:to], "Truncated": to < len(f.grants)}
+		if to < len(f.grants) {
+			out["NextMarker"] = strconv.Itoa(to)
+		}
+		json.NewEncoder(w).Encode(out)
 	default:
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]string{"__type": "UnknownOperationException"})

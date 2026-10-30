@@ -42,7 +42,7 @@
       "Sid": "EnclaveReadsItsKeyPolicy",
       "Effect": "Allow",
       "Principal": { "AWS": "arn:aws:iam::${ACCOUNT_ID}:role/${PARENT_INSTANCE_ROLE}" },
-      "Action": ["kms:DescribeKey", "kms:GetKeyPolicy"],
+      "Action": ["kms:DescribeKey", "kms:GetKeyPolicy", "kms:ListGrants"],
       "Resource": "*"
     }
   ]

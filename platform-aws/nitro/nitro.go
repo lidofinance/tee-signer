@@ -35,11 +35,13 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -58,6 +60,10 @@ import (
 )
 
 const dataKeyBlob = "sealing/datakey.kms"
+
+// sharePrefix is where the runner stores its sealed shares
+// (tee-signer/server ListShares).
+const sharePrefix = "shares/"
 
 // ProxyClient returns an HTTP client whose connections to each host:port
 // in routes go to the given vsock (or other transport) address, where
@@ -189,7 +195,10 @@ func kmsRecipient(n *NSM, seen *platform.ImageSeen) (*rsa.PrivateKey, *types.Rec
 // admin call Encrypt with exactly {purpose: record-creds} and nothing else,
 // so no blob the admin makes decrypts under the other two: the admin cannot
 // plant a sealing key or a mark log key. Only GenerateDataKey with this
-// enclave's attestation as recipient makes those. KMS takes strings, so
+// enclave's attestation as recipient makes those. That holds once the
+// policy is locked: before, the admin holds PutKeyPolicy and can allow
+// itself more, so dataKey does not trust a sealing blob on a store without
+// shares (AWS-KMS-02). KMS takes strings, so
 // the binary values go in hex: the SDK turns bytes that are not UTF-8 into
 // U+FFFD, which would drop most of a hash.
 const (
@@ -238,9 +247,13 @@ func (k Keys) setupHex() string { return hex.EncodeToString(k.Setup[:]) }
 // whether the key material came from outside KMS (Origin) and whether
 // replicas in other regions exist (MultiRegion). key_release_hash is over,
 // in order: Arn, Origin, KeyManager, MultiRegion (one byte) and the policy
-// text as KMS returns it. The lock is policyLock of the same answers. The
-// key policy grants the parent role these two reads
-// (cloud/aws/kms-key-policy.json.tmpl). The answers come over TLS from KMS,
+// text as KMS returns it. The lock is policyLock of the same answers, and
+// then grantLock of the key's grants (ListGrants, every page): a key with
+// any grant is not locked, so the hash of a locked key, which leaves the
+// grants out, still describes everything that releases it. A ListGrants
+// that fails leaves a locked policy at KeyLockUnread. The key policy
+// grants the parent role these three reads
+// (platform-aws/deploy/kms-key-policy.json.tmpl). The answers come over TLS from KMS,
 // so the parent cannot change them. UNTESTED against KMS: the code ran
 // against a fake.
 func (k Keys) KeyRule(ctx context.Context) (platform.KeyRule, error) {
@@ -266,7 +279,32 @@ func (k Keys) KeyRule(ctx context.Context) (platform.KeyRule, error) {
 	r := platform.KeyRule{Hash: backend.KeyReleaseHash(backend.KeyReleaseNitro, []byte(*m.Arn), []byte(m.Origin), []byte(m.KeyManager),
 		[]byte{multi}, []byte(*p.Policy))}
 	r.Lock, r.Why = policyLock(*p.Policy, string(m.Origin), *m.MultiRegion)
+	if r.Lock != backend.KeyLockLocked {
+		return r, nil
+	}
+	// ListGrants takes a key ID or ARN, not an alias: use the ARN
+	// DescribeKey answered for kms_key_id.
+	grants, err := k.listGrants(ctx, *m.Arn)
+	if err != nil {
+		r.Lock, r.Why = backend.KeyLockUnread, fmt.Sprintf("nitro: ListGrants: %v", err)
+		return r, nil
+	}
+	r.Lock, r.Why = grantLock(grants)
 	return r, nil
+}
+
+// listGrants reads every grant of the key arn, all pages of ListGrants.
+func (k Keys) listGrants(ctx context.Context, arn string) ([]types.GrantListEntry, error) {
+	var all []types.GrantListEntry
+	pages := kms.NewListGrantsPaginator(k.Client, &kms.ListGrantsInput{KeyId: aws.String(arn)})
+	for pages.HasMorePages() {
+		page, err := pages.NextPage(ctx)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, page.Grants...)
+	}
+	return all, nil
 }
 
 func (k Keys) sealingContext() map[string]string {
@@ -317,14 +355,33 @@ func (k Keys) recordCredentials(ctx context.Context, store platform.Store, key s
 // dataKey gets the sealing key under the sealing context of this setup:
 // from the stored blob with Decrypt, or a new one with GenerateDataKey on
 // first boot. A stored blob of another setup or KMS key, or one the key
-// admin made, does not decrypt, and the start stops.
+// admin made under a locked policy, does not decrypt, and the start stops.
+//
+// The stored blob counts only when the store holds a sealed share
+// (sharePrefix), that is when an earlier start of this runner sealed
+// something under it. Otherwise dataKey ignores the blob and makes a new
+// key (AWS-KMS-02). Before the key policy was locked, the key admin could
+// encrypt a key it knows under the sealing context; that blob decrypts
+// under the locked policy too, and its decryption does not show who chose
+// the key. A new key costs nothing while no share is sealed. The ignored
+// blob is kept under another name first (setAside), never destroyed.
 func (k Keys) dataKey(ctx context.Context, store platform.Store) ([]byte, error) {
 	rsaKey, recipient, err := k.Recipient()
 	if err != nil {
 		return nil, err
 	}
 
+	shares, err := store.List(sharePrefix)
+	if err != nil {
+		return nil, err
+	}
 	blob, err := store.Get(dataKeyBlob)
+	if err == nil && len(shares) == 0 {
+		if err := setAside(store, blob); err != nil {
+			return nil, err
+		}
+		err = platform.ErrNotFound
+	}
 	switch {
 	case errors.Is(err, platform.ErrNotFound):
 		out, err := k.Client.GenerateDataKey(ctx, &kms.GenerateDataKeyInput{
@@ -349,6 +406,23 @@ func (k Keys) dataKey(ctx context.Context, store platform.Store) ([]byte, error)
 		return nil, fmt.Errorf("nitro: kms Decrypt: %w", err)
 	}
 	return DecryptEnvelopedData(out.CiphertextForRecipient, rsaKey)
+}
+
+// setAside copies a sealing blob that dataKey ignores to
+// sealing/datakey.kms.ignored-<first 8 bytes of its SHA-256, hex> before
+// the new key overwrites it. If the shares were only missing from the
+// listing (a partial restore, a late mount), the operator can put the
+// copy back by hand. The name follows the blob, so restarts do not pile
+// up copies.
+func setAside(store platform.Store, blob []byte) error {
+	sum := sha256.Sum256(blob)
+	aside := fmt.Sprintf("%s.ignored-%x", dataKeyBlob, sum[:8])
+	if err := store.Put(aside, blob); err != nil {
+		return fmt.Errorf("nitro: keep the ignored sealing key blob as %s: %w", aside, err)
+	}
+	slog.Warn("nitro: no stored share, so the stored sealing key blob is not used; a new key replaces it (AWS-KMS-02)",
+		"blob", dataKeyBlob, "copy", aside)
+	return nil
 }
 
 func (k Keys) NewKey(ctx context.Context, aad []byte) ([]byte, []byte, error) {
