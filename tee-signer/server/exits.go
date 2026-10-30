@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/lidofinance/tee-signer/governance/exitapproval"
@@ -32,7 +31,7 @@ const (
 )
 
 type exitState struct {
-	mu      sync.Mutex
+	mu      namedMutex[exitsMuName]
 	pending []heldExit
 }
 

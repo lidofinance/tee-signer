@@ -114,7 +114,7 @@ type Server struct {
 	// sharesMu orders share additions (read) against the handover's read
 	// of every share and its tombstone (write): no share is added between
 	// the two, so none is left behind.
-	sharesMu sync.RWMutex
+	sharesMu namedRWMutex[sharesMuName]
 	// blocked holds validators whose import raised the mark log but whose
 	// interchange maxima the core did not take: they sign nothing until a
 	// restart, which reads the raised mark.

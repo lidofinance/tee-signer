@@ -12,7 +12,10 @@ The Go packages have separate roles:
 - `threshold` checks polynomial commitments and recovers signatures and public keys from shares. It links blst directly and does not import `core`. The current provisioning path still uses its commitment checks.
 - `software` is the development backend. It also holds the sample chain configuration, memory-only hooks, random key generation and share splitting used by tests. Runners do not import it.
 
-The binding tests use the public `core` API from an external test package. Development and threshold helpers are test dependencies, so the bindings do not depend on them.
+The binding tests use the public `core` API from an external test package.
+Development helpers are test dependencies, so the bindings do not depend on them.
+Threshold recovery and commitment checks have their own external test package
+in `threshold/`.
 
 Portable C signing core of the threshold signer, for the cloud runner and
 the OP-TEE trusted app of each "hardware Dirk" node (`../ta/`):
@@ -220,7 +223,8 @@ window for this reason.
 If `store_watermark` fails, the request is refused and the state is left
 unchanged.
 
-`sc_watermark_encode` / `decode` give a fixed 32-byte record for storage.
+[`markformat`](../markformat/README.md) provides the fixed 32-byte watermark storage
+record. The core only handles in-memory watermark values.
 Rollback protection of that record (RPMB or similar) is the TA's job.
 
 ### One mark per device

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/lidofinance/tee-signer/governance/setupwire"
+	"github.com/lidofinance/tee-signer/markformat"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
@@ -281,7 +282,7 @@ func (r *Record) encodeBody() []byte {
 	b = append(b, r.Owner[:]...)
 	b = be.AppendUint16(b, uint16(len(r.KeyBlob)))
 	b = append(b, r.KeyBlob...)
-	b = append(b, backend.EncodeWatermark(r.Mark)...)
+	b = append(b, markformat.EncodeWatermark(r.Mark)...)
 	b = be.AppendUint64(b, r.Time)
 	for gi, g := range []*GroupState{&r.State.Locked, &r.State.Open} {
 		active, pending := r.Copies[2*gi], r.Copies[2*gi+1]
@@ -390,7 +391,7 @@ func Parse(enc []byte) (*Record, error) {
 		return nil, fmt.Errorf("%w: key blob of %d bytes", errRecord, kb)
 	}
 	r.KeyBlob = append([]byte(nil), rd.take(kb)...)
-	wm, err := backend.DecodeWatermark(rd.take(backend.WatermarkEncodedLen))
+	wm, err := markformat.DecodeWatermark(rd.take(markformat.WatermarkEncodedLen))
 	if err != nil && !rd.bad {
 		return nil, err
 	}

@@ -43,7 +43,7 @@ func lagrangeAtZero(ids []uint64) ([]byte, error) {
 				continue
 			}
 			if xi == xj {
-				return nil, errors.New("core: duplicate share id")
+				return nil, errors.New("threshold: duplicate share id")
 			}
 			num.Mul(num, new(big.Int).SetUint64(xj)).Mod(num, curveOrder)
 			d := new(big.Int).Sub(new(big.Int).SetUint64(xj), new(big.Int).SetUint64(xi))
@@ -63,7 +63,7 @@ func lagrangeAtZero(ids []uint64) ([]byte, error) {
 func RecoverSignature(ids []uint64, sigs []backend.Signature) (backend.Signature, error) {
 	var out backend.Signature
 	if len(ids) == 0 || len(ids) != len(sigs) {
-		return out, errors.New("core: ids and signatures differ in length")
+		return out, errors.New("threshold: ids and signatures differ in length")
 	}
 	scalars, err := lagrangeAtZero(ids)
 	if err != nil {
@@ -74,7 +74,7 @@ func RecoverSignature(ids []uint64, sigs []backend.Signature) (backend.Signature
 		pts = append(pts, s[:]...)
 	}
 	if C.threshold_p2_lincomb(u8(pts), u8(scalars), C.size_t(len(ids)), u8(out[:])) != 0 {
-		return out, errors.New("core: bad partial signature")
+		return out, errors.New("threshold: bad partial signature")
 	}
 	return out, nil
 }
@@ -83,7 +83,7 @@ func RecoverSignature(ids []uint64, sigs []backend.Signature) (backend.Signature
 func RecoverPubkey(ids []uint64, pks []backend.Pubkey) (backend.Pubkey, error) {
 	var out backend.Pubkey
 	if len(ids) == 0 || len(ids) != len(pks) {
-		return out, errors.New("core: ids and keys differ in length")
+		return out, errors.New("threshold: ids and keys differ in length")
 	}
 	scalars, err := lagrangeAtZero(ids)
 	if err != nil {
@@ -94,7 +94,7 @@ func RecoverPubkey(ids []uint64, pks []backend.Pubkey) (backend.Pubkey, error) {
 		pts = append(pts, p[:]...)
 	}
 	if C.threshold_p1_lincomb(u8(pts), u8(scalars), C.size_t(len(ids)), u8(out[:])) != 0 {
-		return out, errors.New("core: bad share public key")
+		return out, errors.New("threshold: bad share public key")
 	}
 	return out, nil
 }
@@ -106,7 +106,7 @@ func RecoverPubkey(ids []uint64, pks []backend.Pubkey) (backend.Pubkey, error) {
 func FeldmanEval(commitments []backend.Pubkey, x uint64) (backend.Pubkey, error) {
 	var out backend.Pubkey
 	if len(commitments) == 0 {
-		return out, errors.New("core: no commitments")
+		return out, errors.New("threshold: no commitments")
 	}
 	scalars := make([]byte, 0, 32*len(commitments))
 	pts := make([]byte, 0, 48*len(commitments))
@@ -120,7 +120,7 @@ func FeldmanEval(commitments []backend.Pubkey, x uint64) (backend.Pubkey, error)
 		acc.Mul(acc, xb).Mod(acc, curveOrder)
 	}
 	if C.threshold_p1_lincomb(u8(pts), u8(scalars), C.size_t(len(commitments)), u8(out[:])) != 0 {
-		return out, errors.New("core: a commitment is not a G1 point")
+		return out, errors.New("threshold: a commitment is not a G1 point")
 	}
 	return out, nil
 }

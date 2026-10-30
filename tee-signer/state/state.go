@@ -43,9 +43,9 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
-	"sync"
 	"time"
 
+	"github.com/lidofinance/tee-signer/markformat"
 	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-protocol"
@@ -124,7 +124,7 @@ type Hooks struct {
 	mark      backend.Watermark
 	markFound bool
 
-	mu     sync.Mutex
+	mu     namedMutex[hooksMuName]
 	floors map[backend.Pubkey]uint64
 	expect map[backend.Pubkey]bool
 	// The source gate (SourceFloor, decideGate): while on, a validator
@@ -446,7 +446,7 @@ func (h *Hooks) LoadWatermark(pk backend.Pubkey) (backend.Watermark, bool, error
 			if err != nil {
 				return wm, false, fmt.Errorf("unseal watermark: %w", err)
 			}
-			if wm, err = backend.DecodeWatermark(rec); err != nil {
+			if wm, err = markformat.DecodeWatermark(rec); err != nil {
 				return wm, false, err
 			}
 			found = true
@@ -574,7 +574,7 @@ func (h *Hooks) StoreWatermark(pk backend.Pubkey, wm backend.Watermark) error {
 	if !h.mode.Persist {
 		return nil
 	}
-	blob, err := h.sealer.Seal(backend.EncodeWatermark(wm), wmAAD(pk))
+	blob, err := h.sealer.Seal(markformat.EncodeWatermark(wm), wmAAD(pk))
 	if err != nil {
 		return err
 	}

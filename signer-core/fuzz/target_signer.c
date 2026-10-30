@@ -19,6 +19,7 @@
  * preloaded marks and repeat roots come only before a validator's first
  * signature.
  */
+#include "../tests/markformat_host.h"
 #include "base_config.h"
 #include "signer_ops.h"
 
@@ -113,7 +114,7 @@ static int h_load(void *ctx, const uint8_t pk[48], sc_watermark *out)
         return SC_ERR_STORAGE;
     if (!h->rec[i].has_wm)
         return SC_ERR_UNKNOWN_VALIDATOR;
-    return sc_watermark_decode(h->rec[i].enc, sizeof h->rec[i].enc, out) == SC_OK ? SC_OK
+    return test_watermark_decode(h->rec[i].enc, sizeof h->rec[i].enc, out) == SC_OK ? SC_OK
                                                                                 : SC_ERR_STORAGE;
 }
 
@@ -124,7 +125,7 @@ static int h_store(void *ctx, const uint8_t pk[48], const sc_watermark *wm)
     FUZZ_CHECK(i >= 0);
     if (h->fail & FAIL_STORE)
         return SC_ERR_STORAGE;
-    sc_watermark_encode(wm, h->rec[i].enc);
+    test_watermark_encode(wm, h->rec[i].enc);
     h->rec[i].has_wm = 1;
     return SC_OK;
 }
@@ -136,7 +137,7 @@ static int h_load_dev(void *ctx, sc_watermark *out)
         return SC_ERR_STORAGE;
     if (!h->has_device)
         return SC_ERR_UNKNOWN_VALIDATOR;
-    return sc_watermark_decode(h->device, sizeof h->device, out) == SC_OK ? SC_OK : SC_ERR_STORAGE;
+    return test_watermark_decode(h->device, sizeof h->device, out) == SC_OK ? SC_OK : SC_ERR_STORAGE;
 }
 
 static int h_store_dev(void *ctx, const sc_watermark *wm)
@@ -144,7 +145,7 @@ static int h_store_dev(void *ctx, const sc_watermark *wm)
     host_t *h = ctx;
     if (h->fail & (FAIL_STORE | FAIL_DEVICE))
         return SC_ERR_STORAGE;
-    sc_watermark_encode(wm, h->device);
+    test_watermark_encode(wm, h->device);
     h->has_device = 1;
     return SC_OK;
 }
@@ -776,7 +777,7 @@ static void op_preload(fz_in *in, int v, int what)
         wm.block_slot = pick_slot(in);
         wm.source_epoch = pick_epoch(in);
         wm.target_epoch = pick_epoch(in);
-        sc_watermark_encode(&wm, dst);
+        test_watermark_encode(&wm, dst);
         if (sel & 0x80)
             dst[fz_u8(in) % SC_WATERMARK_ENCODED_LEN] = fz_u8(in); /* a damaged record */
         if (what == OP_PRELOAD_DEVICE)

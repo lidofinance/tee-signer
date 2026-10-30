@@ -7,6 +7,7 @@
  *
  * usage: test_unit [data dir with registration_go.txt]   (default tests/data)
  */
+#include "../tests/markformat_host.h"
 #include <time.h>
 
 #include "testutil.h"
@@ -53,7 +54,7 @@ static int h_load(void *ctx, const uint8_t pk[48], sc_watermark *out)
         return SC_ERR_STORAGE;
     if (i < 0 || !h->rec[i].has_wm)
         return SC_ERR_UNKNOWN_VALIDATOR;
-    return sc_watermark_decode(h->rec[i].enc, SC_WATERMARK_ENCODED_LEN, out) == SC_OK
+    return test_watermark_decode(h->rec[i].enc, SC_WATERMARK_ENCODED_LEN, out) == SC_OK
                ? SC_OK
                : SC_ERR_STORAGE;
 }
@@ -64,7 +65,7 @@ static int h_store(void *ctx, const uint8_t pk[48], const sc_watermark *wm)
     int i;
     if (h->fail_store || (i = h_find(h, pk, 1)) < 0)
         return SC_ERR_STORAGE;
-    sc_watermark_encode(wm, h->rec[i].enc);
+    test_watermark_encode(wm, h->rec[i].enc);
     h->rec[i].has_wm = 1;
     h->writes++;
     return SC_OK;
@@ -86,7 +87,7 @@ static int h_load_device(void *ctx, sc_watermark *out)
         return SC_ERR_STORAGE;
     if (!h->has_device)
         return SC_ERR_UNKNOWN_VALIDATOR;
-    return sc_watermark_decode(h->device, SC_WATERMARK_ENCODED_LEN, out) == SC_OK ? SC_OK
+    return test_watermark_decode(h->device, SC_WATERMARK_ENCODED_LEN, out) == SC_OK ? SC_OK
                                                                                  : SC_ERR_STORAGE;
 }
 
@@ -95,7 +96,7 @@ static int h_store_device(void *ctx, const sc_watermark *wm)
     host_t *h = ctx;
     if (h->fail_store)
         return SC_ERR_STORAGE;
-    sc_watermark_encode(wm, h->device);
+    test_watermark_encode(wm, h->device);
     h->has_device = 1;
     h->writes++;
     return SC_OK;
@@ -918,17 +919,6 @@ static void test_table_and_errors(void)
     CHECK_RC(sc_repeat_roots_decode(rrenc, sizeof rrenc - 1, &rr2), SC_ERR_DECODE);
     rrenc[4] = 0x4;
     CHECK_RC(sc_repeat_roots_decode(rrenc, sizeof rrenc, &rr2), SC_ERR_DECODE);
-
-    /* watermark encoding */
-    sc_watermark w = {123, 45, 67, SC_WM_HAS_BLOCK | SC_WM_HAS_ATTESTATION}, w2;
-    uint8_t enc[SC_WATERMARK_ENCODED_LEN];
-    sc_watermark_encode(&w, enc);
-    CHECK_RC(sc_watermark_decode(enc, sizeof enc, &w2), SC_OK);
-    CHECK(w2.block_slot == 123 && w2.source_epoch == 45 && w2.target_epoch == 67 &&
-          w2.flags == w.flags);
-    CHECK_RC(sc_watermark_decode(enc, sizeof enc - 1, &w2), SC_ERR_DECODE);
-    enc[0] ^= 1;
-    CHECK_RC(sc_watermark_decode(enc, sizeof enc, &w2), SC_ERR_DECODE);
 }
 
 static void test_fork_versions(void)

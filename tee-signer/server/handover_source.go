@@ -139,7 +139,7 @@ type sourceHandover struct {
 	opt HandoverSourceOptions
 
 	// mu runs one HANDOVER_ORDER or HANDOVER at a time.
-	mu sync.Mutex
+	mu namedMutex[sourceMuName]
 	// shares are the shares read once for the handover, in pubkey order;
 	// nil until the first HANDOVER that passed every check.
 	shares []handedShare

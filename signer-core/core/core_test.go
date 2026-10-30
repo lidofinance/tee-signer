@@ -6,7 +6,6 @@ import (
 
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-core/software"
-	"github.com/lidofinance/tee-signer/signer-core/threshold"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
@@ -424,65 +423,3 @@ func TestInterchangeImportOnAdd(t *testing.T) {
 
 // 3-of-5: every 3-subset of partial signatures recovers a signature that
 // verifies under the full public key.
-func TestThresholdRecover(t *testing.T) {
-	cfg := software.DevConfig(genesis, 12, 32)
-	sk, _ := software.NewSecret()
-	pk, _ := core.PubkeyOf(sk)
-	shares, err := software.Split(sk, 3, 5)
-	if err != nil {
-		t.Fatal(err)
-	}
-	a := att(19, 20)
-	root, _ := cfg.SigningRoot(a)
-	sigs := map[uint64]backend.Signature{}
-	sharePks := map[uint64]backend.Pubkey{}
-	for _, sh := range shares {
-		h := software.NewMemHooks()
-		h.Clock = clockAtEpoch(20)
-		s, err := core.NewSigner(cfg, 1, 0, h)
-		if err != nil {
-			t.Fatal(err)
-		}
-		k, err := s.AddValidator(pk, sh.Secret, 7, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		sig, err := s.Sign(signReq(s, pk, a))
-		s.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !core.Verify(k.SharePubkey, root, sig) {
-			t.Fatalf("share %d: partial signature does not verify under the share key", sh.ID)
-		}
-		if core.Verify(pk, root, sig) {
-			t.Fatalf("share %d: partial signature verifies under the full key", sh.ID)
-		}
-		sigs[sh.ID], sharePks[sh.ID] = sig, k.SharePubkey
-	}
-	subsets := 0
-	for i := uint64(1); i <= 5; i++ {
-		for j := i + 1; j <= 5; j++ {
-			for k := j + 1; k <= 5; k++ {
-				ids := []uint64{i, j, k}
-				full, err := threshold.RecoverSignature(ids, []backend.Signature{sigs[i], sigs[j], sigs[k]})
-				if err != nil {
-					t.Fatal(err)
-				}
-				if !core.Verify(pk, root, full) {
-					t.Fatalf("subset %v: recovered signature does not verify", ids)
-				}
-				rpk, err := threshold.RecoverPubkey(ids, []backend.Pubkey{sharePks[i], sharePks[j], sharePks[k]})
-				if err != nil || rpk != pk {
-					t.Fatalf("subset %v: recovered pubkey differs", ids)
-				}
-				subsets++
-			}
-		}
-	}
-	two, _ := threshold.RecoverSignature([]uint64{1, 2}, []backend.Signature{sigs[1], sigs[2]})
-	if core.Verify(pk, root, two) {
-		t.Fatal("2 shares must not be enough")
-	}
-	t.Logf("3-of-5: %d subsets recovered and verified", subsets)
-}

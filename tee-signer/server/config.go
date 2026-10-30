@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"math"
 	"slices"
-	"sync"
 	"time"
 
 	"github.com/lidofinance/tee-signer/governance/setupwire"
@@ -129,9 +128,9 @@ type Updates struct {
 
 	// writeMu orders the log writes: an accepted update and the record that
 	// shows an update in force.
-	writeMu sync.Mutex
+	writeMu namedMutex[updatesWriteMuName]
 
-	mu     sync.Mutex
+	mu     namedMutex[updatesMuName]
 	signer *core.Signer
 	bodies map[bodyID]*setupwire.Update
 	logSt  markstore.ConfigState // the log's state the view comes from
@@ -153,7 +152,7 @@ type Updates struct {
 	// them in the order slot is no import (importslot.go), and it leaves
 	// the slot at its not_after (compute). handedOver reports the
 	// tombstone, after which the order stays.
-	srcMu        sync.Mutex
+	srcMu        namedMutex[updatesSrcMuName]
 	sourceOrders map[[32]byte]uint64
 	handedOver   func() bool
 }

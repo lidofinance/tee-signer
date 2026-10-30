@@ -11,6 +11,9 @@ rm -rf "$SRC/build/fresh-copy"
 mkdir -p "$ROOT/signer-core"
 (cd "$SRC" && tar --exclude=./build --exclude=./vectors --exclude=./logs -cf - .) |
   tar -xf - -C "$ROOT/signer-core"
+cp -r "$SRC/../markformat" "$ROOT/markformat"
+mkdir -p "$ROOT/devkit"
+cp -r "$SRC/../devkit/cfuzz" "$ROOT/devkit/cfuzz"
 if [ -d "$SRC/vectors/downloads" ]; then
   mkdir -p "$ROOT/signer-core/vectors/downloads"
   cp -rl "$SRC/vectors/downloads/." "$ROOT/signer-core/vectors/downloads/"

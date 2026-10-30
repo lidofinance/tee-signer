@@ -70,6 +70,8 @@ slashing-log/wormfake
 slashing-log/logtest
 nts/ntstest
 github.com/lidofinance/tee-signer/devkit
+platform/dev/dev.go
+signer-core/software/software.go
 L
   extra release
 }
@@ -85,7 +87,7 @@ FORBIDDEN_COMMITS="${RELEASE_GATE_FORBIDDEN_COMMITS-} $(extra commit)"
 FORBIDDEN_BRANCHES="${RELEASE_GATE_FORBIDDEN_BRANCHES-} $(extra branch)"
 
 check_binary() {
-  local file="$1" kind="$2" s bad=0
+  local file="$1" kind="$2" s tags bad=0
   case "$kind" in release|debug) ;; *) echo "release gate: kind $kind, want release or debug" >&2; return 2 ;; esac
   # The build overlay is for testnet builds only.
   if [ -n "${SIGNER_BUILD_OVERLAY_DIR:-}" ]; then
@@ -97,7 +99,12 @@ check_binary() {
     if grep -qaF -- "$s" "$file"; then echo "release gate: $file holds \"$s\" (a default build carries no bypass code)" >&2; bad=1; fi
   done < <(default_list)
   if [ "$kind" = release ]; then
+    tags="$(go version -m "$file" 2>/dev/null | awk '$1 == "build" && $2 ~ /^-tags=/ { sub(/^-tags=/, "", $2); print $2 }' || true)"
     while IFS= read -r s; do
+      # The local dev runner intentionally links platform/dev.
+      if [ "$s" = platform/dev/dev.go ]; then
+        case ",$tags," in *,platform_dev,*) continue ;; esac
+      fi
       if grep -qaF -- "$s" "$file"; then echo "release gate: $file holds \"$s\" (a release build carries no debug or test code)" >&2; bad=1; fi
     done < <(release_list)
   fi
@@ -106,6 +113,9 @@ check_binary() {
 
 check_deps() {
   local dir="$1" tags="$2" pkg="$3" deps bad
+  case ",${tags// /,}," in
+    *,lockcheck,*) echo "release gate: lockcheck is for tests only" >&2; return 1 ;;
+  esac
   # Standard packages as "std <path>", the others as "mod <path>".
   deps="$(cd "$dir" && go list -deps -tags "$tags" -f '{{if .Standard}}std{{else}}mod{{end}} {{.ImportPath}}' "$pkg")"
   # A module package is test-only when one of its path elements names a

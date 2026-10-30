@@ -103,9 +103,9 @@ type importer struct {
 
 	// slotMu orders the writes of the order slot: the start and the end of
 	// an import.
-	slotMu sync.Mutex
+	slotMu namedMutex[importSlotMuName]
 
-	mu sync.Mutex
+	mu namedMutex[importMuName]
 	// mark is the handed-over mark of this process's import; every request
 	// carries it.
 	mark *backend.Watermark

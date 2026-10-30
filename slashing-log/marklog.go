@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"math"
 	"sort"
-	"sync"
 	"time"
 
 	"github.com/lidofinance/tee-signer/governance/setupwire"
@@ -167,7 +166,7 @@ type MarkLog struct {
 	pubs map[string]ed25519.PublicKey
 	bad  map[string]bool // blobs the key release refused as not authentic
 
-	mu      sync.Mutex
+	mu      namedMutex[markLogMuName]
 	owner   [16]byte
 	claimed bool
 	version uint64 // newest record this process wrote or read

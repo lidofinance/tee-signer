@@ -1,13 +1,15 @@
-package backend
+package markformat
 
 import (
 	"bytes"
 	"encoding/hex"
 	"testing"
+
+	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
 func TestWatermarkStorageFormat(t *testing.T) {
-	w := Watermark{
+	w := backend.Watermark{
 		BlockSlot: 0x0807060504030201, SourceEpoch: 0x1817161514131211,
 		TargetEpoch: 0x2827262524232221, HasBlock: true, HasAttestation: true,
 	}
@@ -33,7 +35,7 @@ func TestWatermarkStorageFormat(t *testing.T) {
 }
 
 func TestWatermarkRejectsMalformedRecords(t *testing.T) {
-	b := EncodeWatermark(Watermark{})
+	b := EncodeWatermark(backend.Watermark{})
 	for n := 0; n <= WatermarkEncodedLen+1; n++ {
 		if n == WatermarkEncodedLen {
 			continue
@@ -57,8 +59,8 @@ func TestWatermarkRejectsMalformedRecords(t *testing.T) {
 }
 
 func FuzzWatermarkStorageRecord(f *testing.F) {
-	f.Add(EncodeWatermark(Watermark{}))
-	f.Add(EncodeWatermark(Watermark{BlockSlot: ^uint64(0), SourceEpoch: 2, TargetEpoch: 1, HasAttestation: true}))
+	f.Add(EncodeWatermark(backend.Watermark{}))
+	f.Add(EncodeWatermark(backend.Watermark{BlockSlot: ^uint64(0), SourceEpoch: 2, TargetEpoch: 1, HasAttestation: true}))
 	f.Add([]byte("SCW1"))
 	f.Fuzz(func(t *testing.T, b []byte) {
 		w, err := DecodeWatermark(b)

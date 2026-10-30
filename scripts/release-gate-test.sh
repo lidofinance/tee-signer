@@ -76,6 +76,8 @@ printf 'package main\n\nimport "gatemod/fuzzcheck"\n\nfunc main() { println(fuzz
 printf 'package main\n\nimport "gatemod/leakcheck"\n\nfunc main() { println(leakcheck.F()) }\n' >"$tmp/mod/leakcmd/main.go"
 expect fail "deps: package fuzzcheck" bash "$GATE" deps "$tmp/mod" "" ./fuzzcmd
 expect fail "deps: package leakcheck" bash "$GATE" deps "$tmp/mod" "" ./leakcmd
+expect fail "deps: tag lockcheck" bash "$GATE" deps "$tmp/mod" "netgo,lockcheck" ./okcmd
+expect fail "deps: space-separated lockcheck" bash "$GATE" deps "$tmp/mod" "netgo lockcheck" ./okcmd
 expect pass "deps: other tags" bash "$GATE" deps "$tmp/mod" "netgo,osusergo" ./okcmd
 
 # No devkit package belongs in release builds.

@@ -47,7 +47,10 @@ for m in "${mods[@]}"; do
           esac
         fi
         case "$rest" in
-          devkit|devkit/*) bad "$f imports $imp outside a test (devkit is for tests)" ;;
+          devkit|devkit/*)
+            if [ "$rest" != devkit/lockorder ] || ! head -n 1 "$f" | grep -qx '//go:build lockcheck'; then
+              bad "$f imports $imp outside a test (only lockcheck-guarded lockorder imports are allowed)"
+            fi ;;
           tests|tests/*) bad "$f imports $imp outside a test" ;;
         esac ;;
     esac

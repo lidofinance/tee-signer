@@ -20,8 +20,9 @@ BLST_SRC ?= $(abspath ../third_party/blst)
 BLST_LIB ?= $(abspath ../../build/x86_64/lib/libblst.a)
 CC ?= cc
 B := build
-CORE_SRCS := ../src/ssz.c ../src/bls.c ../src/slashing.c ../src/policy.c ../src/signer.c ../src/typed.c
-INC := -I../include -I../src -I$(BLST_SRC)/bindings
+MARKFORMAT_DIR := $(abspath ../../markformat)
+CORE_SRCS := ../../markformat/markformat.c ../src/ssz.c ../src/bls.c ../src/slashing.c ../src/policy.c ../src/signer.c ../src/typed.c
+INC := -I$(MARKFORMAT_DIR) -I../include -I../src -I$(BLST_SRC)/bindings
 CORE_FLAGS := -std=c11 -O2 -g -fno-common $(INC)
 SIM_FLAGS := -std=c11 -O2 -g -D_DEFAULT_SOURCE -Wall -Wextra -Wno-unused-function $(INC)
 WRAP := -Wl,--wrap=blst_hash_to_g2,--wrap=blst_sign_pk_in_g1,--wrap=blst_p2_compress,--wrap=blst_sk_to_pk_in_g1,--wrap=blst_p1_compress

@@ -84,7 +84,7 @@ package_cloud() {
   case "$1" in
     github.com/lidofinance/tee-signer/platform/dev) echo dev ;;
     # Operator tools, adapters and development helpers are never runner dependencies.
-    github.com/lidofinance/tee-signer/devkit|github.com/lidofinance/tee-signer/devkit/*|github.com/lidofinance/tee-signer/tests|github.com/lidofinance/tee-signer/tests/*|github.com/lidofinance/tee-signer/signer-admin|github.com/lidofinance/tee-signer/signer-admin/*|github.com/lidofinance/tee-signer/web3signer-api|github.com/lidofinance/tee-signer/web3signer-api/*|github.com/lidofinance/tee-signer/signer-core/software) echo none ;;
+    github.com/lidofinance/tee-signer/devkit|github.com/lidofinance/tee-signer/devkit/*|github.com/lidofinance/tee-signer/tests|github.com/lidofinance/tee-signer/tests/*|github.com/lidofinance/tee-signer/signer-admin|github.com/lidofinance/tee-signer/signer-admin/*|github.com/lidofinance/tee-signer/web3signer-api|github.com/lidofinance/tee-signer/web3signer-api/*|github.com/lidofinance/tee-signer/signer-core/software|github.com/lidofinance/tee-signer/signer-core/software/*) echo none ;;
     # The UDP relay: its client is the Nitro enclave's NTP path.
     github.com/lidofinance/tee-signer/platform-aws/nitro|github.com/lidofinance/tee-signer/platform-aws/nitro/*|github.com/lidofinance/tee-signer/platform-aws/hostagent|github.com/lidofinance/tee-signer/platform-aws/hostagent/*|github.com/lidofinance/tee-signer/platform-aws/udprelay) echo aws ;;
     # NTS test servers never belong in a binary.
@@ -108,7 +108,7 @@ audit_layer_ok() {
   case "$1" in
     "$root"/signer-protocol|"$root"/signer-protocol/*)
       case "$2" in "$root"/signer-protocol|"$root"/signer-protocol/*) return 0 ;; esac ;;
-    "$root"/signer-core/core|"$root"/signer-core/threshold)
+    "$root"/signer-core/core|"$root"/signer-core/threshold|"$root"/markformat)
       [ "$2" = "$root/signer-protocol" ] && return 0 ;;
     "$root"/trusted-time/*)
       case "$2" in "$root"/trusted-time/*) return 0 ;; esac ;;

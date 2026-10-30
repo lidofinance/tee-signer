@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.0.1
 	github.com/fxamacker/cbor/v2 v2.9.6 // indirect
+	github.com/lidofinance/tee-signer/markformat v0.0.0 // indirect
 	github.com/mdlayher/socket v0.6.0 // indirect
 	github.com/mdlayher/vsock v1.3.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
@@ -36,3 +37,5 @@ replace (
 	github.com/lidofinance/tee-signer/tee-signer => ../tee-signer
 	github.com/lidofinance/tee-signer/trusted-time => ../trusted-time
 )
+
+replace github.com/lidofinance/tee-signer/markformat => ../markformat
