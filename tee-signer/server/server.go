@@ -420,7 +420,12 @@ func (s *Server) writeShare(pk backend.Pubkey, blob []byte, replace bool) error 
 		return err
 	}
 	if err := s.Platform.Store.Put(shareKey(pk), blob); err != nil {
-		return err
+		// The write may have landed with its reply lost. Then the stored
+		// set is the one after: keep it, so the next write names the set
+		// the store holds and a start finds it vouched.
+		if cur, gerr := s.Platform.Store.Get(shareKey(pk)); gerr != nil || sha256.Sum256(cur) != next[pk] {
+			return err
+		}
 	}
 	s.shareHash = next
 	s.Hooks.SetShareSet(&markstore.ShareSet{Current: pending})
