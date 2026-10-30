@@ -8,8 +8,8 @@
 //
 // A setup has a public part and a private part.
 // The public part holds the chain, the safety values, max_keys,
-// slashing_log_min_lock_days and both config groups; every field of it is a
-// leaf of the policy tree, with a salt of its own. The private part is the
+// slashing_log_min_lock_days, signing_mode and both config groups; every
+// field of it is a leaf of the policy tree, with a salt of its own. The private part is the
 // rest of the platform part, committed by one salted hash. setup_hash is
 // SHA-256 over policy_root and platform_commitment, so a verifier who gets
 // the policy leaves learns nothing of the private part.
@@ -26,8 +26,9 @@
 //
 //	setup    = 'S' public public_salts locked locked_salts open open_salts
 //	           platform_salt[32] private
-//	public   = setup_format_version:u8(1) cluster_id[32] handover_generation:u64
+//	public   = setup_format_version:u8(2) cluster_id[32] handover_generation:u64
 //	           chain safety max_keys:u32 slashing_log_min_lock_days:u32
+//	           signing_mode:u8
 //	chain    = genesis_validators_root[32] genesis_fork_version[4] genesis_time:u64
 //	           seconds_per_slot:u64 slots_per_epoch:u64 preset:u8 voluntary_exit_fork_version[4]
 //	safety   = max_sign_epochs_ahead_of_clock:u64 slashing_mark_prewrite.block_slots:u64
@@ -88,7 +89,8 @@ import (
 
 const (
 	// FormatVersion is setup_format_version, the setup's second byte.
-	FormatVersion = 1
+	// Format 2 added signing_mode, the last leaf of the public part.
+	FormatVersion = 2
 
 	kindSetup  = 'S'
 	kindBody   = 'B'
@@ -176,11 +178,26 @@ const (
 	ImageTA    ImageKind = 4 // TA hash
 )
 
+// SigningMode says how the signer holds its keys. It is a leaf of the
+// public part, so it is under setup_hash, the approvers see it in the
+// setup they sign, and it cannot change without a new setup.
+type SigningMode uint8
+
+const (
+	// SigningModeThreshold: the signer holds shares of t-of-n splits with
+	// n >= 2 and refuses a 1 of 1 import order.
+	SigningModeThreshold SigningMode = 1
+	// SigningModeSingle: the signer holds whole keys, 1 of 1 import orders
+	// only (CheckThresholdOn).
+	SigningModeSingle SigningMode = 2
+)
+
 var (
-	platformNames = []string{PlatformNitro: "nitro", PlatformAzure: "azure", PlatformGCP: "gcp", PlatformDev: "dev"}
-	presetNames   = []string{PresetMainnet: "mainnet", PresetMinimal: "minimal"}
-	groupNames    = []string{GroupLocked: "locked", GroupOpen: "open"}
-	imageNames    = []string{ImageNitro: "nitro", ImageAzure: "azure", ImageGCP: "gcp", ImageTA: "ta"}
+	signingModeNames = []string{SigningModeThreshold: "threshold", SigningModeSingle: "single"}
+	platformNames    = []string{PlatformNitro: "nitro", PlatformAzure: "azure", PlatformGCP: "gcp", PlatformDev: "dev"}
+	presetNames      = []string{PresetMainnet: "mainnet", PresetMinimal: "minimal"}
+	groupNames       = []string{GroupLocked: "locked", GroupOpen: "open"}
+	imageNames       = []string{ImageNitro: "nitro", ImageAzure: "azure", ImageGCP: "gcp", ImageTA: "ta"}
 	// rootDomainNames is indexed by bit: bit n is domain type 0x0n000000.
 	rootDomainNames = []string{2: "randao", 5: "selection_proof", 6: "aggregate_and_proof",
 		7: "sync_committee", 8: "sync_committee_selection_proof", 9: "contribution_and_proof"}
@@ -208,6 +225,17 @@ func (p Platform) String() string  { return enumName(platformNames, uint8(p)) }
 func (p Preset) String() string    { return enumName(presetNames, uint8(p)) }
 func (g Group) String() string     { return enumName(groupNames, uint8(g)) }
 func (k ImageKind) String() string { return enumName(imageNames, uint8(k)) }
+func (m SigningMode) String() string {
+	return enumName(signingModeNames, uint8(m))
+}
+
+// ParseSigningMode reads threshold or single.
+func ParseSigningMode(s string) (SigningMode, error) {
+	if v, ok := enumValue(signingModeNames, s); ok {
+		return SigningMode(v), nil
+	}
+	return 0, fmt.Errorf("signing_mode %q, want threshold or single", s)
+}
 
 // ParsePlatform reads nitro, azure, gcp or dev.
 func ParsePlatform(s string) (Platform, error) {
@@ -222,6 +250,9 @@ func ParsePlatform(s string) (Platform, error) {
 func PresetNames() []string    { return slices.Clone(presetNames) }
 func GroupNames() []string     { return slices.Clone(groupNames) }
 func ImageKindNames() []string { return slices.Clone(imageNames) }
+func SigningModeNames() []string {
+	return slices.Clone(signingModeNames)
+}
 
 // RootDomainNames is indexed by bit: bit n is domain type 0x0n000000.
 func RootDomainNames() []string { return slices.Clone(rootDomainNames) }
@@ -248,6 +279,7 @@ type Setup struct {
 	Safety                 Safety
 	MaxKeys                uint32
 	SlashingLogMinLockDays uint32
+	SigningMode            SigningMode
 	Locked                 Locked
 	Open                   Open
 	// PolicySalts are the salts of the policy leaves. signer-config setup
@@ -340,9 +372,9 @@ type KeyRelease struct {
 	// UnsafeSingleKeyAccepted (GCP only,
 	// sealing_key_release.unsafe_single_key_accepted): the setup accepts
 	// that this signer holds keys alone (an import order with t = n = 1).
-	// Without it a GCP signer refuses such an order (CheckThresholdOn):
-	// see UnsafeSingleKeyWarning. signer-admin setup sets it with
-	// -allow-gcp-unsafe-single-key.
+	// Only a single-mode setup may say it, and a single-mode GCP setup
+	// must (Check, CheckThresholdOn): see UnsafeSingleKeyWarning.
+	// signer-admin setup sets it with -allow-gcp-unsafe-single-key.
 	UnsafeSingleKeyAccepted bool
 }
 
@@ -605,6 +637,7 @@ func DecodeSetup(b []byte) (*Setup, error) {
 	readSafety(r, &s.Safety)
 	s.MaxKeys = r.u32()
 	s.SlashingLogMinLockDays = r.u32()
+	s.SigningMode = SigningMode(r.u8())
 	s.PolicySalts.Public = r.salts(NumPublicLeaves)
 	readLocked(r, &s.Locked)
 	s.PolicySalts.Locked = r.salts(NumLockedLeaves)
@@ -718,6 +751,7 @@ func (s *Setup) publicFields() []field {
 		field{"slashing_mark_prewrite.target_epochs", func(w *writer) { w.u64(sf.SlashingMarkPrewrite.TargetEpochs) }},
 		field{"max_keys", func(w *writer) { w.u32(s.MaxKeys) }},
 		field{"slashing_log_min_lock_days", func(w *writer) { w.u32(s.SlashingLogMinLockDays) }},
+		field{"signing_mode", func(w *writer) { w.u8(uint8(s.SigningMode)) }},
 	)
 }
 
@@ -1083,6 +1117,19 @@ func (s *Setup) Check() error {
 	if s.PlatformSalt == ([32]byte{}) {
 		return errors.New("setup: platform_salt is zero; signer-config setup draws it")
 	}
+	return s.checkSingleOnGCP()
+}
+
+// checkSingleOnGCP refuses a single-mode GCP setup without
+// sealing_key_release.unsafe_single_key_accepted (UnsafeSingleKeyWarning),
+// so a GCP runner does not start from one. It is a rule of Check, not of
+// CheckValues: signer-admin setup reads the human file first and adds the
+// acceptance after (-allow-gcp-unsafe-single-key), then refuses the setup
+// with the reason if it still lacks it.
+func (s *Setup) checkSingleOnGCP() error {
+	if s.SigningMode == SigningModeSingle && s.Platform.Platform == PlatformGCP && !s.Platform.SealingKeyRelease.UnsafeSingleKeyAccepted {
+		return errors.New("setup: signing_mode = single on gcp needs sealing_key_release.unsafe_single_key_accepted = true (signer-admin setup -allow-gcp-unsafe-single-key): " + UnsafeSingleKeyWarning)
+	}
 	return nil
 }
 
@@ -1098,6 +1145,11 @@ func (s *Setup) CheckValues() error {
 	}
 	if err := s.Platform.Check(); err != nil {
 		return err
+	}
+	// The acceptance of a key held alone means nothing in a threshold
+	// setup, whose runner refuses every 1 of 1 order.
+	if s.Platform.SealingKeyRelease.UnsafeSingleKeyAccepted && s.SigningMode != SigningModeSingle {
+		return fmt.Errorf("setup: sealing_key_release.unsafe_single_key_accepted needs signing_mode = single (signing_mode is %s)", s.SigningMode)
 	}
 	if err := s.checkGroups(); err != nil {
 		return err
@@ -1124,6 +1176,9 @@ func (s *Setup) checkPublic() error {
 	}
 	if s.SlashingLogMinLockDays == 0 || s.SlashingLogMinLockDays > MaxLockDays {
 		return fmt.Errorf("setup: slashing_log_min_lock_days %d, want 1 to %d", s.SlashingLogMinLockDays, MaxLockDays)
+	}
+	if !enumValid(signingModeNames, uint8(s.SigningMode)) {
+		return fmt.Errorf("setup: signing_mode %d, want %d (threshold) or %d (single)", s.SigningMode, SigningModeThreshold, SigningModeSingle)
 	}
 	return nil
 }

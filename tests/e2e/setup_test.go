@@ -151,7 +151,9 @@ func TestE2ESetupSharesStayWithTheSetup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Approvers 1 to 3 (configApprover), k = 2, to sign the import order.
+	// A threshold setup, which takes the 2-of-3 share below; approvers 1
+	// to 3 (configApprover), k = 2, to sign the import order.
+	s.SigningMode = setupwire.SigningModeThreshold
 	s.Locked.Approvers = setupwire.ApproverSet{ApprovalsNeeded: 2}
 	for id := byte(1); id <= 3; id++ {
 		s.Locked.Approvers.Keys = append(s.Locked.Approvers.Keys, [32]byte(configApprover(id).Public().(ed25519.PublicKey)))

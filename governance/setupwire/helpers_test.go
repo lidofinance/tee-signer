@@ -156,7 +156,7 @@ func samples(t testing.TB) map[string]*Setup {
 		return &Setup{ClusterID: [32]byte{id, 0xc1}, HandoverGeneration: 1, Chain: sampleChain(),
 			Safety: Safety{MaxSignEpochsAheadOfClock: 2,
 				SlashingMarkPrewrite: SlashingMarkPrewrite{BlockSlots: 16, SourceEpochs: 2, TargetEpochs: 2}},
-			MaxKeys: maxKeys, SlashingLogMinLockDays: lockDays,
+			MaxKeys: maxKeys, SlashingLogMinLockDays: lockDays, SigningMode: SigningModeThreshold,
 			Locked: sampleLocked(), Open: sampleOpen(), PolicySalts: testPolicySalts(),
 			SignerName: name, Platform: p, PlatformSalt: sha256.Sum256([]byte("test platform salt " + name))}
 	}
@@ -194,6 +194,9 @@ func samples(t testing.TB) map[string]*Setup {
 		SlashingLogStore:    Store{Dir: "/var/lib/signer/marks"},
 		EncryptedStateStore: &Store{Dir: "/var/lib/signer/state-copy"}})
 	dev.Locked.ChangeDelaySeconds = u64p(0)
+	// dev holds whole keys, as a single-node devnet signer does; the
+	// runner tests and the end-to-end tests start from it.
+	dev.SigningMode = SigningModeSingle
 	// nitro-peers: the Nitro signer of a cluster with an Azure peer
 	// (sharedneu) and a GCP peer.
 	nitroPeers := base("signer-1", 1, 1024, 3650, nitro.Platform)

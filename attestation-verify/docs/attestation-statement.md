@@ -1,4 +1,4 @@
-# Attestation statement: setup format 1
+# Attestation statement: setup format 2
 
 This file gives the exact bytes. The golden vectors are in `attestation-verify/docs/attestation-statement-vectors.json`; `governance/setupwire` makes them (`go test -run TestStatementVectors -update`), except the human forms, which `governance/setuptext` makes (`go test -run TestStatementHuman -update`), and `TestStatementVectors` recomputes every value in the file from the formulas below without the package's helpers.
 
@@ -45,11 +45,11 @@ Each leaf has its own 32-byte salt. A salt of 32 zero bytes is refused everywher
 
 ### Leaf order and value bytes
 
-`public`, 16 leaves:
+`public`, 17 leaves:
 
 | # | Name | Value |
 | --- | --- | --- |
-| 0 | `setup_format_version` | u8, 1 |
+| 0 | `setup_format_version` | u8, 2 |
 | 1 | `cluster_id` | 32 bytes, not zero |
 | 2 | `handover_generation` | u64, 1 or more |
 | 3 | `genesis_validators_root` | 32 bytes |
@@ -65,6 +65,7 @@ Each leaf has its own 32-byte salt. A salt of 32 zero bytes is refused everywher
 | 13 | `slashing_mark_prewrite.target_epochs` | u64, 0 to 8 |
 | 14 | `max_keys` | u32, 1 to 8192 |
 | 15 | `slashing_log_min_lock_days` | u32, 1 to 36500 |
+| 16 | `signing_mode` | u8: 1 threshold (shares of t-of-n splits, n >= 2), 2 single (whole keys, 1 of 1 import orders only) |
 
 `locked`, 19 leaves:
 
@@ -107,7 +108,7 @@ Each group has its own root:
 group_root = MerkleRoot(leaf_hash[0], ..., leaf_hash[n-1])
 ```
 
-MerkleRoot pads the list with 32-byte zero hashes up to the next power of two P, then hashes pairs level by level, `node = H(CTX_NODE, left || right)`, until one hash is left. One leaf is its own root. So `public` (16 leaves) has depth 4, `locked` (19 leaves, padded to 32) depth 5 and `open` (2 leaves) depth 1. A zero hash cannot pose as a leaf or node hash, which would need a SHA-256 preimage of zero.
+MerkleRoot pads the list with 32-byte zero hashes up to the next power of two P, then hashes pairs level by level, `node = H(CTX_NODE, left || right)`, until one hash is left. One leaf is its own root. So `public` (17 leaves, padded to 32) has depth 5, `locked` (19 leaves, padded to 32) depth 5 and `open` (2 leaves) depth 1. A zero hash cannot pose as a leaf or node hash, which would need a SHA-256 preimage of zero.
 
 ```
 policy_root = H(CTX_POLICY, public_root || locked_root || open_root)
@@ -334,3 +335,4 @@ The design fixes the split and the field names. This file adds these points, and
 6. Key origin counts are u32 and are part of the setup state, so they are in IDENTITY and ATTEST alike. Every byte of the setup state is a public output; keys_hash is the one private input from the signer.
 7. The slot time rule compares the new changes with the ones in force and is checked at arrival with T the effective activation time; the core takes the new slot times at T. The fork rule counts epochs under the slot times in force and those pending, in both orders of arrival (section 4).
 8. The ranges: `max_sign_epochs_ahead_of_clock` 1 to 16, `slashing_mark_prewrite.block_slots` 0 to 64, `source_epochs` and `target_epochs` 0 to 8 (the design's proposed numbers, lower bounds this file's).
+9. `signing_mode` is a public leaf (format 2), the last of `public`, so the leaf numbers of format 1 stay. A verifier who gets the published leaves reads whether the signer holds shares or whole keys, checked against the attested policy_root, and the mode cannot change without a new setup.

@@ -98,6 +98,7 @@ func TestNoLockAccepted(t *testing.T) {
 func TestUnsafeSingleKeyAccepted(t *testing.T) {
 	plain := setups(t)["setup-gcp"]
 	accepted := setups(t)["setup-gcp"]
+	accepted.SigningMode = setupwire.SigningModeSingle
 	accepted.Platform.SealingKeyRelease.UnsafeSingleKeyAccepted = true
 	text, err := FormatSetup(accepted)
 	want := "# UNSAFE: " + setupwire.UnsafeSingleKeyWarning + "\nsealing_key_release.unsafe_single_key_accepted = true\n"

@@ -338,7 +338,7 @@ func TestSetupFileRules(t *testing.T) {
 		{"signer_name", good + "signer_name = x\n", "signer_name: the [signer NAME] header gives it"},
 		{"different groups", good + "allowed_fee_recipients = " + fee2 + "\n", "signers a and b start from different locked groups"},
 		{"twice", good + "\n[signer a]\nmark_store.dir = /x\n", "signer a has a second section"},
-		{"bad value", strings.Replace(good, "max_keys = 16", "max_keys = lots", 1), ":17: max_keys:"},
+		{"bad value", strings.Replace(good, "max_keys = 16", "max_keys = lots", 1), ":18: max_keys:"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

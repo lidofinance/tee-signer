@@ -59,7 +59,9 @@ func singleKey(p *setupwire.PlatformConfig) string {
 var infinity = backend.Pubkey{0xc0}
 
 // checkSplit checks the share against the split the order names (issue #5
-// R1 and R5): the request's t, n and share index are the order's, 2t > n,
+// R1 and R5): the request's t, n and share index are the order's, the
+// split fits the setup's signing_mode (1 of 1 only in a single-mode setup,
+// never in a threshold-mode one: setupwire.CheckThresholdOn, issue #23), 2t > n,
 // its commitments hash to the order's entry, commitment 0 is the
 // validator key, and share_pubkey is the commitments' Feldman value at the
 // share index. So a
@@ -73,7 +75,7 @@ func (s *Server) checkSplit(req *backend.SealedImportRequest, b *importorder.Bod
 	// The threshold rule of this signer's platform and chain, once: the
 	// case and its message use the same result.
 	w := s.Updates.SetupWire()
-	thresholdErr := setupwire.CheckThresholdOn(&w.Platform, w.Chain.GenesisForkVersion, int(req.T), int(req.N))
+	thresholdErr := setupwire.CheckThresholdOn(w, int(req.T), int(req.N))
 	switch {
 	case req.T == 0:
 		return backend.Refused(backend.StatusBadRequest, "IMPORT_SHARE_SEALED under an import order needs t, n, the share index and the commitments")

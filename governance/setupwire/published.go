@@ -16,6 +16,7 @@ type Policy struct {
 	Safety                 Safety
 	MaxKeys                uint32
 	SlashingLogMinLockDays uint32
+	SigningMode            SigningMode
 	Locked                 Locked
 	Open                   Open
 	Salts                  PolicySalts
@@ -24,7 +25,7 @@ type Policy struct {
 // Policy is the setup's public part.
 func (s *Setup) Policy() *Policy {
 	return &Policy{ClusterID: s.ClusterID, HandoverGeneration: s.HandoverGeneration, Chain: s.Chain, Safety: s.Safety,
-		MaxKeys: s.MaxKeys, SlashingLogMinLockDays: s.SlashingLogMinLockDays, Locked: s.Locked, Open: s.Open,
+		MaxKeys: s.MaxKeys, SlashingLogMinLockDays: s.SlashingLogMinLockDays, SigningMode: s.SigningMode, Locked: s.Locked, Open: s.Open,
 		Salts: s.PolicySalts}
 }
 
@@ -32,7 +33,7 @@ func (s *Setup) Policy() *Policy {
 // rules of the public part.
 func (p *Policy) setup() *Setup {
 	return &Setup{ClusterID: p.ClusterID, HandoverGeneration: p.HandoverGeneration, Chain: p.Chain, Safety: p.Safety,
-		MaxKeys: p.MaxKeys, SlashingLogMinLockDays: p.SlashingLogMinLockDays, Locked: p.Locked, Open: p.Open,
+		MaxKeys: p.MaxKeys, SlashingLogMinLockDays: p.SlashingLogMinLockDays, SigningMode: p.SigningMode, Locked: p.Locked, Open: p.Open,
 		PolicySalts: p.Salts}
 }
 
@@ -105,6 +106,7 @@ func PolicyFromLeaves(public, locked, open []Leaf) (*Policy, error) {
 	readSafety(r, &p.Safety)
 	p.MaxKeys = r.u32()
 	p.SlashingLogMinLockDays = r.u32()
+	p.SigningMode = SigningMode(r.u8())
 	if err := r.done(); err != nil {
 		return nil, fmt.Errorf("policy: public: %w", err)
 	}

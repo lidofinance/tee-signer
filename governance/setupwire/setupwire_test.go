@@ -66,7 +66,7 @@ func offsetsOf(t *testing.T, s *Setup, b []byte) offsets {
 const (
 	chainLen  = 32 + 4 + 8 + 8 + 8 + 1 + 4
 	safetyLen = 4 * 8
-	publicLen = 1 + 32 + 8 + chainLen + safetyLen + 4 + 4
+	publicLen = 1 + 32 + 8 + chainLen + safetyLen + 4 + 4 + 1
 )
 
 // Every shorter prefix and every longer form of a setup is refused, and so
@@ -110,8 +110,9 @@ func TestDecodeSetupBytes(t *testing.T) {
 		want string
 	}{
 		{"kind", set(0, 'X'), "not a setup"},
-		{"format 0", set(1, 0), "setup format 0, want 1"},
-		{"format 2", set(1, 2), "setup format 2, want 1"},
+		{"format 0", set(1, 0), "setup format 0, want 2"},
+		{"format 1 (before signing_mode)", set(1, 1), "setup format 1, want 2"},
+		{"format 3", set(1, 3), "setup format 3, want 2"},
 		{"empty signer name", set(o.private, 0), "signer_name is empty"},
 		{"oversize", append(slices.Clone(b), make([]byte, MaxSetup)...), "at most 65536"},
 		{"empty", nil, "short"},
@@ -237,6 +238,8 @@ func setupRefusals(t testing.TB) []setupRefusal {
 		{"max keys above cap", "", func(s *Setup) { s.MaxKeys = MaxKeysCap + 1 }, "max_keys 8193", ""},
 		{"lock days 0", "", func(s *Setup) { s.SlashingLogMinLockDays = 0 }, "slashing_log_min_lock_days 0", ""},
 		{"lock days above 100 years", "", func(s *Setup) { s.SlashingLogMinLockDays = MaxLockDays + 1 }, "slashing_log_min_lock_days 36501", ""},
+		{"signing mode 0", "", func(s *Setup) { s.SigningMode = 0 }, "signing_mode 0, want 1 (threshold) or 2 (single)", ""},
+		{"signing mode 3", "", func(s *Setup) { s.SigningMode = 3 }, "signing_mode 3", ""},
 		{"public salts missing", "", func(s *Setup) { s.PolicySalts.Public = nil }, "public: no salts", "skip"},
 		{"locked salts short", "", func(s *Setup) { s.PolicySalts.Locked = s.PolicySalts.Locked[:18] }, "locked: 18 salts, want one for each of the 19 leaves", "skip"},
 		{"open salt zero", "", func(s *Setup) { s.PolicySalts.Open[0] = [32]byte{} }, "open: salt 0 is zero", ""},

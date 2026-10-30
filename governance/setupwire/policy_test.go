@@ -141,7 +141,7 @@ func TestPolicySplit(t *testing.T) {
 			s.Locked.AllowedBuilderRequestAuthDataRoots = append(s.Locked.AllowedBuilderRequestAuthDataRoots, [32]byte{0x61})
 		}},
 		{"gloas_fork_epoch", true, func(s *Setup) { s.Open = sampleOpen() }},
-		{"a public salt", true, func(s *Setup) { s.PolicySalts.Public[15][0]++ }},
+		{"a public salt", true, func(s *Setup) { s.PolicySalts.Public[16][0]++ }},
 		{"a locked salt", true, func(s *Setup) { s.PolicySalts.Locked[18][0]++ }},
 		{"an open salt", true, func(s *Setup) { s.PolicySalts.Open[1][0]++ }},
 		{"signer_name", false, func(s *Setup) { s.SignerName = "signer-9" }},
