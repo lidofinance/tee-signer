@@ -58,6 +58,7 @@ func statementSetup(t testing.TB) *Setup {
 		Safety:                 Safety{MaxSignEpochsAheadOfClock: 2, SlashingMarkPrewrite: SlashingMarkPrewrite{BlockSlots: 32, SourceEpochs: 2, TargetEpochs: 2}},
 		MaxKeys:                1024,
 		SlashingLogMinLockDays: 3650,
+		SigningMode:            SigningModeThreshold,
 		Locked: Locked{
 			Approvers:                           ApproverSet{Keys: [][32]byte{approverPub(1), approverPub(2), approverPub(3)}, ApprovalsNeeded: 2},
 			ChangeDelaySeconds:                  &delay,

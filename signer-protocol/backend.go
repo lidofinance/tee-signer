@@ -89,6 +89,12 @@ type Health struct {
 	// says it, unattested, as it says key_lock. Runners without a setup
 	// and runners before it leave it out.
 	SingleKey string `json:"single_key,omitempty"`
+	// SigningMode is the setup's signing_mode: "threshold" (shares of
+	// t-of-n splits with n >= 2) or "single" (whole keys, 1 of 1 import
+	// orders only). Unlike single_key it is a leaf of the public part, so a
+	// verifier can also check it against the attested policy_root. Runners
+	// without a setup and runners before it leave it out.
+	SigningMode string `json:"signing_mode,omitempty"`
 	// Image is the runner's check of its own image against
 	// allowed_image_measurements in force (docs/protocol.md, "Image
 	// check"). Unattested here; the attestation document carries the image

@@ -467,6 +467,9 @@ func TestHandoverSourceRefusals(t *testing.T) {
 			e.addKeys(1, nil)
 			return e
 		}, "holds 1 keys"},
+		{"another signing_mode", func() *tgtEnv {
+			return newTargetOf(t, src, nil, nil, func(s *setupwire.Setup) { s.SigningMode = setupwire.SigningModeThreshold })
+		}, "public.signing_mode"},
 		{"too small", func() *tgtEnv {
 			return newTargetOf(t, src, nil, nil, func(s *setupwire.Setup) { s.MaxKeys = 2 })
 		}, "max_keys is 2"},

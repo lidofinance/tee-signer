@@ -14,7 +14,10 @@
 //	    draw one random cluster_id, write DIR/NAME.setup for each signer and
 //	    print each setup_sha256. -build testnet: the runners are testnet
 //	    builds, so a time lock above their cap (1800 s) is refused.
-//	    -allow-gcp-unsafe-single-key: the setup of a one-signer GCP
+//	    The file says signing_mode: threshold (shares of t-of-n splits)
+//	    or single (one signer that holds whole keys); single with more
+//	    than one signer, and threshold with one, are refused.
+//	    -allow-gcp-unsafe-single-key: the single-mode setup of a one-signer GCP
 //	    cluster accepts that its signer holds keys alone (1 of 1), which is
 //	    unsafe there (setupwire.UnsafeSingleKeyWarning); without it a file
 //	    with one GCP signer is refused. The flag is refused for a file with
@@ -68,8 +71,9 @@
 //	signer-admin import-draft -cluster cluster.json -signer NAME -split FILE [-not-after 12h] [-allow-gcp-unsafe-single-key] [-out import.bin]
 //	    Draft an import order for one target signer: its setup_sha256, t, n,
 //	    its share index and, per validator, the hash of the t commitments.
-//	    The split must pass the target's threshold rule
-//	    (setupwire.CheckThresholdOn). A 1 of 1 order to a GCP signer is
+//	    The split must pass the target's threshold rule and fit its
+//	    signing_mode (setupwire.CheckThresholdOn): 1 of 1 to a single-mode
+//	    signer only, never to a threshold-mode one. A 1 of 1 order to a GCP signer is
 //	    drafted only with -allow-gcp-unsafe-single-key, and prints a
 //	    WARNING line (setupwire.UnsafeSingleKeyWarning); show prints the
 //	    same line to each approver. show, sign and assemble take it as

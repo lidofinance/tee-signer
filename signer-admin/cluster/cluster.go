@@ -160,6 +160,8 @@ func SameCluster(a, b *Member) error {
 		return fmt.Errorf("signers %s and %s have different chains", a.Name, b.Name)
 	case sa.Safety != sb.Safety || sa.HandoverGeneration != sb.HandoverGeneration:
 		return fmt.Errorf("signers %s and %s have different safety settings or handover generations", a.Name, b.Name)
+	case sa.SigningMode != sb.SigningMode:
+		return fmt.Errorf("signers %s and %s have different signing_mode (%s, %s)", a.Name, b.Name, sa.SigningMode, sb.SigningMode)
 	}
 	la, err1 := sa.Locked.Encode()
 	lb, err2 := sb.Locked.Encode()

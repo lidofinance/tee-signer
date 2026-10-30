@@ -934,7 +934,8 @@ func (s *Server) health() (*backend.Health, error) {
 		h.KeyLock, h.KeyLockWhy = s.KeyLock.String(), s.KeyLockWhy
 	}
 	if s.Updates != nil {
-		h.SingleKey = singleKey(&s.Updates.SetupWire().Platform)
+		w := s.Updates.SetupWire()
+		h.SingleKey, h.SigningMode = singleKey(&w.Platform), w.SigningMode.String()
 	}
 	st := s.Signer.Stats()
 	h.Stats = &backend.SignerStats{

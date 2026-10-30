@@ -13,8 +13,8 @@
 //	    sealing_key_release.unsafe_single_key_accepted gets a WARNING
 //	    on stderr (setupwire.UnsafeSingleKeyWarning); encode and check.
 //	setup-tool check [-platform P] [-chain CHAIN_JSON] FILE
-//	    Decode FILE strictly and print setup_sha256, platform and signer,
-//	    policy_root and platform_commitment, and one
+//	    Decode FILE strictly and print setup_sha256, platform, signer,
+//	    signing_mode, policy_root and platform_commitment, and one
 //	    peer_attestation_hosts line per host (on nitro
 //	    "peer_attestation_hosts none" without any: its handover verifier
 //	    then reaches no azure-maa or gcp-cs key set). With
@@ -205,7 +205,7 @@ func check(args []string) error {
 	}
 	pr, _ := s.PolicyRoot()
 	pc, _ := s.PlatformCommitment()
-	fmt.Printf("setup_sha256 %x\nplatform %s\nsigner %s\npolicy_root %x\nplatform_commitment %x\n", h, s.Platform.Platform, s.SignerName, pr, pc)
+	fmt.Printf("setup_sha256 %x\nplatform %s\nsigner %s\nsigning_mode %s\npolicy_root %x\nplatform_commitment %x\n", h, s.Platform.Platform, s.SignerName, s.SigningMode, pr, pc)
 	for _, e := range s.Platform.PeerAttestationHosts {
 		fmt.Printf("peer_attestation_hosts %s\n", e)
 	}
