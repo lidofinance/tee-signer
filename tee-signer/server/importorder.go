@@ -1,6 +1,8 @@
 package server
 
 import (
+	"slices"
+
 	"github.com/lidofinance/tee-signer/governance/importorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-core/threshold"
@@ -53,12 +55,20 @@ func singleKey(p *setupwire.PlatformConfig) string {
 	return "refused"
 }
 
+// infinity is the compressed G1 point at infinity.
+var infinity = backend.Pubkey{0xc0}
+
 // checkSplit checks the share against the split the order names (issue #5
 // R1 and R5): the request's t, n and share index are the order's, 2t > n,
 // its commitments hash to the order's entry, commitment 0 is the
 // validator key, and share_pubkey is the commitments' Feldman value at the
 // share index (the check key generation makes of its own share). So a
 // share is filed only under the validator whose polynomial it lies on.
+//
+// A degenerate split is refused: a commitment at the point at infinity
+// (a valid G1 point; [pk, infinity] makes every share the key), and with
+// n >= 2 a share_pubkey equal to the validator key (a share that is the
+// whole key; for an honest split the chance is about 1 in r).
 func (s *Server) checkSplit(req *backend.SealedImportRequest, b *importorder.Body, e *importorder.Entry) error {
 	// The threshold rule of this signer's platform and chain, once: the
 	// case and its message use the same result.
@@ -80,6 +90,8 @@ func (s *Server) checkSplit(req *backend.SealedImportRequest, b *importorder.Bod
 		return backend.Refused(backend.StatusBadKey, "the commitments are not the ones the import order names for %s", req.Pubkey.String()[:18])
 	case req.Commitments[0] != req.Pubkey:
 		return backend.Refused(backend.StatusBadKey, "commitment 0 is not the validator key %s", req.Pubkey.String()[:18])
+	case slices.Contains(req.Commitments, infinity):
+		return backend.Refused(backend.StatusBadKey, "a commitment of validator %s is the point at infinity: the split is degenerate", req.Pubkey.String()[:18])
 	}
 	want, err := threshold.FeldmanEval(req.Commitments, uint64(req.ShareIndex))
 	if err != nil {
@@ -87,6 +99,10 @@ func (s *Server) checkSplit(req *backend.SealedImportRequest, b *importorder.Bod
 	}
 	if want != req.SharePubkey {
 		return backend.Refused(backend.StatusBadKey, "share_pubkey is not share %d of validator %s", req.ShareIndex, req.Pubkey.String()[:18])
+	}
+	if req.N >= 2 && req.SharePubkey == req.Pubkey {
+		return backend.Refused(backend.StatusBadKey, "share %d of a %d-of-%d split is the validator key %s: the split is degenerate",
+			req.ShareIndex, req.T, req.N, req.Pubkey.String()[:18])
 	}
 	if w.Platform.Platform == setupwire.PlatformGCP && req.T == 1 && req.N == 1 {
 		s.Log.Warn("UNSAFE: taking a 1 of 1 share on GCP under the setup's unsafe_single_key_accepted", "pubkey", req.Pubkey.String(), "why", setupwire.UnsafeSingleKeyWarning)
