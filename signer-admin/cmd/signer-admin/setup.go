@@ -121,6 +121,7 @@ func cmdSetup(args []string, out io.Writer) error {
 	dir := fs.String("out", "", "folder for the binary setups, one NAME.setup per signer")
 	build := fs.String("build", string(flavor.Default), fmt.Sprintf("the runners' build flavour, default or testnet; a testnet runner refuses a time lock above %d s at start, so this refuses it here",
 		flavor.Testnet.Limits().MaxTimeLock))
+	allowGCPSingle := fs.Bool("allow-gcp-unsafe-single-key", false, "accept, in the setup of a one-signer GCP cluster, that the signer holds keys alone (1 of 1); UNSAFE: "+setupwire.UnsafeSingleKeyWarning)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -129,7 +130,7 @@ func cmdSetup(args []string, out io.Writer) error {
 		return fmt.Errorf("-build %q: default or testnet", *build)
 	}
 	if *dir == "" || fs.NArg() != 1 {
-		return errors.New("usage: signer-admin setup [-build default|testnet] -out DIR FILE")
+		return errors.New("usage: signer-admin setup [-build default|testnet] [-allow-gcp-unsafe-single-key] -out DIR FILE")
 	}
 	data, err := os.ReadFile(fs.Arg(0))
 	if err != nil {
@@ -150,14 +151,47 @@ func cmdSetup(args []string, out io.Writer) error {
 			return fmt.Errorf("signer %s: %w", s.SignerName, err)
 		}
 	}
+	// -allow-gcp-unsafe-single-key is for a one-signer GCP cluster, the
+	// only cluster whose every split is 1 of 1: it writes the acceptance
+	// into that signer's setup, as the key
+	// sealing_key_release.unsafe_single_key_accepted in its section would.
+	// With more signers, or with one signer that is not on GCP, the flag
+	// is refused: the acceptance is one signer's decision, so there the key
+	// in that signer's section says it.
+	if *allowGCPSingle {
+		if len(setups) != 1 {
+			return fmt.Errorf("-allow-gcp-unsafe-single-key: the file has %d signers; it is for a one-signer GCP cluster (put sealing_key_release.unsafe_single_key_accepted = true in a signer's section to accept it there)", len(setups))
+		}
+		if s := setups[0]; s.Platform.Platform != setupwire.PlatformGCP {
+			return fmt.Errorf("-allow-gcp-unsafe-single-key: signer %s is on %s, not on GCP; only a GCP signer needs the acceptance to hold keys alone", s.SignerName, s.Platform.Platform)
+		}
+		setups[0].Platform.SealingKeyRelease.UnsafeSingleKeyAccepted = true
+	}
 	// Every split of the cluster's keys has at most as many shares as the
 	// file has signers. t = n is the split the threshold rule refuses
 	// last, so a cluster that fails it can hold no key at all: one GCP
-	// signer (1 of 1 is refused there on every chain). The runners refuse
-	// such an order; this refuses the setup.
+	// signer without the acceptance. The runners refuse such an order;
+	// this refuses the setup, with the reason and the way to accept. On
+	// mainnet a GCP runner starts only with the other acceptance,
+	// sealing_key_release.no_lock_accepted (platform.Options.CheckNoLock),
+	// so a mainnet setup that accepts a key held alone without it would
+	// make a runner that never starts: refused here, and the flag never
+	// sets no_lock_accepted, as each acceptance is its own decision. A
+	// GCP setup with an acceptance gets its WARNING line on every run, so
+	// the operator sees it when the setup is made, not only in the file.
 	for _, s := range setups {
-		if err := setupwire.CheckThresholdOn(s.Platform.Platform, s.Chain.GenesisForkVersion, len(setups), len(setups)); err != nil {
+		k := &s.Platform.SealingKeyRelease
+		if err := setupwire.CheckThresholdOn(&s.Platform, s.Chain.GenesisForkVersion, len(setups), len(setups)); err != nil {
 			return fmt.Errorf("signer %s: a cluster of %d signer(s) can hold no key: %w", s.SignerName, len(setups), err)
+		}
+		if k.UnsafeSingleKeyAccepted && !k.NoLockAccepted && setupwire.IsMainnet(s.Chain.GenesisForkVersion) {
+			return fmt.Errorf("signer %s: the setup accepts a key held alone on GCP (sealing_key_release.unsafe_single_key_accepted) on mainnet, where a GCP runner starts only with the separate acceptance of a key rule without a lock: put sealing_key_release.no_lock_accepted = true in the signer's section (-allow-gcp-unsafe-single-key does not set it)", s.SignerName)
+		}
+		if k.NoLockAccepted {
+			fprintf(out, "WARNING signer %s: the setup accepts a key rule without a lock (sealing_key_release.no_lock_accepted): Cloud KMS has no lock on the rule that releases the sealing key, and a mainnet runner starts anyway\n", s.SignerName)
+		}
+		if k.UnsafeSingleKeyAccepted {
+			fprintf(out, "WARNING signer %s: the setup accepts a key held alone on GCP (sealing_key_release.unsafe_single_key_accepted): %s\n", s.SignerName, setupwire.UnsafeSingleKeyWarning)
 		}
 	}
 	// One set of policy salts for the cluster, one platform salt per signer.

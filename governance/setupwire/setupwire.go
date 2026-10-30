@@ -55,6 +55,7 @@
 //	sealing_key_release = nitro: region:str kms_key_id:str
 //	           | azure: maa_endpoint:str akv_endpoint:str kid:str
 //	           | gcp: wif_provider:str kms_key:str attest_audience:str no_lock_accepted:u8
+//	                  unsafe_single_key_accepted:u8
 //	           | dev: (nothing)
 //
 // Each field of public, locked and open is one leaf of the policy tree, and
@@ -330,6 +331,13 @@ type KeyRelease struct {
 	// releases the sealing key. Without it a mainnet runner on GCP does
 	// not start (platform.Options.CheckKeyRule).
 	NoLockAccepted bool
+	// UnsafeSingleKeyAccepted (GCP only,
+	// sealing_key_release.unsafe_single_key_accepted): the setup accepts
+	// that this signer holds keys alone (an import order with t = n = 1).
+	// Without it a GCP signer refuses such an order (CheckThresholdOn):
+	// see UnsafeSingleKeyWarning. signer-admin setup sets it with
+	// -allow-gcp-unsafe-single-key.
+	UnsafeSingleKeyAccepted bool
 }
 
 // Image is an entry of the allowed-images list.
@@ -826,6 +834,7 @@ func writeKeyRelease(w *writer, p Platform, k *KeyRelease) {
 		w.str(k.KMSKey)
 		w.str(k.AttestAudience)
 		w.flag(k.NoLockAccepted)
+		w.flag(k.UnsafeSingleKeyAccepted)
 	}
 }
 
@@ -843,6 +852,7 @@ func readKeyRelease(r *reader, p Platform, k *KeyRelease) {
 		k.KMSKey = r.str("sealing_key_release.kms_key")
 		k.AttestAudience = r.str("sealing_key_release.attest_audience")
 		k.NoLockAccepted = r.flag("sealing_key_release.no_lock_accepted")
+		k.UnsafeSingleKeyAccepted = r.flag("sealing_key_release.unsafe_single_key_accepted")
 	}
 }
 
@@ -1282,7 +1292,10 @@ func (k *KeyRelease) check(p Platform) error {
 		only()
 	}
 	if k.NoLockAccepted && p != PlatformGCP {
-		errs = append(errs, fmt.Errorf("sealing_key_release.no_lock_accepted does not apply to %s, whose key rule has a lock", p))
+		errs = append(errs, fmt.Errorf("sealing_key_release.no_lock_accepted does not apply to %s: only GCP has a key rule without a lock", p))
+	}
+	if k.UnsafeSingleKeyAccepted && p != PlatformGCP {
+		errs = append(errs, fmt.Errorf("sealing_key_release.unsafe_single_key_accepted does not apply to %s: only GCP has a key rule without a lock", p))
 	}
 	return firstErr("platform", errs)
 }

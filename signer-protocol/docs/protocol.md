@@ -114,7 +114,7 @@ A refusal caused by the restart floor carries
 
 | Type | Name | Request payload | OK body |
 | --- | --- | --- | --- |
-| 0x01 | HEALTH | empty | JSON of `backend.Health`; `setup` holds the setup state, `key_lock` the key rule lock ("Key rule lock"), `image` the image check ("Image check"), all unattested |
+| 0x01 | HEALTH | empty | JSON of `backend.Health`; `setup` holds the setup state, `key_lock` the key rule lock and `single_key` the single-key acceptance ("Key rule lock"), `image` the image check ("Image check"), all unattested |
 | 0x02 | PUBLIC_KEYS | empty | `count:u32` then `count` x key |
 | 0x03 | SIGN | `pubkey[48] kind:u8 domain[32] message`; kind 5: `pubkey[48] kind:u8 message` | `signature[96]` |
 | 0x04 | ATTEST | `nonce_len:u16 nonce version:u8` (nonce at most 1024 bytes, version 3) | `version:u8 setup_state attestation`, see below |
@@ -353,21 +353,54 @@ platform has no real attestation`, and on other chains HEALTH's
 chains the runner starts; a failed read leaves
 `key_release_hash` zero and logs a warning.
 
-A GCP signer never holds a key alone: an import order with t = n = 1 is
-refused on GCP on every chain, with or without `no_lock_accepted`
-(`setupwire.CheckThresholdOn`). The setup has no single-node mode of its
-own; t = n = 1 in an import order is the single-node trigger. On the
-other platforms a single-node signer is not a split, so the mainnet
-overlap rule (2t - n >= 2) does not apply to it; it applies to every real
-split. Tests: TestThresholdOnGCP (setupwire), TestImportSingleNode
-(tee-signer/server), TestSetupSingleSignerOnEveryPlatform (signer-admin).
+A GCP signer holds a key alone only with a second, separate acceptance:
+an import order with t = n = 1 is refused on GCP on every chain, with or
+without `no_lock_accepted`, unless the setup says
+`sealing_key_release.unsafe_single_key_accepted = true`
+(`setupwire.CheckThresholdOn`). The refusal says why and how to accept.
+Why it is unsafe (`setupwire.UnsafeSingleKeyWarning`): a 1 of 1 signer
+holds the whole validator key, and on GCP the rule that releases the
+sealing key is the IAM bindings of the Workload Identity pool and the KMS
+key. Anyone with IAM or KMS admin rights on the project, the pool or the
+key (folder and organization admins included) can change them at any
+time, with no attestation in the way, and the attacker need not run an
+image: a changed binding lets any principal, the admin's own account
+included, decrypt the sealing key outside any TEE, open the sealed key
+from the state bucket and sign a slashable pair. In a t-of-n split the
+same change yields one share; with 1 of 1 it yields the key. The
+protection is the project's IAM governance and the watchdog, not the TEE.
+`signer-admin setup -allow-gcp-unsafe-single-key` writes the acceptance
+into the setup of a one-signer GCP cluster (the key in the signer's
+section does the same, and is the way for a file with more signers),
+refuses a file with one GCP signer without it, and prints a WARNING line
+for every setup that carries it; on mainnet such a setup also needs
+`no_lock_accepted`, or its runner would not start, so `signer-admin
+setup` refuses it without. The human form carries the warning above the
+key; a GCP runner logs it at start and at every 1 of 1 import.
+`signer-admin import-draft` drafts a 1 of 1 order to a GCP signer only
+with `-allow-gcp-unsafe-single-key` and prints the WARNING line, and
+`show` of that order prints it to each approver before `sign`. The setup
+has no single-node mode of its own; t = n = 1 in an import order is the
+single-node trigger. On the other platforms a single-node signer is not a
+split, so the mainnet overlap rule (2t - n >= 2) does not apply to it; it
+applies to every real split. Tests: TestThresholdOnGCP,
+TestUnsafeSingleKeyAccepted (setupwire), TestImportSingleNode,
+TestHealthSingleKey (tee-signer/server),
+TestSetupSingleSignerOnEveryPlatform, TestSetupAllowGCPSingleFlagScope,
+TestSetupMainnetGCPSingleNeedsNoLockAccepted, TestImportDraftSingleGCP
+(signer-admin).
 
 HEALTH reports the result as `key_lock`: `locked`, `not_locked`, `none`
-(GCP, dev) or `unread`, and the reason as `key_lock_why`. Runners without
-a setup leave both out. The setup
-state above does not carry it: its layout is the statement the circuits
-prove, and IDENTITY shares its version byte with ATTEST. So `key_lock` is
-not attested. The prover reads it on the connection whose IDENTITY it
+(GCP, dev) or `unread`, and the reason as `key_lock_why`. Next to them
+`single_key` says whether the signer holds a key alone where that is
+unsafe: on GCP `accepted` (the setup says
+`sealing_key_release.unsafe_single_key_accepted`) or `refused`, and `n/a`
+on the other platforms. Runners without a setup leave all three out. The
+setup state above does not carry them: its layout is the statement the
+circuits prove, and IDENTITY shares its version byte with ATTEST. So
+`key_lock` is not attested, and neither is `single_key`: the acceptance
+sits in the private part of the setup, which a verifier sees only as
+`platform_commitment`. The prover reads it on the connection whose IDENTITY it
 verified and pushes it along with the proof; the watchdog shows "key rule
 locked: yes, no, not possible (GCP) or unread" per signer and warns on no
 or unread for a mainnet cluster. A zero `key_release_hash` in the proof

@@ -15,6 +15,14 @@ cannot sign below them. Operators set it up with an approver-signed setup.
 Everything that talks to the runner (the Dirk fork, the gateway, validator
 clients, the operator tools) is untrusted, and the runner checks what they send.
 
+On GCP a signer that holds a key alone (1 of 1) is unsafe and refused unless
+its setup accepts the risk: Cloud KMS cannot lock the rule that releases the
+sealing key, so anyone with IAM or KMS admin rights on the project, the pool
+or the key (folder and organization admins included) can rebind it and
+decrypt the sealing key outside any TEE, which opens the whole key from the
+state bucket. See
+[platform-gcp/deploy/README.md](platform-gcp/deploy/README.md#setup), "Setup".
+
 The history before this repo is in
 [lidofinance/threshold-signer-poc](https://github.com/lidofinance/threshold-signer-poc).
 

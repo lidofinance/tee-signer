@@ -58,6 +58,7 @@ func TestParseSetupRefusals(t *testing.T) {
 		{"old safety key", nitro + "max_epochs_ahead = 2\n", `unknown key "max_epochs_ahead"`},
 		{"old locked key", nitro + "k = 2\n", `unknown key "k"`},
 		{"peer hosts on azure", azure + "peer_attestation_hosts = a.example:443\n", "peer_attestation_hosts is for nitro and dev"},
+		{"single key accepted on azure", azure + "sealing_key_release.unsafe_single_key_accepted = true\n", "unsafe_single_key_accepted does not apply to azure"},
 		{"peer host without port", nitro + "peer_attestation_hosts = sharedneu.neu.attest.azure.net\n", "want host:port"},
 		{"peer host as URL", nitro + "peer_attestation_hosts = https://sharedneu.neu.attest.azure.net\n", "want host:port"},
 		{"peer host twice", nitro + "peer_attestation_hosts = a.example:443\npeer_attestation_hosts = a.example:443\n",
