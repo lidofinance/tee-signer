@@ -19,6 +19,11 @@ func FuzzParse(f *testing.F) {
 	f.Add(r.Sign(key))
 	r.Exits = nil
 	f.Add(r.Sign(key))
+	// An SMARK1 record: the SMARK2 body without the share set's presence
+	// byte, which must parse and encode back as SMARK1.
+	b := r.encodeBody()
+	v1 := append([]byte(recordMagicV1), b[len(recordMagic):len(b)-1]...)
+	f.Add(append(v1, ed25519.Sign(key, signedMessage(v1))...))
 	f.Fuzz(func(t *testing.T, b []byte) {
 		var r *Record
 		var err error

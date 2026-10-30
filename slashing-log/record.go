@@ -396,7 +396,7 @@ func (r *recReader) flag() (bool, bool) { v := r.u8(); return v == 1, v <= 1 }
 // Parse reads a record's fields without checking its signature: the key
 // that checks it is in KeyBlob, which only the platform's key release
 // opens (Verify). It reads SMARK1 and SMARK2, and refuses any encoding
-// that does not read back to the same bytes and any state the format does
+// that does not read back to the same bytes under its own magic and any state the format does
 // not allow.
 func Parse(enc []byte) (*Record, error) {
 	if len(enc) > MaxRecord || len(enc) < len(recordMagic)+ed25519.SignatureSize {
