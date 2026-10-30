@@ -3,5 +3,3 @@
 /signer-core/build/
 /signer-core/vectors/
 /signer-core/sim/build/
-/trusted-time/rust/target/
-/.claude/worktrees/

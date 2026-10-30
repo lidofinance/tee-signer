@@ -1,3 +1,3 @@
 module github.com/lidofinance/tee-signer/devkit
 
-go 1.27.3
+go 1.26.0

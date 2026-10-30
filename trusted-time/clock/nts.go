@@ -56,12 +56,17 @@ type NTSServer struct {
 
 // NTS is a clock from NTS servers (RFC 8915) of distinct operators.
 //
-//   - Each server is asked every Interval (at least NTSMinPoll apart). A
-//     Kiss-o'-Death RATE doubles that server's interval up to NTSMaxPoll
-//     (RFC 5905 section 7.4); each good answer halves it back. DENY or RSTR
-//     stops using the server (RFC 5905 section 7.4); NTSN drops the keys and
-//     runs NTS-KE again (RFC 8915 section 5.7). NTS-KE failures back off
-//     from Interval to NTSMaxPoll.
+//   - Each server is asked every Interval (at least NTSMinPoll apart), and a
+//     query gets the exchange timeout or half the Interval, whichever is
+//     shorter. An authenticated Kiss-o'-Death RATE doubles that server's
+//     interval up to NTSMaxPoll (RFC 5905 section 7.4); each good answer
+//     halves it back. An authenticated DENY or RSTR costs the server
+//     NTSMaxPoll of silence and a new NTS-KE, after which it is asked again
+//     (RFC 5905 section 7.4 says to stop; a forged one would otherwise take a
+//     server out until restart). An unauthenticated Kiss-o'-Death is only
+//     counted. NTSN keeps the cookies in hand and runs NTS-KE again when they
+//     run out (RFC 8915 section 5.7). NTS-KE failures back off from Interval
+//     to NTSMaxPoll.
 //   - The latest sample of each server, at most 4 x Interval old, goes to
 //     the quorum, nts.Quorum (one server may be wrong). The result is an offset
 //     from the local monotonic clock and an error bound.
@@ -96,6 +101,7 @@ type NTS struct {
 	Log   *slog.Logger // nil: no logs
 
 	minPoll time.Duration // 0: NTSMinPoll; tests set it lower
+	maxPoll time.Duration // 0: NTSMaxPoll; tests set it lower
 
 	once   sync.Once
 	rmu    sync.Mutex // one Refresh at a time; Status waits for it
@@ -178,6 +184,7 @@ func (n *NTS) interval() time.Duration { return cmpOr(n.Interval, NTSInterval) }
 func (n *NTS) maxBound() time.Duration { return cmpOr(n.MaxBound, NTSMaxBound) }
 func (n *NTS) maxDiff() time.Duration  { return cmpOr(n.MaxCoarseDiff, NTSMaxCoarseDiff) }
 func (n *NTS) minPollD() time.Duration { return cmpOr(n.minPoll, NTSMinPoll) }
+func (n *NTS) maxPollD() time.Duration { return cmpOr(n.maxPoll, NTSMaxPoll) }
 func (n *NTS) baseline() int64         { return int64(ntsDriftBaselinePolls * n.interval()) }
 
 // coarseRefused says whether the NTS time is too far from the coarse
@@ -286,7 +293,7 @@ func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time) {
 		if err != nil {
 			p.stats.KEFail++
 			p.lastErr = err
-			p.keWait = min(max(2*p.keWait, n.interval()), NTSMaxPoll)
+			p.keWait = min(max(2*p.keWait, n.interval()), n.maxPollD())
 			p.nextKE = now + int64(p.keWait)
 			n.logf(slog.LevelWarn, "nts: key exchange failed", "operator", p.srv.Operator, "host", p.srv.Host, "retry_in", p.keWait, "err", err)
 			return
@@ -334,13 +341,13 @@ func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time) {
 		switch {
 		case !kiss.Authentic:
 		case kiss.Code == "RATE":
-			p.poll = min(2*p.poll, NTSMaxPoll)
+			p.poll = min(2*p.poll, n.maxPollD())
 			p.nextPoll = n.local() + int64(p.poll)
 		case kiss.Code == "DENY" || kiss.Code == "RSTR":
 			p.disabled = kiss.Code
 			p.sample = nil
-			p.poll = NTSMaxPoll
-			p.nextPoll = n.local() + int64(NTSMaxPoll)
+			p.poll = n.maxPollD()
+			p.nextPoll = n.local() + int64(p.poll)
 			p.assoc.Close()
 			p.assoc = nil
 		case kiss.Code == "NTSN":

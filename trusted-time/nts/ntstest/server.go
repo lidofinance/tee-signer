@@ -1,9 +1,11 @@
 //go:build nts
 
 // Package ntstest is an NTS-KE and NTS-protected NTP server for tests, on
-// loopback. It is written from RFC 8915 apart from the Rust client and
-// uses its own AES-SIV (siv.go), so client and server check each other.
-// Nothing outside tests imports it.
+// loopback. It is written from RFC 8915 without reading the client in
+// nts/, and its AES-SIV (siv.go) shares no code with the client's
+// nts/siv.go, so client and server check each other. That cross-check
+// (TestSIVMatchesTestServer) is worth something only while the two stay
+// separate. Nothing outside tests imports it.
 package ntstest
 
 import (

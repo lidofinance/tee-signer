@@ -8,8 +8,9 @@ import (
 	"crypto/subtle"
 )
 
-// AES-SIV-CMAC-256 (RFC 5297), written here from the RFC with Go's AES so
-// the test server does not share code with the Rust client. NTS gives S2V
+// AES-SIV-CMAC-256 (RFC 5297), written here from the RFC with Go's AES. It
+// shares no code with the client's nts/siv.go, and must not: the
+// cross-check of the two (TestSIVMatchesTestServer) depends on it. NTS gives S2V
 // the vector (associated data, nonce) and then the plaintext (RFC 8915
 // section 5.6, RFC 5297 section 3).
 

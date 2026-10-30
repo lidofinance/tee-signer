@@ -488,3 +488,62 @@ func opt(o ntstest.NTPOptions) ntstest.NTPOptions {
 	o.Clock = testClock
 	return o
 }
+
+// An authenticated DENY costs the server maxPoll of silence and a new key
+// exchange, not the rest of the process: before maxPoll it is not asked,
+// after maxPoll it is asked again through NTS-KE, and a good answer clears
+// Disabled, halves the poll back and puts the server into the quorum.
+func TestNTSClockDenyServerComesBackAfterMaxPoll(t *testing.T) {
+	fs := newServers(t, map[string]ntstest.NTPOptions{"deny": {Kiss: "DENY"}}, "a", "b", "c", "deny")
+	n := newNTS(fs, &coarseClock{})
+	n.maxPoll = 100 * time.Millisecond
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	p := n.Status().Peers["deny"]
+	if p.Disabled != "DENY" || p.Poll != 100*time.Millisecond || p.Sample != nil || p.Stats.Kisses["DENY"] != 1 || fs[3].ke.Sessions.Load() != 1 {
+		t.Fatalf("after DENY: %+v, sessions %d", p, fs[3].ke.Sessions.Load())
+	}
+	// The server answers again, but it is not asked before maxPoll.
+	fs[3].ntp.Set(opt(ntstest.NTPOptions{}))
+	time.Sleep(60 * time.Millisecond)
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	if r := fs[3].ntp.Requests.Load(); r != 1 || n.Status().Peers["deny"].Disabled != "DENY" || len(n.Status().Members) != 3 {
+		t.Fatalf("before maxPoll: %d requests, %+v", r, n.Status().Peers["deny"])
+	}
+	time.Sleep(60 * time.Millisecond)
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	st := n.Status()
+	p = st.Peers["deny"]
+	if p.Disabled != "" || p.Sample == nil || p.Poll != 50*time.Millisecond || fs[3].ke.Sessions.Load() != 2 || fs[3].ntp.Requests.Load() != 2 || len(st.Members) != 4 {
+		t.Fatalf("after maxPoll: %+v, sessions %d, requests %d, members %v", p, fs[3].ke.Sessions.Load(), fs[3].ntp.Requests.Load(), st.Members)
+	}
+}
+
+// A query gets half the Interval when that is shorter than the exchange
+// timeout: a server that never answers costs a refresh about Interval/2
+// (here 100 ms, not the 5 s exchange timeout), the query is counted as an
+// error, and the other servers form the quorum meanwhile.
+func TestNTSClockQueryTimeoutIsHalfTheInterval(t *testing.T) {
+	fs := newServers(t, map[string]ntstest.NTPOptions{"mute": {Drop: true}}, "a", "b", "c", "mute")
+	n := newNTS(fs, &coarseClock{})
+	n.Interval = 200 * time.Millisecond
+	start := time.Now()
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	took := time.Since(start)
+	st := n.Status()
+	p := st.Peers["mute"]
+	if p.Sample != nil || p.LastErr == "" || p.Stats.Queries != 1 || p.Stats.Errors != 1 || len(st.Members) != 3 {
+		t.Fatalf("mute server: %+v, members %v", p, st.Members)
+	}
+	if took < 100*time.Millisecond || took >= ntsExchangeTimeout/2 {
+		t.Fatalf("refresh with a mute server took %v, want about %v", took, n.interval()/2)
+	}
+	t.Logf("refresh took %v, mute: %s", took, p.LastErr)
+}

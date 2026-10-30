@@ -2,14 +2,13 @@
 # Code lines per module, counted on demand (the numbers change with every
 # commit, so no file of the repo records them). cloc counts code only, no
 # comments or blank lines. Left out: tests (_test.go, the tests module, the
-# C tests, fuzz harness and simulator, the Rust tests), test fakes and test
+# C tests, fuzz harness and simulator), test fakes and test
 # helper packages, testdata, vendored code (third_party) and docs.
 #
 #   scripts/loc.sh              per module and language
 #   scripts/loc.sh builds       the lines each runner build links: the Go
 #                               files of this repo that go list -deps picks for
-#                               its tags, plus the C core, plus the Rust NTS
-#                               crate for the builds with the tag nts
+#                               its tags, plus the C core
 #   scripts/loc.sh files MOD    the counted files of one module
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
@@ -68,7 +67,7 @@ case "${1:-modules}" in
       cat "$tmp/go.list" "$tmp/core.list" >"$tmp/b.list"
       go="$(cloc --quiet --list-file="$tmp/go.list" --csv 2>/dev/null | awk -F, '$2 == "SUM" { print $5 }')"
       all="$(cloc --quiet --list-file="$tmp/b.list" --csv 2>/dev/null | awk -F, '$2 == "SUM" { print $5 }')"
-      printf '%-34s Go %6s, with the C core%s %6s\n' "$name" "$go" "$(has_nts "$name" && echo ' and NTS' || echo '        ')" "$all"
+      printf '%-34s Go %6s, with the C core %6s\n' "$name" "$go" "$all"
     done ;;
   *) echo "usage: loc.sh [modules|builds|files MODULE]" >&2; exit 2 ;;
 esac

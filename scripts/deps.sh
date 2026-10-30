@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Installs build and test dependencies on Ubuntu 22.04 / 24.04 (x86_64 or
-# arm64). Idempotent. Go (>= 1.27.3) and Docker are checked, not installed.
+# arm64). Idempotent. Go (>= 1.26) and Docker are checked, not installed.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
@@ -25,12 +25,12 @@ else
 fi
 
 if ! command -v go >/dev/null; then
-  echo "Go not found. Install Go >= 1.27.3 from https://go.dev/dl/ and put it on PATH." >&2
+  echo "Go not found. Install Go >= 1.26 from https://go.dev/dl/ and put it on PATH." >&2
   exit 1
 fi
 gov="$(go env GOVERSION | sed 's/^go//')"
-if [ "$(printf '%s\n1.27.3\n' "$gov" | sort -V | head -1)" != "1.27.3" ]; then
-  echo "Go $gov is too old; need >= 1.27.3 (the toolchain line of the go.mod files)." >&2
+if [ "$(printf '%s\n1.26\n' "$gov" | sort -V | head -1)" != "1.26" ]; then
+  echo "Go $gov is too old; need >= 1.26 (runner/go.mod)." >&2
   exit 1
 fi
 log "go $gov"
