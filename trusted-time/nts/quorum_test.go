@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// The tests of the Rust core's quorum.rs, ported. iv is one server's
+// The tests of the Rust core's quorum.rs, before the port. iv is one server's
 // interval in milliseconds, measured at T4 = 0.
 
 const qms = int64(time.Millisecond)

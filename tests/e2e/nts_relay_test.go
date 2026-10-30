@@ -63,7 +63,7 @@ func udprelayBinary(t *testing.T) string {
 func TestE2ENTSClockThroughRelay(t *testing.T) {
 	bin := runnerBinary(t, "aws-debug")
 	if out, err := runnerCmd(bin, "-nts-selftest").CombinedOutput(); err != nil {
-		t.Fatalf("%s has no NTS library (build it with the tag nts): %v %s", bin, err, out)
+		t.Fatalf("%s has no NTS client (build it with the tag nts): %v %s", bin, err, out)
 	}
 	dir := t.TempDir()
 	raw0, start := rawNow(), time.Now()

@@ -13,7 +13,7 @@ import (
 
 // NTPv4 with NTS: the client request built by the package, the response
 // built by the test server below, checked by the package. The tests are
-// the Rust core's (rust/core/tests/ntp.rs on the branch before this one),
+// the Rust core's tests/ntp.rs, before the port,
 // and the test server is its common/mod.rs: the server side written from
 // the RFC apart from the client code, on ntstest's independent AES-SIV, so
 // the two sides check each other.

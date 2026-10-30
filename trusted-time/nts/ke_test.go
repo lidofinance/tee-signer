@@ -12,7 +12,7 @@ import (
 
 // NTS-KE records: the client request read back by the test code, server
 // responses built here from RFC 8915 section 4, checked by the package.
-// The tests are the Rust core's (rust/core/tests/ke.rs).
+// The tests are the Rust core's tests/ke.rs, before the port.
 
 // keRec is one record: critical bit and type, body length, body.
 func keRec(critical bool, typ uint16, body []byte) []byte {

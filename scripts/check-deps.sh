@@ -175,7 +175,7 @@ check_source() {
     esac
     linked "$list" "$want" || bad "$name ($goarch): $want is not linked, so the tag platform_$c did nothing"
   done
-  # The NTS library (tag nts) in the cloud builds, not in the dev ones.
+  # The NTS client (tag nts) in the cloud builds, not in the dev ones.
   if has_nts "$name"; then
     linked "$list" github.com/lidofinance/tee-signer/trusted-time/nts || bad "$name ($goarch): built with the tag nts but github.com/lidofinance/tee-signer/trusted-time/nts is not linked"
   elif linked "$list" github.com/lidofinance/tee-signer/trusted-time/nts; then

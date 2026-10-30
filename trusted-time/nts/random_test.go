@@ -7,11 +7,11 @@ import (
 	"testing"
 )
 
-// Deterministic randomized tests (the Rust core's random_input.rs): garbage
-// and mutated packets into both parsers. A panic fails the test; the
-// package must return an error instead. The PRNG is splitmix64 with fixed
-// seeds, so every run feeds the same inputs. The fuzz targets in
-// fuzz_test.go carry on from here with the fuzzing engine.
+// Deterministic randomized tests, the Rust core's random_input.rs before
+// the port: garbage and mutated packets into both parsers. A panic fails
+// the test; the package must return an error instead. The PRNG is
+// splitmix64 with fixed seeds, so every run feeds the same inputs. The
+// fuzz targets in fuzz_test.go carry on from here with the fuzzing engine.
 
 // testRng is splitmix64. The same seed gives the same sequence on every run.
 type testRng uint64

@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// The sample tests of the Rust core (rust/core/src/sample.rs).
+// The sample tests of the Rust core's sample.rs, before the port.
 
 const (
 	sec = int64(time.Second)

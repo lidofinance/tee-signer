@@ -12,10 +12,9 @@ files against the build context. The bundle contains:
 
 - `LICENSE`: this project's Apache-2.0 licence.
 - `THIRD_PARTY_NOTICES`: licence, notice, copyright and patent files from the
-  binary's Go modules, the Go standard library's vendored dependencies, blst when
-  linked, and the pinned Rust crate vendor set for NTS builds.
-- `RUST_STANDARD_LIBRARY.html`: the standard library's copyright and licence
-  notices from the pinned Rust toolchain, for NTS builds.
+  binary's Go modules, the Go standard library's vendored dependencies, and
+  blst when linked. The NTS client is on the Go standard library and adds no
+  notices of its own.
 
 The notice collector uses the binary's Go build information and cached module
 sources, without fetching from the network. It fails if a dependency has no
@@ -38,7 +37,7 @@ or relinking materials required by their terms must accompany a binary release;
 collecting application dependency notices alone does not satisfy those duties.
 The Nitro EIF also contains the kernel and bootstrap from the pinned Nitro CLI
 blobs, whose redistribution terms and corresponding source need a separate
-release review. These components are not Go modules or Rust crates.
+release review. These components are not Go modules.
 
 Adding notice files to an image changes its digest and, for Nitro, its enclave
 measurements. Rebuild and approve the resulting image through the normal image

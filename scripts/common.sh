@@ -252,7 +252,7 @@ git_checkout_pinned() {
   log "$(basename "$dir") at $tag ($commit)"
 }
 
-# has_nts <binary name>: the build links the NTS library (tag nts).
+# has_nts <binary name>: the build carries the NTS client (tag nts).
 has_nts() { case ",$(runner_tags "$1")," in *,nts,*) return 0 ;; *) return 1 ;; esac; }
 
 # The handover release gate (signer-protocol/docs/protocol.md, "Handover"). No image goes

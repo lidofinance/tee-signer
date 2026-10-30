@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// The time format tests of the Rust core (rust/core/src/time.rs).
+// The time format tests of the Rust core's time.rs, before the port.
 
 // era1Unix is the first second of era 1: 2036-02-07 06:28:16 UTC.
 const era1Unix = (1 << 32) - unixEpochNTPSeconds

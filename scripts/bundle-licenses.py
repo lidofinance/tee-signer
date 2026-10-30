@@ -72,12 +72,6 @@ def collect(binary, module_dirs):
     if any(d["Path"] == FIRST_PARTY + "signer-core" for d in deps):
         add_notices(sections, "blst (signer-core/third_party/blst)",
                     ROOT / "signer-core/third_party/blst")
-    rust = "nts" in settings.get("-tags", "").split(",")
-    if rust:
-        # Include the entire pinned vendor set, including build-only crates.
-        for crate in sorted((ROOT / "trusted-time/third_party/nts-vendor").iterdir()):
-            if crate.is_dir():
-                add_notices(sections, f"Rust crate {crate.name}", crate)
     # A distributor can supply notices for its C runtime, linker runtime or overlay.
     if os.environ.get("SIGNER_EXTRA_LICENSE_DIR"):
         add_notices(sections, "Distributor-supplied notices", Path(os.environ["SIGNER_EXTRA_LICENSE_DIR"]))
@@ -85,25 +79,20 @@ def collect(binary, module_dirs):
 
 
 def bundle(binary, module_dirs):
-    sections, settings = collect(binary, module_dirs)
-    extra = {}
-    if "nts" in settings.get("-tags", "").split(","):
-        arch = {"amd64": "x86_64", "arm64": "aarch64"}[settings["GOARCH"]]
-        extra["RUST_STANDARD_LIBRARY.html"] = (
-            ROOT / "build/nts" / arch / "licenses/RUST_STANDARD_LIBRARY.html").read_bytes()
+    sections, _ = collect(binary, module_dirs)
     text = ("Third-party licences and notices for " + binary.name + "\n"
             "Binary SHA-256: " + hashlib.sha256(binary.read_bytes()).hexdigest() + "\n\n"
             "Third-party components retain their own terms. Some notice sets include\n"
             "files not linked into this binary; this is not a package or audit scope list.\n\n")
     for title, contents in sections:
         text += "=" * 72 + "\n" + title + "\n" + "=" * 72 + "\n" + contents.rstrip() + "\n\n"
-    extra.update({"LICENSE": (ROOT / "LICENSE").read_bytes(),
-                  "THIRD_PARTY_NOTICES": text.encode("utf-8")})
+    extra = {"LICENSE": (ROOT / "LICENSE").read_bytes(),
+             "THIRD_PARTY_NOTICES": text.encode("utf-8")}
     # Finish collecting first: a missing dependency notice must fail the build.
     out = Path(str(binary) + ".licenses")
     out.mkdir(exist_ok=True, mode=0o755)
     out.chmod(0o755)
-    for name in ("LICENSE", "THIRD_PARTY_NOTICES", "RUST_STANDARD_LIBRARY.html"):
+    for name in ("LICENSE", "THIRD_PARTY_NOTICES"):
         path = out / name
         if name in extra:
             path.write_bytes(extra[name])

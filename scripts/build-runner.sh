@@ -156,7 +156,7 @@ for arch in "${archs[@]}"; do
           has_string "$out/$name" "$opt" no "this build has no such test option" ;;
       esac
     done
-    # The NTS library and the -nts-clock flag in the cloud builds only; the
+    # The NTS client and the -nts-clock flag in the cloud builds only; the
     # test servers' variable in their debug builds only.
     if has_nts "$name"; then
       has_string "$out/$name" "github.com/lidofinance/tee-signer/trusted-time/nts" yes "a cloud build has the NTS clock"
