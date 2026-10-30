@@ -24,7 +24,7 @@ var fullState = cloud.SetupState{
 	ApproverSetHash: cloud.Root{4},
 	Order:           cloud.Order{Kind: 1, Hash: cloud.Root{5}, ActAt: 1_900_000_000},
 	KeyReleaseHash:  cloud.Root{6},
-	KeyOrigin:       cloud.KeyOrigin{Generated: 3, OrdersHash: cloud.Root{7}},
+	KeyOrigin:       cloud.KeyOrigin{Imported: 3},
 }
 
 var fullAtt = &runnerclient.Attestation{Verifier: runnerclient.VerifierDev,
@@ -70,7 +70,7 @@ func TestProofFileSetupShape(t *testing.T) {
 		t.Fatalf("setup object\n got %s\nwant %s (the example in setupView's comment)", got, want)
 	}
 	r := result{Name: "aws-2", OK: true, Setup: viewOf(&fullState, fullAtt, before)}
-	if l := setupLine(r); l != "locked=v2 open=v1 approvers=04000000 pending=locked:v3@2027-01-15T08:00:00Z order=handover@2030-03-17T17:46:40Z keys=generated:3,imported:0" {
+	if l := setupLine(r); l != "locked=v2 open=v1 approvers=04000000 pending=locked:v3@2027-01-15T08:00:00Z order=handover@2030-03-17T17:46:40Z keys=imported:3" {
 		t.Fatalf("log line %q", l)
 	}
 

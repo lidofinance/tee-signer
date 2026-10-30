@@ -358,8 +358,8 @@ func (u *Updates) compute(st markstore.ConfigState, now uint64) view {
 		activate(&v.state.Open)
 	}
 	// A source order past its not_after leaves the slot: no handover can
-	// start under it, and IDENTITY would show it instead of a DKG order
-	// that waits. Sync writes the cleared slot to the log.
+	// start under it, and IDENTITY would still show it. Sync writes the
+	// cleared slot to the log.
 	if na, ok := u.expiringSourceOrder(v.state.Order); ok && now >= na {
 		v.state.Order = nil
 	}
@@ -623,9 +623,7 @@ func (u *Updates) Run(ctx context.Context, every time.Duration) {
 // SetupWire is the runner's setup.
 func (u *Updates) SetupWire() *setupwire.Setup { return u.opt.Setup }
 
-// LockedInForce is the locked group in force now. DKG orders take the
-// approvers, the time lock, the allowed images, the withdrawal credentials
-// and the deposit amounts from it.
+// LockedInForce is the locked group in force now.
 // A failed clock read is a refusal: the view of the last read may be from
 // before a rotation that is in force by now (SSI-AUTH-01).
 func (u *Updates) LockedInForce() (*setupwire.Locked, error) {

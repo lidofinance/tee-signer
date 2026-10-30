@@ -28,16 +28,16 @@ func TestContexts(t *testing.T) {
 	// The TA header lists the same names except the import order, the
 	// hash-then-sign and the handover carry contexts, which are the
 	// runner's only.
-	if len(Contexts) != 38 {
+	if len(Contexts) != 37 {
 		t.Fatalf("%d contexts; add a new one to Contexts and to the TA header", len(Contexts))
 	}
 	// Package backend cannot import this one, so it holds the names of the
-	// user data, key origin and key release contexts itself.
+	// user data and key release contexts itself.
 	if backend.IdentityContext != CtxRunnerIdentity.String() || backend.AttestContext != CtxRunnerAttest.String() {
 		t.Fatalf("backend's contexts %q and %q are not the registry's", backend.IdentityContext, backend.AttestContext)
 	}
-	if backend.KeygenOrdersContext != CtxKeygenOrders.String() || backend.KeyReleaseContext != CtxKeyRelease.String() {
-		t.Fatalf("backend's contexts %q and %q are not the registry's", backend.KeygenOrdersContext, backend.KeyReleaseContext)
+	if backend.KeyReleaseContext != CtxKeyRelease.String() {
+		t.Fatalf("backend's context %q is not the registry's", backend.KeyReleaseContext)
 	}
 
 	m := CtxSetup.Message([]byte("ab"), []byte("c"))

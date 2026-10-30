@@ -147,7 +147,7 @@ func run() (err error) {
 		markSigner    = flag.String("mark-signer", "", "this signer's log ID in the mark store (default: -record-key)")
 		markCreate    = flag.Bool("mark-create", false, "start a mark log that has no valid record even if shares are stored or objects lie under record names (after losing the log, or a key release that no longer opens it)")
 		markRaiseSlot = flag.Int("mark-raise-slot", -1, "slot of each epoch at which the mark is raised for the next epoch; -1 = three quarters into the epoch (24 of 32)")
-		stateSpec     = flag.String("state-store", "", "durable copy of the sealed state (shares, wrapped sealing key, key generation state) in an object store, same syntax as -mark-store; restored at start on azure, gcp and dev (docs/durable-state.md)")
+		stateSpec     = flag.String("state-store", "", "durable copy of the sealed state (shares, wrapped sealing key, handover order bodies) in an object store, same syntax as -mark-store; restored at start on azure, gcp and dev (docs/durable-state.md)")
 		stateCreate   = flag.Bool("state-create", false, "start a state copy of which no commit opens under this key release with every object it needs (after a new key, with the shares moved by the handover)")
 		stateRefresh  = flag.Duration("state-refresh", 24*time.Hour, "write the whole state into the state copy again when the oldest object its newest commit needs is this old, so a locked store's retention never ends on one; 0 = never")
 		logJSON       = flag.Bool("log-json", false, "JSON logs")

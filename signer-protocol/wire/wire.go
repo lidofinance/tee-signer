@@ -285,8 +285,7 @@ const MaxImportKey = 4096
 // EncodeIdentity: version:u8 (IdentityVersion) setup_state (see
 // backend.AppendSetupState) kem:u16 kdf:u16 aead:u16 import_key_len:u16
 // import_key tls_key_hash_len:u8 tls_key_hash attestation (as in ATTEST).
-// The handover and key generation messages carry an identity in this form
-// too.
+// The handover messages carry an identity in this form too.
 func EncodeIdentity(id *backend.Identity) ([]byte, error) {
 	if len(id.ImportKey) > MaxImportKey || len(id.TLSKeyHash) > 255 || id.Attestation == nil {
 		return nil, errors.New("wire: bad identity")

@@ -76,9 +76,6 @@ var (
 	CtxPolicyRoot         = Context{"signer-policy-root-v1"}
 	CtxPlatformCommitment = Context{"signer-platform-commitment-v1"}
 
-	// The key origin: the hash of the DKG orders the runner's generated
-	// keys came from (backend.KeygenOrdersHash).
-	CtxKeygenOrders = Context{"signer-keygen-orders-v1"}
 	// key_release_hash in the setup state: over what the AWS and Azure
 	// runners read at start about the key that releases their sealing key
 	// (backend.KeyReleaseHash).
@@ -182,7 +179,7 @@ var Contexts = []Context{
 	CtxState, CtxStateKey,
 	CtxRunnerAttest, CtxGCPSealing, CtxGCPKeyWrap,
 	CtxPolicyLeaf, CtxPolicyNode, CtxPolicyRoot, CtxPlatformCommitment,
-	CtxKeygenOrders, CtxKeyRelease,
+	CtxKeyRelease,
 	CtxHandoverShare, CtxHandoverOrigin, CtxHandoverOriginKey,
 	CtxImportOrder, CtxImportCommitments,
 	CtxConfigUpdateHash, CtxHandoverOrderHash, CtxImportOrderHash, CtxTAExitApprovalHash,

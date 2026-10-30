@@ -14,7 +14,7 @@ import (
 func shc01Env(t *testing.T) (src, tgt *tgtEnv, order []byte, page *handover.Response) {
 	t.Helper()
 	src = newSrcEnv(t, nil)
-	src.addKeys(4, 0, [32]byte{}, &srcMark)
+	src.addKeys(4, &srcMark)
 	tgt = newTargetOf(t, src, nil, nil, nil)
 	src.clock.add(8 * testEpoch)
 	order, _ = srcOrder(t, src, tgt, []byte{1, 2}, nil)
@@ -89,7 +89,7 @@ func TestSHC01ImportEndsOnlyWithEveryShare(t *testing.T) {
 // target matches the carried entry.
 func TestCarriedExitKeepsItsKey(t *testing.T) {
 	src := newSrcEnv(t, nil)
-	keys := src.addKeys(2, 0, [32]byte{}, &srcMark)
+	keys := src.addKeys(2, &srcMark)
 	tgt := newTargetOf(t, src, nil, nil, nil)
 	src.clock.add(8 * testEpoch)
 	day := &markstore.ExitDay{Day: src.now() / daySeconds, Stake: 32_000_000_000,

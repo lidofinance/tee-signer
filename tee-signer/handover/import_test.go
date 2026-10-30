@@ -15,8 +15,8 @@ func TestImportRequest(t *testing.T) {
 	key, _ := sealedimport.Generate()
 	_, okey, _ := ed25519.GenerateKey(rand.Reader)
 	mark := backend.Watermark{HasAttestation: true, SourceEpoch: 9, TargetEpoch: 10}
-	s1, _ := share(t, key, mark, OriginGenerated, [32]byte{0xd0}, okey)
-	s2, _ := share(t, key, mark, OriginImported, [32]byte{}, okey)
+	s1, _ := share(t, key, mark, okey)
+	s2, _ := share(t, key, mark, okey)
 	page := &Response{Mark: mark, Total: 2, Carry: Carry{Set: KeySet{Total: 2}}, Shares: []Share{*s1, *s2},
 		Origin: OriginProof{Key: [32]byte(okey.Public().(ed25519.PublicKey)), Nonce: []byte("n"),
 			Attestation: &backend.Attestation{Platform: "dev", Format: "dev-json", UserData: []byte{1}, Document: []byte("{}")}}}
@@ -30,7 +30,7 @@ func TestImportRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	if back.Flags != ImportAsImported || !bytes.Equal(back.Order, q.Order) || len(back.Page.Shares) != 2 || back.Page.Mark != mark ||
-		back.Page.Shares[0].Origin != OriginGenerated || back.Page.Shares[1].Origin != OriginImported {
+		back.Page.Shares[0].Origin != OriginImported || back.Page.Shares[1].Origin != OriginImported {
 		t.Fatalf("%+v", back)
 	}
 	for name, b := range map[string][]byte{
@@ -57,7 +57,7 @@ func TestImportRequest(t *testing.T) {
 	// decode (DecodeResponse).
 	other := mark
 	other.TargetEpoch++
-	s3, _ := share(t, key, other, OriginImported, [32]byte{}, okey)
+	s3, _ := share(t, key, other, okey)
 	bad := *page
 	bad.Shares = []Share{*s3}
 	if enc, err := (&ImportRequest{Order: []byte{'T'}, Page: &bad}).Encode(); err != nil {
@@ -71,7 +71,7 @@ func TestImportRequest(t *testing.T) {
 }
 
 func TestImportResponse(t *testing.T) {
-	r := &ImportResponse{Outcomes: []uint8{Stored, Held, Stored}, Held: 7, Total: 9, Done: false, Generated: 6, Imported: 1}
+	r := &ImportResponse{Outcomes: []uint8{Stored, Held, Stored}, Held: 7, Total: 9, Done: false, Imported: 1}
 	enc, err := r.Encode()
 	if err != nil {
 		t.Fatal(err)
@@ -80,7 +80,7 @@ func TestImportResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(back.Outcomes, r.Outcomes) || back.Held != 7 || back.Total != 9 || back.Done || back.Generated != 6 || back.Imported != 1 {
+	if !bytes.Equal(back.Outcomes, r.Outcomes) || back.Held != 7 || back.Total != 9 || back.Done || back.Imported != 1 {
 		t.Fatalf("%+v", back)
 	}
 	r.Done = true
@@ -92,11 +92,19 @@ func TestImportResponse(t *testing.T) {
 	badOutcome[3] = 3
 	badDone := bytes.Clone(enc)
 	badDone[3+3+8] = 2
+	// The four bytes before the imported count are reserved: earlier
+	// builds counted keys made in key generation there.
+	if !bytes.Equal(enc[len(enc)-8:len(enc)-4], make([]byte, 4)) {
+		t.Fatal("the reserved count is not zero")
+	}
+	badReserved := bytes.Clone(enc)
+	badReserved[len(enc)-5] = 6
 	tooMany := binary.BigEndian.AppendUint16([]byte{1}, MaxPerResponse+1)
 	for name, b := range map[string][]byte{
 		"version 2":   append([]byte{2}, enc[1:]...),
 		"outcome 3":   badOutcome,
 		"done 2":      badDone,
+		"reserved 6":  badReserved,
 		"trailing":    append(bytes.Clone(enc), 0),
 		"short":       enc[:len(enc)-1],
 		"257 answers": tooMany,

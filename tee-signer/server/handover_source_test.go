@@ -72,24 +72,20 @@ func newTargetOf(t *testing.T, src *tgtEnv, l *setupwire.Locked, o *setupwire.Op
 	return tgt
 }
 
-// addKeys stores n shares on e: the first gen made in key generation under
-// order, the rest imported; the first one raises the log to mark.
-func (e *tgtEnv) addKeys(n, gen int, order [32]byte, mark *backend.Watermark) []backend.Pubkey {
+// addKeys stores n imported shares on e; the first one raises the log to
+// mark.
+func (e *tgtEnv) addKeys(n int, mark *backend.Watermark) []backend.Pubkey {
 	e.t.Helper()
 	var out []backend.Pubkey
 	for i := range n {
 		sk, _ := software.NewSecret()
 		other, _ := software.NewSecret()
 		pk, _ := core.PubkeyOf(other)
-		var origin shareOrigin
-		if i < gen {
-			origin = shareOrigin{generated: true, order: order[:]}
-		}
 		var ic *backend.Watermark
 		if i == 0 {
 			ic = mark
 		}
-		if _, err := e.srv.addShareOf(pk, &sk, uint64(200+i), ic, "sealed", origin, nil); err != nil {
+		if _, err := e.srv.addShareOf(pk, &sk, uint64(200+i), ic, "sealed", nil); err != nil {
 			e.t.Fatal(err)
 		}
 		out = append(out, pk)
@@ -210,8 +206,7 @@ var srcMark = testMark
 // and keeps the exits.
 func TestHandoverSource(t *testing.T) {
 	src := newSrcEnv(t, nil)
-	dkg := [32]byte{0xd7}
-	keys := src.addKeys(300, 200, dkg, &srcMark)
+	keys := src.addKeys(300, &srcMark)
 	tgt := newTargetOf(t, src, nil, nil, nil)
 	src.clock.add(8 * testEpoch) // past the imported mark
 	order, hash := srcOrder(t, src, tgt, []byte{1, 2}, nil)
@@ -259,10 +254,10 @@ func TestHandoverSource(t *testing.T) {
 	if page.Mark != wantMark || page.Total != 300 || page.Carry.Exits == nil || page.Carry.Exits.Stake != day.Stake {
 		t.Fatalf("first page: mark %+v total %d carry %+v", page.Mark, page.Total, page.Carry)
 	}
-	if !imp.Done || imp.Held != 300 || imp.Generated != 200 || imp.Imported != 100 {
+	if !imp.Done || imp.Held != 300 || imp.Imported != 300 {
 		t.Fatalf("import: %+v", imp)
 	}
-	if ko := tgt.srv.SetupState().KeyOrigin; ko.OrdersHash != backend.KeygenOrdersHash([][32]byte{dkg}) {
+	if ko := tgt.srv.SetupState().KeyOrigin; ko.Imported != 300 {
 		t.Fatalf("target key origin %+v", ko)
 	}
 
@@ -323,13 +318,13 @@ func TestHandoverSource(t *testing.T) {
 }
 
 // At its not_after a source order leaves the order slot by itself, so
-// IDENTITY no longer shows it in front of a DKG order that waits: the view
+// IDENTITY no longer shows it: the view
 // drops it, Sync writes the cleared slot to the log, and a restart keeps it
 // clear. The order is then refused as expired, and a new one takes the
 // slot.
 func TestHandoverSourceOrderExpires(t *testing.T) {
 	src := newSrcEnv(t, nil)
-	src.addKeys(2, 0, [32]byte{}, &srcMark)
+	src.addKeys(2, &srcMark)
 	tgt := newTargetOf(t, src, nil, nil, nil)
 	notAfter := src.now() + 2*srcDelay
 	order, hash := srcOrder(t, src, tgt, []byte{1, 2}, func(b *handoverorder.Body) { b.NotAfter = notAfter })
@@ -381,7 +376,7 @@ func TestHandoverSourceOrderExpires(t *testing.T) {
 // first values is refused and one with the update's values taken.
 func TestHandoverSourceConfigInForce(t *testing.T) {
 	src := newSrcEnv(t, nil)
-	src.addKeys(4, 0, [32]byte{}, &srcMark)
+	src.addKeys(4, &srcMark)
 	lh, _ := src.setup.GroupHash(locked)
 	fresh, _ := setupwire.DecodeSetup(src.raw)
 	b := &setupwire.UpdateBody{ClusterID: src.setup.ClusterID, ChainHash: src.setup.Chain.Hash(), Group: locked, Version: 1, PrevHash: lh,
@@ -425,7 +420,7 @@ func TestHandoverSourceConfigInForce(t *testing.T) {
 // was, signing.
 func TestHandoverSourceRefusals(t *testing.T) {
 	src := newSrcEnv(t, nil)
-	keys := src.addKeys(3, 0, [32]byte{}, &srcMark)
+	keys := src.addKeys(3, &srcMark)
 	tgt := newTargetOf(t, src, nil, nil, nil)
 	stillSigns := func(what string) {
 		t.Helper()
@@ -469,7 +464,7 @@ func TestHandoverSourceRefusals(t *testing.T) {
 		}, "public.max_sign_epochs_ahead_of_clock"},
 		{"a target that holds a key", func() *tgtEnv {
 			e := newTargetOf(t, src, nil, nil, nil)
-			e.addKeys(1, 0, [32]byte{}, nil)
+			e.addKeys(1, nil)
 			return e
 		}, "holds 1 keys"},
 		{"too small", func() *tgtEnv {
@@ -523,7 +518,7 @@ func TestHandoverSourceRefusals(t *testing.T) {
 // until the order comes again, which restores the body.
 func TestHandoverSourceOrderBodyLost(t *testing.T) {
 	src := newSrcEnv(t, nil)
-	keys := src.addKeys(2, 0, [32]byte{}, &srcMark)
+	keys := src.addKeys(2, &srcMark)
 	tgt := newTargetOf(t, src, nil, nil, nil)
 	order, hash := srcOrder(t, src, tgt, []byte{1, 2}, nil)
 	if _, err := src.push(order); err != nil {

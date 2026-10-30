@@ -22,7 +22,7 @@ import (
 // that cannot take the shares.
 func TestSHR01StaleTargetIdentity(t *testing.T) {
 	src := newSrcEnv(t, nil)
-	keys := src.addKeys(2, 0, [32]byte{}, &srcMark)
+	keys := src.addKeys(2, &srcMark)
 	tgt := newTargetOf(t, src, nil, nil, nil)
 	src.clock.add(8 * testEpoch)
 	order, _ := srcOrder(t, src, tgt, []byte{1, 2}, nil)
@@ -70,7 +70,7 @@ func TestSHR01StaleTargetIdentity(t *testing.T) {
 // goes through.
 func TestSHR01ReservedTarget(t *testing.T) {
 	src := newSrcEnv(t, nil)
-	src.addKeys(3, 0, [32]byte{}, &srcMark)
+	src.addKeys(3, &srcMark)
 	tgt := newTargetOf(t, src, nil, nil, nil)
 	src.clock.add(8 * testEpoch)
 	order, hash := srcOrder(t, src, tgt, []byte{1, 2}, nil)
@@ -93,7 +93,7 @@ func TestSHR01ReservedTarget(t *testing.T) {
 		t.Fatal("a reserved target took another order")
 	}
 	sec := newSecret(t)
-	if _, err := tgt.srv.addShareOf(newPubkey(t), &sec, 1, nil, "sealed", shareOrigin{}, nil); err == nil {
+	if _, err := tgt.srv.addShareOf(newPubkey(t), &sec, 1, nil, "sealed", nil); err == nil {
 		t.Fatal("a reserved target took a sealed import")
 	}
 	tgt.restart()

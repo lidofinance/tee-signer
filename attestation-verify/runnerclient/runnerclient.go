@@ -497,8 +497,8 @@ func checkDocument(nonce []byte, id *backend.Identity, platform, format, what st
 // FromVersion).
 //
 // This code is at the end of the file, and the package imports only the
-// constants of backend/buildflavor for it, so that the key generation
-// runners, which link this package, stay byte for byte as they were in
+// constants of backend/buildflavor for it, so that the runners, which
+// link this package, stay byte for byte as they were in
 // their default build: the functions above keep their lines, and no
 // package with code joins the binary.
 

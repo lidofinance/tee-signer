@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -33,8 +32,7 @@ func (s *Server) readShare(pk backend.Pubkey, f func(rec *shareRecord, secret *[
 	if err != nil {
 		return fmt.Errorf("unseal share: %w", err)
 	}
-	var rec shareRecord
-	err = json.Unmarshal(plain, &rec)
+	rec, err := parseShareRecord(plain)
 	clear(plain)
 	if err != nil || rec.Pubkey != pk || len(rec.Secret) != 32 {
 		clear(rec.Secret)

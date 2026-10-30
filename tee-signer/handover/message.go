@@ -27,17 +27,19 @@ import (
 //	           attestation (wire.EncodeAttestation)
 //	share    = header sealed_len:u16 sealed origin_sig[64]
 //	header   = pubkey[48] share_pubkey[48] index:u64 interchange[25]
-//	           origin:u8 order_hash[32]
+//	           origin:u8 reserved[32]
 //
 // identity is the target's IDENTITY answer for nonce, policy its published
 // setup, order the signed handover order. start pages through the shares;
 // every request is checked in full again.
 //
 // Each share is a sealed import (IMPORT_SHARE_SEALED's header, the mark
-// as interchange maxima) with the share's key origin added: origin 1
-// imported, 2 generated in key generation inside the source, and the hash
-// of the DKG order it was made under (zero for an imported share, and for
-// one made under a policy file). The carry (carry.go) holds the key set
+// as interchange maxima) with the share's key origin added. The origin is
+// always 1 (imported) and the 32 reserved bytes after it are zero: the
+// layout is that of earlier builds, which also handed over keys made in
+// key generation (origin 2, with that order's hash). DecodeShare refuses
+// any other origin and reserved bytes that are not zero, so such a share
+// never counts as an imported one. The carry (carry.go) holds the key set
 // the source hands over and the day's exits of its mark log. The HPKE
 // associated data is CtxHandoverShare over the header and the carry's
 // hash, so neither the mark, the origin nor the carry changes without the
@@ -45,14 +47,14 @@ import (
 // import.
 //
 // HPKE does not say who sealed: anyone can seal a share of their own to
-// the target's attested import key. So the origin is signed. The source
+// the target's attested import key. So the header is signed. The source
 // makes an Ed25519 origin key per process, signs each header with it under
 // CtxHandoverOrigin, and proves the key with its own attestation: the
 // origin proof is a platform document over CtxHandoverOriginKey(order_hash,
 // origin_key) for the request's nonce. A target that verifies the proof
 // with the order's source settings (its image and verifier) and each
-// header's signature knows the origin came from that image. A target that
-// does not must count the share as imported.
+// header's signature knows the header, with its mark, came from that
+// image.
 
 // Type is HANDOVER.
 const Type wire.MsgType = 0x32
@@ -67,11 +69,8 @@ const (
 	MaxOrder    = 8 << 10  // handoverorder.MaxSize
 )
 
-// Key origins of a handed-over share.
-const (
-	OriginImported  uint8 = 1
-	OriginGenerated uint8 = 2
-)
+// OriginImported is the key origin of every handed-over share.
+const OriginImported uint8 = 1
 
 // Request asks a source to hand its shares to the target of an order.
 type Request struct {
@@ -187,8 +186,7 @@ func DecodeRequest(p []byte) (*Request, error) {
 // Share is one handed-over share.
 type Share struct {
 	backend.SealedImportRequest
-	Origin    uint8
-	Order     [32]byte // the DKG order of a generated share, or zero
+	Origin    uint8    // OriginImported
 	OriginSig [64]byte // by the source's origin key over the header
 }
 
@@ -196,11 +194,11 @@ type Share struct {
 const HeaderLen = wireadmin.SealedHeaderLen + 1 + 32
 
 // Header is the share's header: IMPORT_SHARE_SEALED's header, origin:u8
-// and order_hash[32].
+// and 32 reserved zero bytes.
 func (s *Share) Header() []byte {
 	h := wireadmin.SealedHeader(&s.SealedImportRequest)
 	h = append(h, s.Origin)
-	return append(h, s.Order[:]...)
+	return append(h, make([]byte, 32)...)
 }
 
 // CarriesMark reports whether the share's interchange maxima are mark. A
@@ -213,14 +211,11 @@ func (s *Share) CarriesMark(mark backend.Watermark) bool {
 	return s.Interchange != nil && *s.Interchange == mark
 }
 
-// CheckOrigin applies the origin rules: a known origin, and an order hash
-// only on a generated share.
+// CheckOrigin refuses a key origin other than OriginImported. Origin 2
+// was a key made in key generation inside the source, in earlier builds.
 func (s *Share) CheckOrigin() error {
-	switch {
-	case s.Origin != OriginImported && s.Origin != OriginGenerated:
-		return fmt.Errorf("handover: key origin %d, want 1 (imported) or 2 (generated)", s.Origin)
-	case s.Origin == OriginImported && s.Order != [32]byte{}:
-		return errors.New("handover: an imported share names a DKG order")
+	if s.Origin != OriginImported {
+		return fmt.Errorf("handover: key origin %d, want 1 (imported)", s.Origin)
 	}
 	return nil
 }
@@ -258,7 +253,7 @@ func DecodeShare(p []byte) (*Share, error) {
 		return nil, errShort
 	}
 	// The sealed import's header and length, as IMPORT_SHARE_SEALED has
-	// them, with origin and order between.
+	// them, with origin and the reserved bytes between.
 	n := int(binary.BigEndian.Uint16(p[HeaderLen:]))
 	if n > wireadmin.MaxSealed || len(p) != HeaderLen+2+n+64 {
 		return nil, errors.New("handover: share of the wrong length")
@@ -269,7 +264,9 @@ func DecodeShare(p []byte) (*Share, error) {
 		return nil, err
 	}
 	s := &Share{SealedImportRequest: req, Origin: p[wireadmin.SealedHeaderLen]}
-	copy(s.Order[:], p[wireadmin.SealedHeaderLen+1:HeaderLen])
+	if !bytes.Equal(p[wireadmin.SealedHeaderLen+1:HeaderLen], make([]byte, 32)) {
+		return nil, errors.New("handover: the reserved bytes after the key origin are not zero")
+	}
 	copy(s.OriginSig[:], p[HeaderLen+2+n:])
 	if err := s.CheckOrigin(); err != nil {
 		return nil, err

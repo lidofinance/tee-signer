@@ -207,6 +207,8 @@ func TestRecordStrict(t *testing.T) {
 		"pending at the active version": func(r *Record) { r.State.Open.Pending = &Pending{Version: 0}; r.Copies[3] = BodyCopy{N: 1} },
 		"pending without a copy":        func(r *Record) { r.State.Open.Pending = &Pending{Version: 1} },
 		"order of an unknown kind":      func(r *Record) { r.State.Order = &Order{Kind: 3} },
+		"order of kind 2":               func(r *Record) { r.State.Order = &Order{Kind: 2, Hash: [32]byte{8}, ActAt: 9} },
+		"order of kind 0":               func(r *Record) { r.State.Order = &Order{Kind: 0} },
 		"links forward":                 func(r *Record) { r.PrevVersion = 2 },
 	} {
 		r := base
@@ -294,6 +296,12 @@ func TestMarkLogOnFiles(t *testing.T) {
 	st.Open.Pending = &Pending{Version: 1, Hash: h, EffectiveAt: 1_800_000_100}
 	if err := m.SetState(ctx, st); err != nil {
 		t.Fatal(err)
+	}
+	// Kind 2, the key generation order of earlier builds, is not a kind.
+	kind2 := st.Clone()
+	kind2.Order = &Order{Kind: 2, Hash: [32]byte{8}, ActAt: 1_800_000_100}
+	if err := m.SetState(ctx, kind2); err == nil {
+		t.Fatal("SetState took an order of kind 2")
 	}
 	m2, _ := New(l, "signer-1", testKey(1), opt)
 	got, found, err := m2.Claim(ctx, true)

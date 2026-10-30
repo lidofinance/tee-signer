@@ -99,7 +99,7 @@ that; a client that needs to tell causes apart reads `detail`.
 | 1001 | `UNSUPPORTED` | a message type this runner does not serve (unknown, another build, a flag that turns it off, a runner without a setup); an ATTEST or IDENTITY request of another version; an unknown root message type | no |
 | 1002 | `INTERNAL` | anything else | maybe |
 | 1003 | `DOMAIN_MISMATCH` | the request's domain (a typed kind's, or a root message's) differs from the one the runner computes | no |
-| 1004 | `NOT_READY` | the runner is not serving yet (CONFIG_UPDATE before its core exists), a handover import is in progress, the operator key is not loaded, or the image check refuses (`detail` starts with `image check:`, see "Image check") | later |
+| 1004 | `NOT_READY` | the runner is not serving yet (CONFIG_UPDATE before its core exists), a handover import is in progress, or the image check refuses (`detail` starts with `image check:`, see "Image check") | later |
 | 1005 | `PLATFORM` | a sealing, store or attestation hook failed | maybe |
 | 1006 | `FORBIDDEN` | the client certificate's role does not allow this message (see "Client roles") | no |
 | 1007 | `RATE_LIMITED` | an attest-only client certificate had its fresh attestations of the minute (see "Client roles"); `detail` says how many seconds to wait | later |
@@ -125,7 +125,7 @@ A refusal caused by the restart floor carries
 | 0x08 | CONFIG_UPDATE | the signed update, see below (a runner with a setup) | `version:u8 outcome:u8 setup_state` |
 | 0x31 | HANDOVER_ORDER | the signed handover order (`governance/handoverorder`) | `outcome:u8 status:u8 hash[32] arrived:u64 act_at:u64 not_after:u64 why_len:u16 why` |
 | 0x32 | HANDOVER | `version:u8(1) nonce_len:u16 nonce identity_len:u32 identity policy_len:u32 policy order_len:u32 order start:u32` | `version:u8(1) mark[26] total:u32 origin_proof count:u16 (len:u16 share)* carry_len:u32 carry`, at most 256 shares; see `tee-signer/handover` message.go and carry.go |
-| 0x33 | IMPORT_HANDOVER | `version:u8(1) flags:u8 order_len:u32 order page_len:u32 page` | `version:u8(1) count:u16 (outcome:u8)* held:u32 total:u32 done:u8 generated:u32 imported:u32` |
+| 0x33 | IMPORT_HANDOVER | `version:u8(1) flags:u8 order_len:u32 order page_len:u32 page` | `version:u8(1) count:u16 (outcome:u8)* held:u32 total:u32 done:u8 reserved:u32 imported:u32` (reserved is zero) |
 
 A `mark` is `has_block:u8 block_slot:u64 has_attestation:u8 source_epoch:u64
 target_epoch:u64`. PUBLIC_KEYS has no paging: one frame holds at most
@@ -137,8 +137,8 @@ handover between two runners with setups (see "Handover" below). A release
 build with a setup and the mark log serves all three. Other
 runners answer `UNSUPPORTED`.
 
-Type numbers: 0x01 to 0x09 are taken, the next free one is 0x0a. Key
-generation takes 0x20 to 0x28, the handover 0x31 to 0x33. A response
+Type numbers: 0x01 to 0x09 are taken, the next free one is 0x0a. The
+handover takes 0x31 to 0x33. A response
 type is the request type with 0x80 set, so request types stay below 0x80.
 
 After a handover the runner answers HEALTH, PUBLIC_KEYS, ATTEST, IDENTITY
@@ -281,7 +281,7 @@ open:   version:u64 hash[32] pending_version:u64 pending_hash[32] pending_effect
 approver_set_hash[32]
 order_kind:u8 order_hash[32] order_act_at:u64
 key_release_hash[32]
-key_origin: generated_keys:u32 imported_keys:u32 keygen_orders_hash[32]
+key_origin: reserved[4] imported_keys:u32 reserved[32]
 ```
 
 - `setup_hash`: SHA-256 over the context `signer-setup-v1`, `policy_root`
@@ -302,18 +302,16 @@ key_origin: generated_keys:u32 imported_keys:u32 keygen_orders_hash[32]
 - The pending order (kind 1 handover), its hash and act time, or
   zeros. Kind 1 is a source's handover order (from its arrival on, also
   after the tombstone) or a target's handover import in progress (act
-  time: the import's start). Kind 2 was the DKG order of earlier builds;
-  this build takes none, so it does not occur.
+  time: the import's start). A reader refuses any other kind.
 - `key_release_hash` (context `signer-key-release-v1`): the AWS runner's
   KMS key metadata and key policy, or the Azure runner's Key Vault release
   policy and flags, read once at start. Zero on GCP and dev, and when the
   read failed (the runner logs why).
-- The key origin: of the loaded keys, how many were made in the key
-  generation of an earlier build (this build makes none; a handed-over
-  share keeps its origin) and how many were imported, and the hash of the
-  DKG orders of the generated ones (context `signer-keygen-orders-v1`;
-  zero without a generated key). Each share's sealed record says where it
-  came from.
+- The key origin: `imported_keys`, the number of loaded keys. Every key
+  came in by an import (sealed, handed over, or plaintext in a debug
+  build). The reserved bytes are zero, and a reader refuses a state
+  where they are not: earlier builds counted keys made in key generation
+  inside the runner there.
 
 HEALTH carries the same values as JSON (`setup`), unattested, and
 `config_hash`, equal to `setup.setup_hash`.
@@ -911,8 +909,8 @@ HANDOVER. Before anything changes, the source checks:
   `cluster_id`, chain, safety, `handover_generation` + 1, and version 0
   of both groups equal to the source's config in force;
 - the target's state: version 0 of both groups with its published group
-  hashes, nothing pending, its setup's approver set, no key (key origin 0
-  and 0), reserved for this order (the order in its slot), and `max_keys`
+  hashes, nothing pending, its setup's approver set, no key
+  (`imported_keys` 0), reserved for this order (the order in its slot), and `max_keys`
   at least the source's share count, checked again on the shares read
   under the share lock.
 
@@ -931,10 +929,10 @@ attested import key:
 - the mark before the tombstone, as each share's interchange maxima. The
   target raises its own log to it before it stores a share, and a fresh
   target log takes its vote history from it;
-- each share's key origin (generated in the key generation of an earlier
-  build, with its DKG order hash, or imported), from the share's sealed
-  record, signed with the source's origin key, whose attestation over the
-  order hash the page carries;
+- each share's header (its mark and key origin, which is always
+  imported; the target refuses any other origin), signed with the
+  source's origin key, whose attestation over the order hash the page
+  carries;
 - the carry, which every page has: the key set the source hands over (how
   many shares, and `KeysHash` of their pubkey and share pubkey pairs) and
   the day's exits of the source's mark log (validator key, stake and
@@ -959,8 +957,8 @@ and chain, k approvers in force), finds itself empty at version 0 on the
 first request and writes the order into the slot: it signs nothing and
 takes no other share or update until every share is in, also
 after a restart. Every request of one process carries the same mark. It
-checks the origin proof and signatures (or counts every share as imported
-on request), opens each share, stores it after raising its log, and clears
+checks the origin proof and signatures (or skips them on request), opens
+each share, stores it after raising its log, and clears
 the slot when it holds exactly the carry's key set. Only a request in which a share
 opened under the carry ends the import: the page's total alone is not
 authenticated, and a page whose total is not its carry's does not decode.

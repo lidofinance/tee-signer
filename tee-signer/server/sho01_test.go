@@ -18,7 +18,7 @@ import (
 // (the locked slot holds the hash), and the source signs again.
 func TestSHO01VoidOrderBodyComesBack(t *testing.T) {
 	src := newSrcEnv(t, nil)
-	keys := src.addKeys(2, 0, [32]byte{}, &srcMark)
+	keys := src.addKeys(2, &srcMark)
 	tgt := newTargetOf(t, src, nil, nil, nil)
 	order, hash := srcOrder(t, src, tgt, []byte{1, 2}, nil)
 	if _, err := src.push(order); err != nil {

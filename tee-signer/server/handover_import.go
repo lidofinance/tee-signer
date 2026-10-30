@@ -50,7 +50,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -196,7 +195,7 @@ func (im *importer) sourceVerifier(b *handoverorder.Body, hash [32]byte) (runner
 // checkOrigin verifies the page's origin proof (once per order and key)
 // and the origin signature of each share in fresh.
 func (im *importer) checkOrigin(ctx context.Context, b *handoverorder.Body, hash [32]byte, page *handover.Response, fresh []int) error {
-	const hint = " (a target that cannot check the origin may count every share as imported: handover-target import -as-imported)"
+	const hint = " (a target that cannot check the origin may skip the origin checks: handover-target import -as-imported)"
 	var id [64]byte
 	copy(id[:32], hash[:])
 	copy(id[32:], page.Origin.Key[:])
@@ -252,7 +251,7 @@ func (im *importer) checkStart(total uint32) error {
 // start writes the order into the order slot: from here on the runner
 // signs nothing until the import ends. The caller holds slotMu. It holds
 // the share lock while it writes, so a share that another path (a sealed
-// import, key generation) stores either comes first and stops the start,
+// import) stores either comes first and stops the start,
 // or finds the slot set and is refused (addShareOf):
 // the end of the import counts the runner's keys, which must all be the
 // order's.
@@ -484,14 +483,7 @@ func (im *importer) importShares(ctx context.Context, payload []byte) ([]byte, e
 	stored := 0
 	for _, i := range fresh {
 		sh := &page.Shares[i]
-		var origin shareOrigin
-		if !asImported && sh.Origin == handover.OriginGenerated {
-			origin.generated = true
-			if sh.Order != ([32]byte{}) {
-				origin.order = bytes.Clone(sh.Order[:])
-			}
-		}
-		k, err := s.addShareOf(sh.Pubkey, &secrets[i], sh.Index, sh.Interchange, "handover", origin, keys)
+		k, err := s.addShareOf(sh.Pubkey, &secrets[i], sh.Index, sh.Interchange, "handover", keys)
 		var r *backend.RefusedError
 		switch {
 		case errors.As(err, &r) && r.Code == backend.StatusDuplicate:
@@ -635,7 +627,6 @@ func (im *importer) answer(ctx context.Context, hash [32]byte, page *handover.Re
 		var err error
 		if cur := s.importing(); cur != nil && cur.Hash == hash {
 			if err = s.Updates.setImportOrder(ctx, nil); err == nil {
-				ko := s.keyOrigin(keys)
 				mark := backend.Watermark{}
 				im.mu.Lock()
 				if im.mark != nil {
@@ -643,7 +634,7 @@ func (im *importer) answer(ctx context.Context, hash [32]byte, page *handover.Re
 				}
 				im.mu.Unlock()
 				s.Log.Warn("handover import done: every share is in; signing above the handed-over mark", "order", hex.EncodeToString(hash[:6]),
-					"keys", len(keys), "generated", ko.Generated, "imported", ko.Imported,
+					"keys", len(keys),
 					"target", mark.TargetEpoch, "source", mark.SourceEpoch, "block", mark.BlockSlot)
 			}
 		}
@@ -652,9 +643,8 @@ func (im *importer) answer(ctx context.Context, hash [32]byte, page *handover.Re
 			return nil, backend.Refused(backend.StatusStorage, "handover import: every share is in, but the record that ends the import was not written (%v); send the request again", err)
 		}
 	}
-	ko := s.keyOrigin(keys)
 	r := &handover.ImportResponse{Outcomes: outcomes, Held: uint32(len(keys)), Total: total,
-		Done: s.importing() == nil && holds, Generated: ko.Generated, Imported: ko.Imported}
+		Done: s.importing() == nil && holds, Imported: keyOrigin(keys).Imported}
 	out, err := r.Encode()
 	if err != nil {
 		return nil, backend.Refused(backend.StatusInternal, "%v", err)

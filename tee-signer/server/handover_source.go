@@ -161,8 +161,6 @@ type handedShare struct {
 	pk, share backend.Pubkey
 	index     uint64
 	secret    [32]byte
-	origin    uint8
-	order     [32]byte
 }
 
 func (h *sourceHandover) dev() bool { return h.s.Platform.Name == "dev" }
@@ -664,7 +662,7 @@ func (h *sourceHandover) handover(ctx context.Context, payload []byte) ([]byte, 
 	for i := start; i < end; i++ {
 		sh := &h.shares[i]
 		x := handover.Share{SealedImportRequest: backend.SealedImportRequest{Pubkey: sh.pk, SharePubkey: sh.share, Index: sh.index,
-			Interchange: ic}, Origin: sh.origin, Order: sh.order}
+			Interchange: ic}, Origin: handover.OriginImported}
 		if x.Sealed, err = sealedimport.SealAAD(id, x.AAD(carryHash), &sh.secret); err != nil {
 			return nil, backend.Refused(backend.StatusBadKey, "seal share %s: %v", sh.pk.String()[:18], err)
 		}
@@ -789,8 +787,8 @@ func (h *sourceHandover) checkTarget(ctx context.Context, q *handover.Request, b
 		// reservation on it takes no config update, so the state checked
 		// above holds until the import.
 		switch {
-		case st.KeyOrigin.Generated != 0 || st.KeyOrigin.Imported != 0:
-			return bad("the target holds %d keys already; it must be empty", st.KeyOrigin.Generated+st.KeyOrigin.Imported)
+		case st.KeyOrigin.Imported != 0:
+			return bad("the target holds %d keys already; it must be empty", st.KeyOrigin.Imported)
 		case st.Order.Kind == 0:
 			return bad("the target is not reserved for order %x: push the order to the target first (handover-target identity -order)", hash[:8])
 		case st.Order.Kind != uint8(markstore.OrderHandover) || st.Order.Hash != hash:
@@ -817,21 +815,11 @@ func (h *sourceHandover) readShares(check bool) ([]handedShare, error) {
 			copy(pk[:], b)
 		}
 		err := s.readShare(pk, func(rec *shareRecord, sec *[32]byte) error {
-			if !validOrigin(rec) {
-				return errors.New("bad key origin in the share record")
-			}
 			sp, err := core.PubkeyOf(*sec)
 			if err != nil {
 				return err
 			}
-			hs := handedShare{pk: pk, share: sp, index: rec.Index, secret: *sec, origin: handover.OriginImported}
-			if rec.Generated {
-				hs.origin = handover.OriginGenerated
-				if len(rec.Order) == 32 {
-					hs.order = [32]byte(rec.Order)
-				}
-			}
-			out = append(out, hs)
+			out = append(out, handedShare{pk: pk, share: sp, index: rec.Index, secret: *sec})
 			return nil
 		})
 		if err != nil {

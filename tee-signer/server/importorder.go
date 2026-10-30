@@ -62,7 +62,7 @@ var infinity = backend.Pubkey{0xc0}
 // R1 and R5): the request's t, n and share index are the order's, 2t > n,
 // its commitments hash to the order's entry, commitment 0 is the
 // validator key, and share_pubkey is the commitments' Feldman value at the
-// share index (the check key generation makes of its own share). So a
+// share index. So a
 // share is filed only under the validator whose polynomial it lies on.
 //
 // A degenerate split is refused: a commitment at the point at infinity

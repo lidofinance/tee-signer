@@ -178,7 +178,7 @@ func testState() backend.SetupState {
 		ApproverSetHash: backend.Root{4},
 		Order:           backend.Order{Kind: 1, Hash: backend.Root{5}, ActAt: 1_900_000_000},
 		KeyReleaseHash:  backend.Root{6},
-		KeyOrigin:       backend.KeyOrigin{Generated: 7, Imported: 1, OrdersHash: backend.Root{8}},
+		KeyOrigin:       backend.KeyOrigin{Imported: 8},
 	}
 }
 

@@ -425,7 +425,7 @@ func TestGroupHashes(t *testing.T) {
 
 // peer_attestation_hosts: setup_hash covers every host, through
 // platform_commitment only; the cap decodes back.
-func TestKeygenPeerHosts(t *testing.T) {
+func TestPeerAttestationHosts(t *testing.T) {
 	ss := samples(t)
 	plain := ss["setup-nitro"]
 	s := ss["setup-nitro-peers"]

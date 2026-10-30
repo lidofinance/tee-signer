@@ -24,7 +24,6 @@ signer-policy-leaf-v1
 signer-policy-node-v1
 signer-policy-root-v1
 signer-platform-commitment-v1
-signer-keygen-orders-v1
 signer-key-release-v1
 signer-handover-share-v1
 signer-handover-origin-v1

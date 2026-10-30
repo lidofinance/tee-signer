@@ -160,12 +160,11 @@ type mark struct {
 //	  "approver_set_hash": "04000000",
 //	  "order": {"kind": "handover", "hash": "05000000", "act_at_unix": 1900000000},
 //	  "key_release_hash": "06000000",
-//	  "key_origin": {"generated": 3, "imported": 0, "orders_hash": "07000000"}
+//	  "key_origin": {"imported": 3}
 //	}
 //
-// key_origin is IDENTITY's: of the loaded keys, how many the
-// runner made in key generation and how many it imported, and the hash of
-// the DKG orders of the generated ones. Left out on the flag path.
+// key_origin is IDENTITY's: the number of loaded keys, all imported. Left
+// out on the flag path.
 //
 // pinned: cloud.json pins setup_sha256 (the check passed, so it matched).
 // flag_path: a runner without a setup, whose setup_hash is the hash of its
@@ -190,9 +189,7 @@ type setupView struct {
 }
 
 type keyOriginView struct {
-	Generated  uint32 `json:"generated"`
-	Imported   uint32 `json:"imported"`
-	OrdersHash string `json:"orders_hash"`
+	Imported uint32 `json:"imported"`
 }
 
 type groupView struct {
@@ -243,7 +240,7 @@ func viewOf(s *cloud.SetupState, att *runnerclient.Attestation, now time.Time) *
 		v.KeyReleaseHash = short(s.KeyReleaseHash)
 	}
 	if k := s.KeyOrigin; k != (cloud.KeyOrigin{}) {
-		v.KeyOrigin = &keyOriginView{Generated: k.Generated, Imported: k.Imported, OrdersHash: short(k.OrdersHash)}
+		v.KeyOrigin = &keyOriginView{Imported: k.Imported}
 	}
 	return v
 }
@@ -547,7 +544,7 @@ func setupLine(r result) string {
 		s += fmt.Sprintf(" order=%s@%s", o.Kind, time.Unix(o.ActAtUnix, 0).UTC().Format(time.RFC3339))
 	}
 	if k := v.KeyOrigin; k != nil {
-		s += fmt.Sprintf(" keys=generated:%d,imported:%d", k.Generated, k.Imported)
+		s += fmt.Sprintf(" keys=imported:%d", k.Imported)
 	}
 	if !v.Pinned {
 		s += " unpinned"

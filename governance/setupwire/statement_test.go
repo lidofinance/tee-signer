@@ -285,15 +285,6 @@ type vectors struct {
 		Azure vMeasurement `json:"azure"`
 		GCP   vMeasurement `json:"gcp"`
 	} `json:"measurement"`
-	// KeygenOrders is a worked example of keygen_orders_hash (section 5):
-	// the order hashes of a runner's generated keys, one per key, in no
-	// order and with repeats, and the hash over the distinct ones. The
-	// sample setup state above keeps its placeholder orders_hash.
-	KeygenOrders struct {
-		KeyOrders []hexBytes `json:"key_orders"`
-		Input     hexBytes   `json:"input"`
-		Hash      hexBytes   `json:"keygen_orders_hash"`
-	} `json:"keygen_orders"`
 	// KeyRelease works key_release_hash (section 5) through for a sample
 	// AWS key and a sample Azure key: the fields the runner reads, in
 	// order, the input and the hash.
@@ -371,7 +362,7 @@ func buildVectors(t *testing.T) []byte {
 		{"policy_leaf", CtxPolicyLeaf}, {"policy_node", CtxPolicyNode}, {"policy_root", CtxPolicyRoot},
 		{"platform_commitment", CtxPlatformCommitment}, {"setup_hash", CtxSetup}, {"config_update", CtxConfigUpdate},
 		{"chain_hash", CtxChain}, {"approver_set", CtxApproverSet}, {"attest_user_data", CtxRunnerAttest},
-		{"identity_user_data", CtxRunnerIdentity}, {"keygen_orders", CtxKeygenOrders}, {"key_release", CtxKeyRelease},
+		{"identity_user_data", CtxRunnerIdentity}, {"key_release", CtxKeyRelease},
 	} {
 		v.Contexts[c.key] = c.ctx.String()
 	}
@@ -419,8 +410,8 @@ func buildVectors(t *testing.T) []byte {
 	v.Update.UpdateHash, v.Update.Signed = uh[:], must(u.Encode())
 
 	// SetupState: locked version 1 in force, the open group at version
-	// 0 with an open update pending, a pending DKG order, a key-release
-	// hash, and a key origin of 3 keys from key generation. The order and
+	// 0 with an open update pending, a pending handover order, a
+	// key-release hash, and 3 loaded keys. The order and
 	// the key-release hash are phase 2; the sample sets them so every
 	// public byte is exercised.
 	or := must1(s.GroupHash(GroupOpen))
@@ -430,9 +421,9 @@ func buildVectors(t *testing.T) []byte {
 		Open: backend.ConfigGroup{Version: 0, Hash: or,
 			Pending: backend.PendingUpdate{Version: 1, Hash: vsum("pending open update"), EffectiveAt: 1_800_000_600}},
 		ApproverSetHash: s.Locked.Approvers.Hash(),
-		Order:           backend.Order{Kind: 2, Hash: vsum("pending dkg order"), ActAt: 1_800_003_600},
+		Order:           backend.Order{Kind: 1, Hash: vsum("pending handover order"), ActAt: 1_800_003_600},
 		KeyReleaseHash:  vsum("key release policies"),
-		KeyOrigin:       backend.KeyOrigin{Generated: 3, Imported: 0, OrdersHash: vsum("keygen orders")},
+		KeyOrigin:       backend.KeyOrigin{Imported: 3},
 	}
 	ssb := backend.AppendSetupState(nil, &st)
 	v.SetupState.Fields, v.SetupState.Bytes = st, ssb
@@ -532,20 +523,6 @@ func buildVectors(t *testing.T) []byte {
 	v.Measurement.Nitro = measurementVector(uint8(ImageNitro), pcrs)
 	v.Measurement.Azure = measurementVector(uint8(ImageAzure), hostData[:])
 	v.Measurement.GCP = measurementVector(uint8(ImageGCP), s.Locked.AllowedImageMeasurements[0].Measurement)
-
-	// keygen_orders_hash of three generated keys from two DKG orders.
-	oa, ob := vsum("dkg order a"), vsum("dkg order b")
-	keyOrders := [][32]byte{ob, oa, ob}
-	for _, o := range keyOrders {
-		v.KeygenOrders.KeyOrders = append(v.KeygenOrders.KeyOrders, o[:])
-	}
-	lo, hi := oa, ob
-	if bytes.Compare(lo[:], hi[:]) > 0 {
-		lo, hi = hi, lo
-	}
-	v.KeygenOrders.Input = CtxKeygenOrders.Message(binary.BigEndian.AppendUint32(nil, 2), lo[:], hi[:])
-	koh := backend.KeygenOrdersHash(keyOrders)
-	v.KeygenOrders.Hash = koh[:]
 
 	// key_release_hash: a locked AWS key policy (no kms:PutKeyPolicy for
 	// anyone) and an immutable Azure release policy.
@@ -670,11 +647,6 @@ func TestStatementVectors(t *testing.T) {
 			Input       string `json:"input"`
 			Measurement string `json:"measurement"`
 		} `json:"measurement"`
-		KeygenOrders struct {
-			KeyOrders []string `json:"key_orders"`
-			Input     string   `json:"input"`
-			Hash      string   `json:"keygen_orders_hash"`
-		} `json:"keygen_orders"`
 		KeyRelease map[string]struct {
 			Platform uint8 `json:"platform"`
 			Fields   []struct {
@@ -803,7 +775,7 @@ func TestStatementVectors(t *testing.T) {
 
 	// The public outputs are the nonce, the two halves of setup_hash and
 	// the rest of the setup state: config_state with the pending order
-	// (kind at byte 240, here 2) and key_release_hash (281 to 312), and the
+	// (kind at byte 240, here 1) and key_release_hash (281 to 312), and the
 	// key origin. keys_hash stays private.
 	po := &v.PublicOutputs
 	eq("challenge_root", nonce, po.ChallengeRoot)
@@ -812,7 +784,7 @@ func TestStatementVectors(t *testing.T) {
 	eq("config_state", ss[32:313], po.ConfigState)
 	eq("key_origin", ss[313:353], po.KeyOrigin)
 	eq("private keys_hash", kh[:], v.PrivateInputs.KeysHash)
-	if ss[240] != 2 || bytes.Equal(ss[281:313], make([]byte, 32)) {
+	if ss[240] != 1 || bytes.Equal(ss[281:313], make([]byte, 32)) {
 		t.Error("the sample's pending order or key_release_hash is not set")
 	}
 
@@ -896,22 +868,6 @@ func TestStatementVectors(t *testing.T) {
 	}
 	if v.Measurement["gcp"].Value != "0x"+hex.EncodeToString(s.Locked.AllowedImageMeasurements[0].Measurement) {
 		t.Error("the GCP measurement is not the sample's allowed image")
-	}
-
-	// keygen_orders_hash: the distinct order hashes in ascending order,
-	// their count as u32 first.
-	var orders [][]byte
-	for _, o := range v.KeygenOrders.KeyOrders {
-		orders = append(orders, x(o))
-	}
-	slices.SortFunc(orders, bytes.Compare)
-	orders = slices.CompactFunc(orders, bytes.Equal)
-	oin := slices.Concat(msg("signer-keygen-orders-v1"), binary.BigEndian.AppendUint32(nil, uint32(len(orders))), slices.Concat(orders...))
-	eq("keygen orders input", oin, v.KeygenOrders.Input)
-	oh := sha256.Sum256(oin)
-	eq("keygen_orders_hash", oh[:], v.KeygenOrders.Hash)
-	if len(orders) != 2 || len(v.KeygenOrders.KeyOrders) != 3 {
-		t.Error("the keygen orders example has no repeat")
 	}
 
 	// key_release_hash: the platform byte, then each field with its length
