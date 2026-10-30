@@ -33,13 +33,13 @@ NITRO_CLI_DIR="$BUILD/third_party/aws-nitro-enclaves-cli"
 
 # NTS time client (nts/): a Rust static library, linked into the runner by the
 # build tag nts. The Rust toolchain is a Docker image (trusted-time/toolchain/toolchain.Dockerfile:
-# rust:1.94.1-bookworm pinned by digest, plus the aarch64 standard library).
-# The crates are those of trusted-time/rust/Cargo.lock, vendored into third_party/ by
-# scripts/fetch-nts.sh. The output goes to build/nts/, not to
+# rust:1.94.1-slim-bookworm pinned by digest, plus the aarch64 standard library).
+# The crates are those of trusted-time/rust/Cargo.lock, fetched from crates.io
+# into NTS_CARGO_HOME by scripts/fetch-nts.sh. The output goes to build/nts/, not to
 # build/<arch>/, so that no file an image build uses is overwritten.
 NTS_DIR="$ROOT/trusted-time/rust"
-NTS_VENDOR_DIR="$ROOT/trusted-time/third_party/nts-vendor"
-NTS_IMAGE="signer-nts-toolchain:1.94.1"
+NTS_CARGO_HOME="$BUILD/nts/cargo-home"
+NTS_IMAGE="signer-nts-toolchain:1.94.1-slim"
 NTS_RUSTC_COMMIT="e408947bfd200af42db322daf0fadfe7e26d3bd1"
 NTS_OUT="$BUILD/nts"
 

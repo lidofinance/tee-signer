@@ -13,23 +13,42 @@ umask 022
 
 mkdir -p "$HOME" "$CARGO_HOME"
 
+# The crates: build-nts.sh mounts the download cache read-only at /crates.
+# Only the lock's .crate archives are copied out of it, and the copies are
+# checked against the sha256 in Cargo.lock. Each checked archive is unpacked
+# into $VENDOR, a directory source whose .cargo-checksum.json names the same
+# sha256 (cargo compares it with the lock). cargo builds from $VENDOR alone:
+# no registry index, no extracted source and no other file of the host cache
+# is read, so dependency features come from the crates' own Cargo.toml.
+VENDOR=/tmp/vendor
+bash /nts-verify-crates.sh "$NTS_CROOT/nts/Cargo.lock" /crates "$CARGO_HOME"
+mkdir -p "$VENDOR"
+for archive in "$CARGO_HOME"/registry/cache/*/*.crate; do
+  crate="$(basename "$archive" .crate)"
+  [ ! -e "$VENDOR/$crate" ] || continue
+  tar -xzf "$archive" -C "$VENDOR" --no-same-owner
+  [ -f "$VENDOR/$crate/Cargo.toml" ] || { echo "$archive does not unpack to $crate/" >&2; exit 1; }
+  printf '{"files":{},"package":"%s"}\n' "$(sha256sum "$archive" | cut -d' ' -f1)" >"$VENDOR/$crate/.cargo-checksum.json"
+done
+rm -rf "$CARGO_HOME/registry"
+
 got="$(rustc -vV | sed -n 's/^commit-hash: //p')"
 [ "$got" = "$NTS_RUSTC_COMMIT" ] || { echo "rustc is $got, this build is pinned to $NTS_RUSTC_COMMIT" >&2; exit 1; }
 installed="$(rustup target list --installed)"
 grep -qx "$NTS_TARGET" <<<"$installed" || { echo "the standard library for $NTS_TARGET is not installed" >&2; exit 1; }
 
 # Every absolute path the compiler or cargo could write into the archive is
-# mapped to a fixed one: the mount point of the sources, the cargo and rustup
-# folders, the target folder. The standard library has /rustc/<commit>/ paths
+# mapped to a fixed one: the mount point of the sources, the crates, the cargo
+# and rustup folders, the target folder. The standard library has /rustc/<commit>/ paths
 # of its own, the same on every build with this compiler.
-export RUSTFLAGS="--remap-path-prefix=$NTS_CROOT=/build --remap-path-prefix=$CARGO_HOME=/cargo --remap-path-prefix=/usr/local/cargo=/cargo --remap-path-prefix=/usr/local/rustup=/rustup --remap-path-prefix=$CARGO_TARGET_DIR=/target"
+export RUSTFLAGS="--remap-path-prefix=$NTS_CROOT=/build --remap-path-prefix=$VENDOR=/vendor --remap-path-prefix=$CARGO_HOME=/cargo --remap-path-prefix=/usr/local/cargo=/cargo --remap-path-prefix=/usr/local/rustup=/rustup --remap-path-prefix=$CARGO_TARGET_DIR=/target"
 
 cd "$NTS_CROOT/nts"
 # --locked: Cargo.lock must be current. --offline: no index, no download.
-# --frozen: both. Source replacement in trusted-time/rust/.cargo/config.toml makes cargo
-# read the vendored crates, and each one is checked against the sha256 in
-# Cargo.lock.
-cargo_flags=(--locked --offline --frozen)
+# --frozen: both. The source replacement points crates.io at $VENDOR.
+cargo_flags=(--locked --offline --frozen
+  --config 'source.crates-io.replace-with="checked-crates"'
+  --config "source.checked-crates.directory=\"$VENDOR\"")
 
 if [ "${NTS_TEST:-0}" = 1 ]; then
   cargo test "${cargo_flags[@]}" --target x86_64-unknown-linux-gnu -p signer-nts -p signer-nts-core

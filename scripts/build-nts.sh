@@ -18,8 +18,11 @@
 #
 # What keeps the archive the same on every build:
 #   - one pinned compiler (the image's rustc must have NTS_RUSTC_COMMIT), the
-#     crates of Cargo.lock from trusted-time/third_party/nts-vendor (checked first by
-#     fetch-nts.sh --check), and cargo --locked --offline --frozen;
+#     crates of Cargo.lock, fetched from crates.io first by fetch-nts.sh into
+#     build/nts/cargo-home, their archives checked against the sha256 in the
+#     lock by fetch-nts.sh and again in the container, which builds from a
+#     directory source unpacked from the checked archives (no registry index),
+#     and cargo --locked --offline --frozen;
 #   - a fresh container for every build, started with --network none and as
 #     the calling user, so no state and no umask of the host gets in;
 #   - --remap-path-prefix for the mount point of the sources and for the
@@ -44,11 +47,11 @@ done
 [ ${#archs[@]} -gt 0 ] || archs=(x86_64 aarch64)
 
 # Where the sources are mounted in the container. The compiler maps it to
-# /build, so the archive does not depend on it. nts-repro.sh builds with
-# another one to show that.
+# /build, so the archive does not depend on it.
 CROOT="${NTS_CONTAINER_ROOT:-/src}"
 
-bash "$ROOT/scripts/fetch-nts.sh" --check
+# The only step with a network: the crates of Cargo.lock into NTS_CARGO_HOME.
+bash "$ROOT/scripts/fetch-nts.sh"
 nts_toolchain_image
 mkdir -p "$NTS_OUT" "$LOGS"
 
@@ -66,7 +69,8 @@ for arch in "${archs[@]}"; do
     -e NTS_RUSTC_COMMIT="$NTS_RUSTC_COMMIT" -e NTS_TEST="$tests" \
     -v "$ROOT/scripts/nts-container.sh:/nts-container.sh:ro" \
     -v "$NTS_DIR:$CROOT/nts:ro" \
-    -v "$NTS_VENDOR_DIR:$CROOT/third_party/nts-vendor:ro" \
+    -v "$NTS_CARGO_HOME:/crates:ro" \
+    -v "$ROOT/scripts/nts-verify-crates.sh:/nts-verify-crates.sh:ro" \
     -v "$out:/out" \
     "$NTS_IMAGE" bash /nts-container.sh >"$LOGS/nts-build-$arch.log" 2>&1 ||
     { tail -40 "$LOGS/nts-build-$arch.log" >&2; echo "build-nts: the $arch build failed" >&2; exit 1; }
@@ -108,7 +112,7 @@ for arch in "${archs[@]}"; do
   # paths of the Rust project's own build (/rustc/<commit>/..., /build/<target>/stage1-std/...);
   # they are the same for every build with this compiler.
   for a in "$lib" "$nostd"; do
-    leaks="$(grep -a -o -E "($ROOT|$HOME|$CROOT/(nts|third_party)|/tmp/(cargo-home|target|home)|/usr/local/(cargo|rustup))[A-Za-z0-9_./-]*" "$a" | sort -u || true)"
+    leaks="$(grep -a -o -E "($ROOT|$HOME|$CROOT/nts|/tmp/(cargo-home|target|home|vendor)|/usr/local/(cargo|rustup))[A-Za-z0-9_./-]*" "$a" | sort -u || true)"
     [ -z "$leaks" ] || { echo "build-nts: $a names paths of the build:" >&2; echo "$leaks" >&2; exit 1; }
   done
   # The header is valid C and matches the library (the unit test also reads it).

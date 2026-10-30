@@ -13,7 +13,7 @@ files against the build context. The bundle contains:
 - `LICENSE`: this project's Apache-2.0 licence.
 - `THIRD_PARTY_NOTICES`: licence, notice, copyright and patent files from the
   binary's Go modules, the Go standard library's vendored dependencies, blst when
-  linked, and the pinned Rust crate vendor set for NTS builds.
+  linked, and the Rust crates of `trusted-time/rust/Cargo.lock` for NTS builds.
 - `RUST_STANDARD_LIBRARY.html`: the standard library's copyright and licence
   notices from the pinned Rust toolchain, for NTS builds.
 

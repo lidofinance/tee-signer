@@ -1,5 +1,5 @@
 # The crates that nts/Cargo.lock may hold, name and version, from crates.io.
-# scripts/fetch-nts.sh refuses to vendor anything else. A crate is added here
+# scripts/fetch-nts.sh refuses to fetch anything else. A crate is added here
 # only after it was approved: name, version, license and size looked at first.
 #
 # aes-siv 0.7 and what it needs: these 19 crates.
