@@ -28,6 +28,7 @@ check: ## guards: module boundaries, secret scan, release gate self-test, gofmt
 	bash $(ROOT)/scripts/check-imports.sh
 	bash $(ROOT)/scripts/check-forbidden.sh
 	bash $(ROOT)/scripts/fetch-nts.sh --check
+	bash $(ROOT)/scripts/nts-verify-crates-test.sh
 	bash $(ROOT)/scripts/release-gate-test.sh
 	python3 -B $(ROOT)/scripts/bundle-licenses-test.py
 	@for m in */go.mod; do d=$${m%/go.mod}; out=$$(cd $$d && gofmt -l . | grep -v '^third_party/' || true); \

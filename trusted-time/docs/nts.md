@@ -181,6 +181,7 @@ trusted-time/toolchain/toolchain.Dockerfile     the toolchain image
 scripts/fetch-nts.sh          checks the lock, fetches the crates into build/nts/cargo-home,
                               checks the archives
 scripts/nts-verify-crates.sh  checks the crate archives against the sha256 in Cargo.lock
+scripts/nts-verify-crates-test.sh  its self-test on a fixture cache (make check)
 scripts/build-nts.sh          builds libsigner_nts.a for both architectures, runs
                               the Rust tests and the no_std checks of the core
 scripts/nts-container.sh      the part of build-nts.sh that runs in the container
@@ -262,8 +263,9 @@ and it takes dependency features from the registry index files, which the
 lock does not cover. So nothing in the cache is trusted:
 
 - `fetch-nts.sh` runs `scripts/nts-verify-crates.sh` first: each archive in
-  the cache against its sha256 in the lock. All there and matching: no
-  fetch. Some missing: `cargo fetch`, then the same check again. One that
+  the cache against its sha256 in the lock. Each archive must be in at least
+  one registry folder of the cache, and every copy of it must match. All
+  there and matching: no fetch. Some missing: `cargo fetch`, then the same check again. One that
   differs (changed, cut short): the script stops and says to remove the
   cache. It also deletes the extracted sources (`registry/src`).
 - `build-nts.sh` mounts the cache read-only at `/crates` in each build
