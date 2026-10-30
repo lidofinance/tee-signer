@@ -1,6 +1,6 @@
 //go:build nts
 
-package nts
+package ntscore
 
 import (
 	"errors"
@@ -18,13 +18,13 @@ const (
 	testNow = 1_792_195_200 * sec
 )
 
-func sampleAt(t2Unix, t3Unix int64) *timeResponse {
-	return &timeResponse{
-		stratum: 2, precision: -20,
-		reference: ntpFromUnixNanos(t2Unix - 10*sec),
-		origin:    1,
-		receive:   ntpFromUnixNanos(t2Unix),
-		transmit:  ntpFromUnixNanos(t3Unix),
+func sampleAt(t2Unix, t3Unix int64) *TimeResponse {
+	return &TimeResponse{
+		Stratum: 2, Precision: -20,
+		Reference: NTPFromUnixNanos(t2Unix - 10*sec),
+		Origin:    1,
+		Receive:   NTPFromUnixNanos(t2Unix),
+		Transmit:  NTPFromUnixNanos(t3Unix),
 	}
 }
 
@@ -34,7 +34,7 @@ func TestSymmetricPath(t *testing.T) {
 	t1 := 1000 * sec
 	realT1 := testNow + t1 + 5*ms
 	s := sampleAt(realT1+9_500_000, realT1+10_500_000)
-	m, err := measure(s, t1, t1+20*ms, testNow)
+	m, err := Measure(s, t1, t1+20*ms, testNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,13 +56,13 @@ func TestSymmetricPath(t *testing.T) {
 
 func TestRootValuesAddToTheBound(t *testing.T) {
 	s := sampleAt(testNow+5*ms, testNow+5*ms)
-	s.rootDelay = 0x0000_0100      // 1/256 s = 3,906,250 ns
-	s.rootDispersion = 0x0000_0200 // 7,812,500 ns
-	m, err := measure(s, 0, 10*ms, testNow)
+	s.RootDelay = 0x0000_0100      // 1/256 s = 3,906,250 ns
+	s.RootDispersion = 0x0000_0200 // 7,812,500 ns
+	m, err := Measure(s, 0, 10*ms, testNow)
 	if err != nil {
 		t.Fatal(err)
 	}
-	base, err := measure(sampleAt(testNow+5*ms, testNow+5*ms), 0, 10*ms, testNow)
+	base, err := Measure(sampleAt(testNow+5*ms, testNow+5*ms), 0, 10*ms, testNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestTheTrueTimeIsInsideTheBoundForAnyPathAsymmetry(t *testing.T) {
 		t2 := t1 + up + realOffset
 		t3 := t2 + ms
 		t4 := t1 + up + ms + down
-		m, err := measure(sampleAt(t2, t3), t1, t4, testNow)
+		m, err := Measure(sampleAt(t2, t3), t1, t4, testNow)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -96,61 +96,61 @@ func TestTheTrueTimeIsInsideTheBoundForAnyPathAsymmetry(t *testing.T) {
 
 func TestSampleRefusals(t *testing.T) {
 	ok := sampleAt(testNow, testNow+ms)
-	if _, err := measure(ok, 0, 10*ms, testNow); err != nil {
+	if _, err := Measure(ok, 0, 10*ms, testNow); err != nil {
 		t.Fatal(err)
 	}
-	check := func(what string, s *timeResponse, t1, t4 int64, want error) {
+	check := func(what string, s *TimeResponse, t1, t4 int64, want error) {
 		t.Helper()
-		if _, err := measure(s, t1, t4, testNow); !errors.Is(err, want) {
+		if _, err := Measure(s, t1, t4, testNow); !errors.Is(err, want) {
 			t.Fatalf("%s: got %v, want %v", what, err, want)
 		}
 	}
-	check("local reversed", ok, 10, 9, errLocalTimesReversed)
-	check("server reversed", sampleAt(testNow+ms, testNow), 0, 10*ms, errServerTimesReversed)
+	check("local reversed", ok, 10, 9, ErrLocalTimesReversed)
+	check("server reversed", sampleAt(testNow+ms, testNow), 0, 10*ms, ErrServerTimesReversed)
 	// The server held the request 2 ms; our round trip was 1 ms.
-	check("negative delay", sampleAt(testNow, testNow+2*ms), 0, ms, errNegativeDelay)
+	check("negative delay", sampleAt(testNow, testNow+2*ms), 0, ms, ErrNegativeDelay)
 	for _, stratum := range []uint8{0, 16, 255} {
 		s := *ok
-		s.stratum = stratum
-		check("stratum", &s, 0, ms, errSampleStratum)
+		s.Stratum = stratum
+		check("stratum", &s, 0, ms, ErrSampleStratum)
 	}
 	s := *ok
-	s.reference = 0
-	check("zero reference", &s, 0, 10*ms, errNeverSynchronized)
+	s.Reference = 0
+	check("zero reference", &s, 0, 10*ms, ErrNeverSynchronized)
 	// Zero receive or transmit timestamps (RFC 5905 section 8) with a good
-	// reference: refused, not read as the start of an era.
-	for _, zero := range []func(*timeResponse){func(r *timeResponse) { r.receive = 0 }, func(r *timeResponse) { r.transmit = 0 }, func(r *timeResponse) { r.receive, r.transmit = 0, 0 }} {
+	// Reference: refused, not read as the start of an era.
+	for _, zero := range []func(*TimeResponse){func(r *TimeResponse) { r.Receive = 0 }, func(r *TimeResponse) { r.Transmit = 0 }, func(r *TimeResponse) { r.Receive, r.Transmit = 0, 0 }} {
 		z := *ok
 		zero(&z)
-		check("zero timestamp", &z, 0, 10*ms, errZeroTimestamp)
+		check("zero timestamp", &z, 0, 10*ms, ErrZeroTimestamp)
 	}
-	s.reference = ntpFromUnixNanos(testNow + sec)
-	check("reference after transmit", &s, 0, 10*ms, errReferenceAfterTransmit)
+	s.Reference = NTPFromUnixNanos(testNow + sec)
+	check("reference after transmit", &s, 0, 10*ms, ErrReferenceAfterTransmit)
 	s = *ok
-	s.rootDispersion = 0x0001_0000 // 1 s
-	check("dispersion", &s, 0, 10*ms, errBoundTooLarge)
+	s.RootDispersion = 0x0001_0000 // 1 s
+	check("dispersion", &s, 0, 10*ms, ErrBoundTooLarge)
 	s = *ok
-	s.precision = 1 // 2 s
-	check("precision", &s, 0, 10*ms, errBoundTooLarge)
+	s.Precision = 1 // 2 s
+	check("precision", &s, 0, 10*ms, ErrBoundTooLarge)
 	// A 2.1 s round trip: delay/2 alone is over 1 s.
-	check("round trip", ok, 0, 2_100*ms, errBoundTooLarge)
+	check("round trip", ok, 0, 2_100*ms, ErrBoundTooLarge)
 }
 
 func TestExtremeInputsDoNotPanic(t *testing.T) {
 	s := sampleAt(testNow, testNow)
 	for _, c := range [][2]int64{{math.MinInt64, math.MaxInt64}, {math.MinInt64, math.MinInt64}, {math.MaxInt64, math.MaxInt64}, {0, math.MaxInt64}} {
 		for _, pivot := range []int64{math.MinInt64, 0, math.MaxInt64} {
-			_, _ = measure(s, c[0], c[1], pivot)
+			_, _ = Measure(s, c[0], c[1], pivot)
 		}
 	}
 	for _, p := range []int8{math.MinInt8, -64, -1, 0, 7, 8, math.MaxInt8} {
 		c := *s
-		c.precision = p
-		_, _ = measure(&c, 0, 1, testNow)
+		c.Precision = p
+		_, _ = Measure(&c, 0, 1, testNow)
 	}
 	c := *s
-	c.rootDelay, c.rootDispersion = math.MaxUint32, math.MaxUint32
-	if _, err := measure(&c, 0, 1, testNow); !errors.Is(err, errBoundTooLarge) {
+	c.RootDelay, c.RootDispersion = math.MaxUint32, math.MaxUint32
+	if _, err := Measure(&c, 0, 1, testNow); !errors.Is(err, ErrBoundTooLarge) {
 		t.Fatalf("largest root values: %v", err)
 	}
 }
@@ -162,19 +162,19 @@ func TestPrecisionAndDrift(t *testing.T) {
 		p    int8
 		want int64
 	}{{0, 1_000_000_000}, {-1, 500_000_000}, {-20, 954}, {-29, 2}, {-30, 1}, {-31, 1}, {-64, 1}, {-128, 1}, {1, 2_000_000_000}, {7, 128_000_000_000}, {127, 128_000_000_000}} {
-		if got := precisionNs(c.p); got.Int64() != c.want || !got.IsInt64() {
-			t.Errorf("precisionNs(%d) = %v, want %d", c.p, got, c.want)
+		if got := PrecisionNs(c.p); got != c.want {
+			t.Errorf("PrecisionNs(%d) = %v, want %d", c.p, got, c.want)
 		}
 	}
 	// A sample from a server that states precision -128 measures with a 1
 	// ns term, where a shift by 128 would have been undefined.
 	s := sampleAt(testNow, testNow+ms)
-	s.precision = -128
-	m, err := measure(s, 0, 10*ms, testNow)
+	s.Precision = -128
+	m, err := Measure(s, 0, 10*ms, testNow)
 	if err != nil || m.Precision != -128 {
 		t.Fatalf("precision -128: %+v %v", m, err)
 	}
-	base, _ := measure(sampleAt(testNow, testNow+ms), 0, 10*ms, testNow)
+	base, _ := Measure(sampleAt(testNow, testNow+ms), 0, 10*ms, testNow)
 	if base.Bound-m.Bound != 954-1 {
 		t.Fatalf("precision -128 bound %v, -20 bound %v", m.Bound, base.Bound)
 	}

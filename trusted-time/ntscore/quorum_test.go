@@ -1,9 +1,8 @@
 //go:build nts
 
-package nts
+package ntscore
 
 import (
-	"errors"
 	"math"
 	"sort"
 	"strings"
@@ -23,7 +22,7 @@ func iv(op string, offsetMS, boundMS int64) Interval {
 func quorumRefused(t *testing.T, in []Interval, now int64, want string) {
 	t.Helper()
 	q, err := Quorum(in, now)
-	if err == nil || !strings.Contains(err.Error(), want) || !errors.Is(err, &Error{Code: CodeQuorum}) {
+	if err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("Quorum(%d intervals, now %d) = %+v, %v; want a quorum error with %q", len(in), now, q, err, want)
 	}
 }

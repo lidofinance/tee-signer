@@ -56,9 +56,14 @@ checks() {
       go test $RACE -count=1 -tags "$(runner_tags runner-dev)" ./server . || return 1 ;;
     trusted-time)
       # The clock builds without the runner tags; the NTS client has code
-      # with the tag nts only (the cloud runners' build).
+      # with the tag nts only (the cloud runners' build). Its C core is
+      # built freestanding on its own (ntscore/Makefile), and the core's
+      # tests run once more under the sanitizers, which exclude the race
+      # detector.
       go test $RACE -count=1 -v ./... || return 1
-      go vet -tags nts ./... && go test $RACE -count=1 -v -tags nts ./... || return 1 ;;
+      make -C ntscore check || return 1
+      go vet -tags nts ./... && go test $RACE -count=1 -v -tags nts ./... || return 1
+      go test -asan -count=1 -tags nts ./ntscore ./nts || return 1 ;;
     platform|slashing-log|platform-aws|platform-azure|platform-gcp|signer-admin)
       # The operator tools build without the runner tags.
       case "$1" in signer-admin) ;; *) vet_builds || return 1 ;; esac

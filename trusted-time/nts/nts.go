@@ -5,31 +5,48 @@ package nts
 import (
 	"context"
 	"fmt"
-	"math"
-	"math/bits"
 	"net"
 	"syscall"
 	"time"
 	"unsafe"
+
+	"github.com/lidofinance/tee-signer/trusted-time/ntscore"
 )
 
 // Limits of the client.
 const (
 	// RhoPPM is how fast the local clock may drift, in parts per million
 	// (RFC 5905 MAXFREQ). Bounds grow by this much of their age.
-	RhoPPM = 500
+	RhoPPM = ntscore.RhoPPM
 	// MaxSampleBound is RFC 5905 MAXDIST: a sample with a larger bound is refused.
-	MaxSampleBound = time.Second
+	MaxSampleBound = time.Duration(ntscore.MaxSampleBoundNs)
 	// KEPort is the NTS-KE port (RFC 8915 section 4).
-	KEPort = 4460
-	// exchangeTimeout bounds an NTS-KE or NTP exchange whose context has no
-	// deadline.
-	exchangeTimeout = 10 * time.Second
-	// kissGrace is how long a query reads on after a Kiss-o'-Death for the
+	KEPort = ntscore.KEPort
+	// MaxCookies is how many cookies the client keeps (RFC 8915 section
+	// 4.1.6: servers SHOULD send 8).
+	MaxCookies = ntscore.MaxCookies
+	// MinServers is the smallest quorum, MaxServers the largest.
+	MinServers = ntscore.MinServers
+	MaxServers = ntscore.MaxServers
+	// ExchangeTimeout bounds one NTS-KE session or one NTP query; a query
+	// gets half the poll interval if that is shorter.
+	ExchangeTimeout = 5 * time.Second
+	// KissGrace is how long a query reads on after a Kiss-o'-Death for the
 	// real answer: a forged KoD sent before it must not end the query. The
 	// real answer follows within a round trip; this is far more.
-	kissGrace = 500 * time.Millisecond
+	KissGrace = 500 * time.Millisecond
+	// DriftBaselinePolls times the interval is the baseline of the drift
+	// check: the check also compares each quorum with the oldest quorum
+	// kept, at least this old.
+	DriftBaselinePolls = 32
 )
+
+// FloorTime is a time known to be in the past when this code was built. It
+// fixes the NTP era (RFC 5905 section 6: 136 years long, the current one
+// ending in 2036) that server timestamps are read in, for the 68 years
+// after it, so that no input of the host can move the time by an era. Move
+// it forward with the releases.
+var FloorTime = time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 
 // Error codes: what refused an exchange.
 const (
@@ -75,48 +92,37 @@ func (k *KissError) Error() string {
 	return fmt.Sprintf("nts: Kiss-o'-Death %q (not authenticated)", k.Code)
 }
 
-// Version names this NTS client: the Go port of the signer's NTS core on
-// the standard library alone.
-func Version() string { return "signer-nts go 1" }
+// Version names this NTS client: the C core of trusted-time/ntscore under
+// the Go wrapper.
+func Version() string { return "signer-nts c 1" }
 
 // DialFunc opens a connection. Go owns every socket of NTS: TCP for NTS-KE
 // and UDP for NTP. Tests and a vsock proxy plug in here.
 type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
-// timeoutOf is the time left in ctx, or exchangeTimeout without a deadline.
-func timeoutOf(ctx context.Context) time.Duration {
+// Sample is one measurement: real Unix time minus Monotonic, with its
+// error bound at T4.
+type Sample = ntscore.Sample
+
+// Server is one NTS server and the operator who runs it, with the
+// operator's pinned roots (PEM).
+type Server = ntscore.Server
+
+// timeoutOf is the time left in ctx, or d without a deadline.
+func timeoutOf(ctx context.Context, d time.Duration) time.Duration {
 	if dl, ok := ctx.Deadline(); ok {
-		return max(time.Until(dl), time.Millisecond)
+		return max(min(time.Until(dl), d), time.Millisecond)
 	}
-	return exchangeTimeout
+	return d
 }
 
-// Drift is how far a bound grows over d: RhoPPM of d, rounded up. The
-// product takes 128 bits: in int64 it overflowed past about 213.5 days and
-// went negative (TIME-BOUND-01). The result saturates at the largest
-// Duration.
-func Drift(d time.Duration) time.Duration {
-	if d <= 0 {
-		return 0
-	}
-	hi, lo := bits.Mul64(uint64(d), uint64(RhoPPM))
-	lo, carry := bits.Add64(lo, 999_999, 0)
-	// hi < RhoPPM / 2 < 1_000_000, so Div64 does not panic.
-	q, _ := bits.Div64(hi+carry, lo, 1_000_000)
-	if q > math.MaxInt64 {
-		return math.MaxInt64
-	}
-	return time.Duration(q)
-}
+// Drift is how far a bound grows over d: RhoPPM of d, rounded up,
+// saturated at the largest Duration (TIME-BOUND-01).
+func Drift(d time.Duration) time.Duration { return ntscore.Drift(d) }
 
 // AddBound is a + b for two error bounds of zero or more, saturated at the
 // largest Duration instead of wrapping to a negative one.
-func AddBound(a, b time.Duration) time.Duration {
-	if a < 0 || b < 0 || a > math.MaxInt64-b {
-		return math.MaxInt64
-	}
-	return a + b
-}
+func AddBound(a, b time.Duration) time.Duration { return ntscore.AddBound(a, b) }
 
 // clockMonotonicRaw is CLOCK_MONOTONIC_RAW of Linux (linux/time.h).
 const clockMonotonicRaw = 4
@@ -136,8 +142,4 @@ func Monotonic() int64 {
 		return int64(time.Since(monoStart))
 	}
 	return ts.Nano()
-}
-
-func wrapf(code int, format string, args ...any) error {
-	return &Error{Code: code, Err: fmt.Errorf(format, args...)}
 }

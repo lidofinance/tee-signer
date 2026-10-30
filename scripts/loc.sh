@@ -27,6 +27,7 @@ files() {
       find signer-core/src signer-core/include -type f \( -name '*.c' -o -name '*.h' \)
       find signer-core -name '*.go' -not -name '*_test.go' | grep -vE "^signer-core/.*$TEST_DIRS" | grep -v '^signer-core/tools/' ;;
     trusted-time)
+      find trusted-time/ntscore -type f \( -name '*.c' -o -name '*.h' \)
       find trusted-time -name '*.go' -not -name '*_test.go' | grep -vE "^trusted-time/.*$TEST_DIRS" ;;
     tests) ;;
     *)

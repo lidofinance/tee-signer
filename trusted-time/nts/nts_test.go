@@ -3,27 +3,24 @@
 package nts
 
 import (
-	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"net"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/lidofinance/tee-signer/trusted-time/nts/ntstest"
+	"github.com/lidofinance/tee-signer/trusted-time/ntscore"
 )
 
 func TestVersion(t *testing.T) {
 	v := Version()
-	if !strings.HasPrefix(v, "signer-nts go") {
-		t.Fatalf("Version() = %q, want a string that starts with %q", v, "signer-nts go")
+	if !strings.HasPrefix(v, "signer-nts c") {
+		t.Fatalf("Version() = %q, want a string that starts with %q", v, "signer-nts c")
 	}
 	t.Log(v)
 }
@@ -31,30 +28,6 @@ func TestVersion(t *testing.T) {
 func TestAESSIVSelfTest(t *testing.T) {
 	if err := AESSIVSelfTest(); err != nil {
 		t.Fatal(err)
-	}
-}
-
-// The self-test and Version are safe to call from many goroutines at once.
-func TestCallsFromManyGoroutines(t *testing.T) {
-	var wg sync.WaitGroup
-	errs := make(chan error, 16)
-	for i := 0; i < 16; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 50; j++ {
-				if err := AESSIVSelfTest(); err != nil {
-					errs <- err
-					return
-				}
-				_ = Version()
-			}
-		}()
-	}
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		t.Error(err)
 	}
 }
 
@@ -79,140 +52,31 @@ func TestRunnerBuiltWithTheTag(t *testing.T) {
 	}
 }
 
-func TestKEValues(t *testing.T) {
-	if ALPN != "ntske/1" || ExporterLabel != "EXPORTER-network-time-security" {
-		t.Fatalf("ALPN %q, label %q", ALPN, ExporterLabel)
-	}
-	if c := ExporterContext(false); !bytes.Equal(c, []byte{0, 0, 0, 15, 0}) {
-		t.Fatalf("C2S context %x", c)
-	}
-	if c := ExporterContext(true); !bytes.Equal(c, []byte{0, 0, 0, 15, 1}) {
-		t.Fatalf("S2C context %x", c)
-	}
-	if r := hex.EncodeToString(KERequest()); r != "80010002000080040002000f80000000" {
-		t.Fatalf("KE request %s", r)
-	}
-	if _, done, err := keResponseLength([]byte{0x80, 0x01}); done || err != nil {
-		t.Fatalf("2 octets: done %v err %v", done, err)
-	}
-	if _, _, err := keResponseLength([]byte{0x00, 0x05, 0x04, 0x01}); err == nil || !strings.Contains(err.Error(), "at most 1024") {
-		t.Fatalf("over-long record: %v", err)
-	}
-	// The record rules: each refused response, and the reason.
-	rec := func(critical bool, typ uint16, body ...byte) []byte {
-		if critical {
-			typ |= 0x8000
-		}
-		r := []byte{byte(typ >> 8), byte(typ), byte(len(body) >> 8), byte(len(body))}
-		return append(r, body...)
-	}
-	eom := rec(true, 0)
-	proto := rec(true, 1, 0, 0)
-	aead := rec(true, 4, 0, 15)
-	cookie := rec(false, 5, 1, 2, 3)
-	join := func(rs ...[]byte) []byte {
-		var out []byte
-		for _, r := range rs {
-			out = append(out, r...)
-		}
-		return out
-	}
-	if r, err := parseKEResponse(join(proto, aead, cookie, rec(false, 6, 'h', 'o', 's', 't'), rec(false, 7, 0x10, 0x7b), eom)); err != nil || r.server != "host" || r.port != 4219 || len(r.cookies) != 1 {
-		t.Fatalf("good response: %+v %v", r, err)
-	}
-	for _, c := range []struct {
-		name string
-		resp []byte
-		want string
-	}{
-		{"no cookie", join(proto, aead, eom), "no cookie"},
-		{"no protocol", join(aead, cookie, eom), "no Next Protocol"},
-		{"no aead", join(proto, cookie, eom), "no AEAD"},
-		{"other aead", join(proto, rec(true, 4, 0, 30), cookie, eom), "AEAD_AES_SIV_CMAC_256"},
-		{"other protocol", join(rec(true, 1, 0, 1), aead, cookie, eom), "NTPv4"},
-		{"repeated protocol", join(proto, proto, aead, cookie, eom), "repeated"},
-		{"error record", join(rec(true, 2, 0, 1), eom), "server error 1"},
-		{"warning record", join(proto, aead, cookie, rec(true, 3, 0, 0), eom), "server warning 0"},
-		{"unknown critical", join(proto, aead, cookie, rec(true, 99), eom), "unknown critical record 99"},
-		{"trailing bytes", join(proto, aead, cookie, eom, []byte{1}), "after End of Message"},
-		{"no eom", join(proto, aead, cookie), "before End of Message"},
-		{"empty cookie", join(proto, aead, rec(false, 5), eom), "cookie of 0 octets"},
-	} {
-		if _, err := parseKEResponse(c.resp); err == nil || !strings.Contains(err.Error(), c.want) {
-			t.Errorf("%s: %v, want %q", c.name, err, c.want)
+func TestPinnedRoots(t *testing.T) {
+	for _, s := range PublicServers {
+		pem, err := RootsPEM(s.Roots)
+		if err != nil || len(pem) == 0 || len(pem) > ntscore.MaxRootsLen {
+			t.Fatalf("%s: %d octets, %v", s.Host, len(pem), err)
 		}
 	}
-	// An unknown non-critical record is ignored; cookies past 8 are dropped.
-	many := join(proto, aead)
-	for i := 0; i < 12; i++ {
-		many = append(many, cookie...)
-	}
-	if r, err := parseKEResponse(join(many, rec(false, 99, 1, 2), eom)); err != nil || len(r.cookies) != 8 {
-		t.Fatalf("12 cookies and an unknown record: %+v %v", r, err)
+	if _, err := RootsPEM([]string{"other.pem"}); err == nil {
+		t.Fatal("unpinned root accepted")
 	}
 }
 
-// The AES-SIV of this package against the test server's independent one,
-// on random inputs, and against RFC 5297 appendix A (AESSIVSelfTest).
-func TestSIVMatchesTestServer(t *testing.T) {
-	for i := 0; i < 200; i++ {
-		key := make([]byte, 32)
-		ad := make([]byte, i%40)
-		nonce := make([]byte, 1+i%20)
-		pt := make([]byte, i)
-		for _, b := range [][]byte{key, ad, nonce, pt} {
-			rand.Read(b)
-		}
-		k, err := newSIVKey(key)
-		if err != nil {
-			t.Fatal(err)
-		}
-		ours := k.Seal([][]byte{ad, nonce}, pt)
-		theirs := ntstest.Seal(key, ad, nonce, pt)
-		if !bytes.Equal(ours, theirs) {
-			t.Fatalf("%d: seal differs", i)
-		}
-		if p, ok := k.Open([][]byte{ad, nonce}, theirs); !ok || !bytes.Equal(p, pt) {
-			t.Fatalf("%d: open of the server's ciphertext", i)
-		}
-		if _, ok := ntstest.Open(key, ad, nonce, ours); !ok {
-			t.Fatalf("%d: the server does not open ours", i)
-		}
-	}
-}
-
-// The test server's AES-SIV against RFC 5297 appendix A.1, so the cross
-// check below means something.
-func TestTestServerSIVMatchesRFC5297(t *testing.T) {
-	h := func(s string) []byte { b, _ := hex.DecodeString(s); return b }
-	key := h("fffefdfcfbfaf9f8f7f6f5f4f3f2f1f0f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff")
-	ad := h("101112131415161718191a1b1c1d1e1f2021222324252627")
-	pt := h("112233445566778899aabbccddee")
-	want := h("85632d07c6e8f37f950acd320a2ecc9340c02b9690c4dc04daef7f6afe5c")
-	if got := ntstest.SealVector(key, [][]byte{ad}, pt); !bytes.Equal(got, want) {
-		t.Fatalf("A.1: got %x, want %x", got, want)
-	}
-	ct := ntstest.Seal(key, ad, []byte("nonce"), pt)
-	if p, ok := ntstest.Open(key, ad, []byte("nonce"), ct); !ok || !bytes.Equal(p, pt) {
-		t.Fatal("open after seal failed")
-	}
-	ct[3] ^= 1
-	if _, ok := ntstest.Open(key, ad, []byte("nonce"), ct); ok {
-		t.Fatal("tampered ciphertext opened")
-	}
-}
-
+// fixture is one loopback NTS-KE and NTP server pair, and the Server that
+// names them.
 type fixture struct {
 	store *ntstest.Store
 	ke    *ntstest.KEServer
 	ntp   *ntstest.NTPServer
-	cfg   KEConfig
+	srv   Server
 }
 
 // newFixture starts a KE server that names the NTP server's port.
 func newFixture(t *testing.T, keOpts ntstest.KEOptions, ntpOpts ntstest.NTPOptions) *fixture {
 	t.Helper()
-	cert, pool, err := ntstest.Certificate("nts.test", time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	cert, ca, err := ntstest.CertificatePEM("nts.test", time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,8 +90,26 @@ func newFixture(t *testing.T, keOpts ntstest.KEOptions, ntpOpts ntstest.NTPOptio
 		t.Fatal(err)
 	}
 	t.Cleanup(f.ke.Close)
-	f.cfg = KEConfig{Host: "nts.test", Addr: f.ke.Addr, Roots: pool, Time: time.Now}
+	f.srv = Server{Operator: "a", Host: "nts.test", KEAddr: f.ke.Addr, Roots: ca}
 	return f
+}
+
+// newClient is a client of the given servers. A query gets half the
+// interval: 2 s here.
+func newClient(t *testing.T, cfg Config, servers ...Server) *Client {
+	t.Helper()
+	cfg.Servers = servers
+	if cfg.Interval == 0 {
+		cfg.Interval = 4 * time.Second
+	}
+	cfg.MinPoll, cfg.MaxPoll, cfg.MaxBound = cmpOr(cfg.MinPoll, time.Second), cmpOr(cfg.MaxPoll, 1024*time.Second), cmpOr(cfg.MaxBound, 100*time.Millisecond)
+	cfg.MaxCoarseDiff, cfg.CoarseResolution = cmpOr(cfg.MaxCoarseDiff, 30*time.Second), cmpOr(cfg.CoarseResolution, time.Second)
+	c, err := NewClient(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.Close)
+	return c
 }
 
 func ctx(t *testing.T, d time.Duration) context.Context {
@@ -236,21 +118,34 @@ func ctx(t *testing.T, d time.Duration) context.Context {
 	return c
 }
 
+// poll polls server 0 with the host clock as the coarse time.
+func poll(t *testing.T, c *Client) (ntscore.PeerStatus, error) {
+	t.Helper()
+	return c.Poll(ctx(t, 10*time.Second), 0, time.Now(), c.Local())
+}
+
+// mustSample polls and fails unless a sample came back.
+func mustSample(t *testing.T, c *Client) Sample {
+	t.Helper()
+	ps, err := poll(t, c)
+	if err != nil || ps.Sample == nil {
+		t.Fatalf("poll: %+v, %v", ps, err)
+	}
+	return *ps.Sample
+}
+
 func TestKeyExchangeAndQuery(t *testing.T) {
 	f := newFixture(t, ntstest.KEOptions{}, ntstest.NTPOptions{RootDelay: 2 * time.Millisecond, RootDisp: time.Millisecond})
-	ke, err := KeyExchange(ctx(t, 5*time.Second), f.cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ke.Assoc.Close()
-	if ke.NTPAddr != f.ntp.Addr || ke.Assoc.Cookies() != 8 {
-		t.Fatalf("NTP addr %s (want %s), cookies %d", ke.NTPAddr, f.ntp.Addr, ke.Assoc.Cookies())
-	}
+	c := newClient(t, Config{}, f.srv)
 	for i := 0; i < 12; i++ {
-		s, err := ke.Assoc.Query(ctx(t, 2*time.Second), ke.NTPAddr, time.Now(), nil)
-		if err != nil {
-			t.Fatal(err)
+		ps, err := poll(t, c)
+		if err != nil || ps.Sample == nil {
+			t.Fatalf("poll %d: %v", i, err)
 		}
+		if ps.NTPAddr != f.ntp.Addr || ps.Cookies != 8 || ps.Stats.KEOK != 1 {
+			t.Fatalf("NTP addr %s (want %s), cookies %d, stats %+v", ps.NTPAddr, f.ntp.Addr, ps.Cookies, ps.Stats)
+		}
+		s := ps.Sample
 		// The server's clock is this host's; the measured real time must be
 		// within the bound of it.
 		now := time.Now().UnixNano()
@@ -265,22 +160,15 @@ func TestKeyExchangeAndQuery(t *testing.T) {
 			t.Logf("sample %+v", s)
 		}
 	}
-	if n := ke.Assoc.Cookies(); n != 8 {
-		t.Fatalf("cookies after 12 queries: %d", n)
+	if n := f.ke.Sessions.Load(); n != 1 {
+		t.Fatalf("NTS-KE sessions after 12 queries: %d", n)
 	}
 }
 
 func TestServerOffsetIsMeasured(t *testing.T) {
 	f := newFixture(t, ntstest.KEOptions{}, ntstest.NTPOptions{Offset: 3 * time.Second, Hold: 2 * time.Millisecond})
-	ke, err := KeyExchange(ctx(t, 5*time.Second), f.cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ke.Assoc.Close()
-	s, err := ke.Assoc.Query(ctx(t, 2*time.Second), ke.NTPAddr, time.Now(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := newClient(t, Config{}, f.srv)
+	s := mustSample(t, c)
 	est := time.Duration(s.Offset + Monotonic() - time.Now().UnixNano())
 	if (est - 3*time.Second).Abs() > s.Bound+5*time.Millisecond {
 		t.Fatalf("server 3 s ahead, measured %v (bound %v)", est, s.Bound)
@@ -290,28 +178,34 @@ func TestServerOffsetIsMeasured(t *testing.T) {
 	}
 }
 
+// Before the first quorum the certificate is dated by the coarse time the
+// host gives; after it, by the core's own time (the clock tests).
 func TestCertificateValidityUsesTheGivenClock(t *testing.T) {
 	future := time.Date(2031, 1, 1, 0, 0, 0, 0, time.UTC)
-	cert, pool, err := ntstest.Certificate("nts.test", future, future.Add(time.Hour))
+	cert, ca, err := ntstest.CertificatePEM("nts.test", future, future.Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
 	store := ntstest.NewStore()
-	ke, err := ntstest.StartKE(cert, store, ntstest.KEOptions{})
+	ntp, err := ntstest.StartNTP(store, ntstest.NTPOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ntp.Close()
+	ke, err := ntstest.StartKE(cert, store, ntstest.KEOptions{NTPServer: "127.0.0.1", NTPPort: ntp.Port})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ke.Close()
-	cfg := KEConfig{Host: "nts.test", Addr: ke.Addr, Roots: pool, Time: time.Now}
-	if _, err := KeyExchange(ctx(t, 5*time.Second), cfg); err == nil || !strings.Contains(err.Error(), "certificate") {
+	c := newClient(t, Config{}, Server{Operator: "a", Host: "nts.test", KEAddr: ke.Addr, Roots: ca})
+	if _, err := c.Poll(ctx(t, 5*time.Second), 0, time.Now(), c.Local()); err == nil || !strings.Contains(err.Error(), "certificate") {
 		t.Fatalf("certificate from 2031 accepted with today's clock: %v", err)
 	}
-	cfg.Time = func() time.Time { return future.Add(time.Minute) }
-	r, err := KeyExchange(ctx(t, 5*time.Second), cfg)
-	if err != nil {
+	// The failed key exchange backs off: a new client for the second try.
+	c = newClient(t, Config{}, Server{Operator: "a", Host: "nts.test", KEAddr: ke.Addr, Roots: ca})
+	if ps, err := c.Poll(ctx(t, 5*time.Second), 0, future.Add(time.Minute), c.Local()); err != nil || ps.Sample == nil {
 		t.Fatalf("with the given clock in 2031: %v", err)
 	}
-	r.Assoc.Close()
 }
 
 func TestKERefusals(t *testing.T) {
@@ -328,25 +222,39 @@ func TestKERefusals(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			f := newFixture(t, c.opts, ntstest.NTPOptions{})
-			_, err := KeyExchange(ctx(t, 5*time.Second), f.cfg)
+			cl := newClient(t, Config{}, f.srv)
+			ps, err := poll(t, cl)
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("got %v, want an error with %q", err, c.want)
+			}
+			if ps.Stats.KEFail != 1 || ps.Stats.KEOK != 0 || ps.Cookies != 0 {
+				t.Fatalf("stats %+v, cookies %d", ps.Stats, ps.Cookies)
 			}
 			t.Log(err)
 		})
 	}
 	t.Run("roots of another CA", func(t *testing.T) {
 		f := newFixture(t, ntstest.KEOptions{}, ntstest.NTPOptions{})
-		_, other, _ := ntstest.Certificate("nts.test", time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
-		f.cfg.Roots = other
-		if _, err := KeyExchange(ctx(t, 5*time.Second), f.cfg); err == nil || !strings.Contains(err.Error(), "certificate") {
+		_, other, _ := ntstest.CertificatePEM("nts.test", time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+		srv := f.srv
+		srv.Roots = other
+		if _, err := poll(t, newClient(t, Config{}, srv)); err == nil || !strings.Contains(err.Error(), "certificate") {
 			t.Fatalf("got %v", err)
 		}
 	})
 	t.Run("wrong host name", func(t *testing.T) {
 		f := newFixture(t, ntstest.KEOptions{}, ntstest.NTPOptions{})
-		f.cfg.Host = "other.test"
-		if _, err := KeyExchange(ctx(t, 5*time.Second), f.cfg); err == nil || !strings.Contains(err.Error(), "certificate") {
+		srv := f.srv
+		srv.Host = "other.test"
+		if _, err := poll(t, newClient(t, Config{}, srv)); err == nil || !strings.Contains(err.Error(), "certificate") {
+			t.Fatalf("got %v", err)
+		}
+	})
+	t.Run("no roots", func(t *testing.T) {
+		f := newFixture(t, ntstest.KEOptions{}, ntstest.NTPOptions{})
+		srv := f.srv
+		srv.Roots = nil
+		if _, err := poll(t, newClient(t, Config{}, srv)); err == nil || !strings.Contains(err.Error(), "pinned roots") {
 			t.Fatalf("got %v", err)
 		}
 	})
@@ -354,106 +262,69 @@ func TestKERefusals(t *testing.T) {
 
 func TestKissForgeryAndNTSN(t *testing.T) {
 	f := newFixture(t, ntstest.KEOptions{}, ntstest.NTPOptions{Kiss: "RATE"})
-	ke, err := KeyExchange(ctx(t, 5*time.Second), f.cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ke.Assoc.Close()
+	// A query gets half the interval: 500 ms.
+	c := newClient(t, Config{Interval: time.Second}, f.srv)
 	var k *KissError
-	if _, err := ke.Assoc.Query(ctx(t, 2*time.Second), ke.NTPAddr, time.Now(), nil); !errors.As(err, &k) || k.Code != "RATE" || !k.Authentic {
+	if _, err := poll(t, c); !errors.As(err, &k) || k.Code != "RATE" || !k.Authentic {
 		t.Fatalf("RATE: %v", err)
 	}
 	// A response whose authenticator does not verify is dropped and the
 	// query waits for the real one; nothing else comes, so it times out
 	// and says why.
 	f.ntp.Set(ntstest.NTPOptions{BadAuth: true})
-	_, err = ke.Assoc.Query(ctx(t, 500*time.Millisecond), ke.NTPAddr, time.Now(), nil)
+	_, err := poll(t, c)
 	var ne net.Error
 	if !errors.As(err, &ne) || !ne.Timeout() || !strings.Contains(err.Error(), "authenticator does not verify") {
 		t.Fatalf("forged: %v", err)
 	}
-	// The server forgets its cookies: NTSN (RFC 8915 section 5.7).
+	// The server forgets its cookies: NTSN (RFC 8915 section 5.7), never
+	// authenticated, so the keys and the cookies in hand stay.
 	f.ntp.Set(ntstest.NTPOptions{})
 	f.store.Forget()
-	if _, err := ke.Assoc.Query(ctx(t, 2*time.Second), ke.NTPAddr, time.Now(), nil); !errors.As(err, &k) || k.Code != "NTSN" || k.Authentic {
-		t.Fatalf("NTSN: %v", err)
+	ps, err := poll(t, c)
+	if !errors.As(err, &k) || k.Code != "NTSN" || k.Authentic || ps.Cookies != 5 || ps.Stats.Kisses["NTSN"] != 1 {
+		t.Fatalf("NTSN: %v, %+v", err, ps)
 	}
-	// A zero reference timestamp is refused by the RFC 5905 checks.
+	// A zero reference timestamp is refused by the RFC 5905 checks; the
+	// cookies of that answer are kept, since it was authentic.
 	g := newFixture(t, ntstest.KEOptions{}, ntstest.NTPOptions{ZeroRefTim: true})
-	ke2, err := KeyExchange(ctx(t, 5*time.Second), g.cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ke2.Assoc.Close()
+	c2 := newClient(t, Config{}, g.srv)
 	var e *Error
-	if _, err := ke2.Assoc.Query(ctx(t, 2*time.Second), ke2.NTPAddr, time.Now(), nil); !errors.As(err, &e) || e.Code != CodeSample {
-		t.Fatalf("zero reference: %v", err)
+	if ps, err := poll(t, c2); !errors.As(err, &e) || e.Code != CodeSample || ps.Cookies != 8 || ps.Sample != nil {
+		t.Fatalf("zero reference: %v, %+v", err, ps)
 	}
 }
 
+// Eight lost requests use up the cookies; the next poll runs NTS-KE
+// again before it asks (RFC 8915 section 5.7).
 func TestCookiesRunOut(t *testing.T) {
 	f := newFixture(t, ntstest.KEOptions{}, ntstest.NTPOptions{Drop: true})
-	ke, err := KeyExchange(ctx(t, 5*time.Second), f.cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ke.Assoc.Close()
+	c := newClient(t, Config{Interval: 100 * time.Millisecond, ExchangeTimeout: 50 * time.Millisecond}, f.srv)
 	for i := 0; i < 8; i++ {
-		if _, err := ke.Assoc.Query(ctx(t, 50*time.Millisecond), ke.NTPAddr, time.Now(), nil); err == nil {
-			t.Fatal("dropped request answered")
+		ps, err := poll(t, c)
+		if err == nil || ps.Cookies != 7-i {
+			t.Fatalf("poll %d: %v, %d cookies", i, err, ps.Cookies)
 		}
 	}
-	_, err = ke.Assoc.Query(ctx(t, 50*time.Millisecond), ke.NTPAddr, time.Now(), nil)
-	if !errors.Is(err, &Error{Code: CodeNoCookie}) {
-		t.Fatalf("after 8 lost requests: %v", err)
+	if n := f.ke.Sessions.Load(); n != 1 {
+		t.Fatalf("%d NTS-KE sessions with cookies in hand", n)
 	}
-}
-
-func TestQuorumBinding(t *testing.T) {
-	const ms = int64(time.Millisecond)
-	in := []Interval{
-		{Operator: "cloudflare", Offset: 100 * ms, Bound: 10 * time.Millisecond},
-		{Operator: "netnod", Offset: 110 * ms, Bound: 15 * time.Millisecond},
-		{Operator: "ptb", Offset: 102 * ms, Bound: 2 * time.Millisecond},
-	}
-	q, err := Quorum(in, 0)
-	if err != nil || q.Lo != 95*ms || q.Hi != 110*ms || q.Offset != 102_500_000 || q.Bound != 7_500_000 {
-		t.Fatalf("%+v %v", q, err)
-	}
-	in[2].Operator = "netnod"
-	if _, err := Quorum(in, 0); err == nil || !strings.Contains(err.Error(), "two servers of one operator") {
-		t.Fatalf("duplicate: %v", err)
-	}
-	if _, err := Quorum(in[:2], 0); err == nil {
-		t.Fatal("two servers accepted")
-	}
-	if d := Drift(32 * time.Second); d != 16*time.Millisecond {
-		t.Fatalf("Drift(32 s) = %v", d)
-	}
-}
-
-func TestPinnedRoots(t *testing.T) {
-	for _, s := range PublicServers {
-		if _, err := RootPool(s.Roots); err != nil {
-			t.Fatalf("%s: %v", s.Host, err)
-		}
-	}
-	if _, err := RootPool([]string{"other.pem"}); err == nil {
-		t.Fatal("unpinned root accepted")
+	ps, err := poll(t, c)
+	if err == nil || ps.Stats.KEOK != 2 || ps.Cookies != 7 || f.ke.Sessions.Load() != 2 {
+		t.Fatalf("after 8 lost requests: %v, %+v", err, ps)
 	}
 }
 
 // The KE server may name another NTP host; the address follows it.
 func TestNTPAddressFromKE(t *testing.T) {
 	f := newFixture(t, ntstest.KEOptions{}, ntstest.NTPOptions{})
-	ke, err := KeyExchange(ctx(t, 5*time.Second), f.cfg)
+	ps, err := poll(t, newClient(t, Config{}, f.srv))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ke.Assoc.Close()
-	host, port, _ := net.SplitHostPort(ke.NTPAddr)
+	host, port, _ := net.SplitHostPort(ps.NTPAddr)
 	if host != "127.0.0.1" || port != strconv.Itoa(int(f.ntp.Port)) {
-		t.Fatalf("NTP address %s", ke.NTPAddr)
+		t.Fatalf("NTP address %s", ps.NTPAddr)
 	}
 }
 
@@ -462,16 +333,9 @@ func TestNTPAddressFromKE(t *testing.T) {
 // cannot knock a server out of the quorum.
 func TestDecoyBeforeTheAnswer(t *testing.T) {
 	f := newFixture(t, ntstest.KEOptions{}, ntstest.NTPOptions{Decoy: true})
-	ke, err := KeyExchange(ctx(t, 5*time.Second), f.cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ke.Assoc.Close()
+	c := newClient(t, Config{}, f.srv)
 	for i := 0; i < 4; i++ {
-		s, err := ke.Assoc.Query(ctx(t, 2*time.Second), ke.NTPAddr, time.Now(), nil)
-		if err != nil {
-			t.Fatalf("query %d with a decoy first: %v", i, err)
-		}
+		s := mustSample(t, c)
 		if s.CookiesHeld != 8 || s.CookiesReceived != 1 {
 			t.Fatalf("sample %+v", s)
 		}
@@ -482,27 +346,23 @@ func TestDecoyBeforeTheAnswer(t *testing.T) {
 }
 
 // Every precision value a server can state is taken: -128 (which crashed
-// the NTP library this package replaced) measures with a 1 ns term, and
+// the NTP library this client replaced) measures with a 1 ns term, and
 // 127 (2^127 s) is refused by the bound, not by a crash.
 func TestPrecisionExtremes(t *testing.T) {
 	f := newFixture(t, ntstest.KEOptions{}, ntstest.NTPOptions{Precision: -128})
-	ke, err := KeyExchange(ctx(t, 5*time.Second), f.cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ke.Assoc.Close()
-	s, err := ke.Assoc.Query(ctx(t, 2*time.Second), ke.NTPAddr, time.Now(), nil)
-	if err != nil || s.Precision != -128 || s.Bound > 50*time.Millisecond {
-		t.Fatalf("precision -128: %+v %v", s, err)
+	c := newClient(t, Config{}, f.srv)
+	s := mustSample(t, c)
+	if s.Precision != -128 || s.Bound > 50*time.Millisecond {
+		t.Fatalf("precision -128: %+v", s)
 	}
 	f.ntp.Set(ntstest.NTPOptions{Precision: 127})
-	_, err = ke.Assoc.Query(ctx(t, 2*time.Second), ke.NTPAddr, time.Now(), nil)
+	ps, err := poll(t, c)
 	if !errors.Is(err, &Error{Code: CodeSample}) || !strings.Contains(err.Error(), "MAXDIST") {
 		t.Fatalf("precision 127: %v", err)
 	}
 	// The cookies of that answer were kept: it was authentic.
-	if ke.Assoc.Cookies() != 8 {
-		t.Fatalf("%d cookies after a refused measurement", ke.Assoc.Cookies())
+	if ps.Cookies != 8 {
+		t.Fatalf("%d cookies after a refused measurement", ps.Cookies)
 	}
 }
 
@@ -512,27 +372,43 @@ func TestPrecisionExtremes(t *testing.T) {
 // from the server, authenticated, carries the mark.
 func TestForgedKissOfDeath(t *testing.T) {
 	f := newFixture(t, ntstest.KEOptions{}, ntstest.NTPOptions{KissDecoy: "DENY"})
-	ke, err := KeyExchange(ctx(t, 5*time.Second), f.cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ke.Assoc.Close()
-	s, err := ke.Assoc.Query(ctx(t, 2*time.Second), ke.NTPAddr, time.Now(), nil)
-	if err != nil || s.CookiesHeld != 8 {
-		t.Fatalf("a forged DENY before the answer: %+v %v", s, err)
+	c := newClient(t, Config{}, f.srv)
+	if s := mustSample(t, c); s.CookiesHeld != 8 {
+		t.Fatalf("a forged DENY before the answer: %+v", s)
 	}
 	f.ntp.Set(ntstest.NTPOptions{Kiss: "DENY", KissPlain: true})
 	start := time.Now()
 	var k *KissError
-	_, err = ke.Assoc.Query(ctx(t, 5*time.Second), ke.NTPAddr, time.Now(), nil)
-	if !errors.As(err, &k) || k.Code != "DENY" || k.Authentic {
-		t.Fatalf("a forged DENY alone: %v", err)
+	ps, err := poll(t, c)
+	if !errors.As(err, &k) || k.Code != "DENY" || k.Authentic || ps.Disabled != "" || ps.Cookies != 7 {
+		t.Fatalf("a forged DENY alone: %v, %+v", err, ps)
 	}
-	if took := time.Since(start); took < kissGrace || took > 3*time.Second {
-		t.Fatalf("the query took %v, want about the grace of %v", took, kissGrace)
+	if took := time.Since(start); took < KissGrace || took > 3*time.Second {
+		t.Fatalf("the query took %v, want about the grace of %v", took, KissGrace)
 	}
 	f.ntp.Set(ntstest.NTPOptions{Kiss: "DENY"})
-	if _, err := ke.Assoc.Query(ctx(t, 5*time.Second), ke.NTPAddr, time.Now(), nil); !errors.As(err, &k) || k.Code != "DENY" || !k.Authentic {
-		t.Fatalf("the server's own DENY: %v", err)
+	ps, err = poll(t, c)
+	if !errors.As(err, &k) || k.Code != "DENY" || !k.Authentic || ps.Disabled != "DENY" || ps.Cookies != 0 {
+		t.Fatalf("the server's own DENY: %v, %+v", err, ps)
+	}
+}
+
+// A connection that fails before the request leaves costs no cookie.
+func TestFailedDialReturnsTheCookie(t *testing.T) {
+	f := newFixture(t, ntstest.KEOptions{}, ntstest.NTPOptions{})
+	fail := false
+	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if fail && network == "udp" {
+			return nil, errors.New("no route")
+		}
+		var d net.Dialer
+		return d.DialContext(ctx, network, addr)
+	}
+	c := newClient(t, Config{Dial: dial}, f.srv)
+	mustSample(t, c)
+	fail = true
+	ps, err := poll(t, c)
+	if err == nil || !strings.Contains(err.Error(), "no route") || ps.Cookies != 8 || ps.Stats.Errors != 1 {
+		t.Fatalf("failed dial: %v, %+v", err, ps)
 	}
 }

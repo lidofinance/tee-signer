@@ -186,7 +186,7 @@ func ntsCoarseURLs(region string) ([]string, error) {
 func publicNTSServers() ([]clock.NTSServer, error) {
 	var out []clock.NTSServer
 	for _, s := range nts.PublicServers {
-		pool, err := nts.RootPool(s.Roots)
+		pool, err := nts.RootsPEM(s.Roots)
 		if err != nil {
 			return nil, err
 		}
