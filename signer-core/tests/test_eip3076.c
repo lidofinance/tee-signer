@@ -23,17 +23,20 @@
  *
  *   signer                  no window, no restarts
  *   signer+window           commit-ahead {32, 1, 1}
- *   signer+restart          no window, persist_repeat_root 1, a restart
- *                           (new signer over the same storage) before every op
+ *   signer+restart          no window, a restart (new signer over the same
+ *                           marks) before every op
  *   signer+window+restart   both; safety only, like window+restart
  *
  * There should_succeed holds, except for an op whose kind, values and root
- * equal the last op the validator signed in this run with no import of its
- * history in between (sc_signer_import drops the roots): that one must sign
- * again as an exact repeat, with the same signature and no mark write. The
- * vectors hold no such op, so after every op that signed the harness sends
- * it once more (after another restart in the restart modes) and checks the
- * same. Imported roots never count: the resign tests send imported messages
+ * equal the last op the validator signed in this run, with no restart and
+ * no import of its history in between: that one must sign again as an
+ * exact repeat, with the same signature and no mark write. The repeat roots
+ * live in RAM only, so a restart forgets them, and sc_signer_import drops
+ * them. The vectors hold no such op, so after every op that signed the
+ * harness sends it once more in the same run and checks the same. In the
+ * restart modes it then restarts and sends it a third time: the signer
+ * starts with no roots, so the marks must refuse it, with no write.
+ * Imported roots never count: the resign tests send imported messages
  * again, and those must be refused.
  *
  * An import the test expects to succeed may still be refused when the data
@@ -171,7 +174,8 @@ typedef struct {
 } mode_cfg_t;
 
 typedef struct {
-    int tests, tests_pass, ops, ops_match, unsafe, extra_refusals, slashable_skips, writes, repeats;
+    int tests, tests_pass, ops, ops_match, unsafe, extra_refusals, slashable_skips, writes, repeats,
+        restart_refusals;
 } result_t;
 
 static int g_writes;
@@ -347,22 +351,20 @@ typedef struct {
     uint8_t sig[96];
 } last_t;
 
-/* The signer's host: marks and repeat roots per key, in memory, and the
- * share secret each key signs with. */
+/* The signer's host: marks per key, in memory, and the share secret each
+ * key signs with. */
 typedef struct {
     uint8_t pk[48];
     uint8_t secret[32];
     sc_watermark wm;
     int has_wm;
-    sc_repeat_roots rr;
-    int has_rr;
     last_t last[2]; /* 0 block, 1 attestation */
 } skey_t;
 
 typedef struct {
     skey_t keys[MAX_KEYS];
     int n;
-    int writes, root_writes;
+    int writes;
 } shost_t;
 
 /* Epoch 2000 of a chain with genesis at 0 and 12 s slots: every epoch
@@ -398,27 +400,6 @@ static int s_store(void *ctx, const uint8_t pk[48], const sc_watermark *wm)
     return SC_OK;
 }
 
-static int s_load_roots(void *ctx, const uint8_t pk[48], sc_repeat_roots *out)
-{
-    skey_t *k = s_find(ctx, pk);
-    if (!k || !k->has_rr)
-        return SC_ERR_UNKNOWN_VALIDATOR;
-    *out = k->rr;
-    return SC_OK;
-}
-
-static int s_store_roots(void *ctx, const uint8_t pk[48], const sc_repeat_roots *rr)
-{
-    shost_t *h = ctx;
-    skey_t *k = s_find(h, pk);
-    if (!k)
-        return SC_ERR_STORAGE;
-    k->rr = *rr;
-    k->has_rr = 1;
-    h->root_writes++;
-    return SC_OK;
-}
-
 static int s_now(void *ctx, uint64_t *t)
 {
     (void)ctx;
@@ -433,17 +414,16 @@ static void die(const char *what, int rc)
 }
 
 /* A new signer over h's storage, with every key h knows loaded again: the
- * first start of a test, or a restart. */
+ * first start of a test, or a restart. The repeat roots are RAM only, so
+ * no key has any after it. */
 static sc_signer *signer_start(shost_t *h, void *mem, size_t mem_len, const uint8_t gvr[32],
-                               const sc_commit_ahead *ahead, int persist)
+                               const sc_commit_ahead *ahead)
 {
     sc_config cfg;
     sc_host_ops ops = {.ctx = h,
                        .now = s_now,
                        .load_watermark = s_load,
-                       .store_watermark = s_store,
-                       .load_repeat_roots = s_load_roots,
-                       .store_repeat_roots = s_store_roots};
+                       .store_watermark = s_store};
     sc_signer *s = NULL;
     int rc;
 
@@ -452,13 +432,13 @@ static sc_signer *signer_start(shost_t *h, void *mem, size_t mem_len, const uint
     cfg.seconds_per_slot = 12;
     cfg.slots_per_epoch = 32;
     cfg.commit_ahead = *ahead;
-    cfg.persist_repeat_root = (uint32_t)persist;
     if ((rc = sc_signer_init(mem, mem_len, MAX_KEYS, 0, &cfg, &ops, &s)) != SC_OK)
         die("sc_signer_init", rc);
     for (int i = 0; i < h->n; i++) {
         rc = sc_signer_add_validator(s, h->keys[i].pk, h->keys[i].secret, SC_INDEX_UNKNOWN, NULL);
         if (rc != SC_OK)
             die("sc_signer_add_validator", rc);
+        h->keys[i].last[0].valid = h->keys[i].last[1].valid = 0;
     }
     return s;
 }
@@ -537,8 +517,6 @@ static result_t run_signer_mode(const mode_cfg_t *m, int verbose)
     static shost_t h;
     size_t mem_len = sc_signer_mem_size(MAX_KEYS, 0);
     void *mem = malloc(mem_len);
-    /* The restart modes persist the roots: the repeat must survive. */
-    int persist = m->restart_each_op;
     size_t i = 0;
     if (!mem)
         die("malloc", SC_ERR_NOMEM);
@@ -551,7 +529,7 @@ static result_t run_signer_mode(const mode_cfg_t *m, int verbose)
         const char *name = t->name;
         int test_ok = 1;
         memset(&h, 0, sizeof h);
-        sc_signer *s = signer_start(&h, mem, mem_len, t->gvr, &m->ahead, persist);
+        sc_signer *s = signer_start(&h, mem, mem_len, t->gvr, &m->ahead);
         i++;
         while (i < nlines && strcmp(lines[i].kind, "E") != 0) {
             const line_t *step = &lines[i];
@@ -584,20 +562,19 @@ static result_t run_signer_mode(const mode_cfg_t *m, int verbose)
                 uint8_t sig[96], again[96];
                 if (m->restart_each_op) {
                     sc_signer_wipe(s);
-                    s = signer_start(&h, mem, mem_len, t->gvr, &m->ahead, persist);
+                    s = signer_start(&h, mem, mem_len, t->gvr, &m->ahead);
                 }
                 skey_t *k = s_key(&h, s, l->pk);
                 last_t *last = &k->last[l->kind[0] == 'B' ? 0 : 1];
                 int repeat = last->valid && last->a == l->a && last->b == l->b &&
                              !memcmp(last->root, l->root, 32);
-                int writes = h.writes, root_writes = h.root_writes;
+                int writes = h.writes;
                 int rc = sign_op(s, k, l, sig);
                 int ok = rc == SC_OK;
                 r.ops++;
                 if (repeat) {
                     r.repeats++;
-                    if (!ok || memcmp(sig, last->sig, 96) || h.writes != writes ||
-                        h.root_writes != root_writes) {
+                    if (!ok || memcmp(sig, last->sig, 96) || h.writes != writes) {
                         test_ok = 0;
                         if (verbose)
                             printf("  %s: %s(%llu,%llu) repeat -> %s, expected the same signature "
@@ -626,23 +603,36 @@ static result_t run_signer_mode(const mode_cfg_t *m, int verbose)
                 last->b = l->b;
                 memcpy(last->root, l->root, 32);
                 memcpy(last->sig, sig, 96);
-                /* The same request once more: an exact repeat, whatever the
-                 * marks say. */
-                if (m->restart_each_op) {
-                    sc_signer_wipe(s);
-                    s = signer_start(&h, mem, mem_len, t->gvr, &m->ahead, persist);
-                }
+                /* The same request once more in the same run: an exact
+                 * repeat, whatever the marks say. */
                 writes = h.writes;
-                root_writes = h.root_writes;
                 rc = sign_op(s, k, l, again);
                 r.repeats++;
-                if (rc != SC_OK || memcmp(again, sig, 96) || h.writes != writes ||
-                    h.root_writes != root_writes) {
+                if (rc != SC_OK || memcmp(again, sig, 96) || h.writes != writes) {
                     test_ok = 0;
                     if (verbose)
                         printf("  %s: %s(%llu,%llu) sent again -> %s, expected the same signature "
                                "and no write\n", name, l->kind, (unsigned long long)l->a,
                                (unsigned long long)l->b, sc_status_name(rc));
+                }
+                if (!m->restart_each_op)
+                    continue;
+                /* After a restart the signer has no roots, so the marks
+                 * refuse the same request, and nothing is written. */
+                sc_signer_wipe(s);
+                s = signer_start(&h, mem, mem_len, t->gvr, &m->ahead);
+                writes = h.writes;
+                rc = sign_op(s, k, l, again);
+                r.restart_refusals++;
+                if (!(l->kind[0] == 'B' ? rc == SC_ERR_SLASH_BLOCK
+                                        : rc == SC_ERR_SLASH_SOURCE || rc == SC_ERR_SLASH_TARGET) ||
+                    h.writes != writes) {
+                    test_ok = 0;
+                    if (verbose)
+                        printf("  %s: %s(%llu,%llu) sent again after a restart -> %s, expected a "
+                               "slashing refusal and no write\n", name, l->kind,
+                               (unsigned long long)l->a, (unsigned long long)l->b,
+                               sc_status_name(rc));
                 }
             }
         }
@@ -693,11 +683,15 @@ int main(int argc, char **argv)
     for (size_t m = 0; m < sizeof signer_modes / sizeof signer_modes[0]; m++) {
         result_t r = run_signer_mode(&signer_modes[m], 1);
         printf("EIP3076 mode=%s tests=%d pass=%d fail=%d ops=%d match=%d unsafe_accepts=%d "
-               "extra_refusals=%d slashable_skips=%d watermark_writes=%d exact_repeats=%d\n",
+               "extra_refusals=%d slashable_skips=%d watermark_writes=%d exact_repeats=%d "
+               "restart_refusals=%d\n",
                signer_modes[m].name, r.tests, r.tests_pass, r.tests - r.tests_pass, r.ops,
-               r.ops_match, r.unsafe, r.extra_refusals, r.slashable_skips, r.writes, r.repeats);
-        /* Every signed op was sent again, so the shortcut ran. */
-        if (r.tests_pass != r.tests || r.unsafe || r.tests == 0 || r.repeats == 0)
+               r.ops_match, r.unsafe, r.extra_refusals, r.slashable_skips, r.writes, r.repeats,
+               r.restart_refusals);
+        /* Every signed op was sent again, so the shortcut ran, and in the
+         * restart modes once more after a restart. */
+        if (r.tests_pass != r.tests || r.unsafe || r.tests == 0 || r.repeats == 0 ||
+            (signer_modes[m].restart_each_op && r.restart_refusals == 0))
             bad = 1;
     }
     free(lines);
