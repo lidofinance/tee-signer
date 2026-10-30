@@ -43,7 +43,7 @@ func TestRBRLOG02SourceFloorSurvivesCoverAndRestart(t *testing.T) {
 	e.clock.add(5 * testEpoch) // past the target bound the cover wrote
 	e.restart()
 	f2 := e.floorOf()
-	e.clock.add((f2 - e.signer.EpochAt(e.now())) * testEpoch)
+	e.clock.add((f2 + 1 - e.signer.EpochAt(e.now())) * testEpoch) // the slots of f2+1 have started
 	wantSlashSource(t, e.signMsg(pk, vote(floor-1, f2+1)),
 		"vote below the floor after a cover write and a restart")
 	// A vote at the floor signs, and once its source is in the log a
@@ -80,12 +80,12 @@ func TestSSIHISTORY01HistoryLiftsTheGateForItsKeyOnly(t *testing.T) {
 			t.Errorf("%s: B at its own history's source %d: %v", when, start-3, err)
 		}
 	}
-	e.clock.add((floor - start) * testEpoch)
+	e.clock.add((floor + 1 - start) * testEpoch) // the slots of floor+1 have started
 	check("same process")
 
 	f2 := e.floorOf()
 	e.restart()
-	e.clock.add((f2 - e.signer.EpochAt(e.now())) * testEpoch)
+	e.clock.add((f2 + 1 - e.signer.EpochAt(e.now())) * testEpoch) // the slots of f2+1 have started
 	wantSlashSource(t, e.signMsg(pka, vote(start-3, f2+1)), "after a restart: A (no history) below the floor")
 	if err := e.signMsg(pkb, vote(start-3, f2+1)); err != nil {
 		t.Errorf("after a restart: B at its own history's source %d: %v", start-3, err)

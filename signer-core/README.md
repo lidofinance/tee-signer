@@ -278,10 +278,24 @@ core does not parse JSON; the caller does.
 
 - An attestation's target epoch must be the epoch of its slot
   (`SC_ERR_POLICY_TARGET_SLOT`). `process_attestation` asserts the same, so
-  other data is never included; signed, it would only raise the target
-  mark and refuse the honest vote of the slot's epoch. The check comes
-  before the repeat shortcut and the slashing check, so the request moves
-  no mark and no repeat root.
+  other data is never included. The check comes before the repeat shortcut
+  and the slashing check, so the request moves no mark and no repeat root.
+  It is a data consistency check: on its own it does not stop a caller from
+  raising the target mark, since the slot can be in the future too. The
+  slot rule below does that.
+- The slot rule: a block, attestation, PTC vote or payload envelope signs
+  only if its slot has started, that is slot <= the slot at now +
+  `SC_SLOT_MARGIN_SECONDS` (2) under the slot time changes in force
+  (`SC_ERR_POLICY_FUTURE` otherwise). Each of these moves a mark or a Gloas
+  slot rule. Signed for a later slot, one would refuse the validator's real
+  vote or proposal of that slot or epoch, and that refusal outlives the
+  caller's access. The margin covers clock error: the `now` callback gives
+  whole seconds, so now can lag by up to 1 s; the NTS clock fails closed
+  past 100 ms of disagreement; gossip takes messages up to 500 ms early
+  (`MAXIMUM_GOSSIP_CLOCK_DISPARITY`). It is a constant, not a config field.
+  Aggregates, sync committee messages, selection proofs, RANDAO, proposer
+  preferences and builder request auth move no mark and keep the epoch
+  horizon only, as do bare roots (`sc_sign_root`).
 - Attestation target, block epoch and RANDAO epoch must be <= clock epoch +
   `max_epochs_ahead`. The clock epoch comes from the `now` callback and
   `genesis_time`, `seconds_per_slot`, `slots_per_epoch`, and the slot time

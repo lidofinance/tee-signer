@@ -124,6 +124,13 @@ int sc_policy_check_epoch(const sc_config *cfg, const sc_slot_times *times, uint
     return epoch > limit ? SC_ERR_POLICY_FUTURE : SC_OK;
 }
 
+int sc_policy_check_slot(const sc_config *cfg, const sc_slot_times *times, uint64_t now,
+                         uint64_t slot)
+{
+    uint64_t limit = sc_slot_at(cfg, times, sc_sat_add(now, SC_SLOT_MARGIN_SECONDS));
+    return slot > limit ? SC_ERR_POLICY_FUTURE : SC_OK;
+}
+
 int sc_policy_check_exit(const sc_config *cfg, const sc_voluntary_exit *exit,
                          uint64_t bound_index)
 {

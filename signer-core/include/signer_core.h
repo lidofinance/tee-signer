@@ -75,7 +75,9 @@ typedef enum {
     SC_ERR_SLASH_SOURCE_GT_TARGET,
 
     /* Policy refusals. */
-    SC_ERR_POLICY_FUTURE,        /* too far ahead of the trusted clock */
+    SC_ERR_POLICY_FUTURE,        /* too far ahead of the trusted clock: epoch past
+                                    the horizon, or a slot that has not started
+                                    (slot rule, SC_SLOT_MARGIN_SECONDS) */
     SC_ERR_POLICY_EXIT,          /* validator index not in the exit allowlist */
     SC_ERR_POLICY_FEE_RECIPIENT, /* fee recipient not in the allowlist */
     SC_ERR_POLICY_GAS_LIMIT,     /* gas limit outside [min, max] */
@@ -106,8 +108,9 @@ typedef enum {
 
     /* Attestation data consistency. Appended. */
     SC_ERR_POLICY_TARGET_SLOT /* attestation target epoch is not the epoch of its
-                                 slot: no chain includes it, and signing it would
-                                 only raise the target mark */
+                                 slot: no chain includes such data. A data check
+                                 only; the slot rule (SC_SLOT_MARGIN_SECONDS)
+                                 stops votes for slots that have not started */
 } sc_status;
 
 /* Short constant name for a status code, e.g. "SC_ERR_SLASH_TARGET". */
@@ -777,12 +780,34 @@ int sc_signer_set_schedule_under(sc_signer *s, const sc_schedule *next, uint64_t
 /* The slot time changes in force. */
 void sc_signer_get_slot_times(const sc_signer *s, sc_slot_times *out);
 
+/*
+ * The slot rule. A block, attestation, PTC vote or payload envelope signs
+ * only if its slot has started: slot <= the slot at now +
+ * SC_SLOT_MARGIN_SECONDS under the slot time changes in force
+ * (SC_ERR_POLICY_FUTURE otherwise). Each of these moves a mark or a slot
+ * rule, so one signed for a future slot would refuse the validator's real
+ * message for that slot or epoch later (SC_ERR_SLASH_TARGET,
+ * SC_ERR_SLASH_BLOCK, SC_ERR_EQUIVOCATION), long after the caller lost
+ * access. The epoch horizon (max_epochs_ahead) alone allows whole epochs
+ * ahead.
+ *
+ * The margin covers clock error, not early signing: the now callback gives
+ * whole seconds, so now can lag real time by up to 1 s; the NTS clock fails
+ * closed past 100 ms of disagreement; and gossip accepts messages up to
+ * MAXIMUM_GOSSIP_CLOCK_DISPARITY (500 ms) early. It is a constant, not a
+ * config field, so the setup format does not change.
+ */
+#define SC_SLOT_MARGIN_SECONDS 2
+
 /* Signing. Each returns SC_OK and a 96-byte compressed G2 signature, or an
  * error code and leaves signature untouched. sc_sign_block and
- * sc_sign_attestation sign an exact repeat (see sc_repeat_roots).
- * sc_sign_attestation refuses data whose target epoch is not the epoch of
- * its slot (SC_ERR_POLICY_TARGET_SLOT) before the repeat shortcut and the
- * slashing check, so such a request moves no mark and no repeat root. */
+ * sc_sign_attestation sign an exact repeat (see sc_repeat_roots), and both
+ * apply the slot rule. sc_sign_attestation refuses data whose target epoch
+ * is not the epoch of its slot (SC_ERR_POLICY_TARGET_SLOT) before the
+ * repeat shortcut and the slashing check, so such a request moves no mark
+ * and no repeat root. That is a data consistency check: it ties the target
+ * to the slot, and the slot rule then keeps the slot from running ahead of
+ * the clock. */
 int sc_sign_block(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
                   const sc_beacon_block_header *block, uint8_t signature[SC_SIGNATURE_LEN]);
 int sc_sign_attestation(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
@@ -798,9 +823,12 @@ int sc_sign_validator_registration(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_
 /*
  * Gloas signing. Each refuses with SC_ERR_POLICY_FORK unless Gloas is in
  * force at the message's epoch, and with SC_ERR_POLICY_FUTURE past the clock
- * horizon. None of these messages is slashable in the spec (no slashing
- * container covers them), but a second, different PTC vote or envelope for
- * one slot is an equivocation the signer refuses:
+ * horizon. PTC votes and envelopes also apply the slot rule (see
+ * SC_SLOT_MARGIN_SECONDS); proposer preferences and builder request auth
+ * move no slot rule and keep the epoch horizon only. None of these messages
+ * is slashable in the spec (no slashing container covers them), but a
+ * second, different PTC vote or envelope for one slot is an equivocation
+ * the signer refuses:
  *
  * sc_sign_payload_attestation: PayloadAttestationData, DOMAIN_PTC_ATTESTER at
  *   epoch(data.slot) (validator.md get_payload_attestation_message_signature).
