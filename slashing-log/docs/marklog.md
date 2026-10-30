@@ -50,7 +50,8 @@ a pending update come its version (8), hash (32), effective activation
 time (8), copy number (4) and copy time (8). Version 0 has no body, so its
 copy number and time are zero.
 
-The reader refuses any record that does not read back to the same bytes:
+The reader refuses any record that does not read back to the same bytes
+under its own magic (an `SMARK1` record as `SMARK1`):
 a presence byte other than 0 or 1, trailing bytes, a log ID that is zero
 in a later record or set in a first one, a target on a record that is not
 a tombstone, a pending update at or below the active version, a body past
