@@ -321,7 +321,8 @@ func TestCommitsAgainstModel(t *testing.T) {
 			c.Put(k, v)
 			model[k] = v
 		}
-		c.Put(fmt.Sprintf("rr/%d", rng.IntN(10)), []byte("repeat roots stay local"))
+		// rr/ is a legacy prefix (repeat roots of older builds): outside the copy.
+		c.Put(fmt.Sprintf("rr/%d", rng.IntN(10)), []byte("legacy keys stay local"))
 		if err := s.Apply(c); err != nil {
 			t.Fatalf("commit %d: %v", i, err)
 		}

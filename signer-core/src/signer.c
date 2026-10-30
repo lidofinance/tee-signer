@@ -222,8 +222,8 @@ int sc_signer_add_validator(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
     if (s->count >= s->max_validators)
         return SC_ERR_NOMEM;
 
-    /* Every load starts with no repeat roots of any kind: a root signed
-     * before this load may sit below what the key signed since elsewhere. */
+    /* The slot is already zero (init, or the wipe after a failed load);
+     * zero it again so a load never starts with old repeat roots. */
     v = &s->validators[s->count];
     memset(v, 0, sizeof *v);
     rc = sc_bls_load_secret(&v->sk, secret);

@@ -42,7 +42,7 @@ typedef struct {
     uint8_t fail; /* FAIL_* bits */
 } host_t;
 
-enum { FAIL_STORE = 1, FAIL_CLOCK = 2, FAIL_LOAD = 4, FAIL_DEVICE = 16 };
+enum { FAIL_STORE = 1, FAIL_CLOCK = 2, FAIL_LOAD = 4, FAIL_DEVICE = 8 };
 
 typedef struct {
     uint64_t a, b; /* attestation: source, target; others: slot */
@@ -831,7 +831,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
             break;
         }
         case OP_RESTART: restart(); break;
-        case OP_FAIL: W.host.fail = fz_u8(&a) & 0x1f; break;
+        case OP_FAIL: W.host.fail = fz_u8(&a) & 0xf; break;
         case OP_PRELOAD_MARK:
         case OP_PRELOAD_DEVICE: op_preload(&a, v, op); break;
         case OP_ATTESTATION: op_attestation(&a, v); break;
