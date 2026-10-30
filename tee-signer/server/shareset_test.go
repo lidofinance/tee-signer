@@ -26,21 +26,25 @@ func (e *tgtEnv) putRaw(pk backend.Pubkey, blob []byte) {
 	e.store.mu.Unlock()
 }
 
-// Replay: the host keeps the record of an earlier import of K with vote
-// history. K leaves this runner, votes elsewhere and comes back without
-// history (floor F2). The host puts the old record back: K must not load
-// with that history.
+// HSH-01 review (replay): the host keeps the record of an earlier import
+// of K that had earned history. K leaves this runner, votes elsewhere and
+// comes back without history (floor F2). The host puts the old record
+// back: K must not load with that history.
 func TestShareRecordReplayRefused(t *testing.T) {
 	e := newTgtEnv(t, "dev", nil)
-	start := e.signer.EpochAt(e.now())
+	floor := e.floorOf()
 	sk, pk := newKey(t)
-	hist := &backend.Watermark{HasAttestation: true, SourceEpoch: start - 3, TargetEpoch: start - 2}
-	if err := e.importSealed(pk, sk, 5, hist); err != nil {
+	if err := e.importSealed(pk, sk, 5, nil); err != nil {
 		t.Fatal(err)
 	}
+	e.clock.add((floor + 1 - e.signer.EpochAt(e.now())) * testEpoch)
+	if err := e.signMsg(pk, vote(floor, floor+1)); err != nil {
+		t.Fatal(err)
+	}
+	e.srv.promotions.Wait()
 	old, err := e.store.Get(shareKey(pk))
 	if err != nil || !e.recordOf(pk).History {
-		t.Fatalf("no record with history: %v", err)
+		t.Fatalf("no promoted record: %v", err)
 	}
 	// K leaves, votes elsewhere for 20 epochs, comes back without history.
 	e.deleteShare(pk)
@@ -59,24 +63,28 @@ func TestShareRecordReplayRefused(t *testing.T) {
 	wantSlashSource(t, e.signMsg(pk, vote(f2-1, en+1)), "the replayed record: a vote below the re-import's floor")
 }
 
-// promotedPair imports A without history and B with vote history: B's
-// record is the last share write.
+// promotedPair imports A and B without history and lets B earn history:
+// B's record is the last share write.
 func promotedPair(t *testing.T, e *tgtEnv) (a, b backend.Pubkey, floor uint64) {
 	t.Helper()
 	floor = e.floorOf()
-	start := e.signer.EpochAt(e.now())
 	ska, pka := newKey(t)
 	skb, pkb := newKey(t)
-	if err := e.importSealed(pka, ska, 5, nil); err != nil {
-		t.Fatal(err)
-	}
-	hist := &backend.Watermark{HasAttestation: true, SourceEpoch: start - 3, TargetEpoch: start - 2}
-	if err := e.importSealed(pkb, skb, 6, hist); err != nil {
-		t.Fatal(err)
+	for i, k := range []struct {
+		sk [32]byte
+		pk backend.Pubkey
+	}{{ska, pka}, {skb, pkb}} {
+		if err := e.importSealed(k.pk, k.sk, uint64(5+i), nil); err != nil {
+			t.Fatal(err)
+		}
 	}
 	e.clock.add((floor + 1 - e.signer.EpochAt(e.now())) * testEpoch)
+	if err := e.signMsg(pkb, vote(floor, floor+1)); err != nil {
+		t.Fatal(err)
+	}
+	e.srv.promotions.Wait()
 	if !e.recordOf(pkb).History {
-		t.Fatal("B has no history")
+		t.Fatal("B did not earn history")
 	}
 	return pka, pkb, floor
 }
@@ -87,22 +95,6 @@ func promotedPair(t *testing.T, e *tgtEnv) (a, b backend.Pubkey, floor uint64) {
 func TestShareSetPendingVouches(t *testing.T) {
 	e := newTgtEnv(t, "dev", nil)
 	pka, pkb, floor := promotedPair(t, e)
-	// B's record sealed again is the last share write: no mark record
-	// follows it, so the newest record keeps its pending root. (An import
-	// writes a mark record after its share.)
-	rb := e.recordOf(pkb)
-	var sk [32]byte
-	if err := e.srv.readShare(pkb, func(_ *shareRecord, sec *[32]byte) error { sk = *sec; return nil }); err != nil {
-		t.Fatal(err)
-	}
-	rb.Secret = sk[:]
-	blob, err := e.srv.sealRecord(rb)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := e.srv.putShare(pkb, blob); err != nil {
-		t.Fatal(err)
-	}
 	puts := e.store.putsOf(shareKey(pka)) + e.store.putsOf(shareKey(pkb))
 	recs := e.records()
 	if sh := recs[len(recs)-1].Shares; sh == nil || sh.Pending == nil {
@@ -127,18 +119,18 @@ func TestShareSetPendingVouches(t *testing.T) {
 
 // A write cut between the log record and the store write: the log vouches
 // for the set before and after, the store holds the one before. The start
-// loads it as it is: the key that was being imported is not there, and
-// nothing is reset.
+// loads it as it is, so the key that was being promoted has no history,
+// and nothing is reset.
 func TestShareSetCutWriteLoadsTheSetBefore(t *testing.T) {
 	e := newTgtEnv(t, "dev", nil)
 	pka, pkb, floor := promotedPair(t, e)
-	skc, pkc := newKey(t)
 	e.store.mu.Lock()
-	e.store.failPut = func(k string) bool { return k == shareKey(pkc) }
+	e.store.failPut = func(k string) bool { return k == shareKey(pka) }
 	e.store.mu.Unlock()
-	if err := e.importSealed(pkc, skc, 7, nil); err == nil {
-		t.Fatal("an import whose store write failed succeeded")
+	if err := e.signMsg(pka, vote(floor, floor+2)); err != nil {
+		t.Fatal(err)
 	}
+	e.srv.promotions.Wait()
 	e.store.mu.Lock()
 	e.store.failPut = nil
 	e.store.mu.Unlock()
@@ -149,9 +141,6 @@ func TestShareSetCutWriteLoadsTheSetBefore(t *testing.T) {
 	}
 	if !e.recordOf(pkb).History || e.store.putsOf(shareKey(pkb)) != puts {
 		t.Fatal("B was reset after a cut write")
-	}
-	if _, err := e.signer.State(pkc); err == nil {
-		t.Fatal("the key of the cut write loaded")
 	}
 }
 
@@ -241,6 +230,45 @@ func TestShareWriteLogBeforeStore(t *testing.T) {
 	}
 	if e.store.putsOf(shareKey(pk)) != puts {
 		t.Fatal("the store was written before the mark log")
+	}
+}
+
+// At most maxPromotions promotion writes run at once; a vote over it
+// leaves its key for a later vote.
+func TestPromoteInFlightBound(t *testing.T) {
+	e := newTgtEnv(t, "dev", nil)
+	floor := e.floorOf()
+	var pks []backend.Pubkey
+	for i := range maxPromotions + 1 {
+		sk, pk := newKey(t)
+		if err := e.importSealed(pk, sk, uint64(20+i), nil); err != nil {
+			t.Fatal(err)
+		}
+		pks = append(pks, pk)
+	}
+	e.clock.add((floor + 1 - e.signer.EpochAt(e.now())) * testEpoch)
+	release := make(chan struct{})
+	e.store.mu.Lock()
+	e.store.failPut = func(string) bool { <-release; return false }
+	e.store.mu.Unlock()
+	for _, pk := range pks {
+		if err := e.signMsg(pk, vote(floor, floor+1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(release)
+	e.srv.promotions.Wait()
+	e.store.mu.Lock()
+	e.store.failPut = nil
+	e.store.mu.Unlock()
+	n := 0
+	for _, pk := range pks {
+		if e.recordOf(pk).History {
+			n++
+		}
+	}
+	if n != maxPromotions {
+		t.Fatalf("%d keys promoted with %d votes at once, want %d", n, len(pks), maxPromotions)
 	}
 }
 

@@ -130,6 +130,16 @@ type Server struct {
 	// shareSetMu orders share writes.
 	shareSetMu sync.Mutex
 	shareHash  map[backend.Pubkey][32]byte
+	// promoting holds the keys whose share record promote is writing now,
+	// promoted those whose record it wrote in this process; promotions
+	// counts the writes in flight.
+	promoteMu  sync.Mutex
+	promoting  map[backend.Pubkey]bool
+	promoted   map[backend.Pubkey]bool
+	promotions sync.WaitGroup
+	// promoteFailed: per key, the clock epoch of its last failed promotion
+	// write and how many failed (promote's brake).
+	promoteFailed map[backend.Pubkey]promoteTry
 	// attestLimit counts the fresh attestations of attest-only clients
 	// (limit.go); limitNow, if set, is its clock (tests).
 	attestLimit attestLimit
@@ -155,7 +165,8 @@ type shareRecord struct {
 	Secret []byte         `json:"secret"`
 	Index  uint64         `json:"index"`
 	// History: the import that stored the share carried attestation
-	// maxima, which raised the mark log first. A restart
+	// maxima, which raised the mark log first, or the runner signed the
+	// key a vote at or above its source floor since (promote). A restart
 	// exempts the key from the source gate (state.Hooks.NoteHistory). The host can roll
 	// the record back to one without it, which only gates the key again.
 	History bool `json:"history,omitempty"`
@@ -406,6 +417,7 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 		if err != nil {
 			if ctx.Err() != nil {
 				s.wg.Wait()
+				s.promotions.Wait()
 				return nil
 			}
 			return err
@@ -792,6 +804,9 @@ func (s *Server) sign(req backend.SignRequest) (backend.Signature, error) {
 		s.Log.Info("signed (exact repeat, same signature)", "kind", kind, "pubkey", req.Pubkey.String()[:18], "msg", describe(req.Message))
 		return sig, nil
 	}
+	if a, ok := req.Message.(*backend.AttestationData); ok && s.Hooks != nil && s.Hooks.Earns(req.Pubkey, a.Source.Epoch) {
+		s.promote(req.Pubkey, a.Source.Epoch)
+	}
 	if m, ok := req.Message.(*backend.RootMessage); ok && m.Type.Unverified() {
 		s.Log.Warn("signed unverified (allow_unverified_nonslashable)", "root_type", m.Type, "epoch", m.Epoch,
 			"pubkey", req.Pubkey.String()[:18], "count", s.Signer.Stats().UnverifiedSignatures)
@@ -799,6 +814,115 @@ func (s *Server) sign(req backend.SignRequest) (backend.Signature, error) {
 	}
 	s.Log.Info("signed", "kind", kind, "pubkey", req.Pubkey.String()[:18], "msg", describe(req.Message))
 	return sig, nil
+}
+
+// maxPromotions bounds the promotion writes in flight; a vote over it
+// leaves the key for a later vote.
+const maxPromotions = 8
+
+// maxPromotionTries bounds the failed promotion writes of one key in one
+// process. Each try writes a mark log record before the store write, so a
+// store that keeps failing one key must not cost a record per vote.
+const maxPromotionTries = 3
+
+// promoteTry is a key's failed promotion writes: the clock epoch of the
+// last one and how many.
+type promoteTry struct {
+	epoch uint64
+	n     int
+}
+
+// promote marks pk's sealed share record with vote history of its own
+// after the core signed pk a vote with a source at or above its source
+// floor (state.Hooks.Earns): History set, the floor dropped. A handover
+// then sends pk with history, and its target sets no floor for it.
+//
+// It runs after the signature, so the source is already in the mark log
+// (the core writes the mark before it signs): the flag is never set for a
+// vote that was not signed. The write runs off the signing path, at most
+// maxPromotions at a time, and at most one per key. Only a write that
+// succeeded latches the key. After a failed one a vote in a later clock
+// epoch tries again, up to maxPromotionTries per process.
+// A failed write, or a host that rolls the record back, leaves the key
+// without history: it only waits for its floor again after a handover.
+func (s *Server) promote(pk backend.Pubkey, source uint64) {
+	t, err := s.Platform.Clock.Now()
+	if err != nil {
+		return
+	}
+	epoch := s.Signer.EpochAt(uint64(t.Unix()))
+	s.promoteMu.Lock()
+	f, failed := s.promoteFailed[pk]
+	if s.promoted[pk] || s.promoting[pk] || len(s.promoting) >= maxPromotions ||
+		failed && (f.n >= maxPromotionTries || epoch <= f.epoch) {
+		s.promoteMu.Unlock()
+		return
+	}
+	if s.promoting == nil {
+		s.promoting, s.promoted = map[backend.Pubkey]bool{}, map[backend.Pubkey]bool{}
+		s.promoteFailed = map[backend.Pubkey]promoteTry{}
+	}
+	s.promoting[pk] = true
+	s.promoteMu.Unlock()
+	s.promotions.Add(1)
+	go func() {
+		defer s.promotions.Done()
+		err := s.promoteNow(pk, source)
+		s.promoteMu.Lock()
+		delete(s.promoting, pk)
+		n := 0
+		if err == nil {
+			s.promoted[pk] = true
+			delete(s.promoteFailed, pk)
+		} else {
+			n = s.promoteFailed[pk].n + 1
+			s.promoteFailed[pk] = promoteTry{epoch: epoch, n: n}
+		}
+		s.promoteMu.Unlock()
+		switch {
+		case err != nil && n >= maxPromotionTries:
+			s.Log.Warn("share record not marked with vote history; no more tries until a restart, the key keeps its source floor",
+				"pubkey", pk.String()[:18], "tries", n, "err", err)
+		case err != nil:
+			s.Log.Warn("share record not marked with vote history; a vote in a later epoch tries again",
+				"pubkey", pk.String()[:18], "tries", n, "err", err)
+		}
+	}()
+}
+
+// promoteNow writes pk's promoted record. Under the share lock (read), so
+// the handover's read of every record (write lock) sees the record either
+// before or after, and a runner that handed over writes nothing.
+func (s *Server) promoteNow(pk backend.Pubkey, source uint64) error {
+	s.sharesMu.RLock()
+	defer s.sharesMu.RUnlock()
+	if s.HandedOver() {
+		return nil
+	}
+	var floor uint64
+	wrote := false
+	err := s.readShare(pk, func(rec *shareRecord, sec *[32]byte) error {
+		if rec.History {
+			return nil
+		}
+		floor = rec.SourceFloor
+		rec.History, rec.SourceFloor, rec.Secret = true, 0, sec[:]
+		blob, err := s.sealRecord(*rec)
+		if err != nil {
+			return err
+		}
+		wrote = true
+		return s.putShare(pk, blob)
+	})
+	if err != nil {
+		return err
+	}
+	s.Hooks.NoteHistory(pk)
+	if wrote {
+		s.Log.Info("vote history: signed a vote at or above the source floor; the floor is cleared",
+			"pubkey", pk.String()[:18], "source", source, "cleared_floor", floor)
+	}
+	return nil
 }
 
 func atOrBelowFloor(m backend.Message, floor, slotsPerEpoch uint64) bool {

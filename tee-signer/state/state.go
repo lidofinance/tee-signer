@@ -276,6 +276,31 @@ func (h *Hooks) SourceFloor(pk backend.Pubkey) (uint64, bool) {
 	return f, on
 }
 
+// Earns reports whether a vote of pk with this source, which the core
+// signed, gives pk vote history of its own (Server.promote): pk has none
+// yet, it has an import floor, and the source is at or above every floor
+// that holds for it. Every vote pk may have cast before its import has a
+// target below the import floor. The core wrote this source into the mark
+// before it signed, so no later vote here, or at a handover target, has a
+// lower source. A vote with a source at or above the floor neither
+// surrounds nor is surrounded by a vote whose target is below it, so the
+// floor is redundant from then on. A key without an import floor (a record
+// stored before floors) earns nothing: no floor bounds what it signed
+// before. sign() refuses a source below the floor before the core signs;
+// this check repeats it.
+func (h *Hooks) Earns(pk backend.Pubkey, source uint64) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	kf, ok := h.keyFloor[pk]
+	if !ok || h.history[pk] {
+		return false
+	}
+	if h.gateOn {
+		kf = max(kf, h.gateFloor)
+	}
+	return source >= kf
+}
+
 // ImportFloor is the source floor for a validator that comes in now
 // without vote history of its own (SLBOUND-01): the restart floor epoch of
 // the clock now. The log's gate covers only votes cast before the log
