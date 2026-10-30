@@ -262,19 +262,29 @@ func runModel(t *testing.T, ops []byte) (signed int) {
 			}
 			k := keys[int(next())%len(keys)]
 			s, tg, root := max(epoch, 2)-2, epoch, byte(0)
+			skew := false
 			if op >= 3 && op != 16 {
 				// Hostile: any source from before the log began up to the
-				// clock, any target from it up to one epoch ahead.
+				// clock, any target from it up to one epoch ahead; one in
+				// four in the slot of the epoch after its target, which no
+				// chain includes.
 				lo := e0 - 6
 				s = lo + uint64(next())%(epoch+1-lo)
 				tg = s + uint64(next())%(epoch+2-s)
 				root = next() % 3
+				skew = next()%4 == 0
 			}
 			m := vote(s, tg)
 			m.BeaconBlockRoot[1] = root
+			if skew {
+				m.Slot += spe
+			}
 			err := r.e.signMsg(k.pk, m)
 			lost := op == 16
-			trace = append(trace, fmt.Sprintf("runner %d epoch %d: vote key %d (%d, %d) root %d lost=%v: %v", active, epoch, k.index, s, tg, root, lost, err))
+			trace = append(trace, fmt.Sprintf("runner %d epoch %d: vote key %d (%d, %d) slot %d root %d lost=%v: %v", active, epoch, k.index, s, tg, m.Slot, root, lost, err))
+			if skew && err == nil {
+				fail("vote (%d, %d) in a slot of epoch %d signed: it can never be included and only moves the target mark", s, tg, m.Slot/spe)
+			}
 			if err == nil {
 				v := modelVote{source: s, target: tg, root: root}
 				sent[k.pk] = append(sent[k.pk], v)
