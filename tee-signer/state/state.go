@@ -128,6 +128,9 @@ type Hooks struct {
 	gateOn      bool
 	gateFloor   uint64
 	history     map[backend.Pubkey]bool
+	// keyFloor is each validator's import floor (ImportFloor): a source
+	// bound of its own, set when it came in without vote history.
+	keyFloor map[backend.Pubkey]uint64
 }
 
 var _ core.Hooks = (*Hooks)(nil)
@@ -160,7 +163,8 @@ func New(cfg core.Config, mode Mode, clk platform.Clock, store platform.Store,
 		log = slog.Default()
 	}
 	h := &Hooks{cfg: cfg, mode: mode, clock: clk, store: store, sealer: sealer, log: log,
-		floors: map[backend.Pubkey]uint64{}, expect: map[backend.Pubkey]bool{}, history: map[backend.Pubkey]bool{}}
+		floors: map[backend.Pubkey]uint64{}, expect: map[backend.Pubkey]bool{}, history: map[backend.Pubkey]bool{},
+		keyFloor: map[backend.Pubkey]uint64{}}
 	h.epochAt = h.cfg.EpochAt
 	return h, nil
 }
@@ -237,10 +241,47 @@ func (h *Hooks) RaiseMark(ctx context.Context, wm backend.Watermark) error {
 // is refused, so a share imported with no history cannot surround a vote
 // cast before the log was lost. The core's device mark keeps the log's
 // source meanwhile, so a validator's own history can set a lower bound.
+// A validator with an import floor (NoteImportFloor) gets the higher of the
+// two, also once the gate is off.
 func (h *Hooks) SourceFloor(pk backend.Pubkey) (uint64, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.gateFloor, h.gateOn && !h.history[pk]
+	if h.history[pk] {
+		return 0, false
+	}
+	f, on := h.gateFloor, h.gateOn
+	if !on {
+		f = 0
+	}
+	if kf, ok := h.keyFloor[pk]; ok {
+		f, on = max(f, kf), true
+	}
+	return f, on
+}
+
+// ImportFloor is the source floor for a validator that comes in now
+// without vote history of its own (SLBOUND-01): the restart floor epoch of
+// the clock now. The log's gate covers only votes cast before the log
+// started; this validator may have voted elsewhere since, up to the clock.
+// on is false without the restart floor or the mark log (without the log,
+// LoadWatermark puts the same bound into the validator's own mark).
+func (h *Hooks) ImportFloor() (floor uint64, on bool, err error) {
+	if !h.mode.Floor || !h.mode.MarkLog || h.marks == nil {
+		return 0, false, nil
+	}
+	now, err := h.clock.Now()
+	if err != nil {
+		return 0, false, fmt.Errorf("import source floor needs the clock: %w", err)
+	}
+	return satAdd(h.epochAt(uint64(now.Unix())), h.mode.FloorMargin), true, nil
+}
+
+// NoteImportFloor gates pk's vote sources below floor (ImportFloor, or the
+// one its sealed share record kept). Call it before pk can sign.
+func (h *Hooks) NoteImportFloor(pk backend.Pubkey, floor uint64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.keyFloor[pk] = max(h.keyFloor[pk], floor)
 }
 
 // NoteHistory exempts pk from the source gate: its vote history is in the

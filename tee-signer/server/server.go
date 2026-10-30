@@ -153,6 +153,10 @@ type shareRecord struct {
 	// from the source gate (state.Hooks.NoteHistory). The host can roll
 	// the record back to one without it, which only gates the key again.
 	History bool `json:"history,omitempty"`
+	// SourceFloor: the import came without vote history, and the key signs
+	// no vote with a source below this epoch, the restart floor epoch at the
+	// import (state.Hooks.ImportFloor, SLBOUND-01). A restart sets it again.
+	SourceFloor uint64 `json:"source_floor,omitempty"`
 }
 
 func shareKey(pk backend.Pubkey) string { return "shares/" + hex.EncodeToString(pk[:]) }
@@ -233,6 +237,9 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 		copy(sec[:], rec.Secret)
 		clear(rec.Secret)
 		s.Hooks.ExpectRecord(pk)
+		if rec.SourceFloor != 0 && !rec.History {
+			s.Hooks.NoteImportFloor(pk, rec.SourceFloor)
+		}
 		_, err = s.Signer.AddValidator(pk, sec, rec.Index, nil)
 		clear(sec[:])
 		if err != nil {
@@ -584,7 +591,7 @@ func (s *Server) sign(req backend.SignRequest) (backend.Signature, error) {
 	if a, ok := req.Message.(*backend.AttestationData); ok && s.Hooks != nil {
 		if f, on := s.Hooks.SourceFloor(req.Pubkey); on && a.Source.Epoch < f {
 			err := backend.Refused(backend.StatusSlashSource,
-				"attestation source %d below the source gate's floor epoch %d: the mark log held no vote when this runner started on it, and no import carried this validator's vote history", a.Source.Epoch, f)
+				"attestation source %d below the source floor epoch %d: no import carried this validator's vote history, and the mark log held no vote when this runner started on it or the share came in later", a.Source.Epoch, f)
 			s.Log.Info("refused", "kind", kind, "pubkey", req.Pubkey.String()[:18], "msg", describe(req.Message), "err", err)
 			return backend.Signature{}, err
 		}
@@ -751,8 +758,22 @@ func (s *Server) addShareOf(pk backend.Pubkey, secret *[32]byte, index uint64, i
 			return backend.ValidatorKey{}, backend.Refused(backend.StatusStorage, "raise the mark log to the interchange maxima: %v", err)
 		}
 	}
-	blob, err := s.sealRecord(shareRecord{Pubkey: pk, Secret: secret[:], Index: index,
-		History: interchange != nil && interchange.HasAttestation})
+	rec := shareRecord{Pubkey: pk, Secret: secret[:], Index: index,
+		History: interchange != nil && interchange.HasAttestation}
+	if !rec.History && s.Hooks != nil {
+		// No vote history: the key may have voted elsewhere up to now, past
+		// the log's gate (SLBOUND-01). Gate it from now on, before it can
+		// sign; the record keeps the floor for a restart.
+		f, on, err := s.Hooks.ImportFloor()
+		if err != nil {
+			return backend.ValidatorKey{}, backend.Refused(backend.StatusPlatform, "%v", err)
+		}
+		if on {
+			rec.SourceFloor = f
+			s.Hooks.NoteImportFloor(pk, f)
+		}
+	}
+	blob, err := s.sealRecord(rec)
 	if err != nil {
 		return backend.ValidatorKey{}, err
 	}
