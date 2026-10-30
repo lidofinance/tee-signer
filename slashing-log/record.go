@@ -15,7 +15,8 @@ import (
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
-// Record is one entry of a signer's mark log, magic SMARK1. Every record
+// Record is one entry of a signer's mark log, magic SMARK2 (SMARK1 reads
+// as a record without Shares). Every record
 // carries the full config state, so no record needs an earlier one for the
 // config.
 type Record struct {
@@ -38,7 +39,11 @@ type Record struct {
 	// history of its own signs no vote with a source below it. nil: no
 	// gate (RBRLOG-02).
 	SourceGate *uint64
-	Sig        [ed25519.SignatureSize]byte
+	// Shares is the share set commitment (ShareSetRoot): the runner loads
+	// a set of stored share records only if its root is Current or
+	// Pending. nil (and every SMARK1 record): the empty set.
+	Shares *ShareSet
+	Sig    [ed25519.SignatureSize]byte
 
 	body []byte // the signed bytes, as read (Parse)
 }
@@ -188,12 +193,15 @@ func bodyIndex(g setupwire.Group, pending bool) int {
 }
 
 const (
-	// recordMagic is "SMARK" and the format version digit, 1. A record
-	// with a higher digit is from a newer image (RecordHeader).
-	recordMagic  = "SMARK1"
-	versionWidth = 20
-	maxSignerLen = 128
-	maxKeyBlob   = 1024
+	// recordMagic is "SMARK" and the format version digit, 2, the one
+	// this image writes; it reads 1 too (recordMagicV1, without the share
+	// set). A record with a higher digit is from a newer image
+	// (RecordHeader).
+	recordMagic   = "SMARK2"
+	recordMagicV1 = "SMARK1"
+	versionWidth  = 20
+	maxSignerLen  = 128
+	maxKeyBlob    = 1024
 	// MaxRecord bounds an encoded record: the store clients read at most
 	// 1 MiB of an object, a record is about 700 bytes, 21 KB more with
 	// MaxExitsPerDay exits.
@@ -326,6 +334,14 @@ func (r *Record) encodeBody() []byte {
 	if r.SourceGate != nil {
 		b = be.AppendUint64(b, *r.SourceGate)
 	}
+	b = putFlag(b, r.Shares != nil)
+	if s := r.Shares; s != nil {
+		b = append(b, s.Current[:]...)
+		b = putFlag(b, s.Pending != nil)
+		if s.Pending != nil {
+			b = append(b, s.Pending[:]...)
+		}
+	}
 	return b
 }
 
@@ -371,10 +387,15 @@ func (r *recReader) flag() (bool, bool) { v := r.u8(); return v == 1, v <= 1 }
 
 // Parse reads a record's fields without checking its signature: the key
 // that checks it is in KeyBlob, which only the platform's key release
-// opens (Verify). It reads SMARK1 only, and refuses any encoding that does
-// not read back to the same bytes and any state the format does not allow.
+// opens (Verify). It reads SMARK1 and SMARK2, and refuses any encoding
+// that does not read back to the same bytes and any state the format does
+// not allow.
 func Parse(enc []byte) (*Record, error) {
-	if len(enc) > MaxRecord || len(enc) < len(recordMagic)+ed25519.SignatureSize || string(enc[:len(recordMagic)]) != recordMagic {
+	if len(enc) > MaxRecord || len(enc) < len(recordMagic)+ed25519.SignatureSize {
+		return nil, errors.New("markstore: not a mark record")
+	}
+	v2 := string(enc[:len(recordMagic)]) == recordMagic
+	if !v2 && string(enc[:len(recordMagicV1)]) != recordMagicV1 {
 		return nil, errors.New("markstore: not a mark record")
 	}
 	body := enc[:len(enc)-ed25519.SignatureSize]
@@ -459,6 +480,22 @@ func Parse(enc []byte) (*Record, error) {
 		f := rd.u64()
 		r.SourceGate = &f
 	}
+	if v2 {
+		has, valid = rd.flag()
+		ok = ok && valid
+		if has {
+			s := &ShareSet{}
+			rd.fixed(s.Current[:])
+			has, valid = rd.flag()
+			ok = ok && valid
+			if has {
+				var p [32]byte
+				rd.fixed(p[:])
+				s.Pending = &p
+			}
+			r.Shares = s
+		}
+	}
 	if rd.bad || len(rd.b) != 0 || !ok {
 		return nil, fmt.Errorf("%w: length or presence byte", errRecord)
 	}
@@ -493,7 +530,7 @@ type Header struct {
 func RecordHeader(enc []byte) (*Header, bool) {
 	const magicLen = len(recordMagic)
 	if len(enc) > MaxRecord || len(enc) < magicLen || string(enc[:magicLen-1]) != recordMagic[:magicLen-1] ||
-		enc[magicLen-1] < recordMagic[magicLen-1] || enc[magicLen-1] > '9' {
+		enc[magicLen-1] < recordMagicV1[magicLen-1] || enc[magicLen-1] > '9' {
 		return nil, false
 	}
 	rd := &recReader{b: enc[magicLen:]}

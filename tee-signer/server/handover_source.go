@@ -161,6 +161,10 @@ type handedShare struct {
 	pk, share backend.Pubkey
 	index     uint64
 	secret    [32]byte
+	// history and floor: the key's own vote history state from its
+	// sealed record (handover.Share.History, SourceFloor).
+	history bool
+	floor   uint64
 }
 
 func (h *sourceHandover) dev() bool { return h.s.Platform.Name == "dev" }
@@ -662,7 +666,7 @@ func (h *sourceHandover) handover(ctx context.Context, payload []byte) ([]byte, 
 	for i := start; i < end; i++ {
 		sh := &h.shares[i]
 		x := handover.Share{SealedImportRequest: backend.SealedImportRequest{Pubkey: sh.pk, SharePubkey: sh.share, Index: sh.index,
-			Interchange: ic}, Origin: handover.OriginImported}
+			Interchange: ic}, Origin: handover.OriginImported, History: sh.history, SourceFloor: sh.floor}
 		if x.Sealed, err = sealedimport.SealAAD(id, x.AAD(carryHash), &sh.secret); err != nil {
 			return nil, backend.Refused(backend.StatusBadKey, "seal share %s: %v", sh.pk.String()[:18], err)
 		}
@@ -819,7 +823,11 @@ func (h *sourceHandover) readShares(check bool) ([]handedShare, error) {
 			if err != nil {
 				return err
 			}
-			out = append(out, handedShare{pk: pk, share: sp, index: rec.Index, secret: *sec})
+			hs := handedShare{pk: pk, share: sp, index: rec.Index, secret: *sec, history: rec.History}
+			if !rec.History {
+				hs.floor = rec.SourceFloor
+			}
+			out = append(out, hs)
 			return nil
 		})
 		if err != nil {

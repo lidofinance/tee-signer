@@ -93,7 +93,7 @@ func TestSHR01ReservedTarget(t *testing.T) {
 		t.Fatal("a reserved target took another order")
 	}
 	sec := newSecret(t)
-	if _, err := tgt.srv.addShareOf(newPubkey(t), &sec, 1, nil, "sealed", nil); err == nil {
+	if _, err := tgt.srv.addShareOf(newPubkey(t), &sec, 1, nil, "sealed", nil, nil); err == nil {
 		t.Fatal("a reserved target took a sealed import")
 	}
 	tgt.restart()

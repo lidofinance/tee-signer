@@ -124,7 +124,7 @@ A refusal caused by the restart floor carries
 | 0x09 | APPROVE_EXIT | a signed exit approval (governance/exitapproval) | empty |
 | 0x08 | CONFIG_UPDATE | the signed update, see below (a runner with a setup) | `version:u8 outcome:u8 setup_state` |
 | 0x31 | HANDOVER_ORDER | the signed handover order (`governance/handoverorder`) | `outcome:u8 status:u8 hash[32] arrived:u64 act_at:u64 not_after:u64 why_len:u16 why` |
-| 0x32 | HANDOVER | `version:u8(1) nonce_len:u16 nonce identity_len:u32 identity policy_len:u32 policy order_len:u32 order start:u32` | `version:u8(1) mark[26] total:u32 origin_proof count:u16 (len:u16 share)* carry_len:u32 carry`, at most 256 shares; see `tee-signer/handover` message.go and carry.go |
+| 0x32 | HANDOVER | `version:u8(2) nonce_len:u16 nonce identity_len:u32 identity policy_len:u32 policy order_len:u32 order start:u32` | `version:u8(2) mark[26] total:u32 origin_proof count:u16 (len:u16 share)* carry_len:u32 carry`, at most 256 shares; see `tee-signer/handover` message.go and carry.go |
 | 0x33 | IMPORT_HANDOVER | `version:u8(1) flags:u8 order_len:u32 order page_len:u32 page` | `version:u8(1) count:u16 (outcome:u8)* held:u32 total:u32 done:u8 reserved:u32 imported:u32` (reserved is zero) |
 
 A `mark` is `has_block:u8 block_slot:u64 has_attestation:u8 source_epoch:u64
@@ -929,10 +929,25 @@ attested import key:
 - the mark before the tombstone, as each share's interchange maxima. The
   target raises its own log to it before it stores a share, and a fresh
   target log takes its vote history from it;
-- each share's header (its mark and key origin, which is always
-  imported; the target refuses any other origin), signed with the
-  source's origin key, whose attestation over the order hash the page
-  carries;
+- each share's own vote history state, from the share's sealed record
+  (`history:u8 source_floor:u64` after the origin and its reserved bytes
+  in the share header, HSH-01). A key has history if an import with vote
+  history stored it. The mark is the device mark of every key, so it does
+  not say that one key has history. The target exempts a key from the
+  source gate only if `history` is 1, which needs a mark with a vote and
+  no floor. Any other key gets a source floor of the higher of
+  `source_floor` and the target's restart floor epoch at the import
+  (marklog.md, "Source gate"). The target refuses a `source_floor` above
+  its clock epoch plus the floor margin and one epoch. Under
+  `-as-imported` the target does not check the origin signature, so it
+  trusts the history state as it trusts the mark there: only whoever
+  holds the share's secret can seal it. Version 2 of HANDOVER added these
+  fields. A runner of version 1 and one of version 2 refuse each other's
+  request and page, so no floor is lost between them;
+- each share's header (its mark, key origin and history state; the
+  origin is always imported, and the target refuses any other origin),
+  signed with the source's origin key, whose attestation over the order
+  hash the page carries;
 - the carry, which every page has: the key set the source hands over (how
   many shares, and `KeysHash` of their pubkey and share pubkey pairs) and
   the day's exits of the source's mark log (validator key, stake and
@@ -945,10 +960,10 @@ carry = version:u8(1) total:u32 keys_hash[32] has_exits:u8
         [day:u64 stake:u64 count:u16 (pubkey[48] validator_index:u64 exit_epoch:u64 stake:u64 nonce[32])*]
 ```
 
-Each share's HPKE associated data covers its header (the mark and the
-origin) and the carry's hash (`signer-handover-carry-v1`). Nobody can
-change or drop the mark, the origin or the carry without the share failing
-to open. The config needs no carry: the target's version 0 is the source's
+Each share's HPKE associated data covers its header (the mark, the
+origin and the history state) and the carry's hash (`signer-handover-carry-v1`). Nobody can
+change or drop the mark, the origin, the history state or the carry
+without the share failing to open. The config needs no carry: the target's version 0 is the source's
 config in force, which the source compared leaf by leaf, and old updates
 of the source do not chain onto the target's version 0 (`prev_hash`).
 
