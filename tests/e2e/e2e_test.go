@@ -346,31 +346,19 @@ func TestE2E(t *testing.T) {
 
 	sock := filepath.Join(t.TempDir(), "a.sock")
 	tcpA := fmt.Sprintf("tcp:127.0.0.1:%d", freePort(t))
-	a := newRunner(t, "runner-a", c, tcpA+",unix:"+sock, "-persist-repeat-root=true")
+	a := newRunner(t, "runner-a", c, tcpA+",unix:"+sock)
 	a.start()
 	viaTCP, viaUnix := client(t, tcpA), client(t, "unix:"+sock)
 	var others []*remote.Client
-	var otherRunners []*runner
 	for _, name := range []string{"runner-b", "runner-c"} {
 		addr := fmt.Sprintf("tcp:127.0.0.1:%d", freePort(t))
 		r := newRunner(t, name, c, addr)
 		r.start()
 		others = append(others, client(t, addr))
-		otherRunners = append(otherRunners, r)
 	}
 	h := waitReady(t, viaUnix)
 	for _, o := range others {
 		waitReady(t, o)
-	}
-	// Repeat roots are off by default (runner-b and runner-c); runner-a
-	// turns them on for the restart below.
-	if !strings.Contains(a.logText(), "persist_repeat_root=true") {
-		t.Fatal("runner-a: no persist_repeat_root=true in its start line")
-	}
-	for _, r := range otherRunners {
-		if !strings.Contains(r.logText(), "persist_repeat_root=false") {
-			t.Fatalf("%s: no persist_repeat_root=false in its start line (the default)", r.name)
-		}
 	}
 	t.Logf("runner-a ready: platform=%s restart_mode=%s clock=%s", h.Platform, h.RestartMode, h.ClockSource)
 	// The system clock: the time in milliseconds, no NTS state.
@@ -524,24 +512,19 @@ func TestE2E(t *testing.T) {
 		t.Fatalf("after restart: %d validators", h.Validators)
 	}
 	t.Logf("runner-a restarted at epoch %d, share reloaded from sealed storage", e2)
-	// persist_repeat_root (on for runner-a): the roots of the last vote and
-	// block were stored with each signature, so a validator client retry
-	// after the restart signs, with the same partial signature. Another
-	// root at that target is still refused by the floor.
-	sig, err = viaTCP.Sign(ctx, c.req(pk, att(e1-1, e1, 0xa1)))
-	if err != nil || sig != sigs[0] {
-		t.Fatalf("exact repeat after restart: want the same signature, got %v (same %v)", err, sig == sigs[0])
+	// Repeat roots live in RAM: after the restart a validator client retry
+	// of the last vote and block is refused, as is another root at that
+	// target.
+	if _, err := viaTCP.Sign(ctx, c.req(pk, &blkAgain)); !backend.StatusOf(err).IsSlashing() {
+		t.Fatalf("exact repeat of the block after restart: want a slashing refusal, got %v", err)
 	}
-	if sig2, err := viaTCP.Sign(ctx, c.req(pk, &blkAgain)); err != nil {
-		t.Fatalf("exact repeat of the block after restart: %v", err)
-	} else if bsig, _ := c.cfg.SigningRoot(blk); !core.Verify(sp1, bsig, sig2) {
-		t.Fatal("block repeat after restart does not verify")
+	for _, root := range []byte{0xa1, 0xa2} {
+		_, err = viaTCP.Sign(ctx, c.req(pk, att(e1-1, e1, root)))
+		if r := wantRefused(t, err, backend.StatusSlashSource); !strings.Contains(r.Detail, "restart floor") {
+			t.Fatalf("root %x at target %d after restart: want a floor refusal, got %v", root, e1, r)
+		}
 	}
-	_, err = viaTCP.Sign(ctx, c.req(pk, att(e1-1, e1, 0xa2)))
-	if r := wantRefused(t, err, backend.StatusSlashSource); !strings.Contains(r.Detail, "restart floor") {
-		t.Fatalf("other root at target %d after restart: want a floor refusal, got %v", e1, r)
-	}
-	t.Logf("after restart: exact repeats of the last attestation and block signed again (repeat roots from the sealed store); another root at target %d refused by the floor", e1)
+	t.Logf("after restart: the last attestation and block again, and another root at target %d, refused by the floor", e1)
 	var floor uint64
 	// Source below the floor, then source and target at E+1. (E+2 is past
 	// the clock horizon until epoch E+1, and below the floor after.)

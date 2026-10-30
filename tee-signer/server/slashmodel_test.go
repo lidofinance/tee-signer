@@ -28,10 +28,13 @@ import (
 // runner returned. Operations: honest and hostile votes, blocks, clock
 // steps, restarts, store faults (a create that fails, a create that lands
 // but loses its reply), a clone from the same state, imports with and
-// without history, cover writes. The pre-history of an imported key is a
-// vote and a block from before the log began, as after a lost log. The
-// oracle refuses a double vote, a surround and a second block at a slot,
-// across all runners and the pre-history.
+// without history, cover writes, a vote whose signature never leaves (a
+// crash before the reply), an import into a key that already signed (a
+// vote inside its last one, signed elsewhere), and a request sent again
+// for an earlier vote. The pre-history of an imported key is a vote and a
+// block from before the log began, as after a lost log. The oracle refuses
+// a double vote, a surround and a second block at a slot, across all
+// runners, the pre-history and the imported votes.
 //
 // FuzzSlashingModel takes the operations as bytes; TestSlashingModel runs
 // seeded sequences (SLASHMODEL_SEED picks one seed, SLASHMODEL_RUNS the
@@ -100,7 +103,8 @@ func startRunner(base *tgtEnv) (*modelRunner, error) {
 		return r, err
 	}
 	cfg.DeviceMark = true
-	if e.hooks, err = state.New(cfg, state.Mode{Floor: true, FloorMargin: state.DefaultFloorMargin(cfg), MarkLog: true}, e.clock, e.store, e.sealer, quiet); err != nil {
+	mode := state.Mode{Floor: true, FloorMargin: state.DefaultFloorMargin(cfg), MarkLog: true}
+	if e.hooks, err = state.New(cfg, mode, e.clock, e.store, e.sealer, quiet); err != nil {
 		return r, err
 	}
 	e.hooks.UseMarkLog(m, mark, found)
@@ -147,6 +151,15 @@ type oracle struct {
 }
 
 func (o *oracle) vote(pk backend.Pubkey, v modelVote) error {
+	if err := o.conflict(pk, v); err != nil {
+		return err
+	}
+	o.votes[pk] = append(o.votes[pk], v)
+	return nil
+}
+
+// conflict is the slashable pair v would make with a vote held, if any.
+func (o *oracle) conflict(pk backend.Pubkey, v modelVote) error {
 	for _, p := range o.votes[pk] {
 		switch {
 		case p.target == v.target && (p.source != v.source || p.root != v.root):
@@ -155,7 +168,6 @@ func (o *oracle) vote(pk backend.Pubkey, v modelVote) error {
 			return fmt.Errorf("surround: (%d, %d) by %s and (%d, %d) by %s", p.source, p.target, p.who, v.source, v.target, v.who)
 		}
 	}
-	o.votes[pk] = append(o.votes[pk], v)
 	return nil
 }
 
@@ -190,6 +202,10 @@ func runModel(t *testing.T, ops []byte) (signed int) {
 	}()
 	active := 0
 	var keys []modelKey
+	// Votes each key signed, returned or not, in order; and the last one
+	// per runner slot since its start.
+	sent := map[backend.Pubkey][]modelVote{}
+	last := map[int]map[backend.Pubkey]modelVote{}
 	var trace []string
 	pos := 0
 	next := func() byte {
@@ -236,17 +252,17 @@ func runModel(t *testing.T, ops []byte) (signed int) {
 	}
 	importKey(false)
 	for pos < len(ops) {
-		op := next() % 16
+		op := next() % 19
 		r := runners[active]
 		epoch := r.e.signer.EpochAt(r.e.now())
 		switch op {
-		case 0, 1, 2, 3, 4: // votes: three honest, two hostile
+		case 0, 1, 2, 3, 4, 16: // votes: three honest, two hostile, one honest whose reply is lost
 			if len(keys) == 0 || !r.ok {
 				continue
 			}
 			k := keys[int(next())%len(keys)]
 			s, tg, root := max(epoch, 2)-2, epoch, byte(0)
-			if op >= 3 {
+			if op >= 3 && op != 16 {
 				// Hostile: any source from before the log began up to the
 				// clock, any target from it up to one epoch ahead.
 				lo := e0 - 6
@@ -257,8 +273,17 @@ func runModel(t *testing.T, ops []byte) (signed int) {
 			m := vote(s, tg)
 			m.BeaconBlockRoot[1] = root
 			err := r.e.signMsg(k.pk, m)
-			trace = append(trace, fmt.Sprintf("runner %d epoch %d: vote key %d (%d, %d) root %d: %v", active, epoch, k.index, s, tg, root, err))
+			lost := op == 16
+			trace = append(trace, fmt.Sprintf("runner %d epoch %d: vote key %d (%d, %d) root %d lost=%v: %v", active, epoch, k.index, s, tg, root, lost, err))
 			if err == nil {
+				v := modelVote{source: s, target: tg, root: root}
+				sent[k.pk] = append(sent[k.pk], v)
+				if last[active] == nil {
+					last[active] = map[backend.Pubkey]modelVote{}
+				}
+				last[active][k.pk] = v
+			}
+			if err == nil && !lost {
 				signed++
 				if err := o.vote(k.pk, modelVote{source: s, target: tg, root: root, who: fmt.Sprintf("runner %d", active)}); err != nil {
 					fail("%v", err)
@@ -286,6 +311,7 @@ func runModel(t *testing.T, ops []byte) (signed int) {
 			trace = append(trace, fmt.Sprintf("clock +%d s", d))
 		case 9: // restart the active runner
 			r.close()
+			delete(last, active)
 			nr, err := startRunner(base)
 			trace = append(trace, fmt.Sprintf("runner %d: restart: %v", active, err))
 			if nr != nil {
@@ -316,12 +342,82 @@ func runModel(t *testing.T, ops []byte) (signed int) {
 				err := r.e.signer.CoverEpoch(epoch + 1)
 				trace = append(trace, fmt.Sprintf("runner %d: cover %d: %v", active, epoch+1, err))
 			}
+		case 17: // import into a key that signed: a vote inside its last one, signed elsewhere
+			lv := last[active]
+			k, ok := pickKey(keys, func(pk backend.Pubkey) bool { _, ok := lv[pk]; return ok }, next())
+			if !ok || !r.ok {
+				continue
+			}
+			lv0 := lv[k.pk]
+			// The first vote strictly inside that no signature returned
+			// conflicts with: history that already conflicts is no import.
+			var in *modelVote
+			for s := lv0.source + 1; s < lv0.target && in == nil; s++ {
+				for tg := s; tg < lv0.target; tg++ {
+					c := modelVote{source: s, target: tg, root: 0xfe, who: "import"}
+					if o.conflict(k.pk, c) == nil {
+						in = &c
+						break
+					}
+				}
+			}
+			if in == nil {
+				continue
+			}
+			err := r.e.signer.Import(k.pk, backend.Watermark{HasAttestation: true, SourceEpoch: in.source, TargetEpoch: in.target})
+			trace = append(trace, fmt.Sprintf("runner %d: import into key %d inside (%d, %d): (%d, %d): %v", active, k.index, lv0.source, lv0.target, in.source, in.target, err))
+			if err == nil {
+				r.e.hooks.NoteHistory(k.pk)
+				if err := o.vote(k.pk, *in); err != nil {
+					t.Fatal(err)
+				}
+			}
+		case 18: // the request for an earlier vote, sent again
+			// The runner's last vote of the key, or any earlier one.
+			b := next()
+			lv := last[active]
+			has := func(pk backend.Pubkey) bool { _, ok := lv[pk]; return ok }
+			if b&1 == 0 {
+				has = func(pk backend.Pubkey) bool { return len(sent[pk]) > 0 }
+			}
+			k, ok := pickKey(keys, has, next())
+			if !ok || !r.ok {
+				continue
+			}
+			v := lv[k.pk]
+			if b&1 == 0 {
+				v = sent[k.pk][int(b>>1)%len(sent[k.pk])]
+			}
+			m := vote(v.source, v.target)
+			m.BeaconBlockRoot[1] = v.root
+			err := r.e.signMsg(k.pk, m)
+			trace = append(trace, fmt.Sprintf("runner %d epoch %d: vote again key %d (%d, %d) root %d: %v", active, epoch, k.index, v.source, v.target, v.root, err))
+			if err == nil {
+				signed++
+				if err := o.vote(k.pk, modelVote{source: v.source, target: v.target, root: v.root, who: fmt.Sprintf("runner %d, again", active)}); err != nil {
+					fail("%v", err)
+				}
+			}
 		}
 	}
 	if os.Getenv("SLASHMODEL_TRACE") != "" {
 		t.Logf("trace:\n%s", joinLines(trace))
 	}
 	return signed
+}
+
+// pickKey picks, by b, one of the keys has accepts.
+func pickKey(keys []modelKey, has func(backend.Pubkey) bool, b byte) (modelKey, bool) {
+	var ks []modelKey
+	for _, k := range keys {
+		if has(k.pk) {
+			ks = append(ks, k)
+		}
+	}
+	if len(ks) == 0 {
+		return modelKey{}, false
+	}
+	return ks[int(b)%len(ks)], true
 }
 
 func joinLines(ls []string) string {

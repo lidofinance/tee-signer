@@ -64,8 +64,8 @@ import (
 // build hook may add one (runner/hooks.go). handover/ holds the sealed
 // bodies of a source's handover orders: without one the source reads its
 // own pending order as an import and signs nothing (SHO-01). Not in
-// it: rr/ (repeat roots, written on every vote; a missing one costs a
-// refused exact repeat), wm/ (persisted marks, not used with the mark log)
+// it: rr/ (repeat roots of older builds, never read now), wm/ (persisted
+// marks, not used with the mark log)
 // and mark-hint/ (written on every mark record; without it the claim
 // compares nothing, as on any restart with lost state).
 var Prefixes = []string{"sealing/", "shares/", "handover/"}

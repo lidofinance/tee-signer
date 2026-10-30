@@ -105,7 +105,7 @@ FUZZ_SSZ := checkpoint attestation_data beacon_block_header voluntary_exit \
             validator_registration fork_data signing_data payload_attestation_data \
             proposer_preferences
 # Targets built from fuzz/target_ssz.c, one per fixed-size decoder.
-FUZZ_FIXED := $(addprefix ssz_,$(FUZZ_SSZ)) payload_envelope repeat_roots
+FUZZ_FIXED := $(addprefix ssz_,$(FUZZ_SSZ)) payload_envelope
 FUZZ_TARGETS := $(FUZZ_FIXED) builder_request_auth aggregate_and_proof \
                 contribution_and_proof bls config signer
 FUZZ_BINS := $(addprefix $(FUZZ_BUILD)/fuzz_,$(FUZZ_TARGETS))

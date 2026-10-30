@@ -84,13 +84,11 @@ int sc_signer_init_ext(void *mem, size_t mem_len, uint32_t max_validators,
 
     if (!mem || !cfg || !ops || !out || need == 0 || ((uintptr_t)mem & 7u))
         return SC_ERR_ARG;
-    if (!ops->now || cfg->mark_scope > SC_MARKS_PER_DEVICE || cfg->persist_repeat_root > 1)
+    if (!ops->now || cfg->mark_scope > SC_MARKS_PER_DEVICE)
         return SC_ERR_ARG;
     if (cfg->mark_scope == SC_MARKS_PER_VALIDATOR && (!ops->load_watermark || !ops->store_watermark))
         return SC_ERR_ARG;
     if (cfg->mark_scope == SC_MARKS_PER_DEVICE && (!ops->load_device_mark || !ops->store_device_mark))
-        return SC_ERR_ARG;
-    if (cfg->persist_repeat_root && (!ops->load_repeat_roots || !ops->store_repeat_roots))
         return SC_ERR_ARG;
     if (sc_policy_check_config(cfg) != SC_OK || sc_slot_times_check(cfg, times) != SC_OK)
         return SC_ERR_ARG;
@@ -207,25 +205,6 @@ static int load_marks(sc_signer *s, sc_validator *v, const uint8_t pubkey[SC_PUB
     return SC_OK;
 }
 
-/* persist_repeat_root: loads the roots a repeat after a restart may have. */
-static int load_repeat(sc_signer *s, sc_validator *v, const uint8_t pubkey[SC_PUBKEY_LEN])
-{
-    int rc;
-
-    memset(&v->repeat, 0, sizeof v->repeat);
-    if (!s->cfg.persist_repeat_root)
-        return SC_OK;
-    rc = s->ops.load_repeat_roots(s->ops.ctx, pubkey, &v->repeat);
-    if (rc == SC_ERR_UNKNOWN_VALIDATOR) {
-        memset(&v->repeat, 0, sizeof v->repeat);
-        return SC_OK;
-    }
-    if (rc != SC_OK)
-        return SC_ERR_STORAGE;
-    v->repeat.flags &= SC_REPEAT_HAS_ATTESTATION | SC_REPEAT_HAS_BLOCK;
-    return SC_OK;
-}
-
 int sc_signer_add_validator(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
                             const uint8_t secret[SC_SECRET_LEN], uint64_t validator_index,
                             uint8_t share_pubkey_out[SC_PUBKEY_LEN])
@@ -243,14 +222,15 @@ int sc_signer_add_validator(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
     if (s->count >= s->max_validators)
         return SC_ERR_NOMEM;
 
+    /* The slot is already zero (init, or the wipe after a failed load);
+     * zero it again so a load never starts with old repeat roots. */
     v = &s->validators[s->count];
+    memset(v, 0, sizeof *v);
     rc = sc_bls_load_secret(&v->sk, secret);
     if (rc != SC_OK)
         return rc;
 
     rc = load_marks(s, v, pubkey);
-    if (rc == SC_OK)
-        rc = load_repeat(s, v, pubkey);
     if (rc != SC_OK) {
         sc_wipe(v, sizeof *v);
         return rc;
@@ -328,21 +308,13 @@ static int is_repeat(const sc_validator *v, uint32_t kind, const uint8_t root[SC
     return (v->repeat.flags & kind) && memcmp(last, root, SC_ROOT_LEN) == 0;
 }
 
-/*
- * Keeps root as the last one of its kind, in RAM, and with
- * persist_repeat_root also in storage. A failed write leaves the root in
- * RAM only: the signature still goes out, and a repeat after a restart is
- * refused (the safe direction).
- */
-static void remember_root(sc_signer *s, sc_validator *v, const uint8_t pubkey[SC_PUBKEY_LEN],
-                          uint32_t kind, const uint8_t root[SC_ROOT_LEN])
+/* Keeps root as the last one of its kind, in RAM only: after a restart the
+ * marks refuse a repeat. */
+static void remember_root(sc_validator *v, uint32_t kind, const uint8_t root[SC_ROOT_LEN])
 {
     memcpy(kind == SC_REPEAT_HAS_BLOCK ? v->repeat.block_root : v->repeat.attestation_root, root,
            SC_ROOT_LEN);
     v->repeat.flags |= kind;
-    if (s->cfg.persist_repeat_root &&
-        s->ops.store_repeat_roots(s->ops.ctx, pubkey, &v->repeat) == SC_OK)
-        s->stats.repeat_root_writes++;
 }
 
 /* Raises the Gloas slot bounds to an imported block bound: the history
@@ -358,6 +330,18 @@ static void gloas_raise(sc_validator *v, const sc_watermark *imported)
     v->gloas |= G_PTC | G_ENVELOPE;
 }
 
+/*
+ * Forgets the validator's repeat roots of every kind. An import brings
+ * history signed elsewhere: the last root may be a vote that history
+ * conflicts with (a signature lost before release, then a vote inside it
+ * signed by another signer), and a repeat skips the slashing check.
+ */
+static void drop_repeat(sc_validator *v)
+{
+    memset(&v->repeat, 0, sizeof v->repeat);
+    v->gloas &= ~(G_PTC_ROOT | G_ENVELOPE_ROOT);
+}
+
 int sc_signer_import(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
                      const uint8_t genesis_validators_root[SC_ROOT_LEN],
                      const sc_watermark *imported)
@@ -371,6 +355,7 @@ int sc_signer_import(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
     if (!genesis_validators_root ||
         memcmp(genesis_validators_root, s->cfg.genesis_validators_root, SC_ROOT_LEN) != 0)
         return SC_ERR_ARG;
+    drop_repeat(v);
     if (s->cfg.mark_scope == SC_MARKS_PER_VALIDATOR) {
         rc = sc_slashing_import(&v->slash, imported, counted_store, s, pubkey);
         if (rc == SC_OK)
@@ -696,7 +681,7 @@ int sc_sign_block(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
     rc = approve_block(s, v, pubkey, block->slot);
     if (rc != SC_OK)
         return rc;
-    remember_root(s, v, pubkey, SC_REPEAT_HAS_BLOCK, root);
+    remember_root(v, SC_REPEAT_HAS_BLOCK, root);
     remember_block(v, block, obj);
     sign_root(s, v, root, signature);
     return SC_OK;
@@ -731,7 +716,7 @@ int sc_sign_attestation(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
     rc = approve_attestation(s, v, pubkey, data->source.epoch, data->target.epoch);
     if (rc != SC_OK)
         return rc;
-    remember_root(s, v, pubkey, SC_REPEAT_HAS_ATTESTATION, root);
+    remember_root(v, SC_REPEAT_HAS_ATTESTATION, root);
     sign_root(s, v, root, signature);
     return SC_OK;
 }

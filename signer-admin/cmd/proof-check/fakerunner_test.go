@@ -184,10 +184,10 @@ func TestProbeVerifyFails(t *testing.T) {
 func TestProbeCoreCounters(t *testing.T) {
 	r := probeFake(t, func(now time.Time) string {
 		return fmt.Sprintf(`{"platform":"dev","ready":true,"validators":100,"clock_unix":%d,"clock_unix_ms":%d,`+
-			`"stats":{"signatures":5120,"hash_cache_hits":4000,"hash_cache_misses":1120,"watermark_writes":300,"exact_repeats":7,"repeat_root_writes":293}}`,
+			`"stats":{"signatures":5120,"hash_cache_hits":4000,"hash_cache_misses":1120,"watermark_writes":300,"exact_repeats":7}}`,
 			now.Unix(), now.UnixMilli())
 	}, nil)
-	if !r.OK || r.Validators != 100 || r.Stats == nil || r.Stats.Signatures != 5120 || r.Stats.HashCacheMisses != 1120 || r.Stats.RepeatRootWrites != 293 {
+	if !r.OK || r.Validators != 100 || r.Stats == nil || r.Stats.Signatures != 5120 || r.Stats.HashCacheMisses != 1120 || r.Stats.ExactRepeats != 7 {
 		t.Fatalf("result %+v stats %+v", r, r.Stats)
 	}
 	b, _ := json.Marshal(r)

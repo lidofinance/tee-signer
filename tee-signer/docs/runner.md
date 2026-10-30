@@ -128,7 +128,7 @@ make release-gate  # the release gate: self-test, tree check, every runner build
 
 ```sh
 runner -platform dev|nitro|gcp|azure -setup platform|file:PATH -listen tcp:...,unix:...,vsock:any:7100 \
-       -record none [-clock ...] [-persist-repeat-root] [-state-dir DIR]
+       -record none [-clock ...] [-state-dir DIR]
 runner -platform dev -config chain.json -listen ... [-tls-client-ca ca.pem] [-mark-store ...] \
        [-record none|file:DIR|dynamodb:table=T,region=R -record-key NODE]
 ```
@@ -522,12 +522,17 @@ BLS, so the same signature). Policy checks still run. Other messages at
 that target or slot are still refused, and so is a repeat of an older
 message.
 
-`-persist-repeat-root` (off by default) seals the validator's last roots
-(AAD `signer-repeat-roots-v1|<pubkey>`) before each new attestation or
-block and writes them to the platform store, so a validator client retry
-after a restart signs. Off, the roots live in RAM and the floor refuses
-the repeat after a restart. Off is the default because each attestation
-would otherwise wait for the write of its roots; safety does not need them.
+The roots live in RAM only. A key starts with none when it loads (at
+start or on an import) and an import with history drops them, so the floor
+refuses a repeat after a restart and a validator client retry then fails.
+
+Earlier builds had `-persist-repeat-root`, which sealed the last roots
+under `rr/<pubkey>` in the platform store so that retry would sign. It is
+gone: the host can put back any file it stores, and the record had no
+version, so an old root could sign again against imported history or below
+the floor of a key added again without history. A runner passed the flag
+does not start. The runner never reads `rr/` records; delete them from old
+state directories.
 
 ## Building and verifying an image
 

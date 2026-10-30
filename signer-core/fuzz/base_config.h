@@ -70,7 +70,7 @@ static inline void fz_patch_config(sc_config *c, fz_in *in)
 {
     uint8_t field = fz_u8(in);
     uint8_t i = fz_u8(in);
-    switch (field % 24) {
+    switch (field % 23) {
     case 0: c->genesis_time = fz_near(in, c->genesis_time); break;
     case 1: c->seconds_per_slot = fz_near(in, c->seconds_per_slot); break;
     case 2: c->slots_per_epoch = fz_near(in, c->slots_per_epoch); break;
@@ -89,11 +89,10 @@ static inline void fz_patch_config(sc_config *c, fz_in *in)
     case 15: c->commit_ahead.source_epochs = fz_near(in, c->commit_ahead.source_epochs); break;
     case 16: c->commit_ahead.target_epochs = fz_near(in, c->commit_ahead.target_epochs); break;
     case 17: c->mark_scope = (uint32_t)fz_near(in, c->mark_scope); break;
-    case 18: c->persist_repeat_root = (uint32_t)fz_near(in, c->persist_repeat_root); break;
-    case 19: c->gloas_scheduled = (uint32_t)fz_near(in, c->gloas_scheduled); break;
-    case 20: c->gloas_fork_epoch = fz_near(in, c->gloas_fork_epoch); break;
-    case 21: c->builder_auth_root_count = (uint32_t)fz_near(in, c->builder_auth_root_count); break;
-    case 22: fz_bytes(in, c->builder_auth_roots[i % SC_MAX_BUILDER_AUTH_ROOTS], 32); break;
+    case 18: c->gloas_scheduled = (uint32_t)fz_near(in, c->gloas_scheduled); break;
+    case 19: c->gloas_fork_epoch = fz_near(in, c->gloas_fork_epoch); break;
+    case 20: c->builder_auth_root_count = (uint32_t)fz_near(in, c->builder_auth_root_count); break;
+    case 21: fz_bytes(in, c->builder_auth_roots[i % SC_MAX_BUILDER_AUTH_ROOTS], 32); break;
     default: fz_bytes(in, c->genesis_validators_root, 32); break;
     }
 }

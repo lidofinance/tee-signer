@@ -466,18 +466,15 @@ int sc_slashing_cover_slot(sc_slashing_state *st, const sc_commit_ahead *ahead, 
  * signs it again without the slashing check (the signature is the one it
  * already gave, BLS signing is deterministic). Policy checks still run.
  * Only these two roots qualify; an older vote or any other message at or
- * below the marks is refused as before.
+ * below the marks is refused as before. The roots live in RAM only: a
+ * validator starts with none when it is loaded, so after a restart the
+ * marks refuse a repeat.
  */
 typedef struct {
     uint32_t flags; /* SC_REPEAT_HAS_ATTESTATION, SC_REPEAT_HAS_BLOCK */
     uint8_t attestation_root[SC_ROOT_LEN];
     uint8_t block_root[SC_ROOT_LEN];
 } sc_repeat_roots;
-
-#define SC_REPEAT_ROOTS_ENCODED_LEN 72
-/* Fixed encoding with a magic/version prefix, for storage. */
-void sc_repeat_roots_encode(const sc_repeat_roots *r, uint8_t out[SC_REPEAT_ROOTS_ENCODED_LEN]);
-int sc_repeat_roots_decode(const uint8_t *in, size_t len, sc_repeat_roots *out);
 
 /* ------------------------------------------------------------------------ */
 /* Signer                                                                   */
@@ -501,15 +498,6 @@ typedef struct {
      * once, when the first validator is added. */
     int (*load_device_mark)(void *ctx, sc_watermark *out);
     int (*store_device_mark)(void *ctx, const sc_watermark *wm);
-    /* persist_repeat_root = 1. load: SC_OK, SC_ERR_UNKNOWN_VALIDATOR if
-     * nothing is stored, any other code refuses loading the validator.
-     * store: SC_OK once durable. The host must bind the record to pubkey
-     * (storage key or authenticated data): validators of one committee sign
-     * the same attestation root, so a root moved to another validator would
-     * let that validator sign a vote it never cast. */
-    int (*load_repeat_roots)(void *ctx, const uint8_t pubkey[SC_PUBKEY_LEN], sc_repeat_roots *out);
-    int (*store_repeat_roots)(void *ctx, const uint8_t pubkey[SC_PUBKEY_LEN],
-                              const sc_repeat_roots *roots);
 } sc_host_ops;
 
 typedef struct {
@@ -556,16 +544,6 @@ typedef struct {
      * validator starts from this mark.
      */
     uint32_t mark_scope;
-    /*
-     * 0 (boards): exact-repeat roots live in RAM only. A repeat in the same
-     * run signs; right after a restart the marks refuse it. No write per vote.
-     * 1 (cloud runner): before an attestation or block is signed, the
-     * validator's roots are written with store_repeat_roots (one write per
-     * vote), and they are loaded with the validator, so a repeat after a
-     * restart signs. If that write fails the signature still goes out and
-     * the root stays in RAM; a repeat after a restart is then refused.
-     */
-    uint32_t persist_repeat_root;
 
     /*
      * Gloas (EIP-7732). 0: Gloas is not scheduled and every Gloas-only
@@ -593,9 +571,8 @@ typedef struct {
     uint64_t signatures;
     uint64_t hash_cache_hits;
     uint64_t hash_cache_misses;
-    uint64_t watermark_writes;   /* commit-ahead mark writes, per validator or per device */
-    uint64_t repeat_root_writes; /* successful store_repeat_roots calls */
-    uint64_t exact_repeats;      /* requests signed as exact repeats */
+    uint64_t watermark_writes; /* commit-ahead mark writes, per validator or per device */
+    uint64_t exact_repeats;    /* requests signed as exact repeats */
 } sc_signer_stats;
 
 /* Bytes of memory sc_signer_init needs. */
@@ -616,7 +593,8 @@ void sc_signer_wipe(sc_signer *s);
  * Loads a validator. pubkey is the validator's (account) public key that
  * identifies it on chain and in slashing protection. secret may be a
  * threshold share of the key; share_pubkey_out (may be NULL) receives the
- * public key of that share. Calls ops.load_watermark.
+ * public key of that share. Calls ops.load_watermark. The validator
+ * starts with no repeat roots.
  */
 int sc_signer_add_validator(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
                             const uint8_t secret[SC_SECRET_LEN], uint64_t validator_index,
@@ -628,7 +606,9 @@ int sc_signer_add_validator(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
  * must equal the configured one (else SC_ERR_ARG), and the per-validator
  * maxima: highest block slot, source epoch and target epoch. A block slot
  * also raises the validator's Gloas slot bounds: no PTC vote or envelope at
- * or below it signs afterwards.
+ * or below it signs afterwards. Every import first drops the validator's
+ * repeat roots (attestation, block, PTC vote, envelope): no exact repeat
+ * signs until the next new signature of that kind.
  */
 int sc_signer_import(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
                      const uint8_t genesis_validators_root[SC_ROOT_LEN],
@@ -836,7 +816,7 @@ int sc_sign_validator_registration(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_
  * stored bound raises it with one store call (with per-device marks by the
  * same window as a vote, so a device that votes every epoch writes nothing
  * more), and after a restart both kinds start from that bound. Their exact
- * repeat roots live in RAM only, whatever persist_repeat_root says.
+ * repeat roots live in RAM only, as do those of attestations and blocks.
  */
 int sc_sign_payload_attestation(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
                                 const sc_payload_attestation_data *data,

@@ -78,13 +78,6 @@ type Config struct {
 	// hash and the images built from it stay the same.
 	GloasForkEpoch *uint64 `json:"gloas_fork_epoch,omitempty"`
 
-	// PersistRepeatRoot is the core's persist_repeat_root: store the roots
-	// of each validator's last attestation and block on every vote, so an
-	// exact repeat after a restart signs. Not part of the chain config file:
-	// the runner sets it from -persist-repeat-root (off by default, as the
-	// OP-TEE TA: no store write per vote), the software backend leaves it off.
-	PersistRepeatRoot bool `json:"-"`
-
 	// DeviceMark is the core's SC_MARKS_PER_DEVICE: one mark for every
 	// validator, kept by DeviceMarkHooks. Not part of the chain config file:
 	// the runner sets it when it keeps its mark in a mark store (-mark-store).

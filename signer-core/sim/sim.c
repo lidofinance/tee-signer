@@ -11,7 +11,7 @@
  *   - the cloud runner (tee-signer/state/state.go,
  *     tee-signer/record/record.go, trusted-time/clock/clock.go): restart floor at
  *     clock epoch + margin, the external single-writer record (claim, cover),
- *     the Anchored clock, sealed repeat roots;
+ *     the Anchored clock;
  *   - the cloud runner with the mark log (slashing-log): one device mark
  *     in an external locked log (profile cloud-ext), claim at start with the
  *     sealed hint, write-once records, a raise for E+1 at slot 24, the floor
@@ -91,7 +91,7 @@ enum { CLK_TA, CLK_ANCH };
 
 typedef struct {
     const char *name;
-    uint32_t scope, rr;
+    uint32_t scope;
     sc_commit_ahead ahead;
     uint64_t mea;        /* max_epochs_ahead */
     int persist_marks;   /* per-validator marks go to the platform store */
@@ -111,28 +111,28 @@ typedef struct {
 #define DV SC_MARKS_PER_DEVICE
 static const prof_t PROFS[] = {
     /* Board: ta/config/mainnet.conf (commit_ahead 32,0,0; max_epochs_ahead 1). */
-    {"ta", DV, 0, {32, 0, 0}, 1, 1, 0, 0, 0, 0, CLK_TA, 0, 0, 0, 0, 0},
+    {"ta", DV, {32, 0, 0}, 1, 1, 0, 0, 0, 0, CLK_TA, 0, 0, 0, 0, 0},
     /* Board with the older booking of 2 target epochs. */
-    {"ta-b2", DV, 0, {32, 0, 2}, 1, 1, 0, 0, 0, 0, CLK_TA, 0, 0, 0, 0, 0},
+    {"ta-b2", DV, {32, 0, 2}, 1, 1, 0, 0, 0, 0, CLK_TA, 0, 0, 0, 0, 0},
     /* Cloud runner as built for Nitro/Azure/GCP (chain.json 32,2,2, max 2),
-     * floor only, margin 3, record with ahead 0, repeat roots stored. */
-    {"cloud", PV, 1, {32, 2, 2}, 2, 0, 1, 3, 1, 0, CLK_ANCH, 1, 1, 0, 0, 0},
+     * floor only, margin 3, record with ahead 0. */
+    {"cloud", PV, {32, 2, 2}, 2, 0, 1, 3, 1, 0, CLK_ANCH, 1, 1, 0, 0, 0},
     /* Cloud runner with cloud/chain.testnet.json (32,1,1, max 1), margin 2. */
-    {"cloud-t", PV, 1, {32, 1, 1}, 1, 0, 1, 2, 1, 0, CLK_ANCH, 1, 1, 0, 0, 0},
+    {"cloud-t", PV, {32, 1, 1}, 1, 0, 1, 2, 1, 0, CLK_ANCH, 1, 1, 0, 0, 0},
     /* Cloud runner with -record none (GCP and Azure today): clones are out
      * of its threat model, rollback is not. */
-    {"cloud-norec", PV, 1, {32, 2, 2}, 2, 0, 1, 3, 0, 0, CLK_ANCH, 1, 0, 0, 0, 0},
+    {"cloud-norec", PV, {32, 2, 2}, 2, 0, 1, 3, 0, 0, CLK_ANCH, 1, 0, 0, 0, 0},
     /* Persisted per-validator marks only (-persist-watermarks
      * -restart-floor=false): safe only on rollback-proof storage. */
-    {"pv-persist", PV, 0, {32, 1, 1}, 1, 1, 0, 0, 0, 0, CLK_ANCH, 0, 0, 0, 0, 0},
+    {"pv-persist", PV, {32, 1, 1}, 1, 1, 0, 0, 0, 0, CLK_ANCH, 0, 0, 0, 0, 0},
     /* Cloud runner with -mark-store (the locked append-only log): one device
      * mark in the log, raised for E+1 at slot 24 of E; the restart floor
      * keeps target and block bounds only; the log refuses clones. The
      * store admin cannot set the log back (WORM). */
-    {"cloud-ext", DV, 1, {32, 0, 1}, 2, 0, 1, 3, 0, 0, CLK_ANCH, 1, 1, 0, 1, 0},
+    {"cloud-ext", DV, {32, 0, 1}, 2, 0, 1, 3, 0, 0, CLK_ANCH, 1, 1, 0, 1, 0},
     /* The same on a store whose admin can set the record back (a DynamoDB
      * item, a Firestore document): outside the design, for the controls. */
-    {"cloud-ext-mut", DV, 1, {32, 0, 1}, 2, 0, 1, 3, 0, 0, CLK_ANCH, 1, 1, 0, 1, 1},
+    {"cloud-ext-mut", DV, {32, 0, 1}, 2, 0, 1, 3, 0, 0, CLK_ANCH, 1, 1, 0, 1, 1},
 };
 #define NPROF (int)(sizeof PROFS / sizeof PROFS[0])
 /* Fuzz inputs pick among the profiles of the design; cloud-ext-mut, the
@@ -241,8 +241,6 @@ typedef struct {
     uint8_t mark[SC_WATERMARK_ENCODED_LEN];
     uint8_t has_wm[MAXK]; /* per-validator marks; 2 = unreadable */
     uint8_t wm[MAXK][SC_WATERMARK_ENCODED_LEN];
-    uint8_t has_rr[MAXK]; /* repeat roots; 2 = does not unseal */
-    uint8_t rr[MAXK][SC_REPEAT_ROOTS_ENCODED_LEN];
     uint64_t x_hint; /* mark log: the version this signer wrote last (sealed hint) */
 } disk_t;
 
@@ -1043,40 +1041,6 @@ static int cb_store_wm(void *ctx, const uint8_t pk[48], const sc_watermark *wm)
     return act == ACT_LANDED_ERR ? SC_ERR_STORAGE : SC_OK;
 }
 
-static int cb_load_rr(void *ctx, const uint8_t pk[48], sc_repeat_roots *out)
-{
-    inst_t *in = ctx;
-    int k = key_of(pk);
-    if (!in->disk.has_rr[k])
-        return SC_ERR_UNKNOWN_VALIDATOR;
-    if (in->disk.has_rr[k] != 1)
-        return SC_ERR_STORAGE; /* sealed record that does not open */
-    return sc_repeat_roots_decode(in->disk.rr[k], SC_REPEAT_ROOTS_ENCODED_LEN, out) == SC_OK
-               ? SC_OK
-               : SC_ERR_STORAGE;
-}
-
-static int cb_store_rr(void *ctx, const uint8_t pk[48], const sc_repeat_roots *r)
-{
-    inst_t *in = ctx;
-    int k = key_of(pk), act = store_act(in);
-    if (act == ACT_BEFORE)
-        crash_now(in);
-    if (act == ACT_FAIL)
-        return SC_ERR_STORAGE;
-    if (act == ACT_TORN) {
-        in->disk.has_rr[k] = 2; /* AEAD record cut short: does not unseal */
-        count_write(in);
-        crash_now(in);
-    }
-    sc_repeat_roots_encode(r, in->disk.rr[k]);
-    in->disk.has_rr[k] = 1;
-    count_write(in);
-    if (act == ACT_LANDED)
-        crash_now(in);
-    return act == ACT_LANDED_ERR ? SC_ERR_STORAGE : SC_OK;
-}
-
 /* ---- signer config --------------------------------------------------------------------- */
 
 static void gvr_of(uint8_t out[32])
@@ -1119,7 +1083,6 @@ static void make_cfg(sc_config *c, const prof_t *p, uint64_t f1)
     c->registration_max_future_seconds = 3600;
     c->commit_ahead = p->ahead;
     c->mark_scope = p->scope;
-    c->persist_repeat_root = p->rr;
 }
 
 static void share_for(int idx, int k, uint8_t sk[32])
@@ -1173,8 +1136,6 @@ static void inst_boot(inst_t *in)
     ops.store_watermark = cb_store_wm;
     ops.load_device_mark = cb_load_dev;
     ops.store_device_mark = cb_store_dev;
-    ops.load_repeat_roots = cb_load_rr;
-    ops.store_repeat_roots = cb_store_rr;
     in->mem = aligned_alloc(8, (sz + 7) & ~(size_t)7);
     if (!in->mem || sc_signer_init(in->mem, sz, MAXK, 8, &cfg, &ops, &in->s) != SC_OK)
         abort();
@@ -2100,12 +2061,11 @@ static void do_rollback(int i)
 }
 
 /* A restart that lost the local store (ACI or a Confidential Space VM
- * that comes back without its disk): no sealed marks, repeat roots or
- * hint. The mark log's record keys come from the platform's key release,
+ * that comes back without its disk): no sealed marks or hint. The mark log's record keys come from the platform's key release,
  * not from the store (slashing-log, platform.Keys), so the claim reads
  * the log as on any restart. The shares come back (share_for): from the
- * durable state copy (slashing-log/statestore, which holds neither the hint nor
- * the repeat roots), or by import. */
+ * durable state copy (slashing-log/statestore, which does not hold the
+ * hint), or by import. */
 static void do_wipe(int i)
 {
     inst_t *in = prim(i);

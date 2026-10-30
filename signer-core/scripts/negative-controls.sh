@@ -63,8 +63,6 @@ mutant device-source-window src/slashing.c 's/s_hi = source;/s_hi = sc_min64(sc_
   test_unit "$CORE_DIR/tests/data"
 mutant cover-raises-source src/slashing.c 's/epoch <= device->target_epoch/epoch <= device->target_epoch \&\& (epoch ? epoch - 1 : 0) <= device->source_epoch/; s/ctx, epoch, 0, 0);/ctx, epoch, 1, epoch ? epoch - 1 : 0);/' \
   test_unit "$CORE_DIR/tests/data"
-mutant repeat-root-not-loaded src/signer.c 's/if (!s->cfg.persist_repeat_root)/if (1)/' \
-  test_unit "$CORE_DIR/tests/data"
 # sc_sign_root: any domain type accepted, and any RANDAO root accepted.
 mutant root-any-domain src/signer.c 's/^    if (i == n)$/    if (0)/' \
   test_unit "$CORE_DIR/tests/data"

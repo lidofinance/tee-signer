@@ -56,7 +56,8 @@ func mustGet(t *testing.T, s platform.Store, k string) []byte {
 
 // A runner writes its sealing key and a share; its local state is lost; a
 // new process of the same image restores both before anything reads them.
-// Keys outside the copy (repeat roots, the mark hint) stay local.
+// Keys outside the copy (the mark hint, an older build's repeat roots) stay
+// local.
 func TestRestoreAfterLostState(t *testing.T) {
 	l, _ := markstore.NewFileLog(t.TempDir())
 	local := newLocal(t)

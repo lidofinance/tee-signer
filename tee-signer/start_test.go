@@ -293,7 +293,7 @@ func TestChainConfig(t *testing.T) {
 		len(c.BuilderRequestAuthRoots) != 2 || c.BuilderRequestAuthRoots[1] != s.Locked.AllowedBuilderRequestAuthDataRoots[1] {
 		t.Fatalf("locked values: %+v", c)
 	}
-	if c.PersistRepeatRoot || c.DeviceMark {
+	if c.DeviceMark {
 		t.Fatal("runner switches set from the setup")
 	}
 	// The floor margin follows from max_sign_epochs_ahead_of_clock.

@@ -25,7 +25,7 @@ func TestPutManyDeleteList(t *testing.T) {
 		"dkg/pending/": {"dkg/pending/01"},
 		"shares/b":     {"shares/bb"},
 		"sh":           {"shares/aa", "shares/bb"},
-		"rr/":          nil,
+		"wm/":          nil,
 	} {
 		got, err := s.List(prefix)
 		if err != nil || !slices.Equal(got, want) {

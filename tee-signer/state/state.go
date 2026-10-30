@@ -28,12 +28,9 @@
 // the epoch the record's previous owner may have signed up to. Every floor
 // bounds sources as well as targets.
 //
-// Repeat roots (Mode.RepeatRoots, the core's persist_repeat_root): the roots
-// of each validator's last attestation and block, sealed and bound to the
-// pubkey, written on every vote. They let an exact repeat sign after a
-// restart. They are no restart protection: the floors above still refuse
-// everything else, and a rolled-back record only holds an older root this
-// validator already signed.
+// Repeat roots stay in the core's RAM. Older builds could store them under
+// rr/ (-persist-repeat-root); the runner never reads those records, and they
+// can be deleted.
 package state
 
 import (
@@ -59,9 +56,6 @@ type Mode struct {
 	// FloorMargin is added to the clock epoch. It must be at least
 	// max_epochs_ahead + 1 (DefaultFloorMargin).
 	FloorMargin uint64
-	// RepeatRoots stores repeat roots in the platform store (needs store
-	// and sealer). Set it together with core.Config.PersistRepeatRoot.
-	RepeatRoots bool
 	// MarkLog keeps the core's device mark in a mark log (UseMarkLog). Set
 	// it together with core.Config.DeviceMark. Not with Persist.
 	MarkLog bool
@@ -158,9 +152,6 @@ func New(cfg core.Config, mode Mode, clk platform.Clock, store platform.Store,
 	}
 	if mode.Persist && (store == nil || sealer == nil) {
 		return nil, errors.New("state: persisted marks need a store and a sealer")
-	}
-	if mode.RepeatRoots && (store == nil || sealer == nil) {
-		return nil, errors.New("state: persisted repeat roots need a store and a sealer")
 	}
 	if clk == nil {
 		return nil, errors.New("state: nil clock")
@@ -579,51 +570,6 @@ func (h *Hooks) StoreWatermark(pk backend.Pubkey, wm backend.Watermark) error {
 		return err
 	}
 	return h.store.Put(wmKey(pk), blob)
-}
-
-func rrKey(pk backend.Pubkey) string { return "rr/" + hex.EncodeToString(pk[:]) }
-
-// rrAAD binds a sealed record to its validator: an attestation root moved to
-// another validator of the same committee would be a vote it never cast.
-func rrAAD(pk backend.Pubkey) []byte { return append([]byte("signer-repeat-roots-v1|"), pk[:]...) }
-
-var _ core.RepeatRootHooks = (*Hooks)(nil)
-
-// LoadRepeatRoots reads and unseals pk's repeat roots. A missing record is
-// "nothing signed yet": deleting it costs at most a refused retry.
-func (h *Hooks) LoadRepeatRoots(pk backend.Pubkey) ([]byte, bool, error) {
-	if !h.mode.RepeatRoots {
-		return nil, false, errors.New("state: repeat roots are not enabled")
-	}
-	blob, err := h.store.Get(rrKey(pk))
-	if errors.Is(err, platform.ErrNotFound) {
-		return nil, false, nil
-	}
-	if err != nil {
-		return nil, false, err
-	}
-	rec, err := h.sealer.Unseal(blob, rrAAD(pk))
-	if err != nil {
-		return nil, false, fmt.Errorf("unseal repeat roots: %w", err)
-	}
-	return rec, true, nil
-}
-
-// StoreRepeatRoots seals and writes pk's repeat roots, before the core signs.
-// A failure does not stop the signature; it is logged here.
-func (h *Hooks) StoreRepeatRoots(pk backend.Pubkey, rec []byte) error {
-	if !h.mode.RepeatRoots {
-		return errors.New("state: repeat roots are not enabled")
-	}
-	blob, err := h.sealer.Seal(rec, rrAAD(pk))
-	if err == nil {
-		err = h.store.Put(rrKey(pk), blob)
-	}
-	if err != nil {
-		h.log.Warn("repeat roots not stored; a repeat after a restart will be refused",
-			"pubkey", pk.String()[:18], "err", err)
-	}
-	return err
 }
 
 func (h *Hooks) Now() (uint64, error) {

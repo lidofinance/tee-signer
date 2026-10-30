@@ -975,7 +975,7 @@ func (s *Server) health() (*backend.Health, error) {
 	st := s.Signer.Stats()
 	h.Stats = &backend.SignerStats{
 		Signatures: st.Signatures, HashCacheHits: st.HashCacheHits, HashCacheMisses: st.HashCacheMisses,
-		WatermarkWrites: st.WatermarkWrites, ExactRepeats: st.ExactRepeats, RepeatRootWrites: st.RepeatRootWrites,
+		WatermarkWrites: st.WatermarkWrites, ExactRepeats: st.ExactRepeats,
 	}
 	if t, err := s.Platform.Clock.Now(); err == nil {
 		h.ClockUnix = uint64(t.Unix())

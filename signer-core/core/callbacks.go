@@ -50,47 +50,6 @@ func scgoStoreWatermark(h C.uintptr_t, pubkey *C.uint8_t, wm *C.sc_watermark) C.
 	return C.SC_OK
 }
 
-//export scgoLoadRepeatRoots
-func scgoLoadRepeatRoots(h C.uintptr_t, pubkey *C.uint8_t, out *C.uint8_t) C.int {
-	st := stateOf(h)
-	rh, ok := st.hooks.(RepeatRootHooks)
-	if !ok {
-		st.lastErr = errors.New("hooks do not store repeat roots")
-		return C.SC_ERR_STORAGE
-	}
-	rec, found, err := rh.LoadRepeatRoots(pubkeyOf(pubkey))
-	if err != nil {
-		st.lastErr = err
-		return C.SC_ERR_STORAGE
-	}
-	if !found {
-		return C.SC_ERR_UNKNOWN_VALIDATOR
-	}
-	if len(rec) != C.SC_REPEAT_ROOTS_ENCODED_LEN {
-		st.lastErr = errors.New("repeat roots record has the wrong length")
-		return C.SC_ERR_STORAGE
-	}
-	copy(unsafe.Slice((*byte)(unsafe.Pointer(out)), len(rec)), rec)
-	return C.SC_OK
-}
-
-// A failed store does not refuse the signature (the core keeps the root in
-// RAM), so the hooks log their own failures.
-//
-//export scgoStoreRepeatRoots
-func scgoStoreRepeatRoots(h C.uintptr_t, pubkey *C.uint8_t, rec *C.uint8_t) C.int {
-	st := stateOf(h)
-	rh, ok := st.hooks.(RepeatRootHooks)
-	if !ok {
-		return C.SC_ERR_STORAGE
-	}
-	b := C.GoBytes(unsafe.Pointer(rec), C.SC_REPEAT_ROOTS_ENCODED_LEN)
-	if err := rh.StoreRepeatRoots(pubkeyOf(pubkey), b); err != nil {
-		return C.SC_ERR_STORAGE
-	}
-	return C.SC_OK
-}
-
 //export scgoNow
 func scgoNow(h C.uintptr_t, out *C.uint64_t) C.int {
 	st := stateOf(h)

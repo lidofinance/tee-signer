@@ -321,7 +321,8 @@ func TestCommitsAgainstModel(t *testing.T) {
 			c.Put(k, v)
 			model[k] = v
 		}
-		c.Put(fmt.Sprintf("rr/%d", rng.IntN(10)), []byte("repeat roots stay local"))
+		// rr/ is a legacy prefix (repeat roots of older builds): outside the copy.
+		c.Put(fmt.Sprintf("rr/%d", rng.IntN(10)), []byte("legacy keys stay local"))
 		if err := s.Apply(c); err != nil {
 			t.Fatalf("commit %d: %v", i, err)
 		}
@@ -496,8 +497,8 @@ func TestDeleteFinishedAtStart(t *testing.T) {
 	}
 }
 
-// Repeat roots and the mark hint, written on every vote and every mark
-// record, never reach the object store.
+// The mark hint, written on every mark record, never reaches the object
+// store.
 func TestPerVoteKeysStayLocal(t *testing.T) {
 	l := newMemLog()
 	local := newMemLocal()
@@ -505,11 +506,10 @@ func TestPerVoteKeysStayLocal(t *testing.T) {
 	s.Put("shares/aa", []byte("share"))
 	objs, _, _ := l.usage()
 	for i := range 1000 {
-		s.Put(fmt.Sprintf("rr/%04d", i%244), []byte{byte(i)})
 		s.Put("mark-hint/signer-1", []byte{byte(i)})
 	}
 	if n, _, _ := l.usage(); n != objs {
-		t.Fatalf("%d objects written for repeat roots and hints", n-objs)
+		t.Fatalf("%d objects written for hints", n-objs)
 	}
 }
 
