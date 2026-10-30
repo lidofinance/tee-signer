@@ -256,7 +256,12 @@ func (k Keys) setupHex() string { return hex.EncodeToString(k.Setup[:]) }
 // (platform-aws/deploy/kms-key-policy.json.tmpl). The answers come over TLS from KMS,
 // so the parent cannot change them. UNTESTED against KMS: the code ran
 // against a fake.
-func (k Keys) KeyRule(ctx context.Context) (platform.KeyRule, error) {
+//
+// After DescribeKey, KeyRule sets k.KeyID to the key's ARN, so every later
+// call (GetKeyPolicy, ListGrants, Decrypt, GenerateDataKey) names the key
+// it checked. GetKeyPolicy and ListGrants take no alias, and an alias can
+// be pointed at another key after the check.
+func (k *Keys) KeyRule(ctx context.Context) (platform.KeyRule, error) {
 	d, err := k.Client.DescribeKey(ctx, &kms.DescribeKeyInput{KeyId: aws.String(k.KeyID)})
 	if err != nil {
 		return platform.KeyRule{}, fmt.Errorf("nitro: DescribeKey: %w", err)
@@ -265,6 +270,7 @@ func (k Keys) KeyRule(ctx context.Context) (platform.KeyRule, error) {
 	if m == nil || m.Arn == nil || m.MultiRegion == nil || m.Origin == "" || m.KeyManager == "" {
 		return platform.KeyRule{}, errors.New("nitro: DescribeKey answer lacks Arn, Origin, KeyManager or MultiRegion")
 	}
+	k.KeyID = *m.Arn
 	p, err := k.Client.GetKeyPolicy(ctx, &kms.GetKeyPolicyInput{KeyId: aws.String(k.KeyID), PolicyName: aws.String("default")})
 	if err != nil {
 		return platform.KeyRule{}, fmt.Errorf("nitro: GetKeyPolicy: %w", err)
@@ -282,9 +288,7 @@ func (k Keys) KeyRule(ctx context.Context) (platform.KeyRule, error) {
 	if r.Lock != backend.KeyLockLocked {
 		return r, nil
 	}
-	// ListGrants takes a key ID or ARN, not an alias: use the ARN
-	// DescribeKey answered for kms_key_id.
-	grants, err := k.listGrants(ctx, *m.Arn)
+	grants, err := k.listGrants(ctx)
 	if err != nil {
 		r.Lock, r.Why = backend.KeyLockUnread, fmt.Sprintf("nitro: ListGrants: %v", err)
 		return r, nil
@@ -293,18 +297,27 @@ func (k Keys) KeyRule(ctx context.Context) (platform.KeyRule, error) {
 	return r, nil
 }
 
-// listGrants reads every grant of the key arn, all pages of ListGrants.
-func (k Keys) listGrants(ctx context.Context, arn string) ([]types.GrantListEntry, error) {
+// listGrants reads every grant of the key, all pages of ListGrants. A
+// page that says Truncated without a new NextMarker is an error, not the
+// end of the list.
+func (k Keys) listGrants(ctx context.Context) ([]types.GrantListEntry, error) {
 	var all []types.GrantListEntry
-	pages := kms.NewListGrantsPaginator(k.Client, &kms.ListGrantsInput{KeyId: aws.String(arn)})
-	for pages.HasMorePages() {
-		page, err := pages.NextPage(ctx)
+	in := &kms.ListGrantsInput{KeyId: aws.String(k.KeyID)}
+	for {
+		page, err := k.Client.ListGrants(ctx, in)
 		if err != nil {
 			return nil, err
 		}
 		all = append(all, page.Grants...)
+		if !page.Truncated {
+			return all, nil
+		}
+		next := aws.ToString(page.NextMarker)
+		if next == "" || next == aws.ToString(in.Marker) {
+			return nil, errors.New("ListGrants answer is truncated but has no new NextMarker")
+		}
+		in.Marker = aws.String(next)
 	}
-	return all, nil
 }
 
 func (k Keys) sealingContext() map[string]string {
@@ -518,7 +531,7 @@ func New(o platform.Options) (*platform.Platform, error) {
 	}
 	client := kms.New(kms.Options{Region: region, Credentials: agentCreds{agent}, HTTPClient: httpClient})
 	seen := &platform.ImageSeen{}
-	keys := Keys{Client: client, KeyID: keyID, Setup: o.SetupHash,
+	keys := &Keys{Client: client, KeyID: keyID, Setup: o.SetupHash,
 		Recipient: func() (*rsa.PrivateKey, *types.RecipientInfo, error) { return kmsRecipient(n, seen) }}
 
 	// key_release_hash and the lock, read before the sealing key is made or

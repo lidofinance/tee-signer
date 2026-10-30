@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -18,9 +19,12 @@ import (
 // have (research/admin-proof-key-release.md in the PoC repo, section 2.1):
 // with any of them someone can change the policy, hand out the key by a
 // grant, put in key material they know, or copy the key to another
-// region. A wildcard that covers one of them (kms:*, *, kms:Put*) counts
-// too.
-var lockActions = []string{"kms:PutKeyPolicy", "kms:CreateGrant", "kms:ImportKeyMaterial", "kms:ReplicateKey"}
+// region. The alias actions are here too: a setup may name the key by
+// alias, and a principal that can point that alias at another key moves
+// the runner's next start to a key with another policy. A wildcard that
+// covers one of them (kms:*, *, kms:Put*) counts too.
+var lockActions = []string{"kms:PutKeyPolicy", "kms:CreateGrant", "kms:ImportKeyMaterial", "kms:ReplicateKey",
+	"kms:CreateAlias", "kms:UpdateAlias", "kms:DeleteAlias"}
 
 // keyActions are the KMS actions that give out key material or move it
 // under another key (RBRNIT-01). A locked policy allows them only to a
@@ -143,6 +147,11 @@ var imagePCRs = []string{"pcr0", "pcr1", "pcr2"}
 // sha384Hex is a literal PCR or ImageSha384 value.
 var sha384Hex = regexp.MustCompile(`^[0-9a-fA-F]{96}$`)
 
+// zeroImageKeys are the recipient keys whose all-zero value is that of a
+// debug-mode enclave: AWS documents that an enclave started with
+// --debug-mode or --attach-console has PCRs of zeros only.
+var zeroImageKeys = []string{"pcr0", "pcr1", "pcr2", "imagesha384"}
+
 // enclaveBinding reports whether the statement's condition ties it to one
 // Nitro enclave image: StringEquals or StringEqualsIgnoreCase tests of
 // kms:RecipientAttestation:PCR0, PCR1 and PCR2 (NREL-01). KMS checks such
@@ -154,7 +163,9 @@ var sha384Hex = regexp.MustCompile(`^[0-9a-fA-F]{96}$`)
 // under any operator, has a key other than PCR0 to PCR31 or ImageSha384,
 // or a value that is not 96 hex digits. A policy variable such as
 // ${aws:PrincipalTag/pcr0} is not 96 hex digits: IAM fills it in per
-// request from state outside the key policy, so it fixes no image.
+// request from state outside the key policy, so it fixes no image. bad is
+// also set for an all-zero PCR0, PCR1, PCR2 or ImageSha384: those are the
+// values of any debug-mode enclave, whose host can read its memory.
 func (s keyPolicyStatement) enclaveBinding() (bound bool, bad string) {
 	fixed := map[string]bool{}
 	for op, keys := range s.Condition {
@@ -175,6 +186,9 @@ func (s keyPolicyStatement) enclaveBinding() (bound bool, bad string) {
 			for _, v := range vals {
 				if !sha384Hex.MatchString(v) {
 					return false, fmt.Sprintf("condition %s on %s has the value %q, not 96 hex digits", op, k, v)
+				}
+				if strings.Trim(v, "0") == "" && slices.Contains(zeroImageKeys, name) {
+					return false, fmt.Sprintf("condition %s on %s is all zeros, the value of a debug-mode enclave", op, k)
 				}
 			}
 			if exact {
@@ -208,10 +222,14 @@ func knownRecipientKey(name string) bool {
 // grantLock decides on the grants of a key whose policy is locked
 // (AWS-KMS-01). A grant gives its grantee key use that the key policy does
 // not show, and it stays in force after the policy is locked. KMS grant
-// constraints cover the encryption context only, never the recipient's
-// attestation, so a grant of Decrypt or GenerateDataKey hands the key to a
-// principal outside the enclave, and a grant of Encrypt lets one plant a
-// sealing key. A locked key therefore has no grants at all.
+// constraints (EncryptionContextEquals, EncryptionContextSubset,
+// SourceArn) never name the recipient's attestation, so a grant of
+// Decrypt or GenerateDataKey hands the key to a principal outside the
+// enclave, and a grant of Encrypt lets one plant a sealing key. A locked
+// key therefore has no grants at all. KMS grants are eventually
+// consistent: a grant made just before the lock may not show in
+// ListGrants for a few minutes. The code cannot close that; the deploy
+// rule waits (platform-aws/deploy/README.md).
 func grantLock(grants []types.GrantListEntry) (backend.KeyLock, string) {
 	if len(grants) == 0 {
 		return backend.KeyLockLocked, ""

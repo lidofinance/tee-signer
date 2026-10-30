@@ -72,8 +72,14 @@ func TestPolicyLock(t *testing.T) {
 		{"prefix wildcard", allow(`"kms:Put*"`), "AWS_KMS", false, backend.KeyLockNotLocked, "allows kms:PutKeyPolicy"},
 		{"other case", allow(`"KMS:createGRANT"`), "AWS_KMS", false, backend.KeyLockNotLocked, "allows kms:CreateGrant"},
 		{"question mark", allow(`"kms:Replicate?ey"`), "AWS_KMS", false, backend.KeyLockNotLocked, "allows kms:ReplicateKey"},
+		{"CreateAlias", allow(`"kms:CreateAlias"`), "AWS_KMS", false, backend.KeyLockNotLocked, "allows kms:CreateAlias"},
+		{"UpdateAlias", allow(`"kms:UpdateAlias"`), "AWS_KMS", false, backend.KeyLockNotLocked, "allows kms:UpdateAlias"},
+		{"DeleteAlias", allow(`"kms:DeleteAlias"`), "AWS_KMS", false, backend.KeyLockNotLocked, "allows kms:DeleteAlias"},
+		{"alias wildcard", allow(`"kms:*Alias"`), "AWS_KMS", false, backend.KeyLockNotLocked, "allows kms:CreateAlias"},
+		{"admin alias actions next to the locked policy", strings.Replace(lockedPolicy, `"kms:ScheduleKeyDeletion"`,
+			`"kms:ScheduleKeyDeletion", "kms:UpdateAlias", "kms:CreateAlias", "kms:DeleteAlias"`, 1), "AWS_KMS", false, backend.KeyLockNotLocked, "AdminReads allows kms:"},
 		{"NotAction", `{"Statement":[{"Effect":"Allow","Principal":"*","NotAction":["kms:Decrypt"]}]}`, "AWS_KMS", false, backend.KeyLockNotLocked, "number 1 allows kms:PutKeyPolicy"},
-		{"NotAction covering all four", `{"Statement":[{"Effect":"Allow","Principal":"*","NotAction":["kms:PutKeyPolicy","kms:CreateGrant","kms:ImportKeyMaterial","kms:ReplicateKey"]}]}`, "AWS_KMS", false, backend.KeyLockNotLocked, "number 1 allows kms:Decrypt"},
+		{"NotAction covering all lock actions", `{"Statement":[{"Effect":"Allow","Principal":"*","NotAction":["kms:PutKeyPolicy","kms:CreateGrant","kms:ImportKeyMaterial","kms:ReplicateKey","kms:*Alias"]}]}`, "AWS_KMS", false, backend.KeyLockNotLocked, "number 1 allows kms:Decrypt"},
 		{"Deny only takes away", `{"Statement":[{"Effect":"Deny","Principal":"*","Action":"kms:*"}]}`, "AWS_KMS", false, backend.KeyLockLocked, ""},
 		{"imported key", lockedPolicy, "EXTERNAL", false, backend.KeyLockNotLocked, "origin EXTERNAL"},
 		{"custom key store", lockedPolicy, "AWS_CLOUDHSM", false, backend.KeyLockNotLocked, "origin AWS_CLOUDHSM"},
@@ -149,7 +155,7 @@ func TestPolicyLockWhoMayDecrypt(t *testing.T) {
      "Condition": {"StringEquals": {"kms:RecipientAttestation:ImageSha384": ""}}}`), backend.KeyLockNotLocked, "not 96 hex digits"},
 		{"second enclave statement", withStmt(`{"Sid": "A", "Effect": "Allow", ` + admin + `, "Action": "kms:Decrypt",
      "Condition": ` + enclaveCond + `}`), backend.KeyLockLocked, ""},
-		{"NotAction", withStmt(`{"Sid": "A", "Effect": "Allow", ` + admin + `, "NotAction": ["kms:PutKeyPolicy", "kms:CreateGrant", "kms:ImportKeyMaterial", "kms:ReplicateKey"]}`), backend.KeyLockNotLocked, "A allows kms:Decrypt"},
+		{"NotAction", withStmt(`{"Sid": "A", "Effect": "Allow", ` + admin + `, "NotAction": ["kms:PutKeyPolicy", "kms:CreateGrant", "kms:ImportKeyMaterial", "kms:ReplicateKey", "kms:*Alias"]}`), backend.KeyLockNotLocked, "A allows kms:Decrypt"},
 		{"one statement, not a list", `{"Statement":{"Effect":"Allow","Principal":"*","Action":"kms:Decrypt"}}`, backend.KeyLockNotLocked, "number 1 allows kms:Decrypt"},
 	} {
 		got, why := policyLock(c.policy, "AWS_KMS", false)
@@ -210,6 +216,7 @@ func TestPolicyLockImageBinding(t *testing.T) {
 	}
 	q := func(s string) string { return `"` + s + `"` }
 	const tagVar = `"${aws:PrincipalTag/pcr0}"`
+	zeros := strings.Repeat("0", 96)
 	for _, c := range []struct {
 		name, cond string
 		want       backend.KeyLock
@@ -233,6 +240,12 @@ func TestPolicyLockImageBinding(t *testing.T) {
 			"condition key kms:RecipientAttestation:Nonsense is not a Nitro PCR or ImageSha384"},
 		{"made-up key next to PCR0 to PCR2", pcrs("StringEquals", "PCR0", q(pcrA), "PCR1", q(pcrB), "PCR2", q(pcrC), "Nonsense", q(pcrD)), backend.KeyLockNotLocked,
 			"is not a Nitro PCR"},
+		{"debug-mode PCR0", pcrs("StringEqualsIgnoreCase", "PCR0", q(zeros), "PCR1", q(pcrB), "PCR2", q(pcrC)), backend.KeyLockNotLocked,
+			"condition StringEqualsIgnoreCase on kms:RecipientAttestation:PCR0 is all zeros, the value of a debug-mode enclave"},
+		{"debug-mode PCR0 to PCR2", pcrs("StringEquals", "PCR0", q(zeros), "PCR1", q(zeros), "PCR2", q(zeros)), backend.KeyLockNotLocked, "debug-mode enclave"},
+		{"debug-mode PCR2 among two images", pcrs("StringEquals", "PCR0", q(pcrA), "PCR1", q(pcrB), "PCR2", `["`+pcrC+`","`+zeros+`"]`), backend.KeyLockNotLocked, "debug-mode enclave"},
+		{"debug-mode ImageSha384", pcrs("StringEquals", "PCR0", q(pcrA), "PCR1", q(pcrB), "PCR2", q(pcrC), "ImageSha384", q(zeros)), backend.KeyLockNotLocked, "debug-mode enclave"},
+		{"zero PCR3 is not an image PCR", pcrs("StringEquals", "PCR0", q(pcrA), "PCR1", q(pcrB), "PCR2", q(pcrC), "PCR3", q(zeros)), backend.KeyLockLocked, ""},
 		{"PCR32", pcrs("StringEquals", "PCR0", q(pcrA), "PCR1", q(pcrB), "PCR2", q(pcrC), "PCR32", q(pcrD)), backend.KeyLockNotLocked, "is not a Nitro PCR"},
 		{"short value", pcrs("StringEquals", "PCR0", q("00"), "PCR1", q(pcrB), "PCR2", q(pcrC)), backend.KeyLockNotLocked, "not 96 hex digits"},
 		{"PCRs split over two operators", `{"StringEquals": {"kms:RecipientAttestation:PCR0": "` + pcrA + `"},
@@ -287,12 +300,17 @@ func TestKeyRuleGrants(t *testing.T) {
 		t.Fatal("KeyRule did not call ListGrants")
 	}
 
-	// A setup may name the key by alias; ListGrants gets the key's ARN.
-	f.grantKeyIDs = nil
+	// A setup may name the key by alias. GetKeyPolicy and ListGrants take
+	// no alias, so both get the ARN DescribeKey answered, and so does
+	// every later call: KeyRule leaves the ARN in KeyID.
+	f.grantKeyIDs, f.policyKeyIDs = nil, nil
 	byAlias := keys
 	byAlias.KeyID = "alias/signer"
-	if r, err := byAlias.KeyRule(ctx); err != nil || r.Lock != backend.KeyLockLocked || len(f.grantKeyIDs) != 1 || f.grantKeyIDs[0] != f.arn {
-		t.Fatalf("key by alias: %+v %v, ListGrants on %q", r, err, f.grantKeyIDs)
+	if r, err := byAlias.KeyRule(ctx); err != nil || r.Lock != backend.KeyLockLocked || r.Hash != clean.Hash {
+		t.Fatalf("key by alias: %+v %v", r, err)
+	}
+	if len(f.policyKeyIDs) != 1 || f.policyKeyIDs[0] != f.arn || len(f.grantKeyIDs) != 1 || f.grantKeyIDs[0] != f.arn || byAlias.KeyID != f.arn {
+		t.Fatalf("key by alias: GetKeyPolicy on %q, ListGrants on %q, KeyID %q after", f.policyKeyIDs, f.grantKeyIDs, byAlias.KeyID)
 	}
 
 	adminDecrypt := map[string]any{"GrantId": "g-admin", "GranteePrincipal": "arn:aws:iam::111122223333:role/admin",
@@ -314,6 +332,13 @@ func TestKeyRuleGrants(t *testing.T) {
 	if r, err = keys.KeyRule(ctx); err != nil || r.Lock != backend.KeyLockNotLocked || !strings.Contains(r.Why, "3 grant(s)") || f.grantCalls != 3 {
 		t.Fatalf("paged grants: %+v %v, %d ListGrants calls", r, err, f.grantCalls)
 	}
+
+	// A truncated page without NextMarker is not the end of the list.
+	f.dropMarker = true
+	if r, err = keys.KeyRule(ctx); err != nil || r.Lock != backend.KeyLockUnread || !strings.Contains(r.Why, "no new NextMarker") {
+		t.Fatalf("truncated without marker: %+v %v", r, err)
+	}
+	f.dropMarker = false
 
 	f.grants, f.denyGrants = nil, true
 	r, err = keys.KeyRule(ctx)

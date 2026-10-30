@@ -54,9 +54,10 @@ SETUP=signer-2.bin platform-aws/deploy/parent-run.sh               # on the pare
   opens as a sealing key or a mark log key. The admin still holds
   `kms:PutKeyPolicy`, so this holds fully only once the key policy is
   locked. A runner whose setup is on mainnet refuses to start until it is:
-  no principal may hold PutKeyPolicy, CreateGrant, ImportKeyMaterial or
-  ReplicateKey, Decrypt and GenerateDataKey need literal PCR0, PCR1 and
-  PCR2 values, and the key may have no grants
+  no principal may hold PutKeyPolicy, CreateGrant, ImportKeyMaterial,
+  ReplicateKey or the alias actions, Decrypt and GenerateDataKey need
+  literal PCR0, PCR1 and PCR2 values that are not all zeros, and the key
+  may have no grants
   (`signer-protocol/docs/protocol.md`, "Key rule lock"). The key policy
   template does not pass that check. The no-grants rule counts grants
   that AWS services make too (EBS, S3 or DynamoDB encryption with the
@@ -68,9 +69,16 @@ SETUP=signer-2.bin platform-aws/deploy/parent-run.sh               # on the pare
   one it copies the blob to `sealing/datakey.kms.ignored-<hash>`, logs a
   warning and makes a new key. `<hash>` is the first 8 bytes of the
   blob's SHA-256. Each start without a share leaves one more copy: it
-  sets aside the blob the start before it made. A production enclave has
-  no console, so look for `.ignored-` files on the parent rather than for
-  the log line.
+  sets aside the blob the start before it made. A signer that waits for
+  its first import, or a handover target, gathers one copy per restart;
+  delete them on the parent once the signer's shares open. A production
+  enclave has no console, so look for `.ignored-` files on the parent
+  rather than for the log line.
+- A runner with a DynamoDB clone guard (`-record` other than `none`, not
+  the generic image) seals its record under the sealing key. A restart
+  before the first import makes a new key, the record no longer opens,
+  and the start stops ("forged or tampered"). Delete the record item, or
+  import before the first restart.
 - If shares were only missing at such a start (a partial restore, a late
   mount), the blob they were sealed under is one of those copies: the
   oldest copy whose file time is after the newest file under `shares/`
@@ -92,11 +100,22 @@ SETUP=signer-2.bin platform-aws/deploy/parent-run.sh               # on the pare
   the key with its final, locked policy, or, if the key had a mutable
   phase, check its CloudTrail history before the first start: no
   `CreateGrant`, no `Encrypt` under a context other than
-  `purpose=record-creds`, and every `PutKeyPolicy` reviewed. To create
-  it locked, `aws kms create-key --policy` needs
+  `purpose=record-creds`, and every `PutKeyPolicy` reviewed. CloudTrail
+  must have logged KMS management events in the key's region for the
+  whole mutable phase, or the history proves nothing.
+- KMS grants are eventually consistent: a grant can take up to about five
+  minutes to show in `ListGrants`. Start the runner at least five minutes
+  after the last `CreateGrant` in CloudTrail, or run `aws kms list-grants`
+  after that wait and check it is empty. The runner cannot tell a grant
+  that is not listed yet from none.
+- To create the key locked, `aws kms create-key --policy` needs
   `--bypass-policy-lockout-safety-check`: without it KMS refuses a
   policy that does not let the caller change it later, which is the
-  point here.
+  point here. With it, a mistake in the policy is permanent. Render the
+  policy with `scripts/kms-policy.sh render`, check the PCRs against the
+  build and the principals against the deploy, and run it through the
+  lock check (`policyLock` in `platform-aws/nitro`, as its tests do)
+  before `create-key`.
 - The routes follow from the setup over a fixed port map: KMS and STS of
   the key release region on vsock 8000 and 8001, `www.cloudflare.com` on
   8002, the mark bucket on 8004, NTS-KE on 8005 to 8008, and the setup's
