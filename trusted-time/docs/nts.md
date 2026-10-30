@@ -227,6 +227,10 @@ bash scripts/test-nts.sh       # also the runners with the tag nts and the Go te
 bash scripts/nts-interop.sh    # network: NTS-KE and 3 queries per public operator
 ```
 
+Run the Rust tests through `make nts` or `make test-rust`, not bare `cargo`
+in `trusted-time/rust`: bare cargo uses `~/.cargo` and the network, and it
+does not check archives already in that cache.
+
 `make nts` and the scripts write to `build/nts/`. They do not touch
 `build/<arch>/bin`. The image builds take their runners from there, built by
 `scripts/build-runner.sh`, which builds the library into `build/nts/`
@@ -272,7 +276,8 @@ lock does not cover. So nothing in the cache is trusted:
   container. `nts-container.sh` copies only the lock's archives out of it,
   checks the copies with `nts-verify-crates.sh`, and unpacks them into
   `/tmp/vendor`, a cargo directory source whose `.cargo-checksum.json` per
-  crate names the lock's sha256. cargo builds with crates.io replaced by
+  crate names the lock's sha256 and the sha256 of each unpacked file, which
+  cargo checks before it builds. cargo builds with crates.io replaced by
   that directory. The registry index, the extracted sources and every other
   file of the cache are never read in the build, so features come from the
   crates' own `Cargo.toml`. A changed archive stops the build.

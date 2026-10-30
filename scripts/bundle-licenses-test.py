@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Regression checks for distribution notices; no network or native build."""
 
+import contextlib
 import hashlib
 import importlib.util
 import io
@@ -10,6 +11,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+import warnings
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("bundle_licenses", Path(__file__).with_name("bundle-licenses.py"))
@@ -103,6 +105,21 @@ dependencies = [
 """
 
 
+@contextlib.contextmanager
+def without_data_filter():
+    """tarfile as on Python before 3.12, which has no extraction filters."""
+    saved = getattr(tarfile, "data_filter", None)
+    if saved is not None:
+        del tarfile.data_filter
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            yield
+    finally:
+        if saved is not None:
+            tarfile.data_filter = saved
+
+
 class CrateTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -117,14 +134,21 @@ class CrateTests(unittest.TestCase):
         self.lock.write_text(LOCK.format(sum=hashlib.sha256(self.archive.read_bytes()).hexdigest()))
 
     @staticmethod
-    def crate(licence):
+    def crate(licence, extra=None):
         out = io.BytesIO()
         with tarfile.open(fileobj=out, mode="w:gz") as tar:
             for name, body in (("demo-1.2.3/LICENSE-MIT", licence), ("demo-1.2.3/src/lib.rs", b"")):
                 info = tarfile.TarInfo(name)
                 info.size = len(body)
                 tar.addfile(info, io.BytesIO(body))
+            if extra is not None:
+                tar.addfile(extra, io.BytesIO(b"x" * extra.size))
         return out.getvalue()
+
+    def use(self, data):
+        """Puts data in the cache as the demo archive, with its sha256 in the lock."""
+        self.archive.write_bytes(data)
+        self.lock.write_text(LOCK.format(sum=hashlib.sha256(data).hexdigest()))
 
     def test_lock_parser_without_tomllib(self):
         parsed = licenses.lock_crates(self.lock.read_text())
@@ -148,6 +172,35 @@ class CrateTests(unittest.TestCase):
         (other / "demo-1.2.3.crate").write_bytes(self.crate(b"another licence"))
         with self.assertRaisesRegex(ValueError, "differs from its sha256"):
             licenses.add_crate_notices([], self.lock, self.home)
+
+    def test_notices_without_extraction_filter(self):
+        # Python before 3.12 has no tarfile.data_filter.
+        with without_data_filter():
+            sections = []
+            licenses.add_crate_notices(sections, self.lock, self.home)
+        self.assertEqual(sections, [("Rust crate demo-1.2.3 / LICENSE-MIT", "demo crate licence")])
+
+    def test_unsafe_members_are_rejected(self):
+        def member(name, kind=tarfile.REGTYPE, link="", size=1):
+            info = tarfile.TarInfo(name)
+            info.type, info.linkname, info.size = kind, link, size
+            return info
+        cases = {
+            "absolute name": member("/tmp/demo-escape"),
+            "parent folder": member("demo-1.2.3/../demo-escape"),
+            "symlink": member("demo-1.2.3/src/link.rs", tarfile.SYMTYPE, "/etc/passwd", 0),
+            "hardlink": member("demo-1.2.3/src/hard.rs", tarfile.LNKTYPE, "demo-1.2.3/LICENSE-MIT", 0),
+            "device": member("demo-1.2.3/dev", tarfile.CHRTYPE, size=0),
+        }
+        for what, info in cases.items():
+            for filtered in (True, False):
+                with self.subTest(what=what, filter=filtered):
+                    self.use(self.crate(b"demo crate licence", info))
+                    with contextlib.ExitStack() as stack:
+                        if not filtered:
+                            stack.enter_context(without_data_filter())
+                        with self.assertRaisesRegex(ValueError, "a link, a special file or a path outside"):
+                            licenses.add_crate_notices([], self.lock, self.home)
 
     def test_missing_archive_is_rejected(self):
         self.archive.unlink()
