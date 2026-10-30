@@ -2,7 +2,7 @@
 // a setup. The image is the same for every operator; the host hands
 // the setup over at every start, over a channel that needs no key release:
 //
-//	nitro  the host agent on the parent, over vsock (hostagent.SetupChannel)
+//	nitro  the host agent on the parent, over vsock (agentclient.SetupChannel)
 //	azure  the environment value SIGNER_SETUP, base64 (Env)
 //	gcp    the instance metadata attribute signer-setup, base64 (gcp.MetadataSetup)
 //	dev    SIGNER_SETUP, or a file for local runners (Env, File)

@@ -50,7 +50,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/kms/types"
 
 	"github.com/lidofinance/tee-signer/platform"
-	"github.com/lidofinance/tee-signer/platform-aws/hostagent"
+	"github.com/lidofinance/tee-signer/platform-aws/hostagent/agentclient"
 	"github.com/lidofinance/tee-signer/platform-aws/udprelay"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/transport"
@@ -143,7 +143,7 @@ func netOptions(o platform.Options) (map[string]transport.Addr, *transport.Addr,
 	return routes, &relay, nil
 }
 
-type agentCreds struct{ c *hostagent.Client }
+type agentCreds struct{ c *agentclient.Client }
 
 func (a agentCreds) Retrieve(ctx context.Context) (aws.Credentials, error) {
 	cr, err := a.c.Credentials(ctx)
@@ -414,7 +414,7 @@ func New(o platform.Options) (*platform.Platform, error) {
 	if err != nil {
 		return nil, err
 	}
-	agent, err := hostagent.NewClient(o.Param("agent", "vsock:3:7101"))
+	agent, err := agentclient.NewClient(o.Param("agent", "vsock:3:7101"))
 	if err != nil {
 		n.Close()
 		return nil, err
