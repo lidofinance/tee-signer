@@ -360,12 +360,50 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 // the two sets and loads it; the set before holds the key's earlier
 // record or none, never more history than the set after. Share writes go
 // one at a time.
-func (s *Server) putShare(pk backend.Pubkey, blob []byte) error {
-	if _, committed := s.Hooks.ShareSet(); !committed {
+func (s *Server) putShare(pk backend.Pubkey, blob []byte) error { return s.writeShare(pk, blob, false) }
+
+// replaceShare is putShare for a record this runner holds (a promotion).
+// It writes only while the stored record is still the one the runner
+// loaded or wrote, checked before the log record and again before the
+// store write. A record the host removed or changed meanwhile stays as it
+// is and the write fails, so a late promotion does not bring a removed
+// record back.
+func (s *Server) replaceShare(pk backend.Pubkey, blob []byte) error {
+	return s.writeShare(pk, blob, true)
+}
+
+// errShareChanged: replaceShare found another stored record than the one
+// this runner holds, or none.
+var errShareChanged = errors.New("the stored share record is not the one this runner holds")
+
+func (s *Server) writeShare(pk backend.Pubkey, blob []byte, replace bool) error {
+	_, committed := s.Hooks.ShareSet()
+	// held checks the stored record before a replacing write. Without a
+	// mark log the runner keeps no hash, so the record must only exist.
+	held := func() error {
+		if !replace {
+			return nil
+		}
+		cur, err := s.Platform.Store.Get(shareKey(pk))
+		if err != nil {
+			return fmt.Errorf("%w: %v", errShareChanged, err)
+		}
+		if h, ok := s.shareHash[pk]; committed && (!ok || h != sha256.Sum256(cur)) {
+			return errShareChanged
+		}
+		return nil
+	}
+	if !committed {
+		if err := held(); err != nil {
+			return err
+		}
 		return s.Platform.Store.Put(shareKey(pk), blob)
 	}
 	s.shareSetMu.Lock()
 	defer s.shareSetMu.Unlock()
+	if err := held(); err != nil {
+		return err
+	}
 	next := make(map[backend.Pubkey][32]byte, len(s.shareHash)+1)
 	for k, v := range s.shareHash {
 		next[k] = v
@@ -377,6 +415,9 @@ func (s *Server) putShare(pk backend.Pubkey, blob []byte) error {
 	cancel()
 	if err != nil {
 		return fmt.Errorf("mark log share set: %w", err)
+	}
+	if err := held(); err != nil {
+		return err
 	}
 	if err := s.Platform.Store.Put(shareKey(pk), blob); err != nil {
 		return err
@@ -912,7 +953,7 @@ func (s *Server) promoteNow(pk backend.Pubkey, source uint64) error {
 			return err
 		}
 		wrote = true
-		return s.putShare(pk, blob)
+		return s.replaceShare(pk, blob)
 	})
 	if err != nil {
 		return err

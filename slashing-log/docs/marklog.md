@@ -117,7 +117,9 @@ target, has a source below the mark's, so none can surround those votes.
 A handover then sends the key with history, and the target sets no floor
 for it. A failed write, or a record the host rolls back, leaves the key
 without history: it waits for its floor again after a handover, which
-costs liveness, not safety. After a failed write the runner tries again
+costs liveness, not safety. The write goes only over the record the
+runner holds: a record the host removed or changed after the vote stays
+as it is. After a failed write the runner tries again
 in a later epoch, at most 3 times per process, since each try writes a
 log record. The promotion fixes the clock reading taken
 at the import for the key's whole life: without it, each handover target

@@ -3,6 +3,7 @@
 package server
 
 import (
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -306,5 +307,44 @@ func TestPromoteSkipsAfterHandover(t *testing.T) {
 	e.srv.handedOver.Store(false)
 	if e.recordOf(pk).History {
 		t.Fatal("history after a handover")
+	}
+}
+
+// A promotion writes only over the record the runner holds: a record the
+// host removed after the vote stays removed, and one it changed stays as
+// it is.
+func TestPromotionDoesNotRecreateARemovedRecord(t *testing.T) {
+	e := newTgtEnv(t, "dev", nil)
+	sk, pk := newKey(t)
+	if err := e.importSealed(pk, sk, 5, nil); err != nil {
+		t.Fatal(err)
+	}
+	held, err := e.store.Get(shareKey(pk))
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, err := e.srv.sealRecord(shareRecord{Pubkey: pk, Secret: sk[:], Index: 5, History: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.deleteShare(pk)
+	if err := e.srv.replaceShare(pk, blob); !errors.Is(err, errShareChanged) {
+		t.Fatalf("a write over a removed record: %v", err)
+	}
+	if _, err := e.store.Get(shareKey(pk)); err == nil {
+		t.Fatal("the removed record came back")
+	}
+	other := append([]byte(nil), held...)
+	other[len(other)-1] ^= 1
+	e.putRaw(pk, other)
+	if err := e.srv.replaceShare(pk, blob); !errors.Is(err, errShareChanged) {
+		t.Fatalf("a write over a changed record: %v", err)
+	}
+	if got, _ := e.store.Get(shareKey(pk)); string(got) != string(other) {
+		t.Fatal("the changed record was overwritten")
+	}
+	e.putRaw(pk, held)
+	if err := e.srv.replaceShare(pk, blob); err != nil {
+		t.Fatalf("a write over the held record: %v", err)
 	}
 }
