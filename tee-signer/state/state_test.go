@@ -240,9 +240,11 @@ func TestRestartFloorRefusesAtOrBelowEpochPlusTwo(t *testing.T) {
 		t.Fatalf("floor %d", f)
 	}
 	wantSlashing(t, n.attest(101, 102, 1))                           // E
-	wantSlashing(t, n.attest(102, 103, 1))                           // E+1 (the clock allows it)
+	wantStatus(t, n.attest(102, 103, 1), backend.StatusPolicyFuture) // E+1: its slot has not started
 	wantStatus(t, n.attest(103, 104, 1), backend.StatusPolicyFuture) // E+2 is past the clock horizon
 	n.clk.set(at(103, 5))
+	wantSlashing(t, n.attest(102, 103, 1)) // E+1 once its slot starts
+	n.clk.set(at(104, 5))
 	wantStatus(t, n.attest(103, 104, 2), backend.StatusSlashSource) // E+2, source below the floor
 	wantStatus(t, n.attest(104, 104, 2), backend.StatusSlashTarget) // E+2, target at the floor
 	n.clk.set(at(105, 5))
@@ -270,7 +272,7 @@ func (s staticSource) Name() string                             { return "static
 // future check see the epoch that really is running. The reading is 4 s
 // before epoch 101 starts, the local clock is 10 s later: epoch 101. A clock
 // that stood still would say epoch 100, put the floor at 102, and refuse
-// target 102 as too far ahead. With no reading for five intervals the clock
+// target 101 as a slot that has not started. With no reading for five intervals the clock
 // fails and the runner does not load a share.
 func TestFloorWithAnchoredClockBetweenReadings(t *testing.T) {
 	local := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -288,7 +290,7 @@ func TestFloorWithAnchoredClockBetweenReadings(t *testing.T) {
 	if f, _ := n.hooks.Floor(n.pk); f != 103 {
 		t.Fatalf("floor %d, want epoch 101 + 2 = 103 (a clock that stands still gives 102)", f)
 	}
-	wantSlashing(t, n.attest(101, 102, 1)) // at the floor; not "too far ahead"
+	wantSlashing(t, n.attest(100, 101, 1)) // below the floor; not "not started"
 
 	// Time keeps running between readings: a restart 70 s after the reading
 	// is still in epoch 101.
@@ -379,9 +381,10 @@ func TestPersistedMarksAndMissingRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Commit-ahead {32,1,1}: stored target bound 51, source bound 50.
+	n.clk.set(at(51, 5))
 	wantStatus(t, n.attest(49, 51, 2), backend.StatusSlashSource)
 	wantStatus(t, n.attest(50, 51, 2), backend.StatusSlashTarget)
-	n.clk.set(at(51, 5))
+	n.clk.set(at(52, 5))
 	if err := n.attest(50, 52, 2); err != nil {
 		t.Fatal(err)
 	}
@@ -452,8 +455,8 @@ func TestFloorBrokenByClockForwardThenBack(t *testing.T) {
 	if err := n.start(t); err != nil {
 		t.Fatal(err)
 	}
-	n.clk.set(at(110, 5)) // host moves the clock 10 epochs ahead
-	if err := n.attest(109, 111, 1); err != nil {
+	n.clk.set(at(111, 5)) // host moves the clock 11 epochs ahead
+	if err := n.attest(110, 111, 1); err != nil {
 		t.Fatal(err)
 	}
 	n.clk.set(at(100, 10)) // restart with the true time
@@ -695,9 +698,11 @@ func simulate(t *testing.T, mode Mode, trials, steps int, clockLie, jitterSec in
 // The randomized check behind the README claims. Honest clock: no
 // violations in any mode that includes the floor, even with the store
 // rolled back. Lying clock or rollback without the floor: violations.
-// Clock readings that disagree by up to 30 s (honest servers): violations
-// with the pre-review margin max_epochs_ahead, none with the default
-// max_epochs_ahead + 1.
+// Clock readings that disagree by up to 60 s (honest servers): none with
+// the default max_epochs_ahead + 1, and none with the pre-review margin
+// max_epochs_ahead either, since the core's slot rule keeps every signed
+// target at or below epoch(reading + 2 s). Before the slot rule that case
+// had violations.
 func TestRestartSafetyProperty(t *testing.T) {
 	trials, steps := 500, 40
 	if testing.Short() {
@@ -721,7 +726,7 @@ func TestRestartSafetyProperty(t *testing.T) {
 		{"floor, clock off by up to 3 epochs", floor, 3, 0, false, false},
 		{"floor+persisted, clock off by up to 3 epochs, store intact", both, 3, 0, false, true},
 		{"floor+persisted, clock off by up to 3 epochs, store rollback", both, 3, 0, true, false},
-		{"floor margin 1 (pre-review), readings off by up to 60 s", Mode{Floor: true, FloorMargin: 1, shortMargin: true}, 0, 60, false, false},
+		{"floor margin 1 (pre-review), readings off by up to 60 s", Mode{Floor: true, FloorMargin: 1, shortMargin: true}, 0, 60, false, true},
 		{"floor margin 2 (default), readings off by up to 60 s", floor, 0, 60, false, true},
 	}
 	for i, c := range cases {

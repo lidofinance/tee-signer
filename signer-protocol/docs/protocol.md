@@ -86,7 +86,7 @@ that; a client that needs to tell causes apart reads `detail`.
 | 7 | `SC_ERR_STORAGE` | overloaded: the runner handed over and signs nothing (for good); an import whose maxima did not reach the core (until a restart); the mark log has no `log_id` yet; the body of a config update in force is unreadable (until that update is sent again); a mark log or share write failed | maybe |
 | 8 | `SC_ERR_CLOCK` | no trusted time (the NTS clock lacks a quorum, or the clock is not trusted for a config update or a handover) | later |
 | 9 to 12 | `SC_ERR_SLASH_BLOCK`, `_SOURCE`, `_TARGET`, `_SOURCE_GT_TARGET` | slashing protection refused | no |
-| 13 | `SC_ERR_POLICY_FUTURE` | the message's epoch is past the clock horizon | no (only once the clock catches up) |
+| 13 | `SC_ERR_POLICY_FUTURE` | the message's epoch is past the clock horizon, or the slot of a block, attestation, PTC vote or envelope has not started (2 s margin, `SC_SLOT_MARGIN_SECONDS`) | no (only once the clock catches up) |
 | 14 to 20 | `SC_ERR_POLICY_EXIT`, `_FEE_RECIPIENT`, `_GAS_LIMIT`, `_TIMESTAMP`, `_PUBKEY`, `_INDEX`, `_DOMAIN` | policy refused; `_DOMAIN` also for root types 2 to 6 without `allow_unverified_nonslashable` | no (until a config update) |
 | 21 | `SC_ERR_POLICY_FORK` | Gloas: a message before the Gloas fork, Gloas not in the chain config, or an aggregate form that does not fit the fork | no |
 | 22 | `SC_ERR_POLICY_BUILDER` | Gloas: an envelope of another builder | no |
@@ -95,7 +95,7 @@ that; a client that needs to tell causes apart reads `detail`.
 | 25 | `SC_ERR_SELECTION_PROOF` | kinds 9 and 10: the selection proof does not verify under the validator key | no |
 | 26 | `SC_ERR_SCHEDULE` | a fork schedule update changes an epoch the signer may sign before it applies (`sc_signer_set_schedule`); CONFIG_UPDATE returns it, no SIGN does | no |
 | 27 | `SC_ERR_POLICY_BUILDER_AUTH` | kind 14: the root of the BuilderRequestAuth data is not on `builder_request_auth_roots` (an empty list refuses all) | no (until a locked config update) |
-| 28 | `SC_ERR_POLICY_TARGET_SLOT` | kind 1: the attestation's target epoch is not the epoch of its slot; no chain includes such data, and signing it would only raise the target mark | no |
+| 28 | `SC_ERR_POLICY_TARGET_SLOT` | kind 1: the attestation's target epoch is not the epoch of its slot; no chain includes such data. A data check: a vote for a slot that has not started gets `SC_ERR_POLICY_FUTURE` | no |
 | 1000 | `BAD_REQUEST` | the payload does not parse, or the kind of a typed SIGN is unknown; also a well-formed CONFIG_UPDATE or HANDOVER message the runner refuses (reason in `detail`) | no |
 | 1001 | `UNSUPPORTED` | a message type this runner does not serve (unknown, another build, a flag that turns it off, a runner without a setup); an ATTEST or IDENTITY request of another version; an unknown root message type | no |
 | 1002 | `INTERNAL` | anything else | maybe |

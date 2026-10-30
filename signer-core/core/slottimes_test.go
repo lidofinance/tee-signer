@@ -51,9 +51,10 @@ func TestSlotTimesClock(t *testing.T) {
 	}
 }
 
-// The clock horizon follows the slot times the signer holds: at the start of
-// epoch 45 under the changes (epoch 36 under 12 s slots) it signs up to
-// epoch 46 (MaxEpochsAhead 1).
+// The clock horizon and the slot rule follow the slot times the signer
+// holds: at the start of epoch 45 under the changes (epoch 36 under 12 s
+// slots) the horizon is epoch 46 (MaxEpochsAhead 1), and only the slots that
+// have started sign.
 func TestSlotTimesHorizon(t *testing.T) {
 	cfg := software.DevConfig(genesis, 12, 32)
 	cfg.SlotTimeChanges = []core.SlotTimeChange{{30, 6}, {40, 4}}
@@ -66,11 +67,14 @@ func TestSlotTimesHorizon(t *testing.T) {
 	}
 	_, err := s.Sign(signReq(s, pk, att(44, 47)))
 	wantStatus(t, err, backend.StatusPolicyFuture)
-	mustSign(t, s, pk, att(44, 46))
+	// Epoch 46 is inside the horizon, but its slots have not started.
+	_, err = s.Sign(signReq(s, pk, att(44, 46)))
+	wantStatus(t, err, backend.StatusPolicyFuture)
+	mustSign(t, s, pk, att(44, 45))
 	h2 := software.NewMemHooks()
 	h2.Clock = h.Clock
 	p, ppk, _ := newTestSignerWith(t, h2, software.DevConfig(genesis, 12, 32))
-	_, err = p.Sign(signReq(p, ppk, att(44, 46)))
+	_, err = p.Sign(signReq(p, ppk, att(44, 45)))
 	wantStatus(t, err, backend.StatusPolicyFuture)
 }
 
@@ -121,7 +125,7 @@ func TestSetSlotTimes(t *testing.T) {
 	if err := s.SetSlotTimes([]core.SlotTimeChange{{23, 6}, {30, 4}}, 0); err != nil {
 		t.Fatal(err)
 	}
-	mustSign(t, s, pk, att(21, 23))
+	mustSign(t, s, pk, att(21, 22))
 	// The lock-free clock follows the core's after the change.
 	for e := uint64(0); e < 60; e++ {
 		at := genesis + e*32*12 + 7

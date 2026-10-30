@@ -75,6 +75,10 @@ int sc_policy_check_config(const sc_config *cfg);
  * at now under the slot time changes times, plus max_epochs_ahead. */
 int sc_policy_check_epoch(const sc_config *cfg, const sc_slot_times *times, uint64_t now,
                           uint64_t epoch);
+/* SC_ERR_POLICY_FUTURE if slot has not started at now + SC_SLOT_MARGIN_SECONDS
+ * under the slot time changes times (the slot rule, see signer_core.h). */
+int sc_policy_check_slot(const sc_config *cfg, const sc_slot_times *times, uint64_t now,
+                         uint64_t slot);
 int sc_policy_check_exit(const sc_config *cfg, const sc_voluntary_exit *exit,
                          uint64_t bound_index);
 int sc_policy_check_registration(const sc_config *cfg, uint64_t now,
