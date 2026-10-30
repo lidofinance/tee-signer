@@ -211,6 +211,13 @@ for arch in "${archs[@]}"; do
     check_bin "$out/$tool" "$arch"
     log "$arch $tool: $(stat -c %s "$out/$tool") bytes, sha256 $(sha256sum "$out/$tool" | cut -c1-16)..., $(file -b "$out/$tool")"
   done
+  # Keep redistribution notices beside every binary, including the legacy alias.
+  license_bins=()
+  for name in "${RUNNER_BINS[@]}" "${RUNNER_DKG_BINS[@]}" hostagent forwarder udprelay setup-tool; do
+    license_bins+=("$out/$name")
+  done
+  [ "$IMAGE_FLAVOR" != default ] || license_bins+=("$out/runner-debugimport")
+  python3 "$ROOT/scripts/bundle-licenses.py" "${license_bins[@]}"
 done
 
 # A runner built without a platform tag must refuse to start, whatever the flags.

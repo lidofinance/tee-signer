@@ -32,4 +32,5 @@
 # on who built the image.
 FROM scratch
 COPY --chmod=0555 runner /runner
+COPY --chmod=u=rwX,go=rX licenses/ /licenses/
 ENTRYPOINT ["/runner"]

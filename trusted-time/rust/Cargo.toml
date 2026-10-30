@@ -16,6 +16,7 @@ rust-version = "1.94"
 publish = false
 
 [package]
+license = "Apache-2.0"
 name = "signer-nts"
 version.workspace = true
 edition.workspace = true

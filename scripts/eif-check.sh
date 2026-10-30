@@ -5,12 +5,13 @@
 # describe-enclaves`.
 #
 #   eif-check.sh <eif> <x86_64|aarch64> [--runner FILE] [--generic] [--chain FILE]
-#                [--ca FILE] [--build-json FILE] [--blobs DIR]
+#                [--ca FILE] [--build-json FILE] [--blobs DIR] [--licenses DIR]
 #
 #   --runner      the binary that must be /runner in the image (same sha256,
 #                 and an ELF of the arch)
 #   --generic     the image holds nothing of an operator: no /etc/signer
 #                 (the setup comes from the host agent at every start)
+#   --licenses    files that must be present unchanged in /licenses, mode 0644
 #   --chain, --ca the files that must be /etc/signer/chain.json and
 #                 /etc/signer/client-ca.pem in the image (the per-operator
 #                 images before the setup)
@@ -33,12 +34,13 @@
 # match the ones nitro-cli prints.
 set -euo pipefail
 exec python3 -I - "$@" <<'PY'
-import argparse, hashlib, json, struct, sys
+import argparse, hashlib, json, pathlib, struct, sys
 
 ap = argparse.ArgumentParser(prog="eif-check.sh")
 ap.add_argument("eif")
 ap.add_argument("arch", choices=["x86_64", "aarch64"])
 ap.add_argument("--runner")
+ap.add_argument("--licenses")
 ap.add_argument("--generic", action="store_true")
 ap.add_argument("--chain")
 ap.add_argument("--ca")
@@ -122,6 +124,15 @@ if "rootfs/runner" in app:
 if a.generic:
     extra = sorted(n for n in app if n.startswith("rootfs/etc/signer"))
     check(not extra, "no operator files in the image (rootfs/etc/signer: %s)" % (", ".join(extra) or "none"))
+if a.licenses:
+    notices = sorted(pathlib.Path(a.licenses).iterdir())
+    check(bool(notices), "licence bundle is nonempty")
+    for notice in notices:
+        inimg = "rootfs/licenses/" + notice.name
+        check(inimg in app and app[inimg][1] == notice.read_bytes(),
+              "/licenses/%s equals %s" % (notice.name, notice))
+        if inimg in app:
+            check(app[inimg][0] & 0o7777 == 0o644, "/licenses/%s has mode 0644" % notice.name)
 for opt, inimg in ((a.chain, "rootfs/etc/signer/chain.json"), (a.ca, "rootfs/etc/signer/client-ca.pem")):
     if opt:
         check(inimg in app and app[inimg][1] == read(opt), "/%s equals %s" % (inimg[len("rootfs/"):], opt))

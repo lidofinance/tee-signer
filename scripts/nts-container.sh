@@ -45,6 +45,8 @@ fi
 
 cargo build --release "${cargo_flags[@]}" --target "$NTS_TARGET"
 install -m 0644 "$CARGO_TARGET_DIR/$NTS_TARGET/release/libsigner_nts.a" /out/libsigner_nts.a
+# Redistribution notices for the exact standard library linked into this archive.
+install -m 0644 "$(rustc --print sysroot)/share/doc/rust/COPYRIGHT-library.html" /out/RUST_STANDARD_LIBRARY.html
 
 # The core in a no_std static library with its own panic handler: the build
 # fails if anything in the graph links std (nostd-check/src/lib.rs).

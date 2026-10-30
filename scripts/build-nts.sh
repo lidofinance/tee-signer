@@ -72,6 +72,8 @@ for arch in "${archs[@]}"; do
     { tail -40 "$LOGS/nts-build-$arch.log" >&2; echo "build-nts: the $arch build failed" >&2; exit 1; }
   [ "$tests" != 1 ] || grep -E '^test result' "$LOGS/nts-build-$arch.log" >&2
   chmod 0644 "$lib"
+  mkdir -p "$NTS_OUT/$arch/licenses"
+  mv "$out/RUST_STANDARD_LIBRARY.html" "$NTS_OUT/$arch/licenses/"
   # The no_std checks of the core go next to lib/, not into it.
   mv "$out/core-features.txt" "$out/libsigner_nts_nostd_check.a" "$chk/"
   nostd="$chk/libsigner_nts_nostd_check.a"
