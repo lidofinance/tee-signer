@@ -1188,6 +1188,219 @@ static void test_cover_epoch(void)
 }
 
 /*
+ * Marks at the top of the u64 range. A commit-ahead window past UINT64_MAX
+ * saturates at UINT64_MAX and never wraps to a small value, for
+ * per-validator marks, per-device marks (the block bound is the last slot
+ * of the window's epoch) and an import of UINT64_MAX values. A restart
+ * from a saturated mark then refuses every block and vote: nothing is
+ * above the bound. The slashing layer is driven directly; the signer's
+ * clock horizon sits far below these epochs (test_saturation_signer).
+ */
+static void test_saturation(void)
+{
+    const uint64_t M = UINT64_MAX;
+    const uint64_t top = M / 32; /* the epoch of slots UINT64_MAX-1 and UINT64_MAX */
+    host_t h = {0};
+    sc_commit_ahead ahead = {32, 1, 1};
+    sc_slashing_state st, st2;
+    sc_watermark wm, dev;
+    uint8_t pk[48] = {0x5a}, pk2[48] = {0x5b};
+
+    /* Blocks: the window past UINT64_MAX-1 saturates, and slot UINT64_MAX
+     * itself is inside it, with no second write. */
+    sc_slashing_restore(&st, NULL);
+    CHECK_RC(sc_slashing_approve_block(&st, &ahead, h_store, &h, pk, M - 1), SC_OK);
+    CHECK(h.writes == 1 && st.committed.block_slot == M && st.ram.block_slot == M - 1);
+    CHECK_RC(sc_slashing_approve_block(&st, &ahead, h_store, &h, pk, M), SC_OK);
+    CHECK(h.writes == 1 && st.ram.block_slot == M);
+    CHECK_RC(sc_slashing_approve_block(&st, &ahead, h_store, &h, pk, M - 1), SC_ERR_SLASH_BLOCK);
+    /* Attestations: both epoch windows saturate; the source bound is capped
+     * by the target bound, which is UINT64_MAX too. */
+    CHECK_RC(sc_slashing_approve_attestation(&st, &ahead, h_store, &h, pk, M - 1, M - 1), SC_OK);
+    CHECK(h.writes == 2 && st.committed.source_epoch == M && st.committed.target_epoch == M);
+    CHECK_RC(sc_slashing_approve_attestation(&st, &ahead, h_store, &h, pk, M - 1, M), SC_OK);
+    CHECK(h.writes == 2 && st.ram.source_epoch == M - 1 && st.ram.target_epoch == M);
+    /* The stored record keeps UINT64_MAX through the mark codec. */
+    CHECK_RC(h_load(&h, pk, &wm), SC_OK);
+    CHECK(wm.block_slot == M && wm.source_epoch == M && wm.target_epoch == M &&
+          wm.flags == (SC_WM_HAS_BLOCK | SC_WM_HAS_ATTESTATION));
+    /* Restart: the RAM state starts at UINT64_MAX, so nothing signs, not
+     * even a message at UINT64_MAX, and nothing is written. */
+    sc_slashing_restore(&st, &wm);
+    CHECK(st.ram.block_slot == M && st.ram.source_epoch == M && st.ram.target_epoch == M);
+    CHECK_RC(sc_slashing_approve_block(&st, &ahead, h_store, &h, pk, M), SC_ERR_SLASH_BLOCK);
+    CHECK_RC(sc_slashing_approve_block(&st, &ahead, h_store, &h, pk, 0), SC_ERR_SLASH_BLOCK);
+    CHECK_RC(sc_slashing_approve_attestation(&st, &ahead, h_store, &h, pk, M, M), SC_ERR_SLASH_TARGET);
+    CHECK_RC(sc_slashing_approve_attestation(&st, &ahead, h_store, &h, pk, M - 1, M), SC_ERR_SLASH_SOURCE);
+    CHECK_RC(sc_slashing_approve_attestation(&st, &ahead, h_store, &h, pk, 0, 1), SC_ERR_SLASH_SOURCE);
+    CHECK_RC(sc_slashing_cover_slot(&st, &ahead, h_store, &h, pk, M), SC_OK);
+    CHECK(h.writes == 2);
+    /* A first vote at (UINT64_MAX, UINT64_MAX): source equal to target is
+     * allowed, and both bounds land on UINT64_MAX. */
+    sc_slashing_restore(&st, NULL);
+    CHECK_RC(sc_slashing_approve_attestation(&st, &ahead, h_store, &h, pk, M, M), SC_OK);
+    CHECK(st.committed.source_epoch == M && st.committed.target_epoch == M);
+    sc_slashing_restore(&st, NULL);
+    CHECK_RC(sc_slashing_cover_slot(&st, &ahead, h_store, &h, pk, M), SC_OK);
+    CHECK(st.committed.block_slot == M);
+
+    /* Per-device marks. Epoch top is the last one: a block of that epoch
+     * books the target bound one epoch past it and the block bound at the
+     * last slot of that epoch, which is past UINT64_MAX, so UINT64_MAX. */
+    memset(&dev, 0, sizeof dev);
+    h.writes = 0;
+    sc_slashing_restore(&st, NULL);
+    sc_slashing_restore(&st2, NULL);
+    CHECK_RC(sc_slashing_approve_block_device(&st, &dev, &ahead, 32, h_store_device, &h, M - 1), SC_OK);
+    CHECK(h.writes == 1 && dev.block_slot == M && dev.target_epoch == top + 1 && dev.source_epoch == 0);
+    CHECK_RC(sc_slashing_approve_block_device(&st2, &dev, &ahead, 32, h_store_device, &h, M), SC_OK);
+    CHECK(h.writes == 1 && st2.ram.block_slot == M);
+    CHECK_RC(sc_slashing_approve_block_device(&st2, &dev, &ahead, 32, h_store_device, &h, M - 1),
+             SC_ERR_SLASH_BLOCK);
+    /* A target at UINT64_MAX saturates the target bound; the source bound
+     * follows the signed sources, as always with device marks. */
+    CHECK_RC(sc_slashing_approve_attestation_device(&st, &dev, &ahead, 32, h_store_device, &h, M - 1, M),
+             SC_OK);
+    CHECK(h.writes == 2 && dev.target_epoch == M && dev.block_slot == M && dev.source_epoch == M - 1);
+    CHECK_RC(sc_slashing_approve_attestation_device(&st2, &dev, &ahead, 32, h_store_device, &h, M, M),
+             SC_OK);
+    CHECK(h.writes == 3 && dev.source_epoch == M);
+    CHECK_RC(sc_slashing_cover_device(&dev, &ahead, 32, h_store_device, &h, M), SC_OK);
+    CHECK(h.writes == 3);
+    /* Restart from the device mark: every key starts at UINT64_MAX. */
+    CHECK_RC(h_load_device(&h, &wm), SC_OK);
+    CHECK(wm.block_slot == M && wm.source_epoch == M && wm.target_epoch == M);
+    sc_slashing_restore(&st, &wm);
+    CHECK_RC(sc_slashing_approve_block_device(&st, &wm, &ahead, 32, h_store_device, &h, M), SC_ERR_SLASH_BLOCK);
+    CHECK_RC(sc_slashing_approve_attestation_device(&st, &wm, &ahead, 32, h_store_device, &h, M, M),
+             SC_ERR_SLASH_TARGET);
+    CHECK_RC(sc_slashing_approve_attestation_device(&st, &wm, &ahead, 32, h_store_device, &h, 1, 2),
+             SC_ERR_SLASH_SOURCE);
+    CHECK(h.writes == 3);
+    /* The last slot of an epoch, at the edge (no window, so a cover books
+     * the epoch itself): epoch top-1 ends at slot UINT64_MAX-32, epoch top
+     * at UINT64_MAX exactly, with no loss, and any epoch past top is
+     * clamped to UINT64_MAX. */
+    sc_commit_ahead none = {0, 0, 0};
+    memset(&dev, 0, sizeof dev);
+    CHECK_RC(sc_slashing_cover_device(&dev, &none, 32, h_store_device, &h, top - 1), SC_OK);
+    CHECK(dev.target_epoch == top - 1 && dev.block_slot == M - 32);
+    CHECK_RC(sc_slashing_cover_device(&dev, &none, 32, h_store_device, &h, top), SC_OK);
+    CHECK(dev.target_epoch == top && dev.block_slot == M);
+    CHECK_RC(sc_slashing_cover_device(&dev, &none, 32, h_store_device, &h, top + 1), SC_OK);
+    CHECK(dev.target_epoch == top + 1 && dev.block_slot == M);
+
+    /* An import of UINT64_MAX values: taken as they are, stored once, and
+     * nothing signs after it, also after a restart. */
+    sc_watermark all = {M, M, M, SC_WM_HAS_BLOCK | SC_WM_HAS_ATTESTATION};
+    h.writes = 0;
+    sc_slashing_restore(&st, NULL);
+    CHECK_RC(sc_slashing_import(&st, &all, h_store, &h, pk2), SC_OK);
+    CHECK(h.writes == 1 && st.committed.block_slot == M && st.committed.source_epoch == M &&
+          st.committed.target_epoch == M && st.ram.target_epoch == M);
+    CHECK_RC(sc_slashing_import(&st, &all, h_store, &h, pk2), SC_OK);
+    CHECK(h.writes == 1); /* nothing to raise */
+    CHECK_RC(sc_slashing_approve_block(&st, &ahead, h_store, &h, pk2, M), SC_ERR_SLASH_BLOCK);
+    CHECK_RC(sc_slashing_approve_attestation(&st, &ahead, h_store, &h, pk2, M, M), SC_ERR_SLASH_TARGET);
+    CHECK_RC(h_load(&h, pk2, &wm), SC_OK);
+    sc_slashing_restore(&st, &wm);
+    CHECK_RC(sc_slashing_approve_block(&st, &ahead, h_store, &h, pk2, M), SC_ERR_SLASH_BLOCK);
+    CHECK_RC(sc_slashing_approve_attestation(&st, &ahead, h_store, &h, pk2, M - 1, M), SC_ERR_SLASH_SOURCE);
+    CHECK(h.writes == 1);
+    memset(&dev, 0, sizeof dev);
+    sc_slashing_restore(&st, NULL);
+    sc_slashing_state tmp = {st.ram, dev};
+    CHECK_RC(sc_slashing_import(&tmp, &all, h_store, &h, pk2), SC_OK);
+    CHECK(tmp.committed.block_slot == M && tmp.committed.target_epoch == M && tmp.ram.source_epoch == M);
+}
+
+/*
+ * The same through the signer. With a normal clock horizon a message near
+ * UINT64_MAX never reaches the marks: SC_ERR_POLICY_FUTURE refuses it
+ * first, while an import of UINT64_MAX values goes in and then refuses
+ * every vote and block. With max_epochs_ahead at UINT64_MAX the horizon
+ * saturates and the signer signs at the top of the range; its stored mark
+ * saturates, and a restart from it refuses everything, with both mark
+ * scopes.
+ */
+static void test_saturation_signer(void)
+{
+    const uint64_t M = UINT64_MAX;
+    sc_watermark all = {M, M, M, SC_WM_HAS_BLOCK | SC_WM_HAS_ATTESTATION};
+    uint8_t sig[96];
+    sc_slashing_state st;
+
+    for (uint32_t scope = SC_MARKS_PER_VALIDATOR; scope <= SC_MARKS_PER_DEVICE; scope++) {
+        host_t h = {0};
+        sc_config cfg;
+        make_config(&cfg); /* commit_ahead {32, 1, 1}, max_epochs_ahead 2 */
+        cfg.mark_scope = scope;
+        set_epoch(&h, E);
+        sc_signer *s = new_signer(&h, &cfg, 2, 0);
+        vkeys k = add_validator(s, 50, SC_INDEX_UNKNOWN);
+        sc_attestation_data a = att(M - 1, M, 1);
+        sc_beacon_block_header b = blk(M - 1, 1);
+        CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_ERR_POLICY_FUTURE);
+        CHECK_RC(sc_sign_block(s, k.pk, &b, sig), SC_ERR_POLICY_FUTURE);
+        CHECK(h.writes == 0);
+        CHECK_RC(sc_signer_import(s, k.pk, cfg.genesis_validators_root, &all), SC_OK);
+        CHECK_RC(sc_signer_get_state(s, k.pk, &st), SC_OK);
+        CHECK(h.writes == 1 && st.committed.block_slot == M && st.committed.source_epoch == M &&
+              st.committed.target_epoch == M && st.ram.target_epoch == M);
+        a = att(E - 1, E, 1);
+        b = blk(E * 32, 1);
+        CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_ERR_SLASH_SOURCE);
+        CHECK_RC(sc_sign_block(s, k.pk, &b, sig), SC_ERR_SLASH_BLOCK);
+
+        /* A horizon that reaches UINT64_MAX: the signer signs there, and
+         * the mark it books saturates. */
+        host_t h2 = {0};
+        cfg.max_epochs_ahead = M;
+        set_epoch(&h2, E);
+        sc_signer *s2 = new_signer(&h2, &cfg, 2, 0);
+        vkeys k2 = add_validator(s2, 51, SC_INDEX_UNKNOWN);
+        a = att(M - 1, M - 1, 1);
+        b = blk(M - 1, 1);
+        CHECK_RC(sc_sign_attestation(s2, k2.pk, &a, sig), SC_OK);
+        CHECK_RC(sc_sign_block(s2, k2.pk, &b, sig), SC_OK);
+        CHECK_RC(sc_signer_get_state(s2, k2.pk, &st), SC_OK);
+        CHECK(st.committed.block_slot == M && st.committed.target_epoch == M);
+        CHECK(st.committed.source_epoch == (scope == SC_MARKS_PER_DEVICE ? M - 1 : M));
+        CHECK(st.ram.block_slot == M - 1 && st.ram.source_epoch == M - 1 && st.ram.target_epoch == M - 1);
+        a = att(M - 1, M, 2);
+        b = blk(M, 2);
+        CHECK_RC(sc_sign_attestation(s2, k2.pk, &a, sig), SC_OK);
+        CHECK_RC(sc_sign_block(s2, k2.pk, &b, sig), SC_OK);
+        CHECK_RC(sc_signer_get_state(s2, k2.pk, &st), SC_OK);
+        CHECK(st.committed.block_slot == M && st.committed.target_epoch == M &&
+              st.ram.block_slot == M && st.ram.target_epoch == M);
+
+        /* Restart from the stored mark: at UINT64_MAX, so every vote and
+         * block is refused, the repeats of the last ones included. */
+        int writes = h2.writes;
+        sc_signer_wipe(s2);
+        s2 = new_signer(&h2, &cfg, 2, 0);
+        add_validator(s2, 51, SC_INDEX_UNKNOWN);
+        CHECK_RC(sc_signer_get_state(s2, k2.pk, &st), SC_OK);
+        CHECK(st.ram.block_slot == M && st.ram.target_epoch == M &&
+              st.ram.source_epoch == (scope == SC_MARKS_PER_DEVICE ? M - 1 : M));
+        /* Per validator the source bound saturated too, so the source
+         * refuses the last vote; per device it sits at the signed source,
+         * so the target does. */
+        CHECK_RC(sc_sign_attestation(s2, k2.pk, &a, sig),
+                 scope == SC_MARKS_PER_DEVICE ? SC_ERR_SLASH_TARGET : SC_ERR_SLASH_SOURCE);
+        CHECK_RC(sc_sign_block(s2, k2.pk, &b, sig), SC_ERR_SLASH_BLOCK);
+        a = att(M, M, 3);
+        CHECK_RC(sc_sign_attestation(s2, k2.pk, &a, sig), SC_ERR_SLASH_TARGET);
+        a = att(E - 1, E, 3);
+        b = blk(E * 32, 3);
+        CHECK_RC(sc_sign_attestation(s2, k2.pk, &a, sig), SC_ERR_SLASH_SOURCE);
+        CHECK_RC(sc_sign_block(s2, k2.pk, &b, sig), SC_ERR_SLASH_BLOCK);
+        CHECK(h2.writes == writes);
+    }
+}
+
+/*
  * A restart after a long period without finality: the chain's source stays
  * at S while the target moves on for LEAK epochs, then the device restarts.
  * It must sign the first vote above its target bound (source S) and still
@@ -2858,6 +3071,8 @@ int main(int argc, char **argv)
     test_repeat_restart();
     test_device_marks();
     test_cover_epoch();
+    test_saturation();
+    test_saturation_signer();
     test_nonfinality_restart(0);
     test_nonfinality_restart(2);
     test_write_counts();
