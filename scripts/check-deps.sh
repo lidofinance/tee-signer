@@ -12,7 +12,8 @@
 #      or in a module the build's clouds may use. The AWS SDK, smithy-go,
 #      hf/nsm, mdlayher/vsock and socket and golang.org/x/{net,sync,sys} are
 #      for the AWS build only, fxamacker/cbor and x448/float16 too (the
-#      Nitro verifier's CBOR parser). The Azure, GCP and dev builds hold
+#      Nitro verifier's CBOR parser). The NTS clock (tag nts) is on the
+#      standard library alone and adds no module. The dev builds hold
 #      nothing third-party but the embedded root certificates
 #      (x509roots/fallback).
 #   2b. The attestation verifier of the build's own platform only (tag
@@ -59,10 +60,13 @@ cloud_in() {
 module_ok() {
   case "$2" in
     github.com/lidofinance/tee-signer/*|golang.org/x/crypto/x509roots/fallback) return 0 ;;
+    # x/net and x/sys: the AWS SDK.
+    golang.org/x/net|golang.org/x/sys)
+      cloud_in "$1" aws && return 0 ;;
     # The Nitro verifier's CBOR parser: the AWS platform.
     github.com/fxamacker/cbor/*|github.com/x448/float16)
       cloud_in "$1" aws && return 0 ;;
-    github.com/aws/*|github.com/hf/nsm|github.com/mdlayher/*|golang.org/x/net|golang.org/x/sync|golang.org/x/sys)
+    github.com/aws/*|github.com/hf/nsm|github.com/mdlayher/*|golang.org/x/sync)
       cloud_in "$1" aws && return 0 ;;
   esac
   return 1
@@ -171,7 +175,7 @@ check_source() {
     esac
     linked "$list" "$want" || bad "$name ($goarch): $want is not linked, so the tag platform_$c did nothing"
   done
-  # The NTS library (tag nts) in the cloud builds, not in the dev ones.
+  # The NTS client (tag nts) in the cloud builds, not in the dev ones.
   if has_nts "$name"; then
     linked "$list" github.com/lidofinance/tee-signer/trusted-time/nts || bad "$name ($goarch): built with the tag nts but github.com/lidofinance/tee-signer/trusted-time/nts is not linked"
   elif linked "$list" github.com/lidofinance/tee-signer/trusted-time/nts; then

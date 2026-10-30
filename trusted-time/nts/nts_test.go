@@ -5,6 +5,7 @@ package nts
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"net"
@@ -21,8 +22,8 @@ import (
 
 func TestVersion(t *testing.T) {
 	v := Version()
-	if !strings.HasPrefix(v, "signer-nts ") {
-		t.Fatalf("Version() = %q, want a string that starts with %q", v, "signer-nts ")
+	if !strings.HasPrefix(v, "signer-nts go") {
+		t.Fatalf("Version() = %q, want a string that starts with %q", v, "signer-nts go")
 	}
 	t.Log(v)
 }
@@ -33,8 +34,7 @@ func TestAESSIVSelfTest(t *testing.T) {
 	}
 }
 
-// Go calls C from whatever thread runs the goroutine. The library must not
-// care which one.
+// The self-test and Version are safe to call from many goroutines at once.
 func TestCallsFromManyGoroutines(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make(chan error, 16)
@@ -79,17 +79,9 @@ func TestRunnerBuiltWithTheTag(t *testing.T) {
 	}
 }
 
-// cgo's view of the structs must match the sizes the header states (the
-// Rust test checks the Rust side against the same numbers).
-func TestStructSizesMatchTheHeader(t *testing.T) {
-	if cSizes != headerSizes {
-		t.Fatalf("C struct sizes %v, header says %v", cSizes, headerSizes)
-	}
-}
-
 func TestKEValues(t *testing.T) {
-	if ALPN() != "ntske/1" || ExporterLabel() != "EXPORTER-network-time-security" {
-		t.Fatalf("ALPN %q, label %q", ALPN(), ExporterLabel())
+	if ALPN != "ntske/1" || ExporterLabel != "EXPORTER-network-time-security" {
+		t.Fatalf("ALPN %q, label %q", ALPN, ExporterLabel)
 	}
 	if c := ExporterContext(false); !bytes.Equal(c, []byte{0, 0, 0, 15, 0}) {
 		t.Fatalf("C2S context %x", c)
@@ -100,15 +92,93 @@ func TestKEValues(t *testing.T) {
 	if r := hex.EncodeToString(KERequest()); r != "80010002000080040002000f80000000" {
 		t.Fatalf("KE request %s", r)
 	}
-	if _, done, err := KEResponseLength([]byte{0x80, 0x01}); done || err != nil {
+	if _, done, err := keResponseLength([]byte{0x80, 0x01}); done || err != nil {
 		t.Fatalf("2 octets: done %v err %v", done, err)
 	}
-	_, _, err := KEResponseLength([]byte{0x00, 0x05, 0x04, 0x01})
-	var e *Error
-	if !errors.As(err, &e) || e.Code != CodeKE || e.Kind() != 4 {
+	if _, _, err := keResponseLength([]byte{0x00, 0x05, 0x04, 0x01}); err == nil || !strings.Contains(err.Error(), "at most 1024") {
 		t.Fatalf("over-long record: %v", err)
 	}
-	t.Log(err)
+	// The record rules: each refused response, and the reason.
+	rec := func(critical bool, typ uint16, body ...byte) []byte {
+		if critical {
+			typ |= 0x8000
+		}
+		r := []byte{byte(typ >> 8), byte(typ), byte(len(body) >> 8), byte(len(body))}
+		return append(r, body...)
+	}
+	eom := rec(true, 0)
+	proto := rec(true, 1, 0, 0)
+	aead := rec(true, 4, 0, 15)
+	cookie := rec(false, 5, 1, 2, 3)
+	join := func(rs ...[]byte) []byte {
+		var out []byte
+		for _, r := range rs {
+			out = append(out, r...)
+		}
+		return out
+	}
+	if r, err := parseKEResponse(join(proto, aead, cookie, rec(false, 6, 'h', 'o', 's', 't'), rec(false, 7, 0x10, 0x7b), eom)); err != nil || r.server != "host" || r.port != 4219 || len(r.cookies) != 1 {
+		t.Fatalf("good response: %+v %v", r, err)
+	}
+	for _, c := range []struct {
+		name string
+		resp []byte
+		want string
+	}{
+		{"no cookie", join(proto, aead, eom), "no cookie"},
+		{"no protocol", join(aead, cookie, eom), "no Next Protocol"},
+		{"no aead", join(proto, cookie, eom), "no AEAD"},
+		{"other aead", join(proto, rec(true, 4, 0, 30), cookie, eom), "AEAD_AES_SIV_CMAC_256"},
+		{"other protocol", join(rec(true, 1, 0, 1), aead, cookie, eom), "NTPv4"},
+		{"repeated protocol", join(proto, proto, aead, cookie, eom), "repeated"},
+		{"error record", join(rec(true, 2, 0, 1), eom), "server error 1"},
+		{"warning record", join(proto, aead, cookie, rec(true, 3, 0, 0), eom), "server warning 0"},
+		{"unknown critical", join(proto, aead, cookie, rec(true, 99), eom), "unknown critical record 99"},
+		{"trailing bytes", join(proto, aead, cookie, eom, []byte{1}), "after End of Message"},
+		{"no eom", join(proto, aead, cookie), "before End of Message"},
+		{"empty cookie", join(proto, aead, rec(false, 5), eom), "cookie of 0 octets"},
+	} {
+		if _, err := parseKEResponse(c.resp); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", c.name, err, c.want)
+		}
+	}
+	// An unknown non-critical record is ignored; cookies past 8 are dropped.
+	many := join(proto, aead)
+	for i := 0; i < 12; i++ {
+		many = append(many, cookie...)
+	}
+	if r, err := parseKEResponse(join(many, rec(false, 99, 1, 2), eom)); err != nil || len(r.cookies) != 8 {
+		t.Fatalf("12 cookies and an unknown record: %+v %v", r, err)
+	}
+}
+
+// The AES-SIV of this package against the test server's independent one,
+// on random inputs, and against RFC 5297 appendix A (AESSIVSelfTest).
+func TestSIVMatchesTestServer(t *testing.T) {
+	for i := 0; i < 200; i++ {
+		key := make([]byte, 32)
+		ad := make([]byte, i%40)
+		nonce := make([]byte, 1+i%20)
+		pt := make([]byte, i)
+		for _, b := range [][]byte{key, ad, nonce, pt} {
+			rand.Read(b)
+		}
+		k, err := newSIVKey(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ours := k.Seal([][]byte{ad, nonce}, pt)
+		theirs := ntstest.Seal(key, ad, nonce, pt)
+		if !bytes.Equal(ours, theirs) {
+			t.Fatalf("%d: seal differs", i)
+		}
+		if p, ok := k.Open([][]byte{ad, nonce}, theirs); !ok || !bytes.Equal(p, pt) {
+			t.Fatalf("%d: open of the server's ciphertext", i)
+		}
+		if _, ok := ntstest.Open(key, ad, nonce, ours); !ok {
+			t.Fatalf("%d: the server does not open ours", i)
+		}
+	}
 }
 
 // The test server's AES-SIV against RFC 5297 appendix A.1, so the cross
@@ -252,7 +322,8 @@ func TestKERefusals(t *testing.T) {
 	}{
 		{"TLS 1.2 only", ntstest.KEOptions{TLS12: true}, "protocol version"},
 		{"no ALPN", ntstest.KEOptions{NoALPN: true}, "ALPN"},
-		{"error record", ntstest.KEOptions{ErrorCode: 2}, "server error (value: error code, RFC 8915 4.1.3): 1"},
+		{"error record", ntstest.KEOptions{ErrorCode: 2}, "server error 1"},
+		{"octets after End of Message", ntstest.KEOptions{Trailing: true}, "after End of Message"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -289,20 +360,22 @@ func TestKissForgeryAndNTSN(t *testing.T) {
 	}
 	defer ke.Assoc.Close()
 	var k *KissError
-	if _, err := ke.Assoc.Query(ctx(t, 2*time.Second), ke.NTPAddr, time.Now(), nil); !errors.As(err, &k) || k.Code != "RATE" {
+	if _, err := ke.Assoc.Query(ctx(t, 2*time.Second), ke.NTPAddr, time.Now(), nil); !errors.As(err, &k) || k.Code != "RATE" || !k.Authentic {
 		t.Fatalf("RATE: %v", err)
 	}
-	// A response whose authenticator does not verify is skipped; nothing
-	// else comes, so the query times out and says why.
+	// A response whose authenticator does not verify is dropped and the
+	// query waits for the real one; nothing else comes, so it times out
+	// and says why.
 	f.ntp.Set(ntstest.NTPOptions{BadAuth: true})
 	_, err = ke.Assoc.Query(ctx(t, 500*time.Millisecond), ke.NTPAddr, time.Now(), nil)
-	if err == nil || !strings.Contains(err.Error(), "authenticator does not verify") {
+	var ne net.Error
+	if !errors.As(err, &ne) || !ne.Timeout() || !strings.Contains(err.Error(), "authenticator does not verify") {
 		t.Fatalf("forged: %v", err)
 	}
 	// The server forgets its cookies: NTSN (RFC 8915 section 5.7).
 	f.ntp.Set(ntstest.NTPOptions{})
 	f.store.Forget()
-	if _, err := ke.Assoc.Query(ctx(t, 2*time.Second), ke.NTPAddr, time.Now(), nil); !errors.As(err, &k) || k.Code != "NTSN" {
+	if _, err := ke.Assoc.Query(ctx(t, 2*time.Second), ke.NTPAddr, time.Now(), nil); !errors.As(err, &k) || k.Code != "NTSN" || k.Authentic {
 		t.Fatalf("NTSN: %v", err)
 	}
 	// A zero reference timestamp is refused by the RFC 5905 checks.
@@ -381,5 +454,85 @@ func TestNTPAddressFromKE(t *testing.T) {
 	host, port, _ := net.SplitHostPort(ke.NTPAddr)
 	if host != "127.0.0.1" || port != strconv.Itoa(int(f.ntp.Port)) {
 		t.Fatalf("NTP address %s", ke.NTPAddr)
+	}
+}
+
+// A spoofer on the path sends a forged answer before the real one: the
+// forgery is dropped and the real answer is taken, so one fake packet
+// cannot knock a server out of the quorum.
+func TestDecoyBeforeTheAnswer(t *testing.T) {
+	f := newFixture(t, ntstest.KEOptions{}, ntstest.NTPOptions{Decoy: true})
+	ke, err := KeyExchange(ctx(t, 5*time.Second), f.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ke.Assoc.Close()
+	for i := 0; i < 4; i++ {
+		s, err := ke.Assoc.Query(ctx(t, 2*time.Second), ke.NTPAddr, time.Now(), nil)
+		if err != nil {
+			t.Fatalf("query %d with a decoy first: %v", i, err)
+		}
+		if s.CookiesHeld != 8 || s.CookiesReceived != 1 {
+			t.Fatalf("sample %+v", s)
+		}
+	}
+	if n := f.ntp.Requests.Load(); n != 4 {
+		t.Fatalf("%d requests for 4 queries", n)
+	}
+}
+
+// Every precision value a server can state is taken: -128 (which crashed
+// the NTP library this package replaced) measures with a 1 ns term, and
+// 127 (2^127 s) is refused by the bound, not by a crash.
+func TestPrecisionExtremes(t *testing.T) {
+	f := newFixture(t, ntstest.KEOptions{}, ntstest.NTPOptions{Precision: -128})
+	ke, err := KeyExchange(ctx(t, 5*time.Second), f.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ke.Assoc.Close()
+	s, err := ke.Assoc.Query(ctx(t, 2*time.Second), ke.NTPAddr, time.Now(), nil)
+	if err != nil || s.Precision != -128 || s.Bound > 50*time.Millisecond {
+		t.Fatalf("precision -128: %+v %v", s, err)
+	}
+	f.ntp.Set(ntstest.NTPOptions{Precision: 127})
+	_, err = ke.Assoc.Query(ctx(t, 2*time.Second), ke.NTPAddr, time.Now(), nil)
+	if !errors.Is(err, &Error{Code: CodeSample}) || !strings.Contains(err.Error(), "MAXDIST") {
+		t.Fatalf("precision 127: %v", err)
+	}
+	// The cookies of that answer were kept: it was authentic.
+	if ke.Assoc.Cookies() != 8 {
+		t.Fatalf("%d cookies after a refused measurement", ke.Assoc.Cookies())
+	}
+}
+
+// A forged Kiss-o'-Death does not end the query: the real answer that
+// follows it is taken. One sent by itself is reported after the grace,
+// without the authentic mark, so the clock does not obey it; the same code
+// from the server, authenticated, carries the mark.
+func TestForgedKissOfDeath(t *testing.T) {
+	f := newFixture(t, ntstest.KEOptions{}, ntstest.NTPOptions{KissDecoy: "DENY"})
+	ke, err := KeyExchange(ctx(t, 5*time.Second), f.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ke.Assoc.Close()
+	s, err := ke.Assoc.Query(ctx(t, 2*time.Second), ke.NTPAddr, time.Now(), nil)
+	if err != nil || s.CookiesHeld != 8 {
+		t.Fatalf("a forged DENY before the answer: %+v %v", s, err)
+	}
+	f.ntp.Set(ntstest.NTPOptions{Kiss: "DENY", KissPlain: true})
+	start := time.Now()
+	var k *KissError
+	_, err = ke.Assoc.Query(ctx(t, 5*time.Second), ke.NTPAddr, time.Now(), nil)
+	if !errors.As(err, &k) || k.Code != "DENY" || k.Authentic {
+		t.Fatalf("a forged DENY alone: %v", err)
+	}
+	if took := time.Since(start); took < kissGrace || took > 3*time.Second {
+		t.Fatalf("the query took %v, want about the grace of %v", took, kissGrace)
+	}
+	f.ntp.Set(ntstest.NTPOptions{Kiss: "DENY"})
+	if _, err := ke.Assoc.Query(ctx(t, 5*time.Second), ke.NTPAddr, time.Now(), nil); !errors.As(err, &k) || k.Code != "DENY" || !k.Authentic {
+		t.Fatalf("the server's own DENY: %v", err)
 	}
 }

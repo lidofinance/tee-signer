@@ -48,7 +48,6 @@ jobs:
           cache: false
       - run: bash scripts/deps.sh
       - run: make core
-      - run: make nts
       - run: make test-modules
       # Show every failing test with its output, not only the log's tail.
       - if: failure()

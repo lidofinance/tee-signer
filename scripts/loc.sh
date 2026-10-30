@@ -2,14 +2,13 @@
 # Code lines per module, counted on demand (the numbers change with every
 # commit, so no file of the repo records them). cloc counts code only, no
 # comments or blank lines. Left out: tests (_test.go, the tests module, the
-# C tests, fuzz harness and simulator, the Rust tests), test fakes and test
+# C tests, fuzz harness and simulator), test fakes and test
 # helper packages, testdata, vendored code (third_party) and docs.
 #
 #   scripts/loc.sh              per module and language
 #   scripts/loc.sh builds       the lines each runner build links: the Go
 #                               files of this repo that go list -deps picks for
-#                               its tags, plus the C core, plus the Rust NTS
-#                               crate for the builds with the tag nts
+#                               its tags, plus the C core
 #   scripts/loc.sh files MOD    the counted files of one module
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
@@ -28,8 +27,6 @@ files() {
       find signer-core/src signer-core/include -type f \( -name '*.c' -o -name '*.h' \)
       find signer-core -name '*.go' -not -name '*_test.go' | grep -vE "^signer-core/.*$TEST_DIRS" | grep -v '^signer-core/tools/' ;;
     trusted-time)
-      find trusted-time/rust/src trusted-time/rust/core/src trusted-time/rust/nostd-check/src trusted-time/rust/include -type f \
-        \( -name '*.rs' -o -name '*.h' \) -not -name 'tests.rs'
       find trusted-time -name '*.go' -not -name '*_test.go' | grep -vE "^trusted-time/.*$TEST_DIRS" ;;
     tests) ;;
     *)
@@ -62,17 +59,15 @@ case "${1:-modules}" in
   files) files "${2:?module}" ;;
   builds)
     files signer-core | grep -E '\.(c|h)$' >"$tmp/core.list"
-    files trusted-time | grep -E '\.(rs|h)$' >"$tmp/rust.list"
     for name in "${RUNNER_BINS[@]}"; do
       tags="netgo,osusergo,$(runner_tags "$name")"
       (cd tee-signer && GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go list -deps -tags "$tags" \
         -f '{{if .Module}}{{range .GoFiles}}{{println $.Module.Path $.Dir .}}{{end}}{{range .CgoFiles}}{{println $.Module.Path $.Dir .}}{{end}}{{range .CFiles}}{{println $.Module.Path $.Dir .}}{{end}}{{end}}' .) |
         awk '$1 ~ /^github.com[/]lidofinance[/]tee-signer[/]/ { print $2 "/" $3 }' | sed "s#^$ROOT/##" >"$tmp/go.list"
       cat "$tmp/go.list" "$tmp/core.list" >"$tmp/b.list"
-      has_nts "$name" && cat "$tmp/rust.list" >>"$tmp/b.list"
       go="$(cloc --quiet --list-file="$tmp/go.list" --csv 2>/dev/null | awk -F, '$2 == "SUM" { print $5 }')"
       all="$(cloc --quiet --list-file="$tmp/b.list" --csv 2>/dev/null | awk -F, '$2 == "SUM" { print $5 }')"
-      printf '%-34s Go %6s, with the C core%s %6s\n' "$name" "$go" "$(has_nts "$name" && echo ' and NTS' || echo '        ')" "$all"
+      printf '%-34s Go %6s, with the C core %6s\n' "$name" "$go" "$all"
     done ;;
   *) echo "usage: loc.sh [modules|builds|files MODULE]" >&2; exit 2 ;;
 esac

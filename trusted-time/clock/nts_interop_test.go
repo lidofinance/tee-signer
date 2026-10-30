@@ -17,8 +17,9 @@ import (
 // TestNTSInteropPublicServers runs the NTS clock against the four public
 // operators: one NTS-KE and three queries per server, 33 s apart (RFC 5905
 // MINPOLL is 16 s), so about 70 s and 4 x (1 TLS session + 3 UDP queries).
-// It runs only with NTS_INTEROP=1 (scripts/nts-interop.sh): it needs the
-// network and is not part of the offline tests.
+// It runs only with NTS_INTEROP=1 (from trusted-time: NTS_INTEROP=1 go test
+// -tags nts -run TestNTSInteropPublicServers ./clock): it needs the network
+// and is not part of the offline tests.
 //
 // The coarse clock is the host clock here: the HTTPS-date sources would be
 // other hosts, which this test does not contact. So the 2 s check compares

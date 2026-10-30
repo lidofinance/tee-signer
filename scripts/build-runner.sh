@@ -30,10 +30,8 @@
 #                            between vsock and UDP, allowlist and rate limits
 #
 # The cloud runners (azure, aws, gcp and their debug builds) have the build
-# tag nts: they link the Rust NTS library, which scripts/build-nts.sh builds
-# first (build/nts/<arch>/lib, offline, in its toolchain image), and their
-# images turn the NTS clock on (-nts-clock). runner-dev and
-# runner-dev-debugimport stay without it.
+# tag nts: they carry the NTS clock (trusted-time/nts) and their images turn
+# it on (-nts-clock). runner-dev and runner-dev-debugimport stay without it.
 #
 # Only the three release binaries named after a cloud go into images; the
 # debug builds never do. The script checks that every binary is static and of
@@ -95,9 +93,6 @@ if [ ${#archs[@]} -eq 0 ]; then
     command -v "$(cc_for "$a")" >/dev/null 2>&1 && archs+=("$a")
   done
 fi
-# The NTS library of the cloud runners (no tests here: scripts/test-nts.sh).
-bash "$ROOT/scripts/build-nts.sh" --no-test "${archs[@]}"
-
 # -trimpath and an empty build id keep the binary byte-identical across
 # rebuilds with the same toolchain, which keeps enclave measurements stable.
 LDFLAGS="-s -w -buildid= -linkmode external -extldflags -static"
@@ -161,13 +156,13 @@ for arch in "${archs[@]}"; do
           has_string "$out/$name" "$opt" no "this build has no such test option" ;;
       esac
     done
-    # The NTS library and the -nts-clock flag in the cloud builds only; the
+    # The NTS client and the -nts-clock flag in the cloud builds only; the
     # test servers' variable in their debug builds only.
     if has_nts "$name"; then
-      has_string "$out/$name" "signer-nts " yes "a cloud build links the NTS library"
+      has_string "$out/$name" "github.com/lidofinance/tee-signer/trusted-time/nts" yes "a cloud build has the NTS clock"
       has_string "$out/$name" "nts-coarse-urls" yes "a cloud build has the NTS clock flags"
     else
-      has_string "$out/$name" "signer-nts " no "a dev build has no NTS library"
+      has_string "$out/$name" "github.com/lidofinance/tee-signer/trusted-time/nts" no "a dev build has no NTS clock"
       has_string "$out/$name" "nts-coarse-urls" no "a dev build has no NTS clock flags"
     fi
     case "$name" in
