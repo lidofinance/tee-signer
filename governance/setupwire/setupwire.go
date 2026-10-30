@@ -217,6 +217,15 @@ func ParsePlatform(s string) (Platform, error) {
 	return 0, fmt.Errorf("platform %q, want nitro, azure, gcp or dev", s)
 }
 
+// The names of the enum values, indexed by value ("" for an unused value),
+// for the human form (governance/setuptext).
+func PresetNames() []string    { return slices.Clone(presetNames) }
+func GroupNames() []string     { return slices.Clone(groupNames) }
+func ImageKindNames() []string { return slices.Clone(imageNames) }
+
+// RootDomainNames is indexed by bit: bit n is domain type 0x0n000000.
+func RootDomainNames() []string { return slices.Clone(rootDomainNames) }
+
 // Size is the length of a measurement of this kind.
 func (k ImageKind) Size() int {
 	switch k {
@@ -1409,6 +1418,10 @@ func (l *Locked) Check() error {
 	}
 	return nil
 }
+
+// CompareImages is the order of AllowedImageMeasurements: by kind, then by
+// measurement.
+func CompareImages(a, b Image) int { return compareImages(a, b) }
 
 func compareImages(a, b Image) int {
 	if a.Kind != b.Kind {

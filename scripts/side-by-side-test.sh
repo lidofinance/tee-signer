@@ -47,7 +47,7 @@ make_setup() { # make_setup SAMPLE OUT [KEY=VALUE...]
   local sample="$1" out="$2" kv
   shift 2
   awk -F' = ' 'NR == FNR { if (NF > 1) drop[$1] = 1; next } !($1 in drop)' \
-    "$work/chain.lines" "$ROOT/governance/setupwire/testdata/$sample" >"$work/setup.conf"
+    "$work/chain.lines" "$ROOT/governance/setuptext/testdata/$sample" >"$work/setup.conf"
   cat "$work/chain.lines" >>"$work/setup.conf"
   for kv in "$@"; do
     sed -i "s|^${kv%%=*} = .*|${kv%%=*} = ${kv#*=}|" "$work/setup.conf"

@@ -41,7 +41,7 @@ management plane, which addresses the account by its subscription and
 group. `signer-config setup` (the signing client's tool) makes the setups of a
 cluster with one `cluster_id`. `signer-admin/cmd/setup-tool encode` makes one
 binary setup from a human `key = value` file
-(`governance/setupwire/testdata/setup-azure.conf` is an example), and
+(`governance/setuptext/testdata/setup-azure.conf` is an example), and
 `setup-tool chain-lines CHAIN_JSON` prints the chain lines of a chain.
 
 ```sh

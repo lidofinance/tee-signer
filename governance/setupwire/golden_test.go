@@ -10,9 +10,9 @@ import (
 	"testing"
 )
 
-// goldenFiles builds every vector: the binary and human form of each
-// sample setup and of three signed updates, the hashes, and the context
-// list. Approver keys and salts come from fixed seeds and Ed25519 signs
+// goldenFiles builds every vector: the binary form of each sample setup
+// and of three signed updates, the hashes, and the context list. Their
+// human forms are in governance/setuptext/testdata (TestGolden there). Approver keys and salts come from fixed seeds and Ed25519 signs
 // deterministically, so the files are the same on every run.
 func goldenFiles(t *testing.T) map[string][]byte {
 	files := map[string][]byte{}
@@ -27,7 +27,6 @@ func goldenFiles(t *testing.T) map[string][]byte {
 		s := ss[name]
 		b := must(s.Encode())
 		files[name+".bin"] = b
-		files[name+".conf"] = must(s.Format())
 		lh, _ := s.GroupHash(GroupLocked)
 		oh, _ := s.GroupHash(GroupOpen)
 		sh, _ := SetupHash(b)
@@ -51,7 +50,6 @@ func goldenFiles(t *testing.T) map[string][]byte {
 		{"update-rotation", signedUpdate(t, s, rotationBody(s), []byte{0, 1}, []byte{2, 3, 4})},
 	} {
 		files[u.name+".bin"] = must(u.u.Encode())
-		files[u.name+".conf"] = must(u.u.Format())
 		h, _ := u.u.Body.Hash()
 		fmt.Fprintf(&hashes, "%s update_hash %x\n", u.name, h)
 	}
@@ -64,8 +62,8 @@ func goldenFiles(t *testing.T) map[string][]byte {
 	return files
 }
 
-// The vectors in testdata match the code, and each file reads back to its
-// pair: the .conf parses to the .bin, the .bin formats to the .conf.
+// The vectors in testdata match the code, and each binary file decodes and
+// encodes back to itself.
 func TestGolden(t *testing.T) {
 	files := goldenFiles(t)
 	for name, want := range files {
@@ -91,20 +89,13 @@ func TestGolden(t *testing.T) {
 			continue
 		}
 		bin, _ := os.ReadFile(filepath.Join("testdata", name))
-		conf, _ := os.ReadFile(filepath.Join("testdata", base+".conf"))
-		var fromBin, fromConf []byte
-		var text []byte
+		var fromBin []byte
 		if strings.HasPrefix(base, "setup-") {
 			d, err := DecodeSetup(bin)
 			if err != nil {
 				t.Fatalf("%s: %v", name, err)
 			}
-			text = must(d.Format())
-			p, err := ParseSetup(base+".conf", conf)
-			if err != nil {
-				t.Fatalf("%s.conf: %v", base, err)
-			}
-			fromBin, fromConf = must(d.Encode()), must(p.Encode())
+			fromBin = must(d.Encode())
 		} else {
 			d, err := DecodeUpdate(bin)
 			if err != nil {
@@ -113,15 +104,10 @@ func TestGolden(t *testing.T) {
 			if err := d.Verify(&s.Locked.Approvers); err != nil {
 				t.Fatalf("%s: %v", name, err)
 			}
-			text = must(d.Format())
-			p, err := ParseUpdate(base+".conf", conf)
-			if err != nil {
-				t.Fatalf("%s.conf: %v", base, err)
-			}
-			fromBin, fromConf = must(d.Encode()), must(p.Encode())
+			fromBin = must(d.Encode())
 		}
-		if !bytes.Equal(text, conf) || !bytes.Equal(fromBin, bin) || !bytes.Equal(fromConf, bin) {
-			t.Errorf("%s and %s.conf do not read back to each other", name, base)
+		if !bytes.Equal(fromBin, bin) {
+			t.Errorf("%s does not read back to itself", name)
 		}
 	}
 }

@@ -42,18 +42,6 @@ func TestNoLockAccepted(t *testing.T) {
 			t.Errorf("trailing byte %d accepted", last)
 		}
 	}
-	// The human form carries it, and only for GCP.
-	text, err := accepted.Format()
-	if err != nil || !strings.Contains(string(text), "sealing_key_release.no_lock_accepted = true") {
-		t.Fatalf("format: %v\n%s", err, text)
-	}
-	back, err := ParseSetup("gcp.conf", text)
-	if err != nil || !back.Platform.SealingKeyRelease.NoLockAccepted {
-		t.Fatalf("parse: %v", err)
-	}
-	if text, _ := plain.Format(); strings.Contains(string(text), "no_lock_accepted") {
-		t.Fatal("format writes no_lock_accepted for a setup without it")
-	}
 	for _, name := range []string{"setup-nitro", "setup-azure", "setup-dev"} {
 		s := samples(t)[name]
 		s.Platform.SealingKeyRelease.NoLockAccepted = true

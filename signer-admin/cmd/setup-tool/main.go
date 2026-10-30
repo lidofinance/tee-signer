@@ -38,6 +38,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/lidofinance/tee-signer/governance/setuptext"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/platform/setup"
 )
@@ -73,7 +74,7 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		text, err := s.Format()
+		text, err := setuptext.FormatSetup(s)
 		if err != nil {
 			return err
 		}
@@ -102,7 +103,7 @@ func encode(human, out string) error {
 	if err != nil {
 		return err
 	}
-	s, err := setupwire.ParseSetup(human, text)
+	s, err := setuptext.ParseSetup(human, text)
 	if err != nil {
 		return err
 	}

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/lidofinance/tee-signer/governance/flavor"
+	"github.com/lidofinance/tee-signer/governance/setuptext"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 )
 
@@ -101,7 +102,7 @@ func buildSetups(name string, data []byte, clusterID [32]byte) ([]*setupwire.Set
 		text[sec.start] = "signer_name = " + sec.name
 		copy(text[sec.start+1:], lines[sec.start+1:sec.end])
 		text[len(lines)] = fmt.Sprintf("cluster_id = 0x%x", clusterID)
-		s, err := setupwire.ParseSetup(name, []byte(strings.Join(text, "\n")))
+		s, err := setuptext.ParseSetup(name, []byte(strings.Join(text, "\n")))
 		if err != nil {
 			return nil, fmt.Errorf("signer %s: %w", sec.name, err)
 		}

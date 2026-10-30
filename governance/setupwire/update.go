@@ -302,6 +302,9 @@ func SignBody(key ed25519.PrivateKey, body []byte) ([64]byte, error) {
 	return u.Sign(key)
 }
 
+// Check runs the checks of Encode on a signed update without encoding it.
+func (u *Update) Check() error { return u.check() }
+
 func (u *Update) check() error {
 	if err := u.Body.Check(); err != nil {
 		return err

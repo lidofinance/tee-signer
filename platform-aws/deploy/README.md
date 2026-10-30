@@ -28,7 +28,7 @@ setup ("Setup").
 The chain config, the client CA, the KMS key and region, the mark bucket and
 the signer name are in the signer's setup, a binary file that
 `signer-admin/cmd/setup-tool encode` makes from a human `key = value` file
-(`governance/setupwire/testdata/setup-nitro.conf` is an example;
+(`governance/setuptext/testdata/setup-nitro.conf` is an example;
 `setup-tool chain-lines <chain config>` prints the chain lines of a chain).
 
 ```sh

@@ -295,3 +295,30 @@ func SetupHash(raw []byte) ([32]byte, error) {
 	}
 	return s.Hash()
 }
+
+// leafNames are the leaf names of each group, in leaf order.
+var (
+	publicLeafNames = fieldNames((&Setup{}).publicFields())
+	lockedLeafNames = fieldNames((&Locked{}).fields())
+	openLeafNames   = fieldNames((&Open{}).fields())
+)
+
+func fieldNames(fs []field) []string {
+	out := make([]string, len(fs))
+	for i, f := range fs {
+		out[i] = f.name
+	}
+	return out
+}
+
+// LeafNames are the names of the leaves of the public part and of the two
+// groups, in leaf order.
+func LeafNames() (public, locked, open []string) {
+	return slices.Clone(publicLeafNames), slices.Clone(lockedLeafNames), slices.Clone(openLeafNames)
+}
+
+// unsalted reports whether the setup has no salt at all.
+func (s *Setup) unsalted() bool {
+	p := &s.PolicySalts
+	return p.Public == nil && p.Locked == nil && p.Open == nil && s.PlatformSalt == [32]byte{}
+}

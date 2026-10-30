@@ -12,8 +12,8 @@ import (
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
-// Every sample survives binary -> struct -> binary and human -> struct ->
-// human, and both forms give the same struct.
+// Every sample survives binary -> struct -> binary. The human form is
+// checked in governance/setuptext.
 func TestSetupRoundTrip(t *testing.T) {
 	for name, s := range samples(t) {
 		b, err := s.Encode()
@@ -26,21 +26,6 @@ func TestSetupRoundTrip(t *testing.T) {
 		}
 		if !reflect.DeepEqual(got, s) {
 			t.Fatalf("%s: decoded\n%+v\nwant\n%+v", name, got, s)
-		}
-		text, err := s.Format()
-		if err != nil {
-			t.Fatal(err)
-		}
-		parsed, err := ParseSetup(name, text)
-		if err != nil {
-			t.Fatalf("%s: parse: %v\n%s", name, err, text)
-		}
-		if !reflect.DeepEqual(parsed, s) {
-			t.Fatalf("%s: parsed\n%+v\nwant\n%+v", name, parsed, s)
-		}
-		again, _ := parsed.Format()
-		if !bytes.Equal(again, text) {
-			t.Fatalf("%s: human form changed:\n%s\n---\n%s", name, text, again)
 		}
 		h1, err := s.Hash()
 		h2, err2 := SetupHash(b)
@@ -166,9 +151,54 @@ func must(b []byte, err error) []byte {
 	return b
 }
 
+// setupRefusal is a setup the value rules refuse: the sample base changed
+// by mutate.
+type setupRefusal struct {
+	name   string
+	base   string
+	mutate func(s *Setup)
+	want   string
+	// decode is what DecodeSetup says about the unchecked bytes: ""
+	// the same as want, "any" any error, "skip" the bytes cannot
+	// carry the fault.
+	decode string
+}
+
+// setup returns the sample the case starts from, changed by mutate.
+func (c setupRefusal) setup(t testing.TB) *Setup {
+	base := c.base
+	if base == "" {
+		base = "setup-nitro"
+	}
+	s := samples(t)[base]
+	c.mutate(s)
+	return s
+}
+
 // Each value rule refuses its fault, in the encoder and, where the bytes
-// can carry the fault, in the decoder.
+// can carry the fault, in the decoder. FormatRefusals runs the same cases
+// through the human form.
 func TestSetupRefusals(t *testing.T) {
+	for _, c := range setupRefusals(t) {
+		s := c.setup(t)
+		if _, err := s.Encode(); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: encode: got %v, want %q", c.name, err, c.want)
+		}
+		if c.decode == "skip" {
+			continue
+		}
+		want := c.decode
+		if want == "" {
+			want = c.want
+		}
+		_, err := DecodeSetup(rawSetup(s))
+		if err == nil || want != "any" && !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: decode: got %v, want %q", c.name, err, want)
+		}
+	}
+}
+
+func setupRefusals(t testing.TB) []setupRefusal {
 	ca := goldenCA(t)
 	ca2 := makeCA(t, 2, "second CA", true)
 	cas := [][]byte{ca, ca2}
@@ -186,16 +216,7 @@ func TestSetupRefusals(t *testing.T) {
 		nonCanonical[i] = 0xff
 	}
 	nonCanonical[31] = 0x7f
-	cases := []struct {
-		name   string
-		base   string
-		mutate func(s *Setup)
-		want   string
-		// decode is what DecodeSetup says about the unchecked bytes: ""
-		// the same as want, "any" any error, "skip" the bytes cannot
-		// carry the fault.
-		decode string
-	}{
+	return []setupRefusal{
 		{"signer name case", "", func(s *Setup) { s.SignerName = "Signer-1" }, "signer_name", ""},
 		{"signer name long", "", func(s *Setup) { s.SignerName = strings.Repeat("a", 129) }, "signer_name", ""},
 		{"signer name empty", "", func(s *Setup) { s.SignerName = "" }, "signer_name", "signer_name is empty"},
@@ -364,31 +385,6 @@ func TestSetupRefusals(t *testing.T) {
 		{"forks unsorted", "", func(s *Setup) { slices.Reverse(s.Open.ForkSchedule) }, "ascending epoch order", ""},
 		{"two forks at one epoch", "", func(s *Setup) { s.Open.ForkSchedule[1].Epoch = 0 }, "ascending epoch order", ""},
 		{"gloas not a fork", "", func(s *Setup) { s.Open.GloasForkEpoch = u64p(15) }, "gloas_fork_epoch 15", ""},
-	}
-	for _, c := range cases {
-		base := c.base
-		if base == "" {
-			base = "setup-nitro"
-		}
-		s := samples(t)[base]
-		c.mutate(s)
-		if _, err := s.Encode(); err == nil || !strings.Contains(err.Error(), c.want) {
-			t.Errorf("%s: encode: got %v, want %q", c.name, err, c.want)
-		}
-		if _, err := s.Format(); err == nil {
-			t.Errorf("%s: format accepted it", c.name)
-		}
-		if c.decode == "skip" {
-			continue
-		}
-		want := c.decode
-		if want == "" {
-			want = c.want
-		}
-		_, err := DecodeSetup(rawSetup(s))
-		if err == nil || want != "any" && !strings.Contains(err.Error(), want) {
-			t.Errorf("%s: decode: got %v, want %q", c.name, err, want)
-		}
 	}
 }
 

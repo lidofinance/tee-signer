@@ -1,6 +1,6 @@
 # Attestation statement: setup format 1
 
-This file gives the exact bytes. The golden vectors are in `attestation-verify/docs/attestation-statement-vectors.json`; `governance/setupwire` makes them (`go test -run TestStatementVectors -update`) and `TestStatementVectors` recomputes every value in the file from the formulas below without the package's helpers.
+This file gives the exact bytes. The golden vectors are in `attestation-verify/docs/attestation-statement-vectors.json`; `governance/setupwire` makes them (`go test -run TestStatementVectors -update`), except the human forms, which `governance/setuptext` makes (`go test -run TestStatementHuman -update`), and `TestStatementVectors` recomputes every value in the file from the formulas below without the package's helpers.
 
 The source of truth for the code is `governance/setupwire` (setupwire.go, policy.go, update.go, slottimes.go) and `signer-protocol/backend.go` (SetupState, AttestUserData, KeygenOrdersHash, KeyReleaseHash).
 

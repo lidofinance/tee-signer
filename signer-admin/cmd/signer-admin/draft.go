@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lidofinance/tee-signer/governance/setuptext"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	cloud "github.com/lidofinance/tee-signer/signer-protocol"
 )
@@ -197,9 +198,9 @@ func groupLines(g setupwire.Group, l *setupwire.Locked, o *setupwire.Open) ([]st
 	var b []byte
 	var err error
 	if g == setupwire.GroupLocked {
-		b, err = l.Format()
+		b, err = setuptext.FormatLocked(l)
 	} else {
-		b, err = o.Format()
+		b, err = setuptext.FormatOpen(o)
 	}
 	return lines(b), err
 }
@@ -374,10 +375,10 @@ func cmdDraft(args []string, out io.Writer) error {
 	switch *group {
 	case "locked":
 		body.Group = setupwire.GroupLocked
-		body.Locked, err = setupwire.ParseLocked(fs.Arg(0), text)
+		body.Locked, err = setuptext.ParseLocked(fs.Arg(0), text)
 	case "open":
 		body.Group = setupwire.GroupOpen
-		body.Open, err = setupwire.ParseOpen(fs.Arg(0), text)
+		body.Open, err = setuptext.ParseOpen(fs.Arg(0), text)
 	default:
 		return errors.New("-group: want locked or open")
 	}

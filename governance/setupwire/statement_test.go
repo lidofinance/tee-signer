@@ -333,8 +333,33 @@ func keyReleaseVector(platform uint8, pairs ...string) vKeyRelease {
 	return v
 }
 
+// humanText is a human form in the vectors file.
+type humanText struct {
+	Human string `json:"human"`
+}
+
+// humanForms reads the human forms of the vectors file. governance/setuptext
+// makes and checks them (TestStatementHuman); this package has no human
+// form, so buildVectors keeps them as they are.
+func humanForms(t *testing.T) (h struct {
+	Setup      humanText `json:"setup"`
+	Update     humanText `json:"update"`
+	AzureSetup humanText `json:"azure_setup"`
+	NitroSetup humanText `json:"nitro_setup"`
+}) {
+	b, err := os.ReadFile(filepath.FromSlash(vectorsPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &h); err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
 func buildVectors(t *testing.T) []byte {
 	s := statementSetup(t)
+	human := humanForms(t)
 	var v vectors
 	v.Description = "Golden vectors of the attestation statement, setup format 1 (docs/attestation-statement.md). " +
 		"Hex is 0x-prefixed; every hash is SHA-256. Made by backend/setupwire TestStatementVectors -update; the test recomputes them."
@@ -351,7 +376,7 @@ func buildVectors(t *testing.T) []byte {
 		v.Contexts[c.key] = c.ctx.String()
 	}
 
-	v.Setup.Human = string(must(s.Format()))
+	v.Setup.Human = human.Setup.Human
 	v.Setup.Bytes = must(s.Encode())
 	pub := must1(s.PublicLeaves())
 	lk := must1(s.Locked.Leaves(s.PolicySalts.Locked))
@@ -389,7 +414,7 @@ func buildVectors(t *testing.T) []byte {
 	}
 	gr := must1(body.GroupRoot())
 	uh := must1(body.Hash())
-	v.Update.Human = string(must(u.Format()))
+	v.Update.Human = human.Update.Human
 	v.Update.Body, v.Update.GroupRoot, v.Update.Header = must(body.Encode()), gr[:], must(body.Header())
 	v.Update.UpdateHash, v.Update.Signed = uh[:], must(u.Encode())
 
@@ -450,7 +475,7 @@ func buildVectors(t *testing.T) []byte {
 	if azpr != pr {
 		t.Fatal("the Azure sample has another policy_root")
 	}
-	v.AzureSetup.Human, v.AzureSetup.Bytes = string(must(az.Format())), must(az.Encode())
+	v.AzureSetup.Human, v.AzureSetup.Bytes = human.AzureSetup.Human, must(az.Encode())
 	v.AzureSetup.PolicyRoot, v.AzureSetup.PlatformSalt, v.AzureSetup.PrivatePart = azpr[:], az.PlatformSalt[:], must(az.PrivateBytes())
 	v.AzureSetup.PlatformCommitment, v.AzureSetup.SetupHash = azpc[:], azsh[:]
 	azst := st
@@ -479,7 +504,7 @@ func buildVectors(t *testing.T) []byte {
 	if nipr != pr {
 		t.Fatal("the Nitro sample has another policy_root")
 	}
-	v.NitroSetup.Human, v.NitroSetup.Bytes = string(must(ni.Format())), must(ni.Encode())
+	v.NitroSetup.Human, v.NitroSetup.Bytes = human.NitroSetup.Human, must(ni.Encode())
 	v.NitroSetup.PolicyRoot, v.NitroSetup.PlatformSalt, v.NitroSetup.PrivatePart = nipr[:], ni.PlatformSalt[:], must(ni.PrivateBytes())
 	v.NitroSetup.PlatformCommitment, v.NitroSetup.SetupHash = nipc[:], nish[:]
 	nist := st
@@ -730,9 +755,6 @@ func TestStatementVectors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p, err := ParseSetup("vectors", []byte(v.Setup.Human)); err != nil || !sameSetup(p, s) {
-		t.Fatalf("the human form does not read to the bytes: %v", err)
-	}
 
 	// The update: the group root of its body's leaves, the header, its hash.
 	ub, err := DecodeUpdateBody(x(v.Update.Body))
@@ -810,9 +832,6 @@ func TestStatementVectors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p, err := ParseSetup("vectors", []byte(as.Human)); err != nil || !sameSetup(p, azs) {
-		t.Fatalf("the Azure human form does not read to the bytes: %v", err)
-	}
 	if azs.Platform.Platform != PlatformAzure || azs.Platform.SealingKeyRelease.MAAEndpoint == "" {
 		t.Error("the Azure sample is not an Azure setup with an MAA host")
 	}
@@ -844,9 +863,6 @@ func TestStatementVectors(t *testing.T) {
 	nis, err := DecodeSetup(nb)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if p, err := ParseSetup("vectors", []byte(ns.Human)); err != nil || !sameSetup(p, nis) {
-		t.Fatalf("the Nitro human form does not read to the bytes: %v", err)
 	}
 	if nis.Platform.Platform != PlatformNitro {
 		t.Error("the Nitro sample is not a Nitro setup")
@@ -931,5 +947,3 @@ type vKeyHex struct {
 	Pubkey      string `json:"pubkey"`
 	SharePubkey string `json:"share_pubkey"`
 }
-
-func sameSetup(a, b *Setup) bool { return bytes.Equal(must(a.Encode()), must(b.Encode())) }

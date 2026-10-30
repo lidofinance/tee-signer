@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lidofinance/tee-signer/governance/setuptext"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 )
 
@@ -200,7 +201,7 @@ func TestFlowDevRunners(t *testing.T) {
 	near := writeFile(t, filepath.Join(dir, "near.conf"), openText(epoch+2))
 	wantIn(t, failTool(t, "draft", "-cluster", cl, "-group", "open", "-margin", "0s", "-out", filepath.Join(dir, "near.bin"), near),
 		"the fork rule refuses this update")
-	nearOpen, err := setupwire.ParseOpen("near", mustRead(t, near))
+	nearOpen, err := setuptext.ParseOpen("near", mustRead(t, near))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -56,26 +56,10 @@ func TestUpdateRoundTrip(t *testing.T) {
 		if err := got.Body.Matches(s); err != nil {
 			t.Fatal(err)
 		}
-		text, err := u.Format()
-		if err != nil {
-			t.Fatal(err)
-		}
-		parsed, err := ParseUpdate(name, text)
-		if err != nil {
-			t.Fatalf("%s: parse: %v\n%s", name, err, text)
-		}
-		if !reflect.DeepEqual(parsed, u) {
-			t.Fatalf("%s: parsed %+v, want %+v", name, parsed, u)
-		}
 		body := must(u.Body.Encode())
 		gotBody, err := DecodeUpdateBody(body)
 		if err != nil || !reflect.DeepEqual(*gotBody, u.Body) {
 			t.Fatalf("%s: body: %v", name, err)
-		}
-		btext := must(u.Body.Format())
-		pb, err := ParseUpdateBody(name, btext)
-		if err != nil || !reflect.DeepEqual(*pb, u.Body) {
-			t.Fatalf("%s: body text: %v", name, err)
 		}
 		h, _ := u.Body.Hash()
 		header := must(u.Body.Header())
