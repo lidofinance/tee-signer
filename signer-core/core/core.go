@@ -7,7 +7,7 @@
 package core
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/../include -I${SRCDIR}/../third_party/blst/bindings
+#cgo CFLAGS: -I${SRCDIR}/../include
 #cgo linux,amd64 LDFLAGS: -L${SRCDIR}/../../build/x86_64/lib -lsigner_core -lblst
 #cgo linux,arm64 LDFLAGS: -L${SRCDIR}/../../build/aarch64/lib -lsigner_core -lblst
 #include <stdlib.h>
@@ -15,8 +15,6 @@ package core
 #include "signer_core.h"
 
 void scgo_make_ops(sc_host_ops *ops, uintptr_t handle);
-int scgo_p2_lincomb(const uint8_t *points, const uint8_t *scalars, size_t n, uint8_t out[96]);
-int scgo_p1_lincomb(const uint8_t *points, const uint8_t *scalars, size_t n, uint8_t out[48]);
 */
 import "C"
 
@@ -878,26 +876,6 @@ func fromC(c C.sc_watermark) backend.Watermark {
 		HasBlock:       c.flags&C.SC_WM_HAS_BLOCK != 0,
 		HasAttestation: c.flags&C.SC_WM_HAS_ATTESTATION != 0,
 	}
-}
-
-// EncodeWatermark is the core's fixed 32-byte storage record.
-func EncodeWatermark(w backend.Watermark) []byte {
-	cw := toC(w)
-	out := make([]byte, C.SC_WATERMARK_ENCODED_LEN)
-	C.sc_watermark_encode(&cw, u8(out))
-	return out
-}
-
-// DecodeWatermark parses a record from EncodeWatermark.
-func DecodeWatermark(b []byte) (backend.Watermark, error) {
-	if len(b) == 0 {
-		return backend.Watermark{}, errors.New("core: empty watermark record")
-	}
-	var cw C.sc_watermark
-	if rc := C.sc_watermark_decode(u8(b), C.size_t(len(b)), &cw); rc != C.SC_OK {
-		return backend.Watermark{}, fmt.Errorf("core: watermark record: %v", backend.Status(rc))
-	}
-	return fromC(cw), nil
 }
 
 // StatusName returns the core's name for a status code (sc_status_name).

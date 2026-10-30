@@ -595,7 +595,7 @@ The chain config is in each signer's setup ("Setup"), and it must be the
 network the validator client signs for. The image has none.
 
 - The tests (`tests/e2e`, `signer-core/core`) build a made-up chain with
-  `core.DevConfig`: a genesis validators root of
+  `software.DevConfig`: a genesis validators root of
   `sha256("tee-signer dev chain")`, 12 s slots, one fork at epoch 10.
   `governance/chains/chain.testnet.json` is the same chain as a file.
 - `chain-from-devnet.sh [BEACON_URL [OUT]]` reads a local test chain's

@@ -57,7 +57,6 @@ import (
 
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/platform"
-	"github.com/lidofinance/tee-signer/platform/dev"
 	"github.com/lidofinance/tee-signer/platform/filestore"
 	"github.com/lidofinance/tee-signer/platform/jwtclaims"
 	"github.com/lidofinance/tee-signer/signer-protocol"
@@ -306,7 +305,7 @@ func New(o platform.Options) (*platform.Platform, error) {
 		return nil, err
 	}
 	defer clear(dek)
-	wrapper, err := dev.NewGCMSealer(wrap)
+	wrapper, err := platform.NewGCMSealer(wrap)
 	clear(wrap)
 	if err != nil {
 		return nil, err
@@ -336,7 +335,7 @@ func New(o platform.Options) (*platform.Platform, error) {
 	if p.Store, err = o.UseDurable(ctx, p); err != nil {
 		return nil, err
 	}
-	if p.Sealer, err = dev.NewGCMSealer(dek); err != nil {
+	if p.Sealer, err = platform.NewGCMSealer(dek); err != nil {
 		return nil, err
 	}
 	return p, nil

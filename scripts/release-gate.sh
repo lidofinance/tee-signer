@@ -12,7 +12,7 @@
 #   release-gate.sh deps <module dir> <tags> <package>
 #       fail if the package links "testing", net/http/httptest or a
 #       test-only package (fakes, test helpers, fuzz oracles, the goroutine
-#       leak check), or if the tags hold lockcheck
+#       leak check)
 #   release-gate.sh tree [dir]
 #       fail unless dir (default: this repo) is a git tree whose HEAD has
 #       none of the forbidden commits or branch tips in its history
@@ -58,8 +58,8 @@ L
 
 # Strings no release runner may hold: the plaintext import and the fake
 # hardware of the debug builds, and the test-only packages.
-# lockorder/check.go is the lock order check that -tags lockcheck
-# builds in place of lockorder/off.go; it panics on an inversion.
+# Package bans use import paths: function metadata keeps these unversioned
+# with -trimpath, even when the live code comes from a helper file.
 release_list() {
   cat <<'L'
 allow-import
@@ -68,12 +68,12 @@ server/plainimport.go
 hooks_debug.go
 nts_servers_debug.go
 RUNNER_NTS_TEST_SERVERS
-slashing-log/wormfake
-slashing-log/logtest
-nts/ntstest
-lockorder/check.go
-devkit/leakcheck
-devkit/fuzzcheck
+github.com/lidofinance/tee-signer/slashing-log/wormfake
+github.com/lidofinance/tee-signer/slashing-log/logtest
+github.com/lidofinance/tee-signer/trusted-time/nts/ntstest
+github.com/lidofinance/tee-signer/devkit
+github.com/lidofinance/tee-signer/platform/dev
+github.com/lidofinance/tee-signer/signer-core/software
 L
   extra release
 }
@@ -89,7 +89,7 @@ FORBIDDEN_COMMITS="${RELEASE_GATE_FORBIDDEN_COMMITS-} $(extra commit)"
 FORBIDDEN_BRANCHES="${RELEASE_GATE_FORBIDDEN_BRANCHES-} $(extra branch)"
 
 check_binary() {
-  local file="$1" kind="$2" s bad=0
+  local file="$1" kind="$2" s tags bad=0
   case "$kind" in release|debug) ;; *) echo "release gate: kind $kind, want release or debug" >&2; return 2 ;; esac
   # The build overlay is for testnet builds only.
   if [ -n "${SIGNER_BUILD_OVERLAY_DIR:-}" ]; then
@@ -101,7 +101,15 @@ check_binary() {
     if grep -qaF -- "$s" "$file"; then echo "release gate: $file holds \"$s\" (a default build carries no bypass code)" >&2; bad=1; fi
   done < <(default_list)
   if [ "$kind" = release ]; then
+    tags="$(go version -m "$file" 2>/dev/null | awk '$1 == "build" && $2 ~ /^-tags=/ { sub(/^-tags=/, "", $2); print $2 }' || true)"
     while IFS= read -r s; do
+      # The local dev runner intentionally links platform/dev.
+      if [ "$s" = github.com/lidofinance/tee-signer/platform/dev ]; then
+        case ",${tags// /,}," in
+          *,platform_aws,*|*,platform_azure,*|*,platform_gcp,*) ;;
+          *,platform_dev,*) continue ;;
+        esac
+      fi
       if grep -qaF -- "$s" "$file"; then echo "release gate: $file holds \"$s\" (a release build carries no debug or test code)" >&2; bad=1; fi
     done < <(release_list)
   fi
@@ -110,10 +118,8 @@ check_binary() {
 
 check_deps() {
   local dir="$1" tags="$2" pkg="$3" deps bad
-  # The lock order check (devkit/lockorder) panics on an inversion; it is
-  # for tests only.
-  case ",$tags," in
-    *,lockcheck,*) echo "release gate: $pkg is built with tag lockcheck (tests only)" >&2; return 1 ;;
+  case ",${tags// /,}," in
+    *,lockcheck,*) echo "release gate: lockcheck is for tests only" >&2; return 1 ;;
   esac
   # Standard packages as "std <path>", the others as "mod <path>".
   deps="$(cd "$dir" && go list -deps -tags "$tags" -f '{{if .Standard}}std{{else}}mod{{end}} {{.ImportPath}}' "$pkg")"
@@ -125,10 +131,6 @@ check_deps() {
     $1 == "std" && ($2 == "testing" || $2 ~ /^testing\// || $2 == "net/http/httptest") { print; next }
     $1 == "mod" {
       n = split($2, e, "/")
-      # devkit/lockorder is linked in every build: without the tag lockcheck
-      # it is a plain mutex (lockorder/off.go); the binary check forbids its
-      # check.go and the tag check above forbids lockcheck.
-      if (index($2, "/devkit/lockorder") && $2 ~ /lockorder$/) next
       for (i = 1; i <= n; i++)
         if (e[i] != "attest" && e[i] ~ /(^test|test$|fake|mock|^lockrank$|^leakcheck$|^fuzzcheck$|^devkit$)/) { print; next }
     }' <<<"$deps")"

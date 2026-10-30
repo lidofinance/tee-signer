@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/governance/setupwire"
-	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/remote"
 )
@@ -36,7 +36,7 @@ var hoodiFork = backend.Version{0x10, 0x00, 0x09, 0x10}
 func hoodiChain(t *testing.T) chain {
 	t.Helper()
 	now := uint64(time.Now().Unix())
-	cfg := core.DevConfig(now-1000*epochSecs, secondsPerSlot, slotsPerEpoch)
+	cfg := software.DevConfig(now-1000*epochSecs, secondsPerSlot, slotsPerEpoch)
 	cfg.Forks = nil
 	cfg.GenesisForkVersion = hoodiFork
 	raw, _ := json.MarshalIndent(cfg, "", "  ")

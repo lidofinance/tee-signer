@@ -11,7 +11,7 @@ LOGS="$ROOT/logs"
 # scripts/build-core.sh builds it into build/<arch>/lib for cgo.
 SIGNER_CORE="$ROOT/signer-core"
 # The Go modules of this repo, in dependency order (each has its own go.mod).
-GO_MODULES=(devkit trusted-time signer-protocol governance signer-core platform slashing-log
+GO_MODULES=(devkit trusted-time signer-protocol markformat governance signer-core platform slashing-log
   platform-aws platform-azure platform-gcp attestation-verify tee-signer signer-admin web3signer-api tests)
 [ ! -f "$ROOT/gateway/go.mod" ] || GO_MODULES+=(gateway)
 # Go uses the go.mod of each module and its replace lines, never a workspace.

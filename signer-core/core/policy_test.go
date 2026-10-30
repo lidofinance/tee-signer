@@ -1,10 +1,12 @@
-package core
+package core_test
 
 import (
 	"errors"
 	"reflect"
 	"testing"
 
+	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
@@ -13,7 +15,7 @@ import (
 // stay. A policy the checks refuse changes nothing; CheckPolicy changes
 // nothing either.
 func TestSetPolicy(t *testing.T) {
-	s, pk, cfg := newTestSigner(t, NewMemHooks())
+	s, pk, cfg := newTestSigner(t, software.NewMemHooks())
 	sign := func(m backend.Message) error {
 		_, err := s.Sign(signReq(s, pk, m))
 		return err
@@ -66,16 +68,16 @@ func TestSetPolicy(t *testing.T) {
 	wantStatus(t, s.CheckPolicy(bad), backend.StatusArg)
 	wantStatus(t, s.SetPolicy(bad), backend.StatusArg)
 	tooMany := p
-	tooMany.FeeRecipients = make([]backend.Address, maxFeeRecipients+1)
+	tooMany.FeeRecipients = make([]backend.Address, core.MaxFeeRecipientsForTest+1)
 	wantStatus(t, s.SetPolicy(tooMany), backend.StatusArg)
 	if after := s.Config(); !reflect.DeepEqual(after.Policy(), p) {
 		t.Fatal("a refused policy changed the signer")
 	}
 	s.Close()
-	if err := s.SetPolicy(p); !errors.Is(err, ErrClosed) {
+	if err := s.SetPolicy(p); !errors.Is(err, core.ErrClosed) {
 		t.Fatalf("closed signer: %v", err)
 	}
-	if err := s.CheckPolicy(p); !errors.Is(err, ErrClosed) {
+	if err := s.CheckPolicy(p); !errors.Is(err, core.ErrClosed) {
 		t.Fatalf("closed signer: %v", err)
 	}
 }

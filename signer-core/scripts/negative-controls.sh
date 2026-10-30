@@ -25,7 +25,7 @@ mutant() {
     status=1
     return
   fi
-  if ! make -C "$dir" -j"$(nproc)" BUILD=out BLST_SRC="$BLST_DIR" BLST_LIB="$BLST_LIB" "out/$bin" >"$dir/build.log" 2>&1; then
+  if ! make -C "$dir" -j"$(nproc)" BUILD=out MARKFORMAT_DIR="$CORE_DIR/../markformat" BLST_SRC="$BLST_DIR" BLST_LIB="$BLST_LIB" "out/$bin" >"$dir/build.log" 2>&1; then
     echo "ERROR mutant $name: does not build (build/mutants/$name/build.log)"
     status=1
     return

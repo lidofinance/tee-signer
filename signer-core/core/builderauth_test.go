@@ -1,8 +1,10 @@
-package core
+package core_test
 
 import (
 	"testing"
 
+	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
@@ -12,7 +14,7 @@ import (
 // domain, and a policy update changes the list.
 func TestBuilderRequestAuth(t *testing.T) {
 	host := []byte("builder.example.org")
-	hooks := NewMemHooks()
+	hooks := software.NewMemHooks()
 	s, pk, cfg, _ := gloasSigner(t, hooks)
 	m := &backend.BuilderRequestAuth{Data: host, Slot: 20*32 + 1}
 
@@ -38,7 +40,7 @@ func TestBuilderRequestAuth(t *testing.T) {
 	if root != backend.SigningRoot(obj, d) {
 		t.Fatal("signing root: not the genesis fork version with a zero root")
 	}
-	if !Verify(pk, root, sig) { // gloasSigner loads the whole key
+	if !core.Verify(pk, root, sig) { // gloasSigner loads the whole key
 		t.Fatal("signature does not verify")
 	}
 
@@ -51,7 +53,7 @@ func TestBuilderRequestAuth(t *testing.T) {
 	_, err = s.Sign(req)
 	wantStatus(t, err, backend.StatusDomainMismatch)
 
-	p.BuilderRequestAuthRoots = make([]backend.Root, maxBuilderAuthRoots+1)
+	p.BuilderRequestAuthRoots = make([]backend.Root, core.MaxBuilderAuthRootsForTest+1)
 	if err := s.SetPolicy(p); err == nil {
 		t.Fatal("17 roots accepted")
 	}

@@ -8,9 +8,8 @@
 #
 # Tags: the runner modules test with all four platform tags at once, as the
 # platform packages need; tee-signer also with each tag alone (package main),
-# with lockcheck (devkit/lockorder), with testnet and with the tags of a release
-# runner. Logs:
-# logs/test-<module>.log.
+# with testnet and with the tags of a release runner.
+# Logs: logs/test-<module>.log.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 mkdir -p "$LOGS"
@@ -35,21 +34,22 @@ checks() {
   [ -z "$(gofmt -l . | grep -v '^third_party/' || true)" ] || { echo "gofmt: $(gofmt -l .)"; return 1; }
   go vet ./... || return 1
   case "$1" in
+    markformat)
+      make test || return 1
+      go test $RACE -count=1 -v ./... || return 1 ;;
     signer-protocol)
       go test $RACE -count=1 -v ./... || return 1
       go vet -tags platform_aws ./... && go test $RACE -count=1 -v -tags platform_aws ./transport || return 1 ;;
     governance)
       go test $RACE -count=1 -v ./... || return 1
       go vet -tags testnet ./... && go test $RACE -count=1 -v -tags testnet ./setupwire ./flavor ./handoverorder || return 1 ;;
-    devkit)
-      go test $RACE -count=1 -v ./... && go test $RACE -count=1 -tags lockcheck ./lockorder || return 1 ;;
     tee-signer)
       vet_builds || return 1
       local tags
       for tags in "" platform_dev platform_aws platform_azure platform_gcp; do go test $RACE -count=1 -tags "$tags" . || return 1; done
       go test $RACE -count=1 -tags platform_dev,platform_azure,platform_gcp ./record ./attls || return 1
       go test $RACE -count=1 -v -tags "$ALL_TAGS" ./... || return 1
-      go test $RACE -count=1 -tags "$ALL_TAGS,lockcheck" ./server || return 1
+      go test $RACE -count=1 -tags "$ALL_TAGS,lockcheck" ./server ./state || return 1
       go test $RACE -count=1 -v -tags platform_dev,testnet . ./attls || return 1
       go test $RACE -count=1 -v -tags testnet -run 'Flavor|ImageCheck' ./server || return 1
       # The tags a release runner is built with (scripts/common.sh runner_tags).
@@ -67,6 +67,9 @@ checks() {
       env "${dbg[@]}" go test $RACE -count=1 -v ./... || return 1
       local p
       for p in azure aws gcp dev; do go test $RACE -count=1 -tags "verifierselect,platform_$p" ./runnerclient || return 1; done ;;
+    devkit)
+      go test $RACE -count=1 -v ./... || return 1
+      go test $RACE -count=1 -tags lockcheck ./lockorder || return 1 ;;
     tests)
       go vet -tags platform_aws ./... || return 1 ;;
     *)

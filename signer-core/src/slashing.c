@@ -27,30 +27,6 @@
 
 #define WM_FLAGS_MASK (SC_WM_HAS_BLOCK | SC_WM_HAS_ATTESTATION)
 
-static const uint8_t WM_MAGIC[4] = {'S', 'C', 'W', '1'};
-
-void sc_watermark_encode(const sc_watermark *wm, uint8_t out[SC_WATERMARK_ENCODED_LEN])
-{
-    memcpy(out, WM_MAGIC, 4);
-    out[4] = (uint8_t)(wm->flags & WM_FLAGS_MASK);
-    out[5] = out[6] = out[7] = 0;
-    sc_put_u64(out + 8, wm->block_slot);
-    sc_put_u64(out + 16, wm->source_epoch);
-    sc_put_u64(out + 24, wm->target_epoch);
-}
-
-int sc_watermark_decode(const uint8_t *in, size_t len, sc_watermark *out)
-{
-    if (!in || !out || len != SC_WATERMARK_ENCODED_LEN || memcmp(in, WM_MAGIC, 4) != 0 ||
-        (in[4] & ~WM_FLAGS_MASK) || in[5] || in[6] || in[7])
-        return SC_ERR_DECODE;
-    out->flags = in[4];
-    out->block_slot = sc_get_u64(in + 8);
-    out->source_epoch = sc_get_u64(in + 16);
-    out->target_epoch = sc_get_u64(in + 24);
-    return SC_OK;
-}
-
 #define REPEAT_FLAGS_MASK (SC_REPEAT_HAS_ATTESTATION | SC_REPEAT_HAS_BLOCK)
 
 static const uint8_t RR_MAGIC[4] = {'S', 'C', 'R', '1'};

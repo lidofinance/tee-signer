@@ -356,11 +356,6 @@ typedef struct {
     uint32_t flags;
 } sc_watermark;
 
-#define SC_WATERMARK_ENCODED_LEN 32
-/* Fixed little-endian encoding with a magic/version prefix, for storage. */
-void sc_watermark_encode(const sc_watermark *wm, uint8_t out[SC_WATERMARK_ENCODED_LEN]);
-int sc_watermark_decode(const uint8_t *in, size_t len, sc_watermark *out);
-
 /*
  * Commit-ahead window sizes. Before signing a message above the committed
  * window, the core persists a new window that reaches this far past the

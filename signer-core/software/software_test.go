@@ -12,13 +12,13 @@ import (
 func TestSoftwareBackend(t *testing.T) {
 	ctx := context.Background()
 	now := uint64(time.Now().Unix())
-	cfg := core.DevConfig(now-100*384, 12, 32) // clock epoch 100
+	cfg := DevConfig(now-100*384, 12, 32) // clock epoch 100
 	b, err := New(cfg, 4, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer b.Close()
-	sk, _ := core.NewSecret()
+	sk, _ := NewSecret()
 	pk, _ := core.PubkeyOf(sk)
 	if _, err := b.ImportShare(ctx, backend.ImportShareRequest{Pubkey: pk, Secret: sk, Index: 7}); err != nil {
 		t.Fatal(err)

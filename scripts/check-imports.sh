@@ -4,8 +4,7 @@
 #   1. no import of another module's internal/ packages (Go refuses most
 #      of these; this check also catches build-tagged files that vet skips);
 #   2. no import path of the dev repos this tree came from;
-#   3. outside _test.go files, devkit only through devkit/lockorder (a
-#      plain mutex without the tag lockcheck), and nothing of tests/;
+#   3. outside _test.go files, nothing of devkit/ or tests/;
 #   4. every module of this repo that a module imports is required and
 #      replaced in its go.mod, so the module builds on its own.
 # Reads the sources only; exits non-zero on the first kind of violation.
@@ -42,9 +41,16 @@ for m in "${mods[@]}"; do
     case "$f" in
       *_test.go) ;;
       *)
+        if [ "$m" = slashing-log ]; then
+          case "$rest" in
+            signer-core|signer-core/*) bad "$f imports $imp (the log must not depend on signing bindings)" ;;
+          esac
+        fi
         case "$rest" in
-          devkit/lockorder) ;;
-          devkit|devkit/*) bad "$f imports $imp outside a test (devkit is for tests)" ;;
+          devkit|devkit/*)
+            if [ "$rest" != devkit/lockorder ] || ! head -n 1 "$f" | grep -qx '//go:build lockcheck'; then
+              bad "$f imports $imp outside a test (only lockcheck-guarded lockorder imports are allowed)"
+            fi ;;
           tests|tests/*) bad "$f imports $imp outside a test" ;;
         esac ;;
     esac

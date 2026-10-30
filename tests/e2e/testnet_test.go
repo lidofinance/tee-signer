@@ -200,7 +200,7 @@ func TestE2ETestnetImagesUpdateWaits(t *testing.T) {
 	if setupwire.DefaultTimeLock != buildflavor.TestnetFlavorTimeLock || setupwire.ImagesMinTimeLock != buildflavor.TestnetFlavorImagesMinTimeLock {
 		t.Fatal("this test binary does not have the testnet constants")
 	}
-	c := newChain(t) // a devnet: core.DevConfig's fork version and root
+	c := newChain(t) // a devnet: software.DevConfig's fork version and root
 	dir := t.TempDir()
 	caFile, cliCfg := testPKI(t, dir, "waits")
 	var cluster [32]byte

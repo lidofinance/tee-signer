@@ -1,9 +1,11 @@
-package core
+package core_test
 
 import (
 	"errors"
 	"testing"
 
+	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
@@ -14,27 +16,27 @@ func clockAtEpoch(e uint64) func() (uint64, error) {
 	return func() (uint64, error) { return genesis + e*12*32 + 5, nil }
 }
 
-func newTestSigner(t *testing.T, hooks *MemHooks) (*Signer, backend.Pubkey, Config) {
+func newTestSigner(t *testing.T, hooks *software.MemHooks) (*core.Signer, backend.Pubkey, core.Config) {
 	t.Helper()
 
-	return newTestSignerWith(t, hooks, DevConfig(genesis, 12, 32))
+	return newTestSignerWith(t, hooks, software.DevConfig(genesis, 12, 32))
 }
 
-func newTestSignerWith(t *testing.T, hooks *MemHooks, cfg Config) (*Signer, backend.Pubkey, Config) {
+func newTestSignerWith(t *testing.T, hooks *software.MemHooks, cfg core.Config) (*core.Signer, backend.Pubkey, core.Config) {
 	t.Helper()
 	if hooks.Clock == nil {
 		hooks.Clock = clockAtEpoch(20)
 	}
-	s, err := NewSigner(cfg, 16, 16, hooks)
+	s, err := core.NewSigner(cfg, 16, 16, hooks)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(s.Close)
-	sk, err := NewSecret()
+	sk, err := software.NewSecret()
 	if err != nil {
 		t.Fatal(err)
 	}
-	pk, err := PubkeyOf(sk)
+	pk, err := core.PubkeyOf(sk)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +59,7 @@ func att(source, target uint64) *backend.AttestationData {
 
 // signReq is a request for m with the domain the signer's own config gives
 // it, as a caller on the same fork sends it.
-func signReq(s *Signer, pk backend.Pubkey, m backend.Message) backend.SignRequest {
+func signReq(s *core.Signer, pk backend.Pubkey, m backend.Message) backend.SignRequest {
 	cfg := s.Config()
 	d, _ := cfg.MessageDomain(m)
 	return backend.SignRequest{Pubkey: pk, Message: m, Domain: d}
@@ -72,7 +74,7 @@ func wantStatus(t *testing.T, err error, want backend.Status) {
 
 func TestStatusNamesMatchCore(t *testing.T) {
 	for i := 0; i <= int(backend.StatusPolicyBuilderAuth); i++ {
-		if got, want := StatusName(i), backend.Status(i).String(); got != want {
+		if got, want := core.StatusName(i), backend.Status(i).String(); got != want {
 			t.Errorf("status %d: core says %s, Go says %s", i, got, want)
 		}
 	}
@@ -81,9 +83,9 @@ func TestStatusNamesMatchCore(t *testing.T) {
 // Signing every kind and checking the signature against a signing root
 // computed in Go cross-checks the Go SSZ code against the C core.
 func TestSignAllKindsVerifies(t *testing.T) {
-	cfg := DevConfig(genesis, 12, 32)
+	cfg := software.DevConfig(genesis, 12, 32)
 	cfg.AllowUnverifiedNonslashable = true // aggregates and contributions below
-	s, pk, cfg := newTestSignerWith(t, NewMemHooks(), cfg)
+	s, pk, cfg := newTestSignerWith(t, software.NewMemHooks(), cfg)
 	selection := backend.HashTreeRootUint64(20 * 32)
 	msgs := []backend.Message{
 		att(19, 20),
@@ -106,7 +108,7 @@ func TestSignAllKindsVerifies(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !Verify(pk, root, sig) {
+		if !core.Verify(pk, root, sig) {
 			t.Fatalf("%v %+v: signature does not verify against the Go signing root", m.Kind(), m)
 		}
 	}
@@ -116,7 +118,7 @@ func TestSignAllKindsVerifies(t *testing.T) {
 }
 
 func TestForkVersionSwitch(t *testing.T) {
-	h := NewMemHooks()
+	h := software.NewMemHooks()
 	h.Clock = clockAtEpoch(9)
 	s, pk, cfg := newTestSigner(t, h)
 	// Epoch 9 uses the genesis version, epoch 10 the fork version.
@@ -126,7 +128,7 @@ func TestForkVersionSwitch(t *testing.T) {
 			t.Fatal(err)
 		}
 		root, _ := cfg.SigningRoot(a)
-		if !Verify(pk, root, sig) {
+		if !core.Verify(pk, root, sig) {
 			t.Fatalf("target %d: bad signature", a.Target.Epoch)
 		}
 	}
@@ -136,7 +138,7 @@ func TestForkVersionSwitch(t *testing.T) {
 }
 
 func TestSlashingAndPolicyRefusals(t *testing.T) {
-	s, pk, cfg := newTestSigner(t, NewMemHooks())
+	s, pk, cfg := newTestSigner(t, software.NewMemHooks())
 	sign := func(m backend.Message) error {
 		_, err := s.Sign(signReq(s, pk, m))
 		return err
@@ -173,7 +175,7 @@ func TestSlashingAndPolicyRefusals(t *testing.T) {
 // (the core signs the same root again) with no write; anything else at that
 // target or slot is refused, and so is a repeat of an older message.
 func TestExactRepeat(t *testing.T) {
-	h := NewMemHooks()
+	h := software.NewMemHooks()
 	s, pk, _ := newTestSigner(t, h)
 	sign := func(m backend.Message) (backend.Signature, bool, error) {
 		return s.SignDetailed(signReq(s, pk, m))
@@ -221,14 +223,14 @@ func TestExactRepeat(t *testing.T) {
 // root writes, and the repeat is refused after the restart.
 func TestRepeatAfterRestart(t *testing.T) {
 	for _, persist := range []bool{true, false} {
-		h := NewMemHooks()
+		h := software.NewMemHooks()
 		h.Clock = clockAtEpoch(20)
-		cfg := DevConfig(genesis, 12, 32)
+		cfg := software.DevConfig(genesis, 12, 32)
 		cfg.PersistRepeatRoot = persist
-		sk, _ := NewSecret()
-		pk, _ := PubkeyOf(sk)
-		start := func() *Signer {
-			s, err := NewSigner(cfg, 4, 4, h)
+		sk, _ := software.NewSecret()
+		pk, _ := core.PubkeyOf(sk)
+		start := func() *core.Signer {
+			s, err := core.NewSigner(cfg, 4, 4, h)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -275,15 +277,15 @@ func TestRepeatAfterRestart(t *testing.T) {
 	}
 
 	// Without hooks that store roots the setting is refused.
-	cfg := DevConfig(genesis, 12, 32)
+	cfg := software.DevConfig(genesis, 12, 32)
 	cfg.PersistRepeatRoot = true
-	if _, err := NewSigner(cfg, 4, 4, marksOnly{NewMemHooks()}); err == nil {
+	if _, err := core.NewSigner(cfg, 4, 4, marksOnly{software.NewMemHooks()}); err == nil {
 		t.Fatal("persist_repeat_root accepted without RepeatRootHooks")
 	}
 }
 
 // marksOnly hides MemHooks' repeat root methods.
-type marksOnly struct{ m *MemHooks }
+type marksOnly struct{ m *software.MemHooks }
 
 func (h marksOnly) LoadWatermark(pk backend.Pubkey) (backend.Watermark, bool, error) {
 	return h.m.LoadWatermark(pk)
@@ -296,14 +298,14 @@ func (h marksOnly) Now() (uint64, error) { return h.m.Now() }
 // A failed root write does not refuse the vote; after a restart the repeat
 // is then refused (the root was in RAM only).
 func TestRepeatRootWriteFailure(t *testing.T) {
-	h := NewMemHooks()
+	h := software.NewMemHooks()
 	h.Clock = clockAtEpoch(20)
 	h.FailRoots = true
-	cfg := DevConfig(genesis, 12, 32)
+	cfg := software.DevConfig(genesis, 12, 32)
 	cfg.PersistRepeatRoot = true
-	sk, _ := NewSecret()
-	pk, _ := PubkeyOf(sk)
-	s, err := NewSigner(cfg, 4, 4, h)
+	sk, _ := software.NewSecret()
+	pk, _ := core.PubkeyOf(sk)
+	s, err := core.NewSigner(cfg, 4, 4, h)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +320,7 @@ func TestRepeatRootWriteFailure(t *testing.T) {
 	}
 	s.Close()
 	h.FailRoots = false
-	s, _ = NewSigner(cfg, 4, 4, h)
+	s, _ = core.NewSigner(cfg, 4, 4, h)
 	defer s.Close()
 	if _, err := s.AddValidator(pk, sk, 7, nil); err != nil {
 		t.Fatal(err)
@@ -330,16 +332,16 @@ func TestRepeatRootWriteFailure(t *testing.T) {
 
 // A validator whose index is not on the allowlist cannot exit.
 func TestExitAllowlist(t *testing.T) {
-	cfg := DevConfig(genesis, 12, 32)
-	h := NewMemHooks()
+	cfg := software.DevConfig(genesis, 12, 32)
+	h := software.NewMemHooks()
 	h.Clock = clockAtEpoch(20)
-	s, err := NewSigner(cfg, 4, 0, h)
+	s, err := core.NewSigner(cfg, 4, 0, h)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	sk, _ := NewSecret()
-	pk, _ := PubkeyOf(sk)
+	sk, _ := software.NewSecret()
+	pk, _ := core.PubkeyOf(sk)
 	if _, err := s.AddValidator(pk, sk, 8, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -348,7 +350,7 @@ func TestExitAllowlist(t *testing.T) {
 }
 
 type failingHooks struct {
-	*MemHooks
+	*software.MemHooks
 	failStore bool
 	failClock bool
 }
@@ -368,17 +370,17 @@ func (f *failingHooks) Now() (uint64, error) {
 }
 
 func TestHookFailuresRefuse(t *testing.T) {
-	cfg := DevConfig(genesis, 12, 32)
-	mh := NewMemHooks()
+	cfg := software.DevConfig(genesis, 12, 32)
+	mh := software.NewMemHooks()
 	mh.Clock = clockAtEpoch(20)
 	h := &failingHooks{MemHooks: mh}
-	s, err := NewSigner(cfg, 4, 0, h)
+	s, err := core.NewSigner(cfg, 4, 0, h)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	sk, _ := NewSecret()
-	pk, _ := PubkeyOf(sk)
+	sk, _ := software.NewSecret()
+	pk, _ := core.PubkeyOf(sk)
 	if _, err := s.AddValidator(pk, sk, 7, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -399,13 +401,13 @@ func TestHookFailuresRefuse(t *testing.T) {
 }
 
 func TestInterchangeImportOnAdd(t *testing.T) {
-	cfg := DevConfig(genesis, 12, 32)
-	h := NewMemHooks()
+	cfg := software.DevConfig(genesis, 12, 32)
+	h := software.NewMemHooks()
 	h.Clock = clockAtEpoch(20)
-	s, _ := NewSigner(cfg, 4, 0, h)
+	s, _ := core.NewSigner(cfg, 4, 0, h)
 	defer s.Close()
-	sk, _ := NewSecret()
-	pk, _ := PubkeyOf(sk)
+	sk, _ := software.NewSecret()
+	pk, _ := core.PubkeyOf(sk)
 	wm := &backend.Watermark{HasAttestation: true, SourceEpoch: 18, TargetEpoch: 19, HasBlock: true, BlockSlot: 600}
 	if _, err := s.AddValidator(pk, sk, 7, wm); err != nil {
 		t.Fatal(err)
@@ -419,83 +421,5 @@ func TestInterchangeImportOnAdd(t *testing.T) {
 	}
 }
 
-func TestWatermarkRecord(t *testing.T) {
-	in := backend.Watermark{BlockSlot: 1, SourceEpoch: 2, TargetEpoch: 3, HasBlock: true, HasAttestation: true}
-	rec := EncodeWatermark(in)
-	if len(rec) != 32 {
-		t.Fatal(len(rec))
-	}
-	out, err := DecodeWatermark(rec)
-	if err != nil || out != in {
-		t.Fatalf("%+v %v", out, err)
-	}
-	rec[0] ^= 1
-	if _, err := DecodeWatermark(rec); err == nil {
-		t.Fatal("corrupt record accepted")
-	}
-}
-
 // 3-of-5: every 3-subset of partial signatures recovers a signature that
 // verifies under the full public key.
-func TestThresholdRecover(t *testing.T) {
-	cfg := DevConfig(genesis, 12, 32)
-	sk, _ := NewSecret()
-	pk, _ := PubkeyOf(sk)
-	shares, err := Split(sk, 3, 5)
-	if err != nil {
-		t.Fatal(err)
-	}
-	a := att(19, 20)
-	root, _ := cfg.SigningRoot(a)
-	sigs := map[uint64]backend.Signature{}
-	sharePks := map[uint64]backend.Pubkey{}
-	for _, sh := range shares {
-		h := NewMemHooks()
-		h.Clock = clockAtEpoch(20)
-		s, err := NewSigner(cfg, 1, 0, h)
-		if err != nil {
-			t.Fatal(err)
-		}
-		k, err := s.AddValidator(pk, sh.Secret, 7, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		sig, err := s.Sign(signReq(s, pk, a))
-		s.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !Verify(k.SharePubkey, root, sig) {
-			t.Fatalf("share %d: partial signature does not verify under the share key", sh.ID)
-		}
-		if Verify(pk, root, sig) {
-			t.Fatalf("share %d: partial signature verifies under the full key", sh.ID)
-		}
-		sigs[sh.ID], sharePks[sh.ID] = sig, k.SharePubkey
-	}
-	subsets := 0
-	for i := uint64(1); i <= 5; i++ {
-		for j := i + 1; j <= 5; j++ {
-			for k := j + 1; k <= 5; k++ {
-				ids := []uint64{i, j, k}
-				full, err := RecoverSignature(ids, []backend.Signature{sigs[i], sigs[j], sigs[k]})
-				if err != nil {
-					t.Fatal(err)
-				}
-				if !Verify(pk, root, full) {
-					t.Fatalf("subset %v: recovered signature does not verify", ids)
-				}
-				rpk, err := RecoverPubkey(ids, []backend.Pubkey{sharePks[i], sharePks[j], sharePks[k]})
-				if err != nil || rpk != pk {
-					t.Fatalf("subset %v: recovered pubkey differs", ids)
-				}
-				subsets++
-			}
-		}
-	}
-	two, _ := RecoverSignature([]uint64{1, 2}, []backend.Signature{sigs[1], sigs[2]})
-	if Verify(pk, root, two) {
-		t.Fatal("2 shares must not be enough")
-	}
-	t.Logf("3-of-5: %d subsets recovered and verified", subsets)
-}

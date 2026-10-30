@@ -24,10 +24,10 @@ type Backend struct {
 var _ backend.Backend = (*Backend)(nil)
 
 // New creates a software backend with in-memory watermarks. hooks may be
-// nil for core.NewMemHooks().
+// nil for NewMemHooks().
 func New(cfg core.Config, maxValidators uint32, hooks core.Hooks) (*Backend, error) {
 	if hooks == nil {
-		hooks = core.NewMemHooks()
+		hooks = NewMemHooks()
 	}
 	s, err := core.NewSigner(cfg, maxValidators, 64, hooks)
 	if err != nil {

@@ -1,8 +1,10 @@
-package core
+package core_test
 
 import (
 	"testing"
 
+	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
@@ -10,7 +12,7 @@ import (
 // bounds, so a PTC vote for a slot the imported history covers signs.
 func TestVSGLOAS01ImportRaisesGloasSlotBounds(t *testing.T) {
 	t.Run("per validator", func(t *testing.T) {
-		s, pk, _, _ := gloasSigner(t, NewMemHooks())
+		s, pk, _, _ := gloasSigner(t, software.NewMemHooks())
 		if err := s.Import(pk, backend.Watermark{HasBlock: true, BlockSlot: 20*32 + 10}); err != nil {
 			t.Fatal(err)
 		}
@@ -20,20 +22,20 @@ func TestVSGLOAS01ImportRaisesGloasSlotBounds(t *testing.T) {
 		}
 	})
 	t.Run("per device", func(t *testing.T) {
-		h := &deviceHooks{MemHooks: NewMemHooks()}
+		h := &deviceHooks{MemHooks: software.NewMemHooks()}
 		h.Clock = clockAtEpoch(20)
-		cfg := DevConfig(genesis, 12, 32)
-		cfg.Forks = append(cfg.Forks, Fork{Epoch: gloasEpoch, Version: backend.Version{0x07, 0x00, 0x00, 0x01}})
+		cfg := software.DevConfig(genesis, 12, 32)
+		cfg.Forks = append(cfg.Forks, core.Fork{Epoch: gloasEpoch, Version: backend.Version{0x07, 0x00, 0x00, 0x01}})
 		e := uint64(gloasEpoch)
 		cfg.GloasForkEpoch = &e
 		cfg.DeviceMark = true
-		s, err := NewSigner(cfg, 4, 0, h)
+		s, err := core.NewSigner(cfg, 4, 0, h)
 		if err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(s.Close)
-		sk, _ := NewSecret()
-		pk, _ := PubkeyOf(sk)
+		sk, _ := software.NewSecret()
+		pk, _ := core.PubkeyOf(sk)
 		wm := backend.Watermark{HasBlock: true, BlockSlot: 20*32 + 10}
 		if _, err := s.AddValidator(pk, sk, 7, &wm); err != nil {
 			t.Fatal(err)

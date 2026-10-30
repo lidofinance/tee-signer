@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
@@ -15,7 +16,7 @@ func TestNoExitWithoutSetup(t *testing.T) {
 	for _, platform := range []string{"gcp", "azure", "nitro", "dev"} {
 		s := roleServer(t)
 		s.Platform.Name = platform
-		sk, err := core.NewSecret()
+		sk, err := software.NewSecret()
 		if err != nil {
 			t.Fatal(err)
 		}

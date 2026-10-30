@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
@@ -47,7 +48,7 @@ func waitExit(t *testing.T, r *runner, within time.Duration) (exited bool) {
 // an outage while running.
 func TestE2EMarkLog(t *testing.T) {
 	c := newChain(t)
-	sk, _ := core.NewSecret()
+	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
 	sign := func(cl backend.Backend, m backend.Message) error {
 		_, err := cl.Sign(ctx, c.req(pk, m))
@@ -151,7 +152,7 @@ func TestE2EMarkLog(t *testing.T) {
 // conflicts, and no target is signed twice.
 func TestE2EMarkLogClone(t *testing.T) {
 	c := newChain(t)
-	sk, _ := core.NewSecret()
+	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
 	logDir := t.TempDir()
 	flags := []string{"-mark-store", "file:" + logDir, "-mark-signer", "node-1"}
@@ -207,7 +208,7 @@ func TestE2EMarkLogClone(t *testing.T) {
 // back.
 func TestE2EMarkLogOutage(t *testing.T) {
 	c := newChain(t)
-	sk, _ := core.NewSecret()
+	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
 	logDir := t.TempDir()
 	addr := fmt.Sprintf("tcp:127.0.0.1:%d", freePort(t))

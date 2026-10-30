@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -42,7 +43,29 @@ func stack() string {
 	return string(buf[:runtime.Stack(buf, false)])
 }
 
-// acquire checks the order before the goroutine waits for name.
+// orderPath returns an observed chain from start to end. mu must be held.
+func orderPath(start, end string) []string {
+	seen := map[string]bool{}
+	var visit func(string) []string
+	visit = func(name string) []string {
+		if seen[name] {
+			return nil
+		}
+		seen[name] = true
+		if name == end {
+			return []string{name}
+		}
+		for next := range before[name] {
+			if path := visit(next); path != nil {
+				return append([]string{name}, path...)
+			}
+		}
+		return nil
+	}
+	return visit(start)
+}
+
+// acquire refuses a new edge that would close a cycle, before waiting for name.
 func acquire(lock any, name string) {
 	g := goid()
 	mu.Lock()
@@ -50,10 +73,21 @@ func acquire(lock any, name string) {
 		if h.name == name {
 			continue
 		}
-		if at, ok := before[name][h.name]; ok {
+		if path := orderPath(name, h.name); path != nil {
+			var previous strings.Builder
+			for i := 0; i+1 < len(path); i++ {
+				fmt.Fprintf(&previous, "%s before %s at:\n%s\n", path[i], path[i+1], before[path[i]][path[i+1]])
+			}
 			mu.Unlock()
-			panic(fmt.Sprintf("lockorder: %s taken while holding %s, but %s was taken while holding %s at:\n%s\nnow at:\n%s",
-				name, h.name, h.name, name, at, stack()))
+			panic(fmt.Sprintf("lockorder: %s taken while holding %s closes cycle %s\nprevious orders:\n%s\nnow at:\n%s",
+				name, h.name, strings.Join(append(path, name), " -> "), previous.String(), stack()))
+		}
+	}
+	// Record edges only after every check passes: a refused acquisition
+	// must not leave orders behind for a lock that was never taken.
+	for _, h := range byG[g] {
+		if h.name == name {
+			continue
 		}
 		if before[h.name] == nil {
 			before[h.name] = map[string]string{}

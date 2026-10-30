@@ -31,13 +31,18 @@ ifeq ($(ARCH),x86_64)
 BLST_FLAGS += -D__BLST_PORTABLE__
 endif
 
+FUZZ_DRIVER ?= $(abspath ../devkit/cfuzz/driver.c)
+MARKFORMAT_DIR ?= $(abspath ../markformat)
+MARKFORMAT_SRC := $(MARKFORMAT_DIR)/markformat.c
+MARKFORMAT_HDR := $(MARKFORMAT_DIR)/markformat.h
+
 INCLUDES := -Iinclude -I$(BLST_SRC)/bindings
 WARN := -Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes
 # The core is built freestanding: no hosted libc assumptions. It still
 # calls memcpy/memset/memcmp, which every TA environment provides.
 CORE_CFLAGS := -std=c11 -O2 -fPIC -ffreestanding -fno-common $(WARN) $(INCLUDES) $(CFLAGS)
 TEST_CFLAGS := -std=c11 -O2 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -Wno-format-truncation \
-               -Isrc $(INCLUDES) $(CFLAGS)
+               -Isrc -I$(MARKFORMAT_DIR) $(INCLUDES) $(CFLAGS)
 
 CORE_SRCS := src/ssz.c src/bls.c src/slashing.c src/policy.c src/signer.c src/typed.c
 CORE_OBJS := $(patsubst src/%.c,$(BUILD)/obj/%.o,$(CORE_SRCS))
@@ -63,14 +68,14 @@ $(CORE_LIB): $(CORE_OBJS)
 	rm -f $@
 	$(AR) rcs $@ $^
 
-$(BUILD)/test_%: tests/test_%.c tests/testutil.h $(CORE_LIB) $(BLST_LIB)
-	$(CC) $(TEST_CFLAGS) $< -o $@ $(CORE_LIB) $(BLST_LIB) $(LDFLAGS)
+$(BUILD)/test_%: tests/test_%.c tests/testutil.h tests/markformat_host.h $(MARKFORMAT_SRC) $(MARKFORMAT_HDR) $(CORE_LIB) $(BLST_LIB)
+	$(CC) $(TEST_CFLAGS) $< $(MARKFORMAT_SRC) -o $@ $(CORE_LIB) $(BLST_LIB) $(LDFLAGS)
 
 # ---- fuzzing (fuzz/README.md) ---------------------------------------------
 # make fuzz builds one binary per decoder entry point, with ASan and UBSan,
 # into $(BUILD)/fuzz/, plus the seed generator. scripts/fuzz.sh runs them.
 #   FUZZ_ENGINE=libfuzzer  clang -fsanitize=fuzzer (needs clang's runtime)
-#   FUZZ_ENGINE=driver     gcc with fuzz/driver.c and -fsanitize-coverage
+#   FUZZ_ENGINE=driver     gcc with ../devkit/cfuzz/driver.c and -fsanitize-coverage
 #   FUZZ_ENGINE=auto       libfuzzer if $(FUZZ_CLANG) can link a fuzzer, else driver
 FUZZ_ENGINE ?= auto
 # The first clang on PATH: plain clang, else a versioned one (Ubuntu installs
@@ -93,14 +98,14 @@ FUZZ_LINK := $(FUZZ_SAN)
 FUZZ_MAIN := $(FUZZ_BUILD)/obj-driver/driver.o
 endif
 FUZZ_CORE_CFLAGS := -std=c11 -ffreestanding -fno-common -Wall -Wextra $(INCLUDES) $(FUZZ_INSTR)
-FUZZ_CFLAGS := -std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Isrc -Ifuzz $(INCLUDES) $(FUZZ_INSTR)
+FUZZ_CFLAGS := -std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Isrc -Ifuzz -I$(MARKFORMAT_DIR) $(INCLUDES) $(FUZZ_INSTR)
 # Objects per engine, so a change of engine rebuilds and relinks everything.
 FUZZ_CORE_OBJS := $(patsubst src/%.c,$(FUZZ_BUILD)/obj-$(FUZZ_ENGINE)/%.o,$(CORE_SRCS))
 FUZZ_SSZ := checkpoint attestation_data beacon_block_header voluntary_exit \
             validator_registration fork_data signing_data payload_attestation_data \
             proposer_preferences
 # Targets built from fuzz/target_ssz.c, one per fixed-size decoder.
-FUZZ_FIXED := $(addprefix ssz_,$(FUZZ_SSZ)) payload_envelope watermark repeat_roots
+FUZZ_FIXED := $(addprefix ssz_,$(FUZZ_SSZ)) payload_envelope repeat_roots
 FUZZ_TARGETS := $(FUZZ_FIXED) builder_request_auth aggregate_and_proof \
                 contribution_and_proof bls config signer
 FUZZ_BINS := $(addprefix $(FUZZ_BUILD)/fuzz_,$(FUZZ_TARGETS))
@@ -108,7 +113,10 @@ FUZZ_HDRS := fuzz/fuzz.h fuzz/ref_ssz.h fuzz/base_config.h fuzz/signer_ops.h inc
 fuzz_src = $(if $(filter $(1),$(FUZZ_FIXED)),fuzz/target_ssz.c,fuzz/target_$(1).c)
 fuzz_def = $(if $(filter $(1),$(FUZZ_FIXED)),-DT_$(shell echo $(1) | sed 's/^ssz_//' | tr a-z A-Z))
 
-.PHONY: fuzz
+.PHONY: fuzz fuzz-targets
+fuzz-targets:
+	@printf '%s\n' $(FUZZ_TARGETS)
+
 fuzz: $(FUZZ_BINS) $(FUZZ_BUILD)/mkseeds
 	@echo $(FUZZ_ENGINE) >$(FUZZ_BUILD)/engine
 	@echo "fuzz: $(words $(FUZZ_BINS)) targets in $(FUZZ_BUILD) (engine $(FUZZ_ENGINE))"
@@ -119,17 +127,17 @@ $(FUZZ_CORE_OBJS): $(FUZZ_BUILD)/obj-$(FUZZ_ENGINE)/%.o: src/%.c include/signer_
 	@mkdir -p $(dir $@)
 	$(FUZZ_CC) $(FUZZ_CORE_CFLAGS) -c $< -o $@
 
-$(FUZZ_BUILD)/obj-driver/driver.o: fuzz/driver.c
+$(FUZZ_BUILD)/obj-driver/driver.o: $(FUZZ_DRIVER)
 	@mkdir -p $(dir $@)
 	$(FUZZ_CC) -std=c11 -Wall -Wextra $(FUZZ_SAN) -c $< -o $@
 
-$(FUZZ_BUILD)/mkseeds: fuzz/mkseeds.c fuzz/signer_ops.h tests/testutil.h $(CORE_LIB) $(BLST_LIB)
+$(FUZZ_BUILD)/mkseeds: fuzz/mkseeds.c fuzz/signer_ops.h tests/testutil.h tests/markformat_host.h $(MARKFORMAT_SRC) $(MARKFORMAT_HDR) $(CORE_LIB) $(BLST_LIB)
 	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CFLAGS) $< -o $@ $(CORE_LIB) $(BLST_LIB) $(LDFLAGS)
+	$(CC) $(TEST_CFLAGS) $< $(MARKFORMAT_SRC) -o $@ $(CORE_LIB) $(BLST_LIB) $(LDFLAGS)
 
 .SECONDEXPANSION:
-$(FUZZ_BUILD)/fuzz_%: $$(call fuzz_src,$$*) $(FUZZ_HDRS) $(FUZZ_CORE_OBJS) $(FUZZ_MAIN) $(BLST_LIB)
-	$(FUZZ_CC) $(FUZZ_CFLAGS) $(call fuzz_def,$*) $< $(FUZZ_CORE_OBJS) $(FUZZ_MAIN) $(BLST_LIB) \
+$(FUZZ_BUILD)/fuzz_%: $$(call fuzz_src,$$*) $(FUZZ_HDRS) tests/markformat_host.h $(MARKFORMAT_SRC) $(MARKFORMAT_HDR) $(FUZZ_CORE_OBJS) $(FUZZ_MAIN) $(BLST_LIB)
+	$(FUZZ_CC) $(FUZZ_CFLAGS) $(call fuzz_def,$*) $< $(MARKFORMAT_SRC) $(FUZZ_CORE_OBJS) $(FUZZ_MAIN) $(BLST_LIB) \
 	  $(FUZZ_LINK) -o $@
 
 # Symbols the core objects reference but do not define themselves.

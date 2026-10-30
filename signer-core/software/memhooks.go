@@ -1,10 +1,11 @@
-package core
+package software
 
 import (
 	"errors"
 	"sync"
 	"time"
 
+	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
@@ -24,7 +25,7 @@ type MemHooks struct {
 	Clock      func() (uint64, error)
 }
 
-var _ RepeatRootHooks = (*MemHooks)(nil)
+var _ core.RepeatRootHooks = (*MemHooks)(nil)
 
 func NewMemHooks() *MemHooks {
 	return &MemHooks{marks: map[backend.Pubkey]backend.Watermark{}, roots: map[backend.Pubkey][]byte{}}

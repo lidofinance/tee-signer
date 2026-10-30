@@ -1,10 +1,12 @@
-package core
+package core_test
 
 import (
 	"crypto/sha256"
 	"errors"
 	"testing"
 
+	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
@@ -14,16 +16,16 @@ var nextVersion = backend.Version{0x09, 0x00, 0x00, 0x01}
 // another chain or none is refused before the core signs or writes anything;
 // the domain the signer's own schedule gives signs.
 func TestTypedDomainCheck(t *testing.T) {
-	h := NewMemHooks()
+	h := software.NewMemHooks()
 	s, pk, cfg := newTestSigner(t, h)
-	gs, gpk, gcfg, _ := gloasSigner(t, NewMemHooks())
+	gs, gpk, gcfg, _ := gloasSigner(t, software.NewMemHooks())
 	slot := uint64(20*32 + 3)
 	proof := mustSign(t, s, pk, &backend.SelectionProof{Slot: slot})
 	syncProof := mustSign(t, s, pk, &backend.SyncSelectionProof{Slot: slot, SubcommitteeIndex: 2})
 	type signer struct {
-		s   *Signer
+		s   *core.Signer
 		pk  backend.Pubkey
-		cfg Config
+		cfg core.Config
 	}
 	plain, gloas := signer{s, pk, cfg}, signer{gs, gpk, gcfg}
 	env := &backend.PayloadEnvelope{BuilderIndex: backend.BuilderIndexSelfBuild}
@@ -67,7 +69,7 @@ func TestTypedDomainCheck(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%v: %v", c.m.Kind(), err)
 		}
-		if root, _ := c.on.cfg.SigningRoot(c.m); !Verify(c.on.pk, root, sig) {
+		if root, _ := c.on.cfg.SigningRoot(c.m); !core.Verify(c.on.pk, root, sig) {
 			t.Fatalf("%v: signature does not verify", c.m.Kind())
 		}
 	}
@@ -90,7 +92,7 @@ type unknownMessage struct{}
 
 func (unknownMessage) Kind() backend.Kind { return 99 }
 
-func mustSign(t *testing.T, s *Signer, pk backend.Pubkey, m backend.Message) backend.Signature {
+func mustSign(t *testing.T, s *core.Signer, pk backend.Pubkey, m backend.Message) backend.Signature {
 	t.Helper()
 	sig, err := s.Sign(signReq(s, pk, m))
 	if err != nil {
@@ -103,12 +105,12 @@ func mustSign(t *testing.T, s *Signer, pk backend.Pubkey, m backend.Message) bac
 // max_epochs_ahead 1, so with the clock in epoch 20 the first epoch an update
 // may change is 23. The domain check follows the new schedule.
 func TestSetSchedule(t *testing.T) {
-	h := NewMemHooks()
+	h := software.NewMemHooks()
 	s, pk, cfg := newTestSigner(t, h)
 	before := s.Config()
-	with := func(epoch uint64) Schedule {
+	with := func(epoch uint64) core.Schedule {
 		n := cfg.Schedule()
-		n.Forks = append(n.Forks, Fork{Epoch: epoch, Version: nextVersion})
+		n.Forks = append(n.Forks, core.Fork{Epoch: epoch, Version: nextVersion})
 		return n
 	}
 
@@ -138,14 +140,14 @@ func TestSetSchedule(t *testing.T) {
 	wantStatus(t, err, backend.StatusDomainMismatch)
 	sig := mustSign(t, s, pk, a)
 	newCfg := s.Config()
-	if root, _ := newCfg.SigningRoot(a); !Verify(pk, root, sig) {
+	if root, _ := newCfg.SigningRoot(a); !core.Verify(pk, root, sig) {
 		t.Fatal("signature not under the new fork version")
 	}
 	// The fork at 23 has started now and stays.
 	wantStatus(t, s.SetSchedule(cfg.Schedule(), 0), backend.StatusSchedule)
 
 	// activateAt in epoch 27 moves the first changeable epoch to 30.
-	s2, _, _ := newTestSigner(t, NewMemHooks())
+	s2, _, _ := newTestSigner(t, software.NewMemHooks())
 	at := uint64(genesis + 27*12*32 + 1)
 	wantStatus(t, s2.SetSchedule(with(29), at), backend.StatusSchedule)
 	if err := s2.SetSchedule(with(30), at); err != nil {
@@ -157,7 +159,7 @@ func TestSetSchedule(t *testing.T) {
 	started.Forks[0].Version = nextVersion
 	wantStatus(t, s2.SetSchedule(started, 0), backend.StatusSchedule)
 	descending := with(30)
-	descending.Forks = append(descending.Forks, Fork{Epoch: 25, Version: nextVersion})
+	descending.Forks = append(descending.Forks, core.Fork{Epoch: 25, Version: nextVersion})
 	wantStatus(t, s2.SetSchedule(descending, 0), backend.StatusArg)
 	gloas := with(40)
 	e := uint64(41)
@@ -171,7 +173,7 @@ func TestSetSchedule(t *testing.T) {
 		t.Fatal("Gloas epoch not taken")
 	}
 	s2.Close()
-	if err := s2.SetSchedule(with(30), 0); !errors.Is(err, ErrClosed) {
+	if err := s2.SetSchedule(with(30), 0); !errors.Is(err, core.ErrClosed) {
 		t.Fatalf("closed signer: %v", err)
 	}
 }

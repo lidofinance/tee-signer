@@ -54,7 +54,6 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/platform"
-	"github.com/lidofinance/tee-signer/platform/dev"
 	"github.com/lidofinance/tee-signer/platform/filestore"
 	"github.com/lidofinance/tee-signer/platform/jwtclaims"
 	"github.com/lidofinance/tee-signer/trusted-time/clock"
@@ -490,7 +489,7 @@ func New(o platform.Options) (*platform.Platform, error) {
 	if err != nil {
 		return nil, err
 	}
-	p.Sealer, err = dev.NewGCMSealer(dek)
+	p.Sealer, err = platform.NewGCMSealer(dek)
 	clear(dek)
 	if err != nil {
 		return nil, err

@@ -32,7 +32,7 @@ make -C "$CORE_DIR" -j"$JOBS" FUZZ_ENGINE="${FUZZ_ENGINE:-auto}" fuzz >"$FB/logs
   exit 1
 }
 ENGINE="$(cat "$FB/engine")"
-TARGETS="${FUZZ_TARGETS:-$(cd "$FB" && ls fuzz_* | sed 's/^fuzz_//' | tr '\n' ' ')}"
+TARGETS="${FUZZ_TARGETS:-$(make -s -C "$CORE_DIR" fuzz-targets | tr '\n' ' ')}"
 for d in "$CST_SSZ_DIR" "$CST_BLS_DIR"; do
   [ -d "$d" ] || { echo "missing $d; run scripts/fetch.sh" >&2; exit 1; }
 done
@@ -45,7 +45,7 @@ max_len() {
     aggregate_and_proof) echo 17100 ;;
     builder_request_auth) echo 4200 ;;
     signer) echo 8192 ;;
-    ssz_*|payload_envelope|watermark|repeat_roots|contribution_and_proof|bls) echo 1024 ;;
+    ssz_*|payload_envelope|repeat_roots|contribution_and_proof|bls) echo 1024 ;;
     *) echo 4096 ;;
   esac
 }

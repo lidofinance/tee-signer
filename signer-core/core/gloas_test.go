@@ -1,9 +1,11 @@
-package core
+package core_test
 
 import (
 	"encoding/hex"
 	"testing"
 
+	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
@@ -19,22 +21,22 @@ const gloasEpoch = 15
 
 // gloasSigner is newTestSigner with a Gloas fork at epoch 15 and the clock
 // at epoch 20.
-func gloasSigner(t *testing.T, hooks *MemHooks) (*Signer, backend.Pubkey, Config, [32]byte) {
+func gloasSigner(t *testing.T, hooks *software.MemHooks) (*core.Signer, backend.Pubkey, core.Config, [32]byte) {
 	t.Helper()
-	cfg := DevConfig(genesis, 12, 32)
-	cfg.Forks = append(cfg.Forks, Fork{Epoch: gloasEpoch, Version: backend.Version{0x07, 0x00, 0x00, 0x01}})
+	cfg := software.DevConfig(genesis, 12, 32)
+	cfg.Forks = append(cfg.Forks, core.Fork{Epoch: gloasEpoch, Version: backend.Version{0x07, 0x00, 0x00, 0x01}})
 	e := uint64(gloasEpoch)
 	cfg.GloasForkEpoch = &e
 	if hooks.Clock == nil {
 		hooks.Clock = clockAtEpoch(20)
 	}
-	s, err := NewSigner(cfg, 16, 16, hooks)
+	s, err := core.NewSigner(cfg, 16, 16, hooks)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(s.Close)
 	sk := [32]byte{0x11, 0x22, 0x33}
-	pk, err := PubkeyOf(sk)
+	pk, err := core.PubkeyOf(sk)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +73,7 @@ func TestGloasRootsMatchGo(t *testing.T) {
 }
 
 func TestGloasSigning(t *testing.T) {
-	s, pk, cfg, _ := gloasSigner(t, NewMemHooks())
+	s, pk, cfg, _ := gloasSigner(t, software.NewMemHooks())
 	sign := func(m backend.Message) (backend.Signature, error) {
 		return s.Sign(signReq(s, pk, m))
 	}
@@ -81,7 +83,7 @@ func TestGloasSigning(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !Verify(pk, root, sig) {
+		if !core.Verify(pk, root, sig) {
 			t.Fatalf("%v: signature does not verify against the Go signing root", m.Kind())
 		}
 	}
@@ -141,7 +143,7 @@ func TestGloasSigning(t *testing.T) {
 
 // Without gloas_fork_epoch the core refuses every Gloas message.
 func TestGloasNotScheduled(t *testing.T) {
-	s, pk, _ := newTestSigner(t, NewMemHooks())
+	s, pk, _ := newTestSigner(t, software.NewMemHooks())
 	for _, m := range []backend.Message{
 		&backend.PayloadAttestationData{Slot: 20 * 32},
 		&backend.PayloadEnvelope{BuilderIndex: backend.BuilderIndexSelfBuild},
@@ -150,7 +152,7 @@ func TestGloasNotScheduled(t *testing.T) {
 		_, err := s.Sign(signReq(s, pk, m))
 		wantStatus(t, err, backend.StatusPolicyFork)
 	}
-	cfg := DevConfig(genesis, 12, 32)
+	cfg := software.DevConfig(genesis, 12, 32)
 	bad := uint64(11)
 	cfg.GloasForkEpoch = &bad
 	if err := cfg.Validate(); err == nil {
@@ -176,12 +178,12 @@ func TestGloasUnverifiedRoots(t *testing.T) {
 			t.Fatalf("root type %d: domain %x %v, unverified %v", tt.typ, dt, ok, tt.typ.Unverified())
 		}
 	}
-	root := func(cfg Config, typ backend.RootType, dt backend.DomainType, epoch uint64) *backend.RootMessage {
+	root := func(cfg core.Config, typ backend.RootType, dt backend.DomainType, epoch uint64) *backend.RootMessage {
 		return &backend.RootMessage{Type: typ, Epoch: epoch, ObjectRoot: backend.Root{byte(typ), 0x42}, Domain: cfg.Domain(dt, epoch)}
 	}
 
 	// Switch off (gloasSigner uses DevConfig): refused, nothing counted.
-	off, pk, cfg, _ := gloasSigner(t, NewMemHooks())
+	off, pk, cfg, _ := gloasSigner(t, software.NewMemHooks())
 	for _, tt := range types {
 		_, err := off.Sign(signReq(off, pk, root(cfg, tt.typ, tt.dt, 20)))
 		wantStatus(t, err, backend.StatusPolicyDomain)
@@ -189,9 +191,9 @@ func TestGloasUnverifiedRoots(t *testing.T) {
 
 	// Switch on.
 	cfg.AllowUnverifiedNonslashable = true
-	h := NewMemHooks()
+	h := software.NewMemHooks()
 	h.Clock = clockAtEpoch(20)
-	on, err := NewSigner(cfg, 16, 16, h)
+	on, err := core.NewSigner(cfg, 16, 16, h)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +210,7 @@ func TestGloasUnverifiedRoots(t *testing.T) {
 				t.Fatalf("type %d epoch %d: %v", tt.typ, epoch, err)
 			}
 			sr, _ := cfg.SigningRoot(m)
-			if !Verify(pk, sr, sig) {
+			if !core.Verify(pk, sr, sig) {
 				t.Fatalf("type %d epoch %d: signature does not verify", tt.typ, epoch)
 			}
 			// The Gloas fork version is in the domain.
@@ -241,9 +243,9 @@ func TestGloasUnverifiedRoots(t *testing.T) {
 	}
 
 	// A chain without Gloas: refused at any epoch, switch on.
-	plain := DevConfig(genesis, 12, 32)
+	plain := software.DevConfig(genesis, 12, 32)
 	plain.AllowUnverifiedNonslashable = true
-	ns, pk2, plain := newTestSignerWith(t, NewMemHooks(), plain)
+	ns, pk2, plain := newTestSignerWith(t, software.NewMemHooks(), plain)
 	for _, tt := range types {
 		_, err := ns.Sign(signReq(ns, pk2, root(plain, tt.typ, tt.dt, 20)))
 		wantStatus(t, err, backend.StatusPolicyFork)
@@ -252,7 +254,7 @@ func TestGloasUnverifiedRoots(t *testing.T) {
 
 // After a restart the PTC slot bound comes from the stored block bound.
 func TestGloasRestart(t *testing.T) {
-	h := NewMemHooks()
+	h := software.NewMemHooks()
 	s, pk, _, sk := gloasSigner(t, h)
 	ptc := &backend.PayloadAttestationData{Slot: 20*32 + 4}
 	if _, err := s.Sign(signReq(s, pk, ptc)); err != nil {
@@ -261,7 +263,7 @@ func TestGloasRestart(t *testing.T) {
 	cfg := s.Config()
 	s.Close()
 	// Same storage: a new signer on the same hooks.
-	r, err := NewSigner(cfg, 16, 16, h)
+	r, err := core.NewSigner(cfg, 16, 16, h)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -99,8 +99,8 @@ func TestDevnets(t *testing.T) {
 	devnets := map[string][2]any{
 		// A Kurtosis devnet: ethereum-package's fork version, its own root.
 		"kurtosis": {otherFork, otherRoot},
-		// core.DevConfig, the chain of the runner's own tests.
-		"core.DevConfig": {[4]byte{0, 0, 0, 1}, sha256.Sum256([]byte("tee-signer dev chain"))},
+		// software.DevConfig, the chain of the runner's own tests.
+		"software.DevConfig": {[4]byte{0, 0, 0, 1}, sha256.Sum256([]byte("tee-signer dev chain"))},
 		// The minimal preset's fork version.
 		"minimal": {[4]byte{0, 0, 0, 1}, otherRoot},
 	}
