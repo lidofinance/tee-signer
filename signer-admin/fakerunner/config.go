@@ -13,7 +13,7 @@ import (
 )
 
 // configModel plays the config updates of a runner with a setup
-// (runner/server/config.go of the cloud repo, setup-phase.md section 6) on
+// (tee-signer/server/config.go) on
 // this machine's clock: the checks in the runner's order, the waits,
 // supersede and the rotation rule. It does not run the fork rule or the
 // core's value checks; the dev runner test of signer-admin covers the real

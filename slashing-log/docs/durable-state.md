@@ -414,9 +414,6 @@ state in the runner's store, sealed and bound to setup_hash like the
 shares, so the state copy holds it too. On AWS a network entry runs on the
 parent, which is untrusted, so its state gives no way into the enclave.
 
-Longer-term options for the network credential: threshold-signer-poc
-`research/network-entry-credentials.md`.
-
 ## Settings
 
 | Flag | |
@@ -458,7 +455,7 @@ CCE policy hash or the image digest.
   through the two tools.
 - `attestation-verify/runnerclient` `TestE2EAzureRunnerDurable`: the Azure debug build
   with fake SNP, MAA and Key Vault; the file system lost and restored.
-- Fuzzer (threshold-signer-poc `signer-core/sim`): `OP_WIPE` covers the restored
+- Fuzzer (`signer-core/sim`): `OP_WIPE` covers the restored
   share (the copy does not hold the hint, which the event wipes); `OP_HANDOVER` hands a signer over to a new instance with a log of
   its own, the old one staying up in the clone slot. Negative controls:
   handover with the tombstone 0 violations, with the old log left open

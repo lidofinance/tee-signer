@@ -1,5 +1,5 @@
 // Package signing turns a Web3Signer eth2 signing request body into a Job: the
-// Dirk call to make, its domain, and the signing root the result must cover.
+// signer call to make, its domain, and the signing root the result must cover.
 //
 // Request format: github.com/Consensys/web3signer openapi-specs/eth2/signing
 // (checked against tag 26.9.0).
@@ -37,15 +37,15 @@ const (
 	TypeVoluntaryExit                     = "VOLUNTARY_EXIT"
 )
 
-// Method says which Dirk gRPC call signs a job.
+// Method says which call of the eth2 signer gRPC API signs a job.
 type Method int
 
 const (
-	// MethodGeneric is Signer.Sign: Dirk signs (root, domain) with no slashing checks.
+	// MethodGeneric is Signer.Sign: the signer signs (root, domain) with no slashing checks.
 	MethodGeneric Method = iota
-	// MethodAttestation is Signer.SignBeaconAttestation: Dirk applies attestation slashing protection.
+	// MethodAttestation is Signer.SignBeaconAttestation: the signer applies attestation slashing protection.
 	MethodAttestation
-	// MethodProposal is Signer.SignBeaconProposal: Dirk applies proposal slashing protection.
+	// MethodProposal is Signer.SignBeaconProposal: the signer applies proposal slashing protection.
 	MethodProposal
 	// MethodNone marks jobs that policy always refuses; they carry no signing data.
 	MethodNone
@@ -176,8 +176,8 @@ func (p *Pin) domain(fi *forkInfo, domainType phase0.DomainType, epoch phase0.Ep
 type Job struct {
 	Type   string
 	Method Method
-	// Domain and ObjectRoot are what Dirk signs for MethodGeneric. For the
-	// typed methods Dirk derives the object root from the typed data itself.
+	// Domain and ObjectRoot are what the signer signs for MethodGeneric. For the
+	// typed methods the signer derives the object root from the typed data itself.
 	Domain      phase0.Domain
 	ObjectRoot  phase0.Root
 	SigningRoot phase0.Root
@@ -187,7 +187,7 @@ type Job struct {
 	Registration  *apiv1.ValidatorRegistration
 	VoluntaryExit *phase0.VoluntaryExit
 	// Typed is the request data for a MethodGeneric job, for a signer with
-	// typed calls (the dirk-fork client). It is one of *RandaoReveal,
+	// typed calls (the signing client). It is one of *RandaoReveal,
 	// *AggregationSlot, *phase0.AggregateAndProof, *electra.AggregateAndProof,
 	// *SyncCommitteeMessage, *altair.SyncAggregatorSelectionData,
 	// *altair.ContributionAndProof, *apiv1.ValidatorRegistration, or
@@ -544,8 +544,8 @@ func buildAggregateAndProof(req *requestJSON, chain Chain) (*Job, error) {
 		version, raw = strings.ToUpper(v.Version), v.Data
 	} else if hasCommitteeBits(raw) {
 		// Lighthouse v8 sends type AGGREGATE_AND_PROOF with the bare Electra object
-		// (an aggregate with committee_bits) and signs its Electra root. The Dirk
-		// fork's typed call picks the form the same way.
+		// (an aggregate with committee_bits) and signs its Electra root. The signing
+		// client's typed call picks the form the same way.
 		version = "ELECTRA"
 	}
 

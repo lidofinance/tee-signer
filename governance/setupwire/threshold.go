@@ -22,8 +22,7 @@ func IsMainnet(genesisForkVersion backend.Version) bool {
 // cannot both sign. A chain with mainnet's genesis fork version also needs
 // 2t - n >= 2 (3 of 4, 4 of 5, ...): one signer whose mark fails, plus a
 // hostile gateway, must not be enough for a slashable pair. The rule would
-// give way to a peer mark quorum (research/peer-mark-quorum.md in the PoC
-// repo), which is not built, so nothing turns it off. Devnets and the test
+// give way to a peer mark quorum, which is not built, so nothing turns it off. Devnets and the test
 // networks, the only chains a testnet build runs on, keep 2-of-3.
 //
 // A single-node signer (t = n = 1) passes on every chain, mainnet

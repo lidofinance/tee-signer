@@ -8,8 +8,7 @@ import (
 	"slices"
 )
 
-// The split setup hash (research/attestation-prover.md, "Signer changes",
-// items 1 and 2; docs/attestation-statement.md in the cloud repo):
+// The split setup hash (attestation-verify/docs/attestation-statement.md):
 //
 //	leaf                = H(CtxPolicyLeaf, name_len:u8 name value_len:u32 value salt[32])
 //	group root          = Merkle root of the group's leaves (MerkleRoot)

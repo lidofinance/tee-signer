@@ -8,7 +8,7 @@
 //	share-import -addr tcp:127.0.0.1:7100 -pubkey 0x... -index 9 -share-file share.hex -verifier dev
 //
 // The identity is checked with the verifier of package runnerclient, the
-// one the Dirk fork's cloud adapter uses:
+// one the signing client uses:
 //
 //	-verifier dev        the dev platform's unsigned document (local runners)
 //	-verifier azure-maa  an Azure MAA token: -maa-host, -cce-policy-sha256

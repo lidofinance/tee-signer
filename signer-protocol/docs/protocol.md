@@ -1,6 +1,6 @@
 # Runner wire protocol, version 1
 
-The remote backend (`signer-protocol/remote`, in the Dirk process) and the runner
+The remote backend (`signer-protocol/remote`, in the client process) and the runner
 (`runner/`, inside the TEE) talk over one stream: TCP, a unix socket or
 vsock. On GCP and Azure the TCP stream, and on AWS the vsock stream, runs
 inside mutual TLS 1.3 (see "Channel binding" below). The reference code is
@@ -170,7 +170,7 @@ on-chain key; `share_pubkey` the key of the share this runner holds;
 
 The bytes are those of the message. Every kind but 5 has the caller's
 domain in front of the message: the domain the client signs under, as
-Dirk's typed calls carry it. The runner computes the domain the message
+the signing client's typed calls carry it. The runner computes the domain the message
 gets from its own chain config and fork schedule (the fork version of the
 message's epoch; exits the exit fork version, registrations the builder
 domain) and refuses another one with `DOMAIN_MISMATCH` before the core
@@ -240,9 +240,9 @@ past the clock horizon, and for RANDAO requires
 proposer, attester, exit, deposit or builder domain, so the generic path
 cannot bypass slashing protection or the exit allowlist.
 
-Root messages are the generic path: Dirk's generic `Sign` from a stock client
-(Vouch) when Dirk cannot find the typed message behind a root. The Dirk
-fork's adapter sends typed requests as kinds 9 to 13. Types 2 to 6 (all
+Root messages are the generic path: a generic `Sign` from a stock client,
+when the signing client cannot find the typed message behind a root. The signing
+client sends typed requests as kinds 9 to 13. Types 2 to 6 (all
 but RANDAO: selection proof, aggregate, sync committee message, sync
 selection proof, contribution) are signed only when the chain config sets
 `allow_unverified_nonslashable: true`; otherwise they get `POLICY_DOMAIN`
@@ -270,8 +270,8 @@ repeat after a restart.
 ### Setup state
 
 IDENTITY, ATTEST and HEALTH carry the runner's setup state
-(`backend.SetupState`, `research/setup-phase.md` section 4 of the PoC
-repo, and `attestation-verify/docs/attestation-statement.md` for v3 byte by byte). Its
+(`backend.SetupState`; `attestation-verify/docs/attestation-statement.md`
+for v3 byte by byte). Its
 encoding has a fixed size of 353 bytes:
 
 ```
@@ -558,7 +558,7 @@ the document (platform signature and measurements) binds it.
 `remote.DevVerifier` does the last step for the dev platform's unsigned
 document only. `attestation-verify/identity` (`Config.Verify`, same signature as
 `remote.VerifyFunc`) does it for Nitro, Confidential Space and MAA
-documents. The Dirk fork's cloud adapter, its `cloud-import` tool and
+documents. The signing client, its `cloud-import` tool and
 `share-import` do not call either directly. They build their client with
 `attestation-verify/runnerclient`, which offers four verifiers by name: `dev`
 (`remote.DevVerifier`), `azure-maa` (`attest.VerifyMAA` through
@@ -606,7 +606,7 @@ with `SC_ERR_BAD_KEY`. `-sealed-import=false` turns the message off.
 `signer-admin/cmd/share-import` is the dealer tool; it reads the share from a
 file or stdin and takes the verifier settings of `attestation-verify/runnerclient`
 (`-verifier dev|azure-maa|aws-nitro|gcp-cs`, and the settings of the
-verifier, see `attest/README.md`). The Dirk fork's `cloud-import` does the
+verifier, see `attest/README.md`). The signing client's `cloud-import` does the
 same with the same settings.
 
 ### APPROVE_EXIT
@@ -739,8 +739,7 @@ from Windows for that time).
 
 ### CONFIG_UPDATE
 
-A runner with a setup takes approver-signed config updates
-(`research/setup-phase.md` sections 6 to 9 of the PoC repo; code in
+A runner with a setup takes approver-signed config updates (code in
 `tee-signer/server/config.go`).
 
 ```
@@ -995,7 +994,7 @@ grant: a message type a role may not send gets `FORBIDDEN` before the
 runner reads its payload, before the handed-over check, and a refused
 IMPORT_SHARE or IMPORT_SHARE_SEALED payload is wiped. A type missing from
 the table (an unknown one, or a new message nobody added) is `FORBIDDEN`
-for every role (research/admin-tool.md of the PoC repo, section 4).
+for every role.
 
 A TLS client's role comes from its verified certificate chain
 (`runner/attls.RoleOf`), in this order:
@@ -1030,7 +1029,7 @@ The chain an admin certificate needs, under the root in
 root CA            no role mark, key offline
 ├─ admin CA        clientAuth + AdminClientOID, pathlen:0, key offline
 │   └─ admin leaf  clientAuth + AdminClientOID
-├─ signing CA      clientAuth (issues the Dirk fork's certificates)
+├─ signing CA      clientAuth (issues the signing client's certificates)
 │   └─ signing leaf
 └─ attest CA       clientAuth + AttestOnlyClientOID (optional)
     └─ attest leaf
@@ -1088,12 +1087,11 @@ setup state and the keys stand, gets the same answer again and does not
 count; a failed attestation counts, it called the platform. The limits,
 image constants, in any minute:
 
-- an attest-only certificate: 4 (`backend.AttestOnlyPerMinute`; signer
-  change 8 of research/attestation-prover.md), ATTEST and IDENTITY
+- an attest-only certificate: 4 (`backend.AttestOnlyPerMinute`), ATTEST and IDENTITY
   together. The connection's own IDENTITY counts too (the dashboard's
   proof check makes two a minute);
 - a signing certificate: 32 IDENTITY (`server.SigningIdentityPerMinute`,
-  twice the Dirk fork's pool of 16 connections, each of which asks for
+  twice the signing client's pool of 16 connections, each of which asks for
   IDENTITY when it is made);
 - all non-admin certificates together: 128
   (`server.NonAdminFreshPerMinute`), so many signing certificates cannot
@@ -1148,7 +1146,7 @@ flavour in the subject. A certificate without the mark leaves the decision
 to the setting alone. The next IDENTITY version should carry the chain in
 the attested fields.
 
-`attestation-verify/runnerclient` does this for the Dirk fork and the import tools,
+`attestation-verify/runnerclient` does this for the signing client and the import tools,
 on every new connection: handshake with the client certificate, IDENTITY,
 the verifier (`dev`, `azure-maa`, `aws-nitro` or `gcp-cs`), and the comparison of the verified
 identity's `tls_key_hash` with the handshake key. That comparison is the
@@ -1160,7 +1158,7 @@ adds a fixed pin for one run of a runner.
 After a timeout or an I/O error the client closes the connection and never
 uses it again. The next request dials a new one, with all the steps above.
 That dial runs in its own context, bounded by the client timeout, and not in
-the context of the request that starts it. The Dirk fork's callers stop
+the context of the request that starts it. The signing client's callers stop
 waiting as soon as a threshold of the other signers has answered, usually
 before a new dial to a cloud signer is done, so a dial tied to the request
 would never finish. A request whose context has ended before its turn is not
@@ -1210,7 +1208,7 @@ Places where the code does something this spec would not choose. This
 document describes the code as it is.
 
 1. `backend.Status.IsPolicy` leaves out 27 (`SC_ERR_POLICY_BUILDER_AUTH`).
-   A client that sorts refusals with it, as the Dirk fork's cloud adapter
+   A client that sorts refusals with it, as the signing client
    does (`refusal` in `backends/cloudremote`), reports a kind 14 refusal
    as a plain failure (FAILED), not as a policy refusal (DENIED).
    `SC_ERR_SCHEDULE` (26) is in no class either, but no SIGN returns it.

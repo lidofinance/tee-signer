@@ -82,7 +82,7 @@ func rolePKI(t *testing.T, dir, name string, caFor, clientFor time.Duration) *te
 		return &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{c.Raw, ca.Raw}, PrivateKey: k}}}
 	}
 	r := &testRoles{caFile: filepath.Join(dir, name+"-ca.pem"),
-		signing:    leaf(name+" dirk", signCA, signKey, nil),
+		signing:    leaf(name+" client", signCA, signKey, nil),
 		admin:      leaf(name+" admin", adminCA, adminKey, []asn1.ObjectIdentifier{backend.AdminClientOID}),
 		attestOnly: leaf(name+" prover", signCA, signKey, []asn1.ObjectIdentifier{backend.AttestOnlyClientOID}),
 	}

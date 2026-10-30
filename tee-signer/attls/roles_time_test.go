@@ -137,8 +137,8 @@ func TestHandshakeWithoutTrustedTimeChecksChainButNotDates(t *testing.T) {
 	cfg, _ := clk.config(t, root)
 
 	for name, cert := range map[string]tls.Certificate{
-		"valid":   root.client(t, "dirk", now0.Add(-time.Hour), now0.Add(time.Hour)),
-		"expired": root.client(t, "dirk", now0.Add(-day(20)), now0.Add(-day(10))),
+		"valid":   root.client(t, "client", now0.Add(-time.Hour), now0.Add(time.Hour)),
+		"expired": root.client(t, "client", now0.Add(-day(20)), now0.Add(-day(10))),
 	} {
 		cs := handshake(t, cfg, cert)
 		if len(cs.PeerCertificates) != 1 || len(cs.VerifiedChains) != 0 || RoleOf(&cs) != RoleNone {
@@ -152,8 +152,8 @@ func TestHandshakeWithoutTrustedTimeChecksChainButNotDates(t *testing.T) {
 		return &tls.Config{GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return &c, nil }}
 	}
 	for name, cert := range map[string]tls.Certificate{
-		"other CA":        other.client(t, "dirk", now0.Add(-time.Hour), now0.Add(time.Hour)),
-		"serverAuth only": root.client(t, "dirk", now0.Add(-time.Hour), now0.Add(time.Hour), x509.ExtKeyUsageServerAuth),
+		"other CA":        other.client(t, "client", now0.Add(-time.Hour), now0.Add(time.Hour)),
+		"serverAuth only": root.client(t, "client", now0.Add(-time.Hour), now0.Add(time.Hour), x509.ExtKeyUsageServerAuth),
 	} {
 		_, cerr := try(t, addr, forced(cert))
 		if herr := handshakeResult(t, hs); herr == nil || cerr == nil {
@@ -183,7 +183,7 @@ func TestVerifyAtChecksChainAndDates(t *testing.T) {
 		}
 		return []*x509.Certificate{x}
 	}
-	valid := leaf(root.client(t, "dirk", now0.Add(-time.Hour), now0.Add(time.Hour)))
+	valid := leaf(root.client(t, "client", now0.Add(-time.Hour), now0.Add(time.Hour)))
 	chains, err := VerifyAt(pool, valid, now0)
 	if err != nil || len(chains) == 0 {
 		t.Fatalf("valid certificate: %v", err)
@@ -199,8 +199,8 @@ func TestVerifyAtChecksChainAndDates(t *testing.T) {
 	}{
 		"expired":             {pool, valid, now0.Add(2 * time.Hour)},
 		"not yet valid":       {pool, valid, now0.Add(-2 * time.Hour)},
-		"other CA":            {pool, leaf(other.client(t, "dirk", now0.Add(-time.Hour), now0.Add(time.Hour))), now0},
-		"serverAuth only":     {pool, leaf(root.client(t, "dirk", now0.Add(-time.Hour), now0.Add(time.Hour), x509.ExtKeyUsageServerAuth)), now0},
+		"other CA":            {pool, leaf(other.client(t, "client", now0.Add(-time.Hour), now0.Add(time.Hour))), now0},
+		"serverAuth only":     {pool, leaf(root.client(t, "client", now0.Add(-time.Hour), now0.Add(time.Hour), x509.ExtKeyUsageServerAuth)), now0},
 		"zero time":           {pool, valid, time.Time{}},
 		"no CA":               {nil, valid, now0},
 		"no peer certificate": {pool, nil, now0},

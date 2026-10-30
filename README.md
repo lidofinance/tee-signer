@@ -12,7 +12,7 @@ GCP Confidential Space. The runner keeps validator keys or key shares sealed
 to its measured image, refuses slashable messages, and keeps its signing marks
 in an external append-only log, so a restarted, rolled back or cloned runner
 cannot sign below them. Operators set it up with an approver-signed setup.
-Everything that talks to the runner (the Dirk fork, the gateway, validator
+Everything that talks to the runner (the signing client, the gateway, validator
 clients, the operator tools) is untrusted, and the runner checks what they send.
 
 On GCP a signer that holds a key alone (1 of 1) is unsafe and refused unless
@@ -22,9 +22,6 @@ or the key (folder and organization admins included) can rebind it and
 decrypt the sealing key outside any TEE, which opens the whole key from the
 state bucket. See
 [platform-gcp/deploy/README.md](platform-gcp/deploy/README.md#setup), "Setup".
-
-The history before this repo is in
-[lidofinance/threshold-signer-poc](https://github.com/lidofinance/threshold-signer-poc).
 
 ## Modules
 

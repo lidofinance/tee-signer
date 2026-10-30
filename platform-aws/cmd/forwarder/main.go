@@ -2,7 +2,7 @@
 // EC2 instance: it accepts TCP connections and copies each one to the
 // enclave's vsock port. Nothing else. It does not terminate TLS and holds
 // no certificate, key or CA: the runner's mutual TLS ends inside the
-// enclave, and the parent is not trusted (DESIGN-INVARIANTS.md, rule 12).
+// enclave, and the parent is not trusted.
 // Any other TCP forwarder does the same job, for example
 //
 //	socat TCP-LISTEN:7100,fork,reuseaddr VSOCK-CONNECT:16:7100
@@ -39,7 +39,7 @@ func main() {
 
 func run() error {
 	var (
-		listen   = flag.String("listen", "tcp:0.0.0.0:7100", "address the Dirk fork connects to (tcp:HOST:PORT)")
+		listen   = flag.String("listen", "tcp:0.0.0.0:7100", "address the signing client connects to (tcp:HOST:PORT)")
 		to       = flag.String("to", "", "the enclave's address (vsock:CID:PORT, the runner's -listen port), required")
 		maxConns = flag.Int("max-conns", 256, "connections open at once; more are closed")
 	)

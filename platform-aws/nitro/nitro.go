@@ -176,8 +176,7 @@ func kmsRecipient(n *NSM, seen *platform.ImageSeen) (*rsa.PrivateKey, *types.Rec
 		KeyEncryptionAlgorithm: types.KeyEncryptionMechanismRsaesOaepSha256}, nil
 }
 
-// The encryption contexts of the KMS calls (research/setup-phase.md in the
-// threshold-signer-poc repo, section 4):
+// The encryption contexts of the KMS calls:
 //
 //	sealing data key     {purpose: sealing, signer-setup: <setup_hash, hex>}
 //	platform.Keys        {signer-key: <aad, hex>, signer-setup: <setup_hash, hex>}

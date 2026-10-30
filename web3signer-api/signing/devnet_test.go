@@ -9,7 +9,7 @@ import (
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 )
 
-// devnetPin is the chain of a local devnet (devnet/network_params.yaml): genesis
+// devnetPin is the chain of a local Kurtosis devnet: genesis
 // fork 0x10000038, then Altair to Fulu, all at epoch 0.
 func devnetPin(t *testing.T) *Pin {
 	t.Helper()

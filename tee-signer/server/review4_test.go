@@ -18,8 +18,8 @@ import (
 	"github.com/lidofinance/tee-signer/tee-signer/attls"
 )
 
-// Tests that reproduce findings of the security reviews in issues #4 and #5
-// on lidofinance/threshold-signer-poc. Each asserts the behaviour the
+// Tests that reproduce findings of earlier security reviews.
+// Each asserts the behaviour the
 // finding asks for, so each fails until its fix lands.
 
 // sealedImportPayload is an IMPORT_SHARE_SEALED payload for sk filed under

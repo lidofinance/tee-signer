@@ -17,7 +17,7 @@ import (
 
 // Record is one entry of a signer's mark log, magic SMARK1. Every record
 // carries the full config state, so no record needs an earlier one for the
-// config (setup-phase.md, section 5).
+// config.
 type Record struct {
 	Setup       [32]byte          // setup_hash; zero on the flag path without a setup
 	Signer      string            // the signer's name (its object name part)

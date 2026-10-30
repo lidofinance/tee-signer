@@ -1,5 +1,4 @@
-# Workload image for Confidential Space. One image for every operator
-# (research/setup-phase.md in the threshold-signer-poc repo, "Design v2", section 1):
+# Workload image for Confidential Space. One image for every operator:
 # the release runner and the flags that are the same for everyone.
 #
 # Every runner flag is fixed here. The launch policy below keeps the operator

@@ -2,8 +2,8 @@
 // and sealed share import, config updates and exit approvals
 // (docs/protocol.md). Only clients of the admin role may send them
 // (runner/server/roles.go). Package wire keeps the frames, the errors and
-// the signing and attestation messages, so a signing client such as the
-// Dirk fork builds without this package.
+// the signing and attestation messages, so a signing client
+// builds without this package.
 package admin
 
 import (

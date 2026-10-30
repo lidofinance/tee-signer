@@ -17,8 +17,7 @@ package main
 // another one's binary. A binary built with none of the tags refuses to
 // start.
 //
-// Each file also registers the platform's setup channel (-setup platform,
-// research/setup-phase.md, section 3): the host agent over vsock on Nitro,
+// Each file also registers the platform's setup channel (-setup platform): the host agent over vsock on Nitro,
 // SIGNER_SETUP on Azure and dev, the metadata attribute on GCP.
 
 import (

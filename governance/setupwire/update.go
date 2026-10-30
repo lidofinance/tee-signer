@@ -8,8 +8,7 @@ import (
 	"io"
 )
 
-// CONFIG_UPDATE (setup-phase.md, section 6; attestation-prover.md, "Signer
-// changes", item 1). The body carries the full new group, its values and a
+// CONFIG_UPDATE. The body carries the full new group, its values and a
 // salt for each of its leaves. The approvers sign the header under
 // CtxConfigUpdate; the header names the root of the new group's salted
 // leaves (policy.go) in place of the values, so a signature, and the

@@ -219,8 +219,7 @@ func checkedVersion(kid, answered string) (string, error) {
 // release_policy.contentType and the policy bytes (release_policy.data,
 // base64url), in that order, flags as one byte. An absent flag counts as
 // false. The lock is release_policy.immutable: an immutable release policy
-// cannot change (research/admin-proof-key-release.md in the PoC repo,
-// section 4.1). The public key (key.n, key.e) is not in the hash; the
+// cannot change. The public key (key.n, key.e) is not in the hash; the
 // runner compares it with the released key.
 func keyRuleOf(resp []byte) (platform.KeyRule, CheckedKey, error) {
 	var out struct {

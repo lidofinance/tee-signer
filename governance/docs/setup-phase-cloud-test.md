@@ -2,10 +2,7 @@
 
 The procedure for testing the generic images on all three clouds: one image
 per cloud, the key policy, release policy and WIF condition set once, and
-each signer's values in its setup. It is phase 1 item 9 of the setup-phase
-design (`research/setup-phase.md` in
-[threshold-signer-poc](https://github.com/lidofinance/threshold-signer-poc/blob/main/research/setup-phase.md),
-"Build plan").
+each signer's values in its setup.
 
 Every step that creates or changes something in a cloud needs the
 operator's approval. The deploy scripts refuse such a step unless
@@ -86,7 +83,7 @@ apart:
   `0.1.0+testnet`, and its TLS certificate is named
   `signer-runner testnet`.
 - Every client refuses it in the TLS handshake unless the connection sets
-  `"allow_testnet_build": true`: cloud.json of the Dirk fork and
+  `"allow_testnet_build": true`: cloud.json of the signing client and
   signer-admin's runner entries, identity-check, handover-source and
   handover-target;
   `-allow-testnet-build` for cloud-import and share-import.
@@ -172,8 +169,8 @@ Set these once per shell, from the deploy settings of each cloud.
 ## Step 0: local, no cloud
 
 1. Images: `scripts/generic-images.sh check` passes.
-2. Tools: `signer-config`, `cloud-import` and `proof-check` from the Dirk
-   fork (`dirk-fork/backends/cloudremote/cmd` in threshold-signer-poc),
+2. Tools: `signer-config`, `cloud-import` and `proof-check` from the signing
+   client,
    `identity-check` and `setup-tool` from this repo (`signer-admin/cmd`).
 3. Approver keys: three test keys `approver-1.key` to `approver-3.key`
    (never real keys). For the rotation make a fourth test key:
@@ -186,8 +183,7 @@ Set these once per shell, from the deploy settings of each cloud.
    (`allowed_fee_recipients`, the builder gas limits,
    `builder_registration_max_future_seconds`, `exit_allowed_validators`,
    `allow_unverified_nonslashable_signing`) and the `open` `fork_schedule`.
-5. The cluster file `setup.conf` (setup format 1, field names of
-   `research/attestation-prover.md` in threshold-signer-poc, "Field names").
+5. The cluster file `setup.conf` (setup format 1).
    Before the first section, the lines all signers share:
    `setup_format_version = 1`, `handover_generation = 1`, the chain lines
    (set `allow_unverified_nonslashable_signing` as the test's signing paths need),
@@ -275,7 +271,7 @@ and store on the parent.
 
 Skip this step on fresh resources.
 
-1. Stop the validator clients and Dirk forks that use them, so nothing
+1. Stop the validator clients and signing clients that use them, so nothing
    signs through them.
 2. AWS: terminate the enclave and its proxies, host agent, forwarder and
    udprelay, and move `/var/lib/signer-runner` to
@@ -369,7 +365,7 @@ Then `signer-config pin -cluster cluster.json` (C1) and the share import.
 | C7 | Supersede | `draft -margin 30m` a `locked` update, push; before it activates, push one with a higher version and the active values; while a rotation is pending, push an update signed by the new set only. Optional: add an `allowed_image_measurements` entry | the second replaces the first and starts its own wait; the update of the pending set is refused; the image entry shows an effective time 7 days out (the image minimum), then a supersede cancels it |
 | C8 | Restart keeps the effective config | AWS: terminate the enclave and run `parent-run.sh` again with the same setup; Azure: `az container restart`; GCP: `gcloud compute instances reset` | `signer-config status` shows the same setup hash, versions, hashes and approver set as before the restart; signing resumes after the restart floor |
 | C9 | Planting attempt on AWS | as the key admin: `aws kms encrypt` with the context `purpose=sealing,signer-setup=<hex>`, with no context, and with `purpose=record-creds` plus one more key; then put 32 random bytes encrypted under `purpose=record-creds` as `sealing/datakey.kms` into a store of its own (`STATE_DIR=/var/lib/signer-runner-plant`, with the record blob) and start a setup there, before step 4's real start | the three encrypt calls are denied (AccessDeniedException); the runner does not use the planted key: its Decrypt under `{purpose: sealing, signer-setup}` fails and it stops (`last-exit.txt`) |
-| C10 | Signing | import a few test validators with `cloud-import` (setup pins in `cloud.json`), start their Dirk forks and validator client | attestations included; HEALTH shows the NTS clock |
+| C10 | Signing | import a few test validators with `cloud-import` (setup pins in `cloud.json`), start their signing clients and validator client | attestations included; HEALTH shows the NTS clock |
 
 Keep each check's output as the test's evidence.
 
@@ -388,7 +384,7 @@ Keep each check's output as the test's evidence.
 | AWS | Terminate the generic enclave, move its store aside, move `/var/lib/signer-runner.before-generic` back, run the earlier `parent-run.sh` from its folder. The key policy still holds the earlier PCRs (`prev_pcrs`). |
 | Azure | Delete the generic group and deploy the earlier template: the earlier key is untouched, so its release policy still names the earlier CCE hash. |
 | GCP | `vm-delete`, then `provider-update` with the earlier digest and `vm-create`. The bucket roles only grew. |
-| Dirk forks | They keep their `cloud.json`; start them again. |
+| signing clients | They keep their `cloud.json`; start them again. |
 
 The records the generic signers wrote stay locked for a day; nothing needs
 them after a rollback.

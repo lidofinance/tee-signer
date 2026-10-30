@@ -182,7 +182,7 @@ func (s *Server) checkLogID() error {
 }
 
 // ListShares lists the stored shares. A runner with a setup lists them
-// once, before the mark log's claim (setup-phase.md, section 5): the claim
+// once, before the mark log's claim: the claim
 // learns from that list whether the node holds shares, and the runner loads
 // only that list (LoadListedShares). A share that shows up in a later
 // listing is never loaded.

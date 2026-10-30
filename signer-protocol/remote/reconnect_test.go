@@ -27,12 +27,12 @@ import (
 // protocol over TLS 1.3 and can be slow or stall. They cover what happens to
 // the connection when a request times out, and what the callers see.
 //
-// The Dirk fork's callers end their request as soon as a threshold of the
+// The signing client's callers end their request as soon as a threshold of the
 // other signers has answered, usually long before a new dial to a cloud
 // signer (TLS handshake, IDENTITY, attestation check) can finish. A client
 // that ties the dial to the request's context never gets a new connection:
 // every dial is cancelled with its request. That is how one timed out request
-// once left a Dirk fork without its Azure signer until it restarted.
+// once left a signing client without its Azure signer until it restarted.
 
 // ---- fake runner ----
 
@@ -333,7 +333,7 @@ func TestStalledRequestDropsTheConnection(t *testing.T) {
 	}
 }
 
-// The case of the Dirk fork. After the timeout every request comes with a
+// The case of the signing client. After the timeout every request comes with a
 // context that ends 30 ms after it starts, and a new dial takes about 250 ms.
 // The callers give up on their own, so the dial must not belong to a request.
 // Once it is done, the next request finds a connection. Exactly one new

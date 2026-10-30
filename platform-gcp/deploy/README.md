@@ -186,7 +186,7 @@ stops at the first launcher call (`dial unix
 
 ## Network entry
 
-The network entry is how the Dirk forks reach port 7100. It is not trusted and
+The network entry is how the signing clients reach port 7100. It is not trusted and
 can be replaced. Security comes from mutual TLS 1.3, with the runner's TLS
 key bound to its attested identity, which the client checks on every
 connection. Only port 7100 may listen in the TEE.
@@ -234,7 +234,7 @@ What (b) is made of (`deploy.sh network-create`, `address-reserve`,
 - A dedicated custom VPC `signer-net`. A custom VPC has no allow rule, so the
   `default` network's ssh, rdp, icmp and internal rules do not apply, and
   port 22 is closed.
-- A static regional address `signer-node-1-ip`, so the Dirk fork's `address`
+- A static regional address `signer-node-1-ip`, so the signing client's `address`
   survives a VM restart.
 - One ingress rule `signer-allow-7100`: TCP 7100 from `OPERATOR_IP/32` to VMs
   tagged `signer-node`.
@@ -454,13 +454,13 @@ keeps the durable state copy under `state/` with the same client and roles
 
 ## Verifier settings
 
-For the Dirk fork's cloud adapter, `cloud-import` and `share-import`
+For the signing client, `cloud-import` and `share-import`
 (`attestation-verify/runnerclient`, verifier `gcp-cs`). `deploy.sh
 verifier-config` writes them to `$GCP_TEST_DIR/gcp-signer.json` (directory
 700, file 600, no secrets; some chains add a suffix to the file name). With `HARDWARE=amd-sev` it writes a `NOTE.txt` next to it
 that says the file is for AMD SEV only. It needs `GCP_TEST_DIR`, a private
-directory outside the repo, and `CLIENT_CERT` and `CLIENT_KEY`, the Dirk
-fork's client certificate and key; it stops if one is missing.
+directory outside the repo, and `CLIENT_CERT` and `CLIENT_KEY`, the signing
+client's client certificate and key; it stops if one is missing.
 
 | Setting | Value |
 | --- | --- |
@@ -471,7 +471,7 @@ fork's client certificate and key; it stops if one is missing.
 | `gcp_service_account` | `signer-workload@<gcp-project>.iam.gserviceaccount.com` |
 | `gcp_issuer` | not set: the default `https://confidentialcomputing.googleapis.com` |
 | `address` | `tcp:<signer-node-1-ip>:7100`. The address exists after `address-reserve`. Until then the file holds `tcp:SIGNER_IP:7100` (or set `SIGNER_ADDRESS`) |
-| `client_cert`, `client_key` | the Dirk fork's client certificate and key from the setup's client CA |
+| `client_cert`, `client_key` | the signing client's client certificate and key from the setup's client CA |
 
 `runnerclient.Connection.New()` accepts the file. The command also prints the
 `share-import` flags: `-verifier gcp-cs -gcp-image-digest ... -gcp-audience
@@ -479,8 +479,8 @@ signer-runner-identity -gcp-hwmodel GCP_AMD_SEV -gcp-service-account ...`.
 
 ## Checking a running signer
 
-`signer-admin/cmd/identity-check` connects the way the Dirk fork's cloud
-adapter does: mutual TLS with a client certificate, IDENTITY with a fresh
+`signer-admin/cmd/identity-check` connects the way the signing
+client does: mutual TLS with a client certificate, IDENTITY with a fresh
 nonce on every connection, and the `gcp-cs` verifier of the config. It sends
 nothing but IDENTITY and imports no share.
 
@@ -510,7 +510,7 @@ assumes the launcher's log is named `confidential-space-launcher`).
   64 hex characters fit both. The audience is `signer-runner-identity`
   (`attest_audience`, from the setup, and the runner's default).
   The runner gives this token to every client that asks for `IDENTITY`,
-  Dirk included, so the runner refuses an audience the WIF provider could
+  the signing client included, so the runner refuses an audience the WIF provider could
   take: `https://sts.googleapis.com` or a WIF resource name. Clients verify
   `signer-runner-identity` (`attestation-verify/identity` refuses the STS
   audience).
@@ -548,7 +548,7 @@ assumes the launcher's log is named `confidential-space-launcher`).
   VM at each start; the token nonce carries the identity user data, which
   binds the key's hash (`signer-protocol/docs/protocol.md`, "Channel
   binding"). A client connects with `remote.WithTLS` and a client
-  certificate from that CA. The Dirk fork's adapter does that through
+  certificate from that CA. The signing client does that through
   `attestation-verify/runnerclient`.
 - Shares arrive only sealed with HPKE (ML-KEM-768 + X25519) to the
   runner's attested per-boot key. The image holds the GCP release runner
@@ -564,8 +564,8 @@ assumes the launcher's log is named `confidential-space-launcher`).
 
 - `attest.VerifyConfidentialSpace` checks Confidential Space tokens
   (Google key set, claims, nonce). `attestation-verify/runnerclient` has
-  it as the verifier `gcp-cs`, so the dealer tool `share-import`, the Dirk
-  fork's `cloud-import` and its adapter can select it. Its settings are
+  it as the verifier `gcp-cs`, so the dealer tool `share-import`, the signing
+  client's `cloud-import` and its adapter can select it. Its settings are
   `gcp_image_digest`, `gcp_audience` and `gcp_hwmodels`, and optionally
   `gcp_issuer`, `gcp_jwks_file` and `gcp_service_account` (see
   `attestation-verify/README.md`).

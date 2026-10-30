@@ -15,8 +15,7 @@ import (
 	"github.com/lidofinance/tee-signer/signer-protocol/transport"
 )
 
-// The setup path (-setup, research/setup-phase.md in the threshold-signer-poc repo,
-// "Design v2", sections 1 to 3). The image is the same for every operator
+// The setup path (-setup). The image is the same for every operator
 // and its command fixes only what is the same for all of them. The values
 // that were flags (the chain config, the client CA, max_keys, the
 // slashing log and the encrypted state store, the signer name and the platform options) come from the setup, which the host hands over at every
@@ -222,7 +221,7 @@ func startPlatform(ctx context.Context, a *startArgs, newPlatform platformFunc, 
 	}
 	opts := platform.Options{StateDir: a.stateDir, Params: s.params, Mainnet: s.mainnet, NoLockAccepted: s.noLockAccepted}
 	if s.setup != nil {
-		// Every key-release call carries setup_hash (setup-phase.md, section 4).
+		// Every key-release call carries setup_hash.
 		opts.SetupHash = s.setup.SHA256
 	}
 	var copyStore *durableCopy

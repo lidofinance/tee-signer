@@ -4,7 +4,7 @@
 > Not audited. Not for production or mainnet funds. Interfaces and formats will
 > change without notice.
 
-In this repo, signer-core is the C module of the TEE signer. The runner links it through its Go binding (`core`; module path `github.com/lidofinance/tee-signer/signer-core`). blst is vendored in `third_party/blst` at the pin in `scripts/common.sh`, checked against `third_party/blst.sha256`. The OP-TEE trusted app and the other folders this README names outside signer-core stay in `lidofinance/threshold-signer-poc`.
+In this repo, signer-core is the C module of the TEE signer. The runner links it through its Go binding (`core`; module path `github.com/lidofinance/tee-signer/signer-core`). blst is vendored in `third_party/blst` at the pin in `scripts/common.sh`, checked against `third_party/blst.sha256`. The OP-TEE trusted app and the other folders this README names outside signer-core are not part of this repo.
 
 The Go packages have separate roles:
 
@@ -18,7 +18,7 @@ Threshold recovery and commitment checks have their own external test package
 in `threshold/`.
 
 Portable C signing core of the threshold signer, for the cloud runner and
-the OP-TEE trusted app of each "hardware Dirk" node (`../ta/`):
+the OP-TEE trusted app of each hardware signer node (`../ta/`):
 SSZ hashing, BLS signing with blst, EIP-3076 slashing protection with
 commit-ahead watermarks, and a signing policy. This folder builds and tests
 it natively on x86_64 and cross-builds it for aarch64. The trusted app
@@ -132,7 +132,7 @@ proof) and refuses every other domain type with `SC_ERR_POLICY_DOMAIN`. The
 epoch must pass the clock horizon, and a RANDAO root must equal
 `hash_tree_root(epoch)`. For the other five types the core does not see the
 message content. Only the cloud runner's generic path calls it: a bare root
-from Dirk's generic `Sign` (stock Vouch), behind the runner's
+from a generic `Sign` of a stock client, behind the runner's
 `allow_unverified_nonslashable` switch.
 
 `validator_pubkey` is the validator's on-chain key and identifies it for
@@ -299,7 +299,7 @@ the exact-repeat roots. A merged config that fails the checks of
 
 `sc_signer_set_schedule` replaces the fork schedule of a running signer
 (`sc_schedule`: `forks`, `gloas_scheduled`, `gloas_fork_epoch`; the `open`
-config group of `../research/setup-phase.md`, section 7). With T the later
+config group of a cloud setup). With T the later
 of `activate_at` and the trusted clock, it takes the new schedule only if it
 gives every epoch up to epoch(T) + `max_epochs_ahead` + 1 the same fork
 version and Gloas state as the old one (sums saturate), and refuses it with
@@ -321,8 +321,7 @@ rule: every epoch up to epoch(T) + `max_epochs_ahead` + 1 keeps its slot
 time, so the first changed epoch is at least epoch(T) + `max_epochs_ahead` +
 2, and `SC_ERR_SCHEDULE` refuses anything sooner (`sc_signer_check_slot_times`
 checks without the change). The changes come from the `locked` config group
-of a cloud setup (`slot_time_changes`, `../research/attestation-prover.md`,
-"Signer changes", item 5). `sc_signer_init` passes none, so the board TA
+of a cloud setup (`slot_time_changes`). `sc_signer_init` passes none, so the board TA
 keeps the plain clock and `sc_config` keeps its layout.
 
 The fork rule counts epochs under the full slot schedule.
@@ -343,7 +342,7 @@ an epoch it signed gets that attestation and block refused by the marks
 ## Gloas
 
 Gloas (EIP-7732) adds three message types a validator signs
-([research/gloas-signing.md](https://github.com/lidofinance/threshold-signer-poc/blob/main/research/gloas-signing.md), consensus-specs
+(consensus-specs
 `460fd37c`):
 
 | Call | Message | Domain, epoch | Rules |
@@ -428,11 +427,10 @@ No EIP-3076 test is skipped. Two notes on how they apply:
 ## Not done
 
 - Deposits in the core. The trusted app signs deposits itself
-  (`../ta/trusted-app/signer_ta.c`, see [SIGN_TYPED](https://github.com/lidofinance/threshold-signer-poc/blob/main/ta/README.md#sign_typed)).
+  (`../ta/trusted-app/signer_ta.c`, `SIGN_TYPED`).
 - No policy authentication in the core. `sc_signer_set_policy` replaces the
   policy at run time without checking who sent it. The trusted app takes a
-  new policy only when m of n approvers signed it (`SET_POLICY`, see
-  [Provisioning and the signed policy](https://github.com/lidofinance/threshold-signer-poc/blob/main/ta/README.md#provisioning-and-the-signed-policy)).
+  new policy only when m of n approvers signed it (`SET_POLICY`).
 - The core trusts the `now` callback. The trusted app keeps its own clock.
   Provisioning sets it from the CA-signed record, and after that the normal
   world can move it only forward, in bounded steps (`clock_max_step`). QEMU

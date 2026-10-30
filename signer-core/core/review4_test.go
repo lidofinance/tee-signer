@@ -11,8 +11,8 @@ import (
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
-// Tests that reproduce findings of the security reviews in issues #4 and #5
-// on lidofinance/threshold-signer-poc. Each asserts the behaviour the
+// Tests that reproduce findings of earlier security reviews.
+// Each asserts the behaviour the
 // finding asks for, so each fails until its fix lands.
 
 // deviceHooks are MemHooks with one device mark, kept across a restart

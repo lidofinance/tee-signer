@@ -3,7 +3,7 @@
 # support enabled at launch). x86_64 or arm64: the documented choice is a
 # Graviton c6g.large in eu-central-1. Starts the vsock proxies, the host
 # agent, the enclave and the network entry: a forwarder from a TCP port to
-# "vsock:${ENCLAVE_CID}:7100" that the Dirk fork connects to (README.md,
+# "vsock:${ENCLAVE_CID}:7100" that the signing client connects to (README.md,
 # "Network entry"). The forwarder copies bytes. The mutual TLS of the runner
 # ends inside the enclave, so nothing on this instance needs a certificate
 # or a key.
@@ -16,8 +16,7 @@
 # security group's egress for them (main.tf nts_egress).
 #
 # The EIF is the same for every signer (scripts/nitro-eif.sh). What makes it
-# this signer is its setup (research/setup-phase.md in the threshold-signer-poc repo,
-# section 3): the binary file signer-config setup (or signer-admin/cmd/setup-tool)
+# this signer is its setup: the binary file signer-config setup (or signer-admin/cmd/setup-tool)
 # makes, with the chain, the client CA, the KMS key and region, the mark
 # bucket, the signer name and the key set hosts of the handover target's verifier (peer_attestation_hosts).
 # The host agent checks it with the runner's decoder and hands it to the

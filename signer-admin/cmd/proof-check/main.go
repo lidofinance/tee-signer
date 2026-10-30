@@ -1,5 +1,5 @@
 // Command proof-check is the proof check of the dashboard. For each signer in
-// topology.json it connects the way a Dirk fork does: mutual TLS 1.3 with the
+// topology.json it connects the way a signing client does: mutual TLS 1.3 with the
 // client certificate, and the attestation of the signer checked on every
 // connection with package runnerclient (the verifier named in the signer's
 // cloud.json: dev, azure-maa, aws-nitro or gcp-cs). It then asks for HEALTH,
@@ -48,7 +48,7 @@
 // attest-only one (docs/protocol.md, "Client roles"): HEALTH and IDENTITY
 // are all the check sends, and a signer gives an attest-only certificate 4
 // fresh attestations a minute. Run the tool in the network namespace that
-// reaches the signers (the network entry's, as the Dirk forks do).
+// reaches the signers (the network entry's, as the signing clients do).
 // The check sends no signing request and changes nothing in the signer.
 package main
 
@@ -144,7 +144,7 @@ type mark struct {
 }
 
 // setupView is the signer's setup state as the proof file carries it, for
-// the dashboard's Config row (research/setup-phase.md, "Dashboard panel").
+// the dashboard's Config row.
 // Hashes are 8 hex digits, like tls_key and config. Times are Unix
 // seconds, capped at 2^63-1 (a runner saturates its sums at 2^64-1).
 //
@@ -360,7 +360,7 @@ func check(dir string, s topoSigner, timeout time.Duration) result {
 		return fail(fmt.Errorf("no connection file for %s", s.Name))
 	}
 	// The connection fields, and the IDENTITY version of the signer. Fields
-	// of the Dirk fork (accounts, slots_per_epoch) are left alone.
+	// of the signing client (accounts, slots_per_epoch) are left alone.
 	var conn struct {
 		runnerclient.Connection
 		IdentityVersion int `json:"identity_version"`

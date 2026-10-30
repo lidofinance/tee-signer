@@ -1,6 +1,5 @@
 // Package setup is the start of a runner that takes its operator values from
-// a setup (research/setup-phase.md in the threshold-signer-poc repo, "Design v2",
-// sections 1 to 3). The image is the same for every operator; the host hands
+// a setup. The image is the same for every operator; the host hands
 // the setup over at every start, over a channel that needs no key release:
 //
 //	nitro  the host agent on the parent, over vsock (hostagent.SetupChannel)

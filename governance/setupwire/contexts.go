@@ -6,8 +6,7 @@ import (
 	"encoding/binary"
 )
 
-// Context is one entry of the registry of signing contexts
-// (setup-phase.md, section 2). Every input that approvers sign, or that the
+// Context is one entry of the registry of signing contexts. Every input that approvers sign, or that the
 // runner hashes or derives a key with, is
 //
 //	len:u16 context body

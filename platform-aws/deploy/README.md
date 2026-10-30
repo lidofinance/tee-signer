@@ -100,15 +100,15 @@ chain or signer is a new setup on the parent. The order of a deploy is in
  vsock-proxy 8005-8008 -> NTS-KE (TCP 4460)
 ```
 
-The Dirk fork connects to the forwarder over TCP and never sees vsock (see
+The signing client connects to the forwarder over TCP and never sees vsock (see
 "Network entry").
 
 - Attestation: `/dev/nsm` through `github.com/hf/nsm` (MIT). The document is
   COSE_Sign1, ES384 ([AWS: verify root](https://docs.aws.amazon.com/enclaves/latest/user/verify-root.html)).
   Verifiers check it against the AWS Nitro root and compare PCR0/1/2.
   `attest.VerifyNitro` does that. `attestation-verify/runnerclient` has it as
-  the verifier `aws-nitro`, so the dealer tool `share-import`, the Dirk
-  fork's `cloud-import` and its adapter can select it. Its settings are
+  the verifier `aws-nitro`, so the dealer tool `share-import`, the signing
+  client's `cloud-import` and its adapter can select it. Its settings are
   `nitro_pcrs` (PCR0, PCR1 and PCR2 of the image; `scripts/nitro-eif.sh`
   prints them), and optionally more PCRs and `nitro_root_sha256` (see
   `attestation-verify/README.md`). The NSM writes the payload's top-level map
@@ -487,15 +487,15 @@ trusted and can be replaced. So the way in has three parts, and only the
 last two are trusted.
 
 ```
- Dirk fork --- TCP ---> forwarder (parent) --- vsock 16:7100 ---> runner (enclave)
+ client --- TCP ---> forwarder (parent) --- vsock 16:7100 ---> runner (enclave)
     |                   copies bytes, no TLS                        |
     +------------- mutual TLS 1.3, ends inside the enclave ---------+
     aws-nitro check of the identity on every connection (client side)
 ```
 
-The Dirk fork stays on TCP. Its copy of the client has no vsock. It connects
+The signing client stays on TCP. Its copy of the client has no vsock. It connects
 to `tcp:HOST:PORT` of the forwarder, like it does to a signer on Azure. The
-forwarder can be replaced without touching the Dirk fork or the enclave.
+forwarder can be replaced without touching the signing client or the enclave.
 
 ### TLS inside the enclave
 
@@ -547,7 +547,7 @@ target's key, and the bytes it copies do not contain the payload.
 `socat TCP-LISTEN:7100,fork,reuseaddr VSOCK-CONNECT:16:7100` does the same
 job.
 
-The security group can allow the forwarder's port from the Dirk fork hosts
+The security group can allow the forwarder's port from the signing client hosts
 (`entry_cidrs` in `main.tf`, empty by default: no inbound rule). That limits
 exposure and the load on the instance. It is not what keeps the runner safe.
 
@@ -635,7 +635,7 @@ in debug mode has no console.
   listening runner means the PCR conditions of the key policy accepted its
   document.
 - From a client, through the forwarder, with a client certificate of the
-  setup's CA: `share-import` or the Dirk fork with the `aws-nitro` verifier
+  setup's CA: `share-import` or the signing client with the `aws-nitro` verifier
   and the PCRs of the build. A wrong PCR is refused with `measurement
   mismatch: pcr2 is ..., want ...`. `scripts/kms-policy.sh pcr3` gives the
   PCR3 the document should carry for `role/signer-parent`.

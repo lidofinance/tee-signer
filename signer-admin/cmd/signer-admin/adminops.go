@@ -1,7 +1,6 @@
 package main
 
-// The commands signer-config did not have (research/admin-tool.md,
-// section 3): probe, import-draft, import, exit-draft, and the import
+// The commands signer-config did not have: probe, import-draft, import, exit-draft, and the import
 // order and exit approval paths of show, sign, assemble and push.
 
 import (
@@ -964,7 +963,7 @@ func pushExits(out io.Writer, c *cluster, paths []string, timeout time.Duration)
 
 // printSigning names both messages an approver may sign for raw, so an
 // approver can compare them over a second channel: the direct form and
-// the hashed form (research/admin-tool.md, section 7).
+// the hashed form.
 func printSigning(out io.Writer, raw []byte) {
 	ctx, body, ok := signingInput(raw)
 	if !ok {

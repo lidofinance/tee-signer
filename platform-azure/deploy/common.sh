@@ -20,9 +20,8 @@ if [ "$IMAGE_FLAVOR" = testnet ]; then
   case "$IMAGE_TAG" in *-testnet) ;; *) IMAGE_TAG="$IMAGE_TAG-testnet" ;; esac
 fi
 
-# Setup of signer N (research/setup-phase.md in the threshold-signer-poc repo,
-# section 3): SETUP_FILE_N, a binary setup. signer-config setup (the Dirk
-# fork's tool) writes one per signer of a cluster with one cluster_id;
+# Setup of signer N: SETUP_FILE_N, a binary setup. signer-config setup (the signing
+# client's tool) writes one per signer of a cluster with one cluster_id;
 # signer-admin/cmd/setup-tool encode makes a single one. It holds what were
 # per-signer flags: chain config, client CA, MAA host, vault and key, mark
 # and state stores (the mark log is required; an Azure store names its
@@ -72,11 +71,11 @@ store_scopes() {
 
 RG="${RG:-signer-poc-rg}"
 
-# Network entry: how the Dirk forks reach port 7100 of a signer (README,
+# Network entry: how the signing clients reach port 7100 of a signer (README,
 # "Network entry"). It is one part of the container group template, which
 # deploy.sh render merges into aci-template.json. The network is not
 # trusted and can be replaced; nothing but the runner's port 7100 may
-# listen inside the group. This tree implements none: the private devnet
+# listen inside the group. This tree implements none: a build
 # overlay (SIGNER_BUILD_OVERLAY_DIR) adds its network entries and may
 # set NETWORK's default, its build folder and image tag.
 NETWORK="${NETWORK:-}"

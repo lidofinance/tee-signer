@@ -11,7 +11,7 @@ import (
 )
 
 // lockActions are the KMS actions no principal of a locked key policy may
-// have (research/admin-proof-key-release.md in the PoC repo, section 2.1):
+// have:
 // with any of them someone can change the policy, hand out the key by a
 // grant, put in key material they know, or copy the key to another
 // region. A wildcard that covers one of them (kms:*, *, kms:Put*) counts

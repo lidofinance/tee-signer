@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// Who can plant a GCP data key (setup-phase.md, review A): whoever may
+// Who can plant a GCP data key: whoever may
 // encrypt with the KMS key. cloud/gcp/deploy.sh grants that role
 // (cryptoKeyEncrypterDecrypter) on the key to the WIF principal set alone,
 // the pool whose provider takes only attestation tokens of the pinned

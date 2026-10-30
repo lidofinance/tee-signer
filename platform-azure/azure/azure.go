@@ -175,8 +175,7 @@ func (m MAATime) Fetch(ctx context.Context) (time.Time, error) {
 // derivedKeys derives the sealing data key and the wrapping key of
 // platform.Keys from the released key and setup_hash: HKDF-SHA256 over the
 // key's private exponent, with the info CtxAzureSealing or CtxAzureKeyWrap
-// and setup_hash (research/setup-phase.md in the threshold-signer-poc repo, section
-// 4). Before, the data key was a random key wrapped with RSA-OAEP to the
+// and setup_hash. Before, the data key was a random key wrapped with RSA-OAEP to the
 // released key's public half and kept in the store; anyone with the public
 // key could make such a blob and plant it in a host-writable state folder.
 // A derived key has no stored form to plant, and a runner with another

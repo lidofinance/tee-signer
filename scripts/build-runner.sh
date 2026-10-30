@@ -10,9 +10,9 @@
 #   runner-dev               release: platform dev only, no cloud code; local tests
 #   runner-dev-debugimport   platform dev and -tags debugimport: plaintext
 #                            IMPORT_SHARE and -allow-import. The local stack and
-#                            the Dirk fork tests run this one.
+#                            the signing client tests run this one.
 #   runner-debugimport       a copy of runner-dev-debugimport under its old name,
-#                            which stack/ and dirk-fork/scripts of threshold-signer-poc use
+#                            for older scripts
 #   runner-azure-debugimport test build: the Azure runner with the fake SNP report
 #                            and metadata service (attestation-verify/runnerclient tests)
 #   runner-aws-debugimport   test build: the Nitro runner with the fake NSM, and

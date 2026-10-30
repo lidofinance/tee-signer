@@ -160,7 +160,7 @@ func TestGloasNotScheduled(t *testing.T) {
 	}
 }
 
-// The Gloas root types (stock Vouch through Dirk's generic Sign): refused
+// The Gloas root types (a stock client's generic Sign): refused
 // with the unverified switch off; with it on, signed under the Gloas fork
 // version from the fork epoch on and counted as unverified, refused before
 // it and on a chain without Gloas.

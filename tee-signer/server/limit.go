@@ -12,8 +12,7 @@ import (
 	"github.com/lidofinance/tee-signer/tee-signer/attls"
 )
 
-// The fresh attestation limits (attestation-prover.md, signer change 8;
-// docs/protocol.md, "Client roles"). A fresh attestation is an ATTEST or
+// The fresh attestation limits. A fresh attestation is an ATTEST or
 // IDENTITY answer the runner makes anew for a nonce: one that this
 // certificate has not had an answer to in the last minute, for the same
 // message type and the same state. A repeat of such a request in that
@@ -31,7 +30,7 @@ import (
 
 const (
 	attestWindow = time.Minute
-	// SigningIdentityPerMinute is 2 x the Dirk fork's pool of 16
+	// SigningIdentityPerMinute is 2 x the signing client's pool of 16
 	// connections per runner, each of which asks for IDENTITY when it is
 	// made: enough for a full pool to redial twice in a minute.
 	SigningIdentityPerMinute = 32

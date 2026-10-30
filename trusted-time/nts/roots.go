@@ -52,7 +52,7 @@ type Server struct {
 	Roots    []string // files under roots/
 }
 
-// PublicServers are the four operators of the PoC. PTB runs ptbtime1, 2
+// PublicServers are the four NTS operators the runner uses. PTB runs ptbtime1, 2
 // and 3; one of them counts, since the quorum needs distinct operators.
 var PublicServers = []Server{
 	{Host: "time.cloudflare.com", Operator: "cloudflare", Roots: []string{"sslcom-root-ecc.pem"}},

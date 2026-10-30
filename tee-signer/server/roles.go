@@ -155,7 +155,7 @@ var allows = func() map[attls.Role]map[wire.MsgType]grant {
 		admin[t] = allow
 	}
 	t := map[attls.Role]map[wire.MsgType]grant{
-		// The Dirk fork: keys, signatures, health and its identity on each
+		// The signing client: keys, signatures, health and its identity on each
 		// new connection. It never sends ATTEST.
 		attls.RoleSigning: {wire.TypeHealth: allow, wire.TypePublicKeys: allow, wire.TypeSign: allow, wire.TypeIdentity: limited},
 		// PUBLIC_KEYS is in: a verifier of an ATTEST answer needs the keys

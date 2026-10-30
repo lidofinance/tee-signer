@@ -8,9 +8,7 @@ A watermark holds the highest block slot, source epoch and target epoch covered
 by a durable promise, plus flags saying whether the block and attestation bounds
 exist. The cloud mark log (`slashing-log`) encodes and decodes it through cgo.
 C hosts, including the OP-TEE trusted app, can compile `markformat.c` and include
-`markformat.h` to use the same implementation. The OP-TEE integration lives in
-`lidofinance/threshold-signer-poc`; that repository must adopt this module before
-the audit scope is frozen.
+`markformat.h` to use the same implementation. The OP-TEE integration is outside this repo.
 
 The signing core only works with watermark values in memory and storage
 callbacks. Keeping serialization here lets storage users share one codec without

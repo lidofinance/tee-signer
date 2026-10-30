@@ -84,7 +84,7 @@ printf '%s\n' "basicConstraints=critical,CA:TRUE,pathlen:0" "keyUsage=critical,k
 sign "$tmp/inter.csr" "$DIR/root-ca.pem" "$DIR/root-ca-key.pem" 365 "$tmp/inter.ext" "$DIR/intermediate.pem"
 
 ec_key "$DIR/client-key.pem"
-openssl req -new -sha256 -key "$DIR/client-key.pem" -subj "/CN=dirk-fork-test-client" -out "$tmp/client.csr"
+openssl req -new -sha256 -key "$DIR/client-key.pem" -subj "/CN=test-client" -out "$tmp/client.csr"
 printf '%s\n' "basicConstraints=critical,CA:FALSE" "keyUsage=critical,digitalSignature" "extendedKeyUsage=clientAuth" >"$tmp/client.ext"
 sign "$tmp/client.csr" "$DIR/intermediate.pem" "$DIR/intermediate-key.pem" 1 "$tmp/client.ext" "$tmp/client.leaf.pem"
 cat "$tmp/client.leaf.pem" "$DIR/intermediate.pem" >"$DIR/client.pem"

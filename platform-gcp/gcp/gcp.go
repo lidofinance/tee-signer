@@ -10,7 +10,7 @@
 //     support_attributes and the nonces. Its audience is the identity
 //     audience (attest_audience, default signer-runner-identity), never one
 //     that Workload Identity Federation takes: the runner gives this token
-//     to any client that asks for IDENTITY, Dirk included, and a token with
+//     to any client that asks for IDENTITY, the signing client included, and a token with
 //     the STS audience could be traded at STS for the workload's KMS access.
 //   - Sealing: a 32-byte data key generated in the VM and wrapped with
 //     Cloud KMS. platform.Keys (the mark log's keys) is KMS encrypt and
@@ -333,8 +333,7 @@ func (k *KMS) call(ctx context.Context, op, field string, in, aad []byte) ([]byt
 }
 
 // sealingAAD is the additional authenticated data of the sealing data key:
-// CtxGCPSealing over setup_hash (research/setup-phase.md in the threshold-signer-poc
-// repo, section 4). A data key of another setup does not decrypt under it,
+// CtxGCPSealing over setup_hash. A data key of another setup does not decrypt under it,
 // even under the same KMS key.
 func sealingAAD(setup [32]byte) []byte { return setupwire.CtxGCPSealing.Message(setup[:]) }
 
@@ -348,8 +347,7 @@ func sealingAAD(setup [32]byte) []byte { return setupwire.CtxGCPSealing.Message(
 // deploy_test.go checks that. The AAD is not secret, so a principal that
 // holds the role anyway (an admin who grants it to itself, or a binding
 // inherited from the project or the organization, which the runner cannot
-// see) can still plant a data key. GCP stays outside the admin-proof goal
-// (setup-phase.md, review N).
+// see) can still plant a data key. GCP stays outside the admin-proof goal.
 func (k *KMS) dataKey(ctx context.Context, store platform.Store, setup [32]byte) ([]byte, error) {
 	aad := sealingAAD(setup)
 	blob, err := store.Get(dekBlob)

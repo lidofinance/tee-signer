@@ -22,7 +22,7 @@ signers up the two closest ones set the signing time.
 | `skr-policy.json.tmpl` | Key Vault release policy pinned to the CCE policy hash |
 | `common.sh` | regional MAA hosts, names per signer index, `NETWORK` |
 | `deploy.sh` | one command per step: local `plan`, `render` and `policy`, then one command per Azure step |
-| `make-test-ca.sh` | local test CA and one client certificate for the Dirk fork |
+| `make-test-ca.sh` | local test CA and one client certificate for the signing client |
 | `chain-from-devnet.sh` | writes a `chain.json` for a local test chain from its beacon node |
 
 The prover side of this backend, the in-process attestation, is one of
@@ -38,7 +38,7 @@ state copy, signer name and optional network entry names. An Azure store
 names `account`, `container`, `subscription` and `resource_group`, because
 the lock check reads the container's immutability policy from the
 management plane, which addresses the account by its subscription and
-group. `signer-config setup` (the Dirk fork's tool) makes the setups of a
+group. `signer-config setup` (the signing client's tool) makes the setups of a
 cluster with one `cluster_id`. `signer-admin/cmd/setup-tool encode` makes one
 binary setup from a human `key = value` file
 (`governance/setupwire/testdata/setup-azure.conf` is an example), and
@@ -292,7 +292,7 @@ the sidecar.
 
 The runtime data is `backend.MAARuntimeData` for an identity and
 `{"signer-runner-clock":"<hex nonce>"}` for the clock, which
-`attestation-verify/azureid` and the Dirk fork expect byte for byte. With
+`attestation-verify/azureid` and the signing client expect byte for byte. With
 `dataType` JSON, MAA puts it into the token as `x-ms-runtime`, and the report
 data in the SNP report is the SHA-256 of those exact bytes. The sample token
 on Microsoft's page [Attestation in confidential containers on ACI](https://learn.microsoft.com/en-us/azure/container-instances/confidential-containers-attestation-concepts)
@@ -435,14 +435,14 @@ update changes the hash and needs new keys.
 
 ## Network entry
 
-The network entry is how the Dirk forks reach port 7100 of each signer. It is
+The network entry is how the signing clients reach port 7100 of each signer. It is
 an optional part that can be replaced. This tree has no implementation. This
 section is the contract and the options.
 
 ### Contract
 
-- Carry TCP from the Dirk forks to port 7100 of each signer.
-- A stable name or address per signer (the Dirk fork's `address` setting).
+- Carry TCP from the signing clients to port 7100 of each signer.
+- A stable name or address per signer (the signing client's `address` setting).
 - Pass full-size packets, or set a smaller MTU (see risk 5).
 - It is not trusted. Security comes from mutual TLS 1.3, with the runner's
   TLS key bound to its attested identity, which the client checks on every
@@ -472,7 +472,7 @@ This tree implements none of these.
   outside (a remotely managed tunnel takes its ingress from Cloudflare, which
   the measurement would not cover). One rule, `service: tcp://localhost:7100`,
   and the required catch-all ([configuration file](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/configure-tunnels/local-management/configuration-file/)).
-  Operator side: the tunnel client in TCP access mode on each Dirk host, or
+  Operator side: the tunnel client in TCP access mode on each client host, or
   WARP with a private network route ([connect a private hostname](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/)).
   Watch: the tunnel credential is a secret that is not measured (like any
   overlay credential), Cloudflare sees metadata and can drop traffic, the
@@ -599,8 +599,8 @@ network the validator client signs for. The image has none.
   `sha256("tee-signer dev chain")`, 12 s slots, one fork at epoch 10.
   `governance/chains/chain.testnet.json` is the same chain as a file.
 - `chain-from-devnet.sh [BEACON_URL [OUT]]` reads a local test chain's
-  beacon node (default `http://127.0.0.1:33001`) the same way the Dirk
-  fork's local test mode does, and writes `chain.json`. It sets the policy
+  beacon node (default `http://127.0.0.1:33001`) the same way the signing
+  client's local test mode does, and writes `chain.json`. It sets the policy
   fields to the values of that mode: fee recipient `0x...dEaD`, gas limits
   30 to 60 million, `max_epochs_ahead` 2, no exits. Environment variables
   override them.
@@ -616,7 +616,7 @@ certificate to `<secrets-dir>` (directory mode 700, key files 600), which
 must be outside the repo. It stops without the argument. Only
 `client-ca.pem`, the public CA certificate, goes into the setup
 (`allowed_client_ca`, base64 of its DER). The runner requires a client
-certificate from that CA. The Dirk fork uses `client.pem` and
+certificate from that CA. The signing client uses `client.pem` and
 `client-key.pem`.
 
 ## Steps
@@ -713,8 +713,8 @@ device" (step 1), "no UVM reference info" or "host AMD certificate" (step
 usually the release policy), or "JWS" and "key wrap" errors (step 5).
 Restart policy `OnFailure` makes ACI retry, so the log shows each try.
 
-Then the client side: the Dirk fork or `share-import` against the signer's
-address with the hash of `deploy.sh policy N` (see "What the Dirk fork and
+Then the client side: the signing client or `share-import` against the signer's
+address with the hash of `deploy.sh policy N` (see "What the signing client and
 the dealer check"). A wrong CCE policy hash is refused with `measurement
 mismatch`.
 
@@ -762,9 +762,9 @@ mismatch`.
   (`runner-azure-debugimport` and `runner-dev-debugimport`), for local
   tests, have it.
 
-## What the Dirk fork and the dealer check
+## What the signing client and the dealer check
 
-The Dirk fork's cloud adapter, its `cloud-import` tool and
+The signing client, its `cloud-import` tool and
 `signer-admin/cmd/share-import` build their client with
 `attestation-verify/runnerclient` (`attest.VerifyMAA` through
 `attestation-verify/azureid`). On every connection they check the MAA token
@@ -797,7 +797,7 @@ share-import -addr tcp:signer-1:7100 -pubkey 0x... -index 9 -share-file share.he
 ```
 
 The MAA key set comes from `https://<maa_host>/.well-known/openid-configuration`
-over HTTPS, so the machine that runs the Dirk fork needs outbound HTTPS to
+over HTTPS, so the machine that runs the signing client needs outbound HTTPS to
 the three MAA hosts and CA roots to check their certificates (the
 `debian:bookworm-slim` image has none; mount the host's bundle). The local
 tests use a fake provider and fakes for the runner's own calls

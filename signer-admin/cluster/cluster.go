@@ -188,7 +188,7 @@ func SameCluster(a, b *Member) error {
 }
 
 // LoadConn reads a signer's connection file as runnerclient does: fields
-// of other tools (accounts, slots_per_epoch of the Dirk fork) are left
+// of other tools (accounts, slots_per_epoch of the signing client) are left
 // alone, and paths are relative to the file.
 func LoadConn(path string) (*runnerclient.Connection, error) {
 	b, err := os.ReadFile(path)

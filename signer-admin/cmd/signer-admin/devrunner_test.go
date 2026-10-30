@@ -13,7 +13,7 @@ import (
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 )
 
-// The track against real runners of the cloud repo on the dev platform:
+// The track against real runners of this repo on the dev platform:
 // three runners started with the setups signer-admin builds, then pin,
 // draft, sign, assemble, push and status, a rotation, a time lock with a
 // supersede that comes into force, an open update, and the refusals of
@@ -21,13 +21,13 @@ import (
 // next to the tool's (another cluster, a pin mismatch).
 //
 // SIGNER_ADMIN_RUNNER names the runner binary: a build with the dev
-// platform (go build -tags platform_dev in the cloud repo's runner/, or its
+// platform (go build -tags platform_dev in this repo's tee-signer/, or its
 // runner-dev-debugimport) at cloud commit 26a6df5 or later.
 // scripts/cloud-integration.sh sets it; without it the test is skipped.
 func TestFlowDevRunners(t *testing.T) {
 	bin := os.Getenv("SIGNER_ADMIN_RUNNER")
 	if bin == "" {
-		t.Skip("SIGNER_ADMIN_RUNNER is not set (a dev runner binary of the cloud repo)")
+		t.Skip("SIGNER_ADMIN_RUNNER is not set (a dev runner binary of this repo)")
 	}
 	dir := t.TempDir()
 	ca, cert, key := clientPKI(t, dir)

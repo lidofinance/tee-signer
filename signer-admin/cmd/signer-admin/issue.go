@@ -24,8 +24,7 @@ import (
 	cloud "github.com/lidofinance/tee-signer/signer-protocol"
 )
 
-// Client certificates of the roles (docs/protocol.md, "Client roles";
-// research/admin-tool.md, section 4). The runner reads the role from the
+// Client certificates of the roles (docs/protocol.md, "Client roles"). The runner reads the role from the
 // verified chain:
 //
 //	admin        the leaf and its issuing intermediate carry AdminClientOID

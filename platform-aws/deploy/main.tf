@@ -9,7 +9,7 @@
 # aarch64 for the default c6g.large) and PCR3 from
 # `scripts/kms-policy.sh pcr3 arn:aws:iam::<account>:role/signer-parent`.
 #
-# The EIF is generic (research/setup-phase.md in the threshold-signer-poc repo): its
+# The EIF is generic: its
 # PCRs are the same for every signer and chain, so the key policy and the
 # bucket policy are set once per image. A new chain or signer is a new setup
 # on the parent (parent-run.sh SETUP), not a change here. The DynamoDB clone
@@ -53,7 +53,7 @@ variable "node_key" {
   default     = "node-1"
 }
 variable "entry_cidrs" {
-  description = "CIDR blocks that may reach the network entry (the forwarder's TCP port on the parent), for example the Dirk fork hosts. Empty: no inbound rule. This limits exposure. It is not a security boundary: the runner's mutual TLS inside the enclave is."
+  description = "CIDR blocks that may reach the network entry (the forwarder's TCP port on the parent), for example the signing client hosts. Empty: no inbound rule. This limits exposure. It is not a security boundary: the runner's mutual TLS inside the enclave is."
   type        = list(string)
   default     = []
 }

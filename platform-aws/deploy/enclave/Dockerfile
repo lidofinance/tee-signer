@@ -1,5 +1,4 @@
-# Enclave image for nitro-cli build-enclave. One image for every operator
-# (research/setup-phase.md in the threshold-signer-poc repo, "Design v2", section 1):
+# Enclave image for nitro-cli build-enclave. One image for every operator:
 # it holds the runner and the flags that are the same for everyone, so
 # PCR0 to PCR2 are the same for every signer and the image gets audited
 # once. The host cannot pass arguments to an enclave, and must not be able

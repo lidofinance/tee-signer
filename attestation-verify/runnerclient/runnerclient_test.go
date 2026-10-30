@@ -584,8 +584,8 @@ func TestConfigRefusals(t *testing.T) {
 
 func TestResolvePaths(t *testing.T) {
 	c := Connection{ClientCert: "client.pem", ClientKey: "/abs/key.pem"}
-	c.ResolvePaths("/etc/dirk")
-	if c.ClientCert != "/etc/dirk/client.pem" || c.ClientKey != "/abs/key.pem" {
+	c.ResolvePaths("/etc/client")
+	if c.ClientCert != "/etc/client/client.pem" || c.ClientKey != "/abs/key.pem" {
 		t.Fatalf("%q %q", c.ClientCert, c.ClientKey)
 	}
 }
@@ -742,7 +742,7 @@ func TestMAATokenRefusals(t *testing.T) {
 
 func TestMAAIdentityOfAnotherRunnerRefused(t *testing.T) {
 	// Runner 2 holds a good token for its own CCE policy (another key name,
-	// so another hash). A Dirk configured for runner 1 must not accept it.
+	// so another hash). A client configured for runner 1 must not accept it.
 	ca := newTestCA(t)
 	env := newMAAEnv(t, mainKeySet(t))
 	runner2 := startFakeRunner(t, ca, env.attest(tokenSpec{hostData: strings.Repeat("22", 32)}))

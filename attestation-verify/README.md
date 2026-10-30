@@ -5,7 +5,7 @@
 > change without notice.
 
 Package `github.com/lidofinance/tee-signer/attestation-verify` checks the documents the cloud runner returns
-from `ATTEST` and `IDENTITY`, on the client side (the Dirk fork, the dealer,
+from `ATTEST` and `IDENTITY`, on the client side (the signing client, the dealer,
 an operator). `remote.DevVerifier` is the other verifier of this repo and
 proves nothing. This package covers the three clouds:
 
@@ -51,10 +51,10 @@ in the per-call binding the runner uses (code in `platform`):
 The azure branch is `azureid.Verify`, a small package of its own so that
 `identity` and `runnerclient` check an Azure runner in one way.
 
-### runnerclient: the client of the Dirk fork and the import tools
+### runnerclient: the runner client of signing clients and import tools
 
-`runnerclient` builds a runner client from settings. The Dirk fork's cloud
-adapter (`backend.cloud.config`), its `cloud-import` tool and
+`runnerclient` builds a runner client from settings. The signing
+client (`backend.cloud.config`), its `cloud-import` tool and
 `signer-admin/cmd/share-import` all use it, so they apply the same checks:
 
 ```go
@@ -86,8 +86,7 @@ cl, err := c.New() // refuses a bad or incomplete configuration
   INDEX=HEX` and `-gcp-hwmodel NAME`, both repeated, `-nitro-root-sha256`,
   `-gcp-image-digest`, `-gcp-audience`, `-gcp-issuer`, `-gcp-jwks-file`,
   `-gcp-service-account`.
-- Setup settings, for every verifier (`setup.go`; research/setup-phase.md
-  in the threshold-signer-poc repo, section 11). After the platform check, every
+- Setup settings, for every verifier (`setup.go`). After the platform check, every
   connection checks the setup state of the verified identity:
 
   | Setting | Flag | Rule |
@@ -96,7 +95,7 @@ cl, err := c.New() // refuses a bad or incomplete configuration
   | `min_locked_version`, `min_open_version` | `-min-locked-version`, `-min-open-version` | Optional, need `setup_sha256`. The group's effective version must be at least this. A pending update counts once its effective activation time has passed on the client's clock. |
   | `allow_unpinned_setup` | `-allow-unpinned-setup` | Tests only: accepts a runner with a setup and no `setup_sha256`. Refused with any verifier but `dev`, and together with `setup_sha256`. |
 
-  The Dirk fork's adapter, `cloud-import` (again on the identity it seals
+  The signing client, `cloud-import` (again on the identity it seals
   each share to), `proof-check`, `share-import`, `identity-check`,
   and the runner's own handover checks all apply these rules. `WithVerified` hands each passed
   identity to the caller, and `SetupLog`, `DescribeSetup`,
@@ -272,7 +271,7 @@ cover them; no test runs them on a cloud.
    could exchange it at STS until it expires and call Cloud KMS decrypt as
    the workload, for example on the wrapped data key in the host-side store.
    The runner hands identity tokens to any client that asks for `IDENTITY`,
-   and invariant 7 says Dirk is not trusted. So `attest_audience` defaults
+   and invariant 7 says the signing client is not trusted. So `attest_audience` defaults
    to `signer-runner-identity`, the runner refuses the STS audience and WIF
    resource names for identity and token-iat clock tokens, and the
    `Dockerfile` sets the audience. `platform-gcp/deploy/deploy.sh

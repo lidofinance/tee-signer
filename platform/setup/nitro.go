@@ -8,7 +8,7 @@ import (
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 )
 
-// The Nitro port map, fixed in the image (setup-phase.md, section 1). The
+// The Nitro port map, fixed in the image. The
 // enclave has no network: the parent forwards each of these vsock ports to
 // one host (vsock-proxy) or to the NTP servers (udprelay). Port 8003, the
 // DynamoDB clone guard of the old images, is gone.

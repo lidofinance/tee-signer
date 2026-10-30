@@ -20,10 +20,10 @@ import (
 	"github.com/lidofinance/tee-signer/signer-protocol/buildflavor"
 )
 
-// The human form (setup-phase.md, section 2, step 1): "key = value" lines,
+// The human form: "key = value" lines,
 // as in the TA's policy files (ta/admin/taformat/policyconf.go). '#' starts
-// a comment and blank lines do not count. Keys are the field names of
-// attestation-prover.md ("Field names") in lower case; parts below the top
+// a comment and blank lines do not count. Keys are the setup's field
+// names in lower case; parts below the top
 // level have dotted keys (slashing_mark_prewrite.block_slots,
 // slashing_log_store.bucket). A key that is unknown, set twice, written in
 // another case, or that does not apply to the platform is refused, and so

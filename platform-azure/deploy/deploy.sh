@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# UNTESTED ON AZURE. The Azure PoC: three signers, each one confidential
+# UNTESTED ON AZURE. The Azure deployment: three signers, each one confidential
 # container group (the runner, which does the attestation and the key
 # release itself, plus the network entry container).
 #
@@ -60,8 +60,7 @@
 # mode 600 parameters file.
 #
 # Setup: the image and the command hold no chain config, client CA, vault,
-# key, attestation provider or mark log. Each signer's setup
-# (research/setup-phase.md in the threshold-signer-poc repo) holds them, made with
+# key, attestation provider or mark log. Each signer's setup holds them, made with
 # signer-config setup (one per signer of a cluster) or signer-admin/cmd/setup-tool
 # encode from a human file. group-deploy N checks
 # SETUP_FILE_N with the runner's decoder: an Azure setup, of chain CHAIN

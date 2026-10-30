@@ -1,8 +1,7 @@
-// Command setup-tool makes and checks the binary setup of a signer
-// (research/setup-phase.md in the threshold-signer-poc repo, section 2) for the
+// Command setup-tool makes and checks the binary setup of a signer for the
 // cloud scripts in this repo. It uses the runner's decoder (backend/setupwire,
 // runner/setup), so what it accepts is what the runner accepts. signer-config
-// in the Dirk fork is the operator's tool (cluster ids, n setups, pins); this
+// is the operator's tool (cluster ids, n setups, pins); this
 // one covers one file at a time.
 //
 //	setup-tool encode HUMAN OUT

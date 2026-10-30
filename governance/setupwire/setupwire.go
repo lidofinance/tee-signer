@@ -1,6 +1,4 @@
-// Package setupwire holds the setup of a signer and its config updates
-// (research/setup-phase.md in the threshold-signer-poc repo, "Design v2", sections
-// 2, 6 and 8, and research/attestation-prover.md, "Signer changes"): the
+// Package setupwire holds the setup of a signer and its config updates: the
 // binary encoding, its strict decoder, the human "key = value" form, the
 // salted policy tree and the platform commitment that setup_hash covers
 // (policy.go), the registry of signing contexts, and the value checks that
@@ -97,7 +95,7 @@ const (
 	kindUpdate = 'U'
 )
 
-// Image constants (setup-phase.md, section 1, open point 1); the times are
+// Image constants; the times are
 // the build flavour's (backend/buildflavor). MaxKeysCap is "above 5,000" there.
 const (
 	DefaultTimeLock   = buildflavor.TimeLock // seconds, when the setup names no change delay
@@ -132,8 +130,7 @@ const (
 // could never be proven. Four P-256 client CA certificates take about 2 KB.
 const MaxPlatformPrivate = 2560 // bytes
 
-// Ranges of the safety values (attestation-prover.md, "Signer changes",
-// item 4). A huge max_sign_epochs_ahead_of_clock would switch the clock
+// Ranges of the safety values. A huge max_sign_epochs_ahead_of_clock would switch the clock
 // guard off; a huge prewrite would let one vote raise the stored mark far
 // past the clock.
 const (
@@ -351,8 +348,7 @@ type Image struct {
 type RootDomains uint16
 
 // SlotTimeChange starts a new slot time: from the first slot of Epoch on,
-// a slot lasts SecondsPerSlot seconds (attestation-prover.md, "Signer
-// changes", item 5). slots_per_epoch never changes.
+// a slot lasts SecondsPerSlot seconds. slots_per_epoch never changes.
 type SlotTimeChange struct {
 	Epoch          uint64
 	SecondsPerSlot uint64
