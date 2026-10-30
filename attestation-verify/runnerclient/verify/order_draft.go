@@ -1,6 +1,6 @@
 //go:build !verifierselect
 
-package runnerclient
+package verify
 
 import (
 	"encoding/hex"

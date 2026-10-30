@@ -1,19 +1,20 @@
 //go:build !verifierselect || platform_dev
 
-package runnerclient
+package verify
 
 import (
 	"context"
 
+	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/internal/optset"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/remote"
 )
 
 func init() {
-	verifierFactories[VerifierDev] = func(*Attestation, *options) (remote.VerifyFunc, error) {
+	verifierFactories[VerifierDev] = func(*Attestation, *optset.Options) (VerifyFunc, error) {
 		return remote.DevVerifier, nil
 	}
-	documentFactories[VerifierDev] = func(*Attestation, *options) (DocumentVerifier, error) {
+	documentFactories[VerifierDev] = func(*Attestation, *optset.Options) (DocumentVerifier, error) {
 		return verifyDevDocument, nil
 	}
 }

@@ -1,4 +1,4 @@
-package runnerclient
+package verify
 
 import (
 	"bytes"
@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/internal/optset"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
@@ -21,12 +22,12 @@ type DocumentVerifier func(ctx context.Context, nonce, userData []byte, a *backe
 
 // documentFactories holds the document verifiers built into this program,
 // next to verifierFactories; each verifier's file adds its own.
-var documentFactories = map[string]func(a *Attestation, o *options) (DocumentVerifier, error){}
+var documentFactories = map[string]func(a *Attestation, o *optset.Options) (DocumentVerifier, error){}
 
 // NewDocumentVerifier returns the document verifier the settings name. It
 // validates the settings as NewVerifier does.
 func (a *Attestation) NewDocumentVerifier(opts ...Option) (DocumentVerifier, error) {
-	o := newOptions(opts)
+	o := optset.New(opts)
 	if _, err := a.verifier(o); err != nil {
 		return nil, err
 	}

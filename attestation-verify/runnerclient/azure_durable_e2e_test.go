@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/verify"
 	remoteadmin "github.com/lidofinance/tee-signer/signer-admin/remote/admin"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
@@ -73,7 +74,7 @@ func TestE2EAzureRunnerDurable(t *testing.T) {
 		}
 		c := Connection{Address: r.addr, ClientCert: cert, ClientKey: key,
 			Attestation: Attestation{Verifier: VerifierAzureMAA, MAAHost: hostPort(fakesA.maa), CCEPolicySHA256: hostData}}
-		cl, err := c.New(WithHTTPClient(maaClient), WithTimeout(15*time.Second))
+		cl, err := c.New(verify.WithHTTPClient(maaClient), WithTimeout(15*time.Second))
 		if err != nil {
 			t.Fatal(err)
 		}

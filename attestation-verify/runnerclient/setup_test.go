@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/internal/optset"
+	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/verify"
 	remoteadmin "github.com/lidofinance/tee-signer/signer-admin/remote/admin"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
@@ -41,7 +43,9 @@ func setupState(effectiveAt uint64) backend.SetupState {
 // these tests, 2027-01-15T08:00:00Z.
 const effectiveAt = 1_800_000_000
 
-func withNow(t time.Time) Option { return func(o *options) { o.now = func() time.Time { return t } } }
+func withNow(t time.Time) Option {
+	return func(o *optset.Options) { o.Now = func() time.Time { return t } }
+}
 
 func pinnedConn(t *testing.T, ca *testCA, f *fakeRunner) Connection {
 	c := devConn(t, ca, f)
@@ -270,45 +274,45 @@ func TestWithVerified(t *testing.T) {
 func TestSetupStateHelpers(t *testing.T) {
 	before, at := time.Unix(effectiveAt-60, 0), time.Unix(effectiveAt, 0)
 	s := setupState(effectiveAt)
-	if FlagPath(&s) || !FlagPath(&backend.SetupState{SetupHash: backend.Root{1}}) || !FlagPath(&backend.SetupState{}) {
+	if verify.FlagPath(&s) || !verify.FlagPath(&backend.SetupState{SetupHash: backend.Root{1}}) || !verify.FlagPath(&backend.SetupState{}) {
 		t.Fatal("FlagPath")
 	}
-	if !Waiting(s.Locked, before) || Waiting(s.Locked, at) || Waiting(s.Open, before) {
+	if !verify.Waiting(s.Locked, before) || verify.Waiting(s.Locked, at) || verify.Waiting(s.Open, before) {
 		t.Fatal("Waiting")
 	}
-	if EffectiveVersion(s.Locked, before) != 2 || EffectiveVersion(s.Locked, at) != 3 || EffectiveVersion(s.Open, at) != 1 {
+	if verify.EffectiveVersion(s.Locked, before) != 2 || verify.EffectiveVersion(s.Locked, at) != 3 || verify.EffectiveVersion(s.Open, at) != 1 {
 		t.Fatal("EffectiveVersion")
 	}
 
 	// CheckPending: a locked update that waits, or any order.
-	err := CheckPending(&s, before)
+	err := verify.CheckPending(&s, before)
 	if err == nil || !strings.Contains(err.Error(), "a locked config update is pending: version 3") ||
 		!strings.Contains(err.Error(), "effective at 2027-01-15T08:00:00Z") {
 		t.Fatalf("pending locked update: %v", err)
 	}
-	if err := CheckPending(&s, at); err != nil {
+	if err := verify.CheckPending(&s, at); err != nil {
 		t.Fatalf("locked update in force: %v", err)
 	}
 	open := s
 	open.Locked.Pending = backend.PendingUpdate{}
 	open.Open.Pending = backend.PendingUpdate{Version: 2, Hash: backend.Root{9}, EffectiveAt: math.MaxUint64}
-	if err := CheckPending(&open, before); err != nil {
+	if err := verify.CheckPending(&open, before); err != nil {
 		t.Fatalf("pending open update: %v", err)
 	}
 	order := open
 	order.Order = backend.Order{Kind: 1, Hash: backend.Root{5}, ActAt: effectiveAt}
-	if err := CheckPending(&order, at); err == nil || !strings.Contains(err.Error(), "a handover order is pending") {
+	if err := verify.CheckPending(&order, at); err == nil || !strings.Contains(err.Error(), "a handover order is pending") {
 		t.Fatalf("pending order: %v", err)
 	}
 
-	if UnixTime(effectiveAt) != "2027-01-15T08:00:00Z" || UnixTime(math.MaxUint64) != "unix 18446744073709551615" {
-		t.Fatalf("UnixTime %s %s", UnixTime(effectiveAt), UnixTime(math.MaxUint64))
+	if verify.UnixTime(effectiveAt) != "2027-01-15T08:00:00Z" || verify.UnixTime(math.MaxUint64) != "unix 18446744073709551615" {
+		t.Fatalf("UnixTime %s %s", verify.UnixTime(effectiveAt), verify.UnixTime(math.MaxUint64))
 	}
-	if OrderKind(1) != "handover" || OrderKind(2) != "kind 2" || OrderKind(7) != "kind 7" {
+	if verify.OrderKind(1) != "handover" || verify.OrderKind(2) != "kind 2" || verify.OrderKind(7) != "kind 7" {
 		t.Fatal("OrderKind")
 	}
 
-	d := DescribeSetup(&s, before)
+	d := verify.DescribeSetup(&s, before)
 	for _, want := range []string{"setup_sha256=5e70" + strings.Repeat("0", 60), "locked_version=2 locked_sha256=01" + strings.Repeat("0", 62),
 		"locked_pending_version=3", "locked_pending_effective_at=2027-01-15T08:00:00Z", "open_version=1 open_sha256=03",
 		"approver_set_sha256=04", "imported_keys=0"} {
@@ -319,18 +323,18 @@ func TestSetupStateHelpers(t *testing.T) {
 	if strings.Contains(d, "effective_version") || strings.Contains(d, "order") || strings.Contains(d, "key_release") {
 		t.Fatalf("%q names what is not there", d)
 	}
-	if d := DescribeSetup(&s, at); !strings.Contains(d, "locked_version=2 locked_sha256=01"+strings.Repeat("0", 62)+" locked_effective_version=3") {
+	if d := verify.DescribeSetup(&s, at); !strings.Contains(d, "locked_version=2 locked_sha256=01"+strings.Repeat("0", 62)+" locked_effective_version=3") {
 		t.Fatalf("in force: %q", d)
 	}
 	order.KeyReleaseHash = backend.Root{6}
 	order.KeyOrigin = backend.KeyOrigin{Imported: 1}
-	if d := DescribeSetup(&order, at); !strings.Contains(d, "order=handover order_sha256=05") ||
+	if d := verify.DescribeSetup(&order, at); !strings.Contains(d, "order=handover order_sha256=05") ||
 		!strings.Contains(d, "order_act_at=2027-01-15T08:00:00Z") || !strings.Contains(d, "key_release_sha256=06") ||
 		!strings.HasSuffix(d, " imported_keys=1") {
 		t.Fatalf("order: %q", d)
 	}
 	flagPath := backend.SetupState{SetupHash: backend.Root{1, 2, 3}}
-	if d := DescribeSetup(&flagPath, at); d != "setup_sha256=010203"+strings.Repeat("0", 58)+" flag_path=true" {
+	if d := verify.DescribeSetup(&flagPath, at); d != "setup_sha256=010203"+strings.Repeat("0", 58)+" flag_path=true" {
 		t.Fatalf("flag path: %q", d)
 	}
 }

@@ -68,6 +68,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
+	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/verify"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	cloud "github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/remote"
@@ -220,12 +221,12 @@ func unixCapped(sec uint64) int64 { return int64(min(sec, math.MaxInt64)) }
 
 // viewOf is the proof file's form of state s, checked with att at now.
 func viewOf(s *cloud.SetupState, att *runnerclient.Attestation, now time.Time) *setupView {
-	v := &setupView{SetupHash: short(s.SetupHash), Pinned: att.SetupSHA256 != "", FlagPath: runnerclient.FlagPath(s)}
+	v := &setupView{SetupHash: short(s.SetupHash), Pinned: att.SetupSHA256 != "", FlagPath: verify.FlagPath(s)}
 	if v.FlagPath {
 		return v
 	}
 	group := func(g cloud.ConfigGroup, least uint64) *groupView {
-		gv := &groupView{Version: g.Version, EffectiveVersion: runnerclient.EffectiveVersion(g, now), Hash: short(g.Hash), MinVersion: least}
+		gv := &groupView{Version: g.Version, EffectiveVersion: verify.EffectiveVersion(g, now), Hash: short(g.Hash), MinVersion: least}
 		if p := g.Pending; p.Version != 0 {
 			gv.Pending = &pendingView{Version: p.Version, Hash: short(p.Hash), EffectiveAtUnix: unixCapped(p.EffectiveAt)}
 		}
@@ -234,7 +235,7 @@ func viewOf(s *cloud.SetupState, att *runnerclient.Attestation, now time.Time) *
 	v.Locked, v.Open = group(s.Locked, att.MinLockedVersion), group(s.Open, att.MinOpenVersion)
 	v.ApproverSetHash = short(s.ApproverSetHash)
 	if o := s.Order; o.Kind != 0 {
-		v.Order = &orderView{Kind: runnerclient.OrderKind(o.Kind), Hash: short(o.Hash), ActAtUnix: unixCapped(o.ActAt)}
+		v.Order = &orderView{Kind: verify.OrderKind(o.Kind), Hash: short(o.Hash), ActAtUnix: unixCapped(o.ActAt)}
 	}
 	if s.KeyReleaseHash != (cloud.Root{}) {
 		v.KeyReleaseHash = short(s.KeyReleaseHash)

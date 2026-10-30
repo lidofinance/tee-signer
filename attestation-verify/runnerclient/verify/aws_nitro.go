@@ -1,6 +1,6 @@
 //go:build !verifierselect || platform_aws
 
-package runnerclient
+package verify
 
 import (
 	"context"
@@ -12,8 +12,8 @@ import (
 	"strings"
 
 	"github.com/lidofinance/tee-signer/attestation-verify"
+	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/internal/optset"
 	"github.com/lidofinance/tee-signer/signer-protocol"
-	"github.com/lidofinance/tee-signer/signer-protocol/remote"
 )
 
 // What a Nitro runner puts in its attestation (runner/platform/nitro).
@@ -76,7 +76,7 @@ func allZero(b []byte) bool {
 }
 
 // nitroVerifier returns the aws-nitro verifier for the settings.
-func (a *Attestation) nitroVerifier(o *options) (remote.VerifyFunc, error) {
+func (a *Attestation) nitroVerifier(o *optset.Options) (VerifyFunc, error) {
 	n, err := a.newNitro(o)
 	if err != nil {
 		return nil, err
@@ -85,7 +85,7 @@ func (a *Attestation) nitroVerifier(o *options) (remote.VerifyFunc, error) {
 }
 
 // nitroDocumentVerifier returns the aws-nitro document verifier.
-func (a *Attestation) nitroDocumentVerifier(o *options) (DocumentVerifier, error) {
+func (a *Attestation) nitroDocumentVerifier(o *optset.Options) (DocumentVerifier, error) {
 	n, err := a.newNitro(o)
 	if err != nil {
 		return nil, err
@@ -93,7 +93,7 @@ func (a *Attestation) nitroDocumentVerifier(o *options) (DocumentVerifier, error
 	return n.verifyDocument, nil
 }
 
-func (a *Attestation) newNitro(o *options) (*nitroVerifier, error) {
+func (a *Attestation) newNitro(o *optset.Options) (*nitroVerifier, error) {
 	pcrs, err := a.nitroPCRs()
 	if err != nil {
 		return nil, err
@@ -106,7 +106,7 @@ func (a *Attestation) newNitro(o *options) (*nitroVerifier, error) {
 			return nil, fmt.Errorf("attestation.nitro_root_sha256: this build pins the AWS Nitro root %s, not %s; another root needs a code change", attest.NitroRootSHA256, r)
 		}
 	}
-	return &nitroVerifier{opts: attest.NitroOptions{PCRs: pcrs, Roots: o.nitroRoots}}, nil
+	return &nitroVerifier{opts: attest.NitroOptions{PCRs: pcrs, Roots: o.NitroRoots}}, nil
 }
 
 // nitroVerifier checks the NSM document of an IDENTITY response: it must be

@@ -1,4 +1,4 @@
-package runnerclient
+package verify
 
 import (
 	"context"
@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/signer-protocol"
-	"github.com/lidofinance/tee-signer/signer-protocol/remote"
 )
 
 // The setup pins. Every verifier this package builds runs them after the platform
@@ -83,7 +82,7 @@ func (a *Attestation) setupPins() (*setupPins, error) {
 
 // after returns a verifier that runs v and then checks the setup state of
 // the identity v accepted.
-func (p *setupPins) after(v remote.VerifyFunc, now func() time.Time) remote.VerifyFunc {
+func (p *setupPins) after(v VerifyFunc, now func() time.Time) VerifyFunc {
 	return func(ctx context.Context, nonce []byte, id *backend.Identity) error {
 		if err := v(ctx, nonce, id); err != nil {
 			return err
