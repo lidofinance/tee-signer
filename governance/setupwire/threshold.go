@@ -1,6 +1,7 @@
 package setupwire
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/lidofinance/tee-signer/signer-protocol"
@@ -67,4 +68,18 @@ func CheckThresholdOn(p *PlatformConfig, genesisForkVersion backend.Version, t, 
 		return fmt.Errorf("threshold 1 of 1 on gcp: a single-node signer on GCP is refused unless its setup accepts the risk (sealing_key_release.unsafe_single_key_accepted = true, signer-admin setup -allow-gcp-unsafe-single-key): %s", UnsafeSingleKeyWarning)
 	}
 	return CheckThreshold(genesisForkVersion, t, n)
+}
+
+// CheckSingleKeyMainnet refuses a mainnet setup that accepts a key held
+// alone on GCP (sealing_key_release.unsafe_single_key_accepted) without
+// sealing_key_release.no_lock_accepted. A GCP runner starts on mainnet only
+// with no_lock_accepted (platform.Options.CheckNoLock), so such a setup
+// makes a runner that never starts. signer-admin setup and setup-tool
+// encode both run it before they write a setup.
+func CheckSingleKeyMainnet(p *PlatformConfig, genesisForkVersion backend.Version) error {
+	k := &p.SealingKeyRelease
+	if k.UnsafeSingleKeyAccepted && !k.NoLockAccepted && IsMainnet(genesisForkVersion) {
+		return errors.New("the setup accepts a key held alone on GCP (sealing_key_release.unsafe_single_key_accepted) on mainnet, where a GCP runner starts only with the separate acceptance of a key rule without a lock: put sealing_key_release.no_lock_accepted = true")
+	}
+	return nil
 }

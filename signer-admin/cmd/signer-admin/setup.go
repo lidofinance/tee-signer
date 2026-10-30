@@ -184,8 +184,8 @@ func cmdSetup(args []string, out io.Writer) error {
 		if err := setupwire.CheckThresholdOn(&s.Platform, s.Chain.GenesisForkVersion, len(setups), len(setups)); err != nil {
 			return fmt.Errorf("signer %s: a cluster of %d signer(s) can hold no key: %w", s.SignerName, len(setups), err)
 		}
-		if k.UnsafeSingleKeyAccepted && !k.NoLockAccepted && setupwire.IsMainnet(s.Chain.GenesisForkVersion) {
-			return fmt.Errorf("signer %s: the setup accepts a key held alone on GCP (sealing_key_release.unsafe_single_key_accepted) on mainnet, where a GCP runner starts only with the separate acceptance of a key rule without a lock: put sealing_key_release.no_lock_accepted = true in the signer's section (-allow-gcp-unsafe-single-key does not set it)", s.SignerName)
+		if err := setupwire.CheckSingleKeyMainnet(&s.Platform, s.Chain.GenesisForkVersion); err != nil {
+			return fmt.Errorf("signer %s: %w in the signer's section (-allow-gcp-unsafe-single-key does not set it)", s.SignerName, err)
 		}
 		if k.NoLockAccepted {
 			fprintf(out, "WARNING signer %s: the setup accepts a key rule without a lock (sealing_key_release.no_lock_accepted): Cloud KMS has no lock on the rule that releases the sealing key, and a mainnet runner starts anyway\n", s.SignerName)

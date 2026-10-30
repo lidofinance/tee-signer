@@ -13,6 +13,9 @@
 //	    signer-config setup) and its platform salt. A GCP setup with
 //	    sealing_key_release.unsafe_single_key_accepted gets a WARNING
 //	    on stderr (setupwire.UnsafeSingleKeyWarning); encode and check.
+//	    On mainnet such a setup also needs
+//	    sealing_key_release.no_lock_accepted, or encode refuses it
+//	    (setupwire.CheckSingleKeyMainnet), as signer-admin setup does.
 //	setup-tool check [-platform P] [-chain CHAIN_JSON] FILE
 //	    Decode FILE strictly and print setup_sha256, platform and signer,
 //	    policy_root and platform_commitment, and one
@@ -105,6 +108,9 @@ func encode(human, out string) error {
 	}
 	s, err := setupwire.ParseSetup(human, text)
 	if err != nil {
+		return err
+	}
+	if err := setupwire.CheckSingleKeyMainnet(&s.Platform, s.Chain.GenesisForkVersion); err != nil {
 		return err
 	}
 	if !s.Salted() {

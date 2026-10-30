@@ -37,8 +37,9 @@ makes the binary setup from a human `key = value` file
 > flag and takes the key in the signer's section). On mainnet the same
 > setup also needs `sealing_key_release.no_lock_accepted = true`, the
 > separate acceptance without which a GCP runner does not start there;
-> `signer-admin setup` refuses a mainnet setup that has the one without
-> the other, and the flag never sets `no_lock_accepted`. setup_hash covers
+> `signer-admin setup` and `setup-tool encode` refuse a mainnet setup
+> that has the one without the other, and the flag never sets
+> `no_lock_accepted`. setup_hash covers
 > the acceptance, `setup-tool encode` and `signer-admin setup` print a
 > WARNING line for it, the human form of the setup carries the warning
 > above the key, the runner logs it at start and at every 1 of 1 import,
