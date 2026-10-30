@@ -56,6 +56,40 @@ done < <(bash "$GATE" list release)
 [ "$(bash "$GATE" list default | wc -l)" -ge 5 ] || { echo "release gate self-test: default list too short" >&2; fails=$((fails + 1)); }
 [ "$(bash "$GATE" list release | wc -l)" -ge 4 ] || { echo "release gate self-test: release list too short" >&2; fails=$((fails + 1)); }
 
+# Compile real package dependencies from local fixture modules. Unlike an
+# injected literal, their -trimpath filenames contain module@v0.0.0, and
+# only the helper file is linked. This needs no C libraries or network.
+# build_package <name> <module suffix> <package suffix> [tags]
+build_package() {
+  local name="$1" mod="github.com/lidofinance/tee-signer/$2" sub="$3" tags="${4:-}"
+  local dir="$tmp/packages/$name"
+  mkdir -p "$dir/dependency/$sub"
+  printf 'module %s\n\ngo 1.22\n' "$mod" >"$dir/dependency/go.mod"
+  cat >"$dir/dependency/$sub/helper.go" <<'GO'
+package helper
+
+import "strings"
+
+func Value(s string) string { return strings.ToUpper(s) }
+GO
+  printf 'module packagegate\n\ngo 1.22\n\nrequire %s v0.0.0\nreplace %s => ./dependency\n' "$mod" "$mod" >"$dir/go.mod"
+  printf 'package main\n\nimport ("fmt"; "os"; helper "%s/%s")\n\nfunc main() { fmt.Println(helper.Value(os.Args[0])) }\n' "$mod" "$sub" >"$dir/main.go"
+  (cd "$dir" && CGO_ENABLED=0 GOFLAGS=-mod=mod go build -trimpath -ldflags '-s -w' -tags "$tags" -o "$tmp/$name" .)
+}
+
+for fixture in 'software signer-core software' 'dev platform dev' \
+  'wormfake slashing-log wormfake' 'logtest slashing-log logtest' \
+  'ntstest trusted-time nts/ntstest' 'devkit devkit helper'; do
+  read -r name mod sub <<<"$fixture"
+  build_package "$name" "$mod" "$sub"
+  expect fail "binary: linked $mod/$sub helper" bash "$GATE" binary "$tmp/$name" release
+  expect pass "binary: linked $mod/$sub in debug" bash "$GATE" binary "$tmp/$name" debug
+done
+build_package dev-tagged platform dev platform_dev
+expect pass "binary: local dev runner may link dev" bash "$GATE" binary "$tmp/dev-tagged" release
+build_package dev-cloud platform dev platform_dev,platform_aws
+expect fail "binary: cloud release must not link dev" bash "$GATE" binary "$tmp/dev-cloud" release
+
 # deps: a main package that imports a test-only package, and one that
 # imports testing, fail; the stdlib alone passes.
 mkdir -p "$tmp/mod/wormfake" "$tmp/mod/okcmd" "$tmp/mod/fakecmd" "$tmp/mod/testingcmd" \

@@ -58,6 +58,8 @@ L
 
 # Strings no release runner may hold: the plaintext import and the fake
 # hardware of the debug builds, and the test-only packages.
+# Package bans use import paths: function metadata keeps these unversioned
+# with -trimpath, even when the live code comes from a helper file.
 release_list() {
   cat <<'L'
 allow-import
@@ -66,12 +68,12 @@ server/plainimport.go
 hooks_debug.go
 nts_servers_debug.go
 RUNNER_NTS_TEST_SERVERS
-slashing-log/wormfake
-slashing-log/logtest
-nts/ntstest
+github.com/lidofinance/tee-signer/slashing-log/wormfake
+github.com/lidofinance/tee-signer/slashing-log/logtest
+github.com/lidofinance/tee-signer/trusted-time/nts/ntstest
 github.com/lidofinance/tee-signer/devkit
-platform/dev/dev.go
-signer-core/software/software.go
+github.com/lidofinance/tee-signer/platform/dev
+github.com/lidofinance/tee-signer/signer-core/software
 L
   extra release
 }
@@ -102,8 +104,11 @@ check_binary() {
     tags="$(go version -m "$file" 2>/dev/null | awk '$1 == "build" && $2 ~ /^-tags=/ { sub(/^-tags=/, "", $2); print $2 }' || true)"
     while IFS= read -r s; do
       # The local dev runner intentionally links platform/dev.
-      if [ "$s" = platform/dev/dev.go ]; then
-        case ",$tags," in *,platform_dev,*) continue ;; esac
+      if [ "$s" = github.com/lidofinance/tee-signer/platform/dev ]; then
+        case ",${tags// /,}," in
+          *,platform_aws,*|*,platform_azure,*|*,platform_gcp,*) ;;
+          *,platform_dev,*) continue ;;
+        esac
       fi
       if grep -qaF -- "$s" "$file"; then echo "release gate: $file holds \"$s\" (a release build carries no debug or test code)" >&2; bad=1; fi
     done < <(release_list)
