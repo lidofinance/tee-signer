@@ -846,6 +846,15 @@ the target side `handover_import.go`; the encodings are in
 build with a setup and the mark log has both sides, and no image may go
 out without them (release gate, below).
 
+A handover works only between runners on the same cloud. A release build
+links the attestation verifier of its own platform only
+(`attestation-verify/runnerclient`, tag `verifierselect`), and the source
+checks the target with it: nitro hands over to an `aws-nitro` target,
+azure to `azure-maa`, gcp to `gcp-cs`, dev to `dev`. The source refuses
+an order whose target verifier it lacks (HANDOVER_ORDER, below), and
+`signer-admin handover-draft` refuses to draft one
+(`handoverorder.Runner.CheckSameCloud`).
+
 The operator's steps, with the tools of this tree:
 
 1. A target setup: the source's setup with `handover_generation` one
