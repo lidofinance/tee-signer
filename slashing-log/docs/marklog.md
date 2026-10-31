@@ -23,7 +23,7 @@ enough.
 
 | Field | Bytes | Meaning |
 | --- | --- | --- |
-| magic | 6 | `SMARK1`: `SMARK` and the format version, 1 |
+| magic | 6 | `SMARK2`: `SMARK` and the format version, 2 (the runner reads `SMARK1` records too: they end before the share set) |
 | setup hash | 32 | `setup_hash` of the signer's setup |
 | signer | 1 + up to 128 | the signer's name (`signer_name`) |
 | version | 8 | the version the name carries |
@@ -40,6 +40,7 @@ enough.
 | target | 1, or 33 | presence byte, then the `setup_hash` a tombstone hands over to |
 | exits | 1, or 19 + 104 per exit | presence byte, then the day (8), the stake counted that day in Gwei (8), the number of exits (2, up to 200), and per exit the validator key (48), index (8), exit epoch (8), stake (8) and the approval's nonce (32) |
 | source gate | 1, or 9 | presence byte, then the source floor epoch (see "Source gate") |
+| share set | 1, 34 or 66 | presence byte, then the current root (32), a presence byte and the pending root (32) (see "Share set") |
 | signature | 64 | Ed25519 over the context `signer-mark-v1` and the fields above |
 
 Each group is the active version (8), the hash of the update that set it
@@ -49,7 +50,8 @@ a pending update come its version (8), hash (32), effective activation
 time (8), copy number (4) and copy time (8). Version 0 has no body, so its
 copy number and time are zero.
 
-The reader refuses any record that does not read back to the same bytes:
+The reader refuses any record that does not read back to the same bytes
+under its own magic (an `SMARK1` record as `SMARK1`):
 a presence byte other than 0 or 1, trailing bytes, a log ID that is zero
 in a later record or set in a first one, a target on a record that is not
 a tombstone, a pending update at or below the active version, a body past
@@ -83,7 +85,10 @@ with attestation maxima stored it.
 The gate covers only votes cast before the log started. A validator that
 comes in later without vote history may have voted elsewhere since, so
 its import sets a source floor of its own: the restart floor epoch of the
-clock at the import (SLBOUND-01). The share record keeps it
+clock at the import (SLBOUND-01). Every floor assumes the trusted clock:
+no honest signer signs a target past the clock plus `max_epochs_ahead`,
+so the floor lies above every vote the key cast before. A clock that
+reads behind at the import gives a floor that is too low. The share record keeps it
 (`source_floor`), and a restart sets it again. The validator signs no
 vote with a source below the higher of the two floors, also after the
 log's gate has dropped. Any validator added while the runner runs, with
@@ -93,6 +98,38 @@ here signed. So the core takes the restart floor's block and target
 bounds with the key, in the same step that loads it. The key signs no
 block or PTC vote up to the last slot of the floor epoch and no vote
 with a target up to it (a restart floors every key again).
+
+A handover sends each share's own state with it: whether the key has
+imported history, and else the floor its record holds (HSH-01). The
+handed-over mark is the device mark of every key, so the target does not
+read it as one key's history. A key without history at the source gets
+the higher of the source's floor and the target's own restart floor epoch
+at the import, and the target's record keeps it. With trusted clocks the
+target's floor is the higher one, as it is read later; the source's floor
+keeps a target clock that reads behind the source's from lowering it.
+
+A key earns history of its own by signing. The first time the runner
+signs it a vote with a source at or above every floor that holds for it,
+the runner sets `history` in its share record and drops the floor, once
+per key, after the signature: the core wrote that source into the mark
+before it signed. Every vote the key may have cast before its import has
+a target below its floor, and no later vote, here or at a handover
+target, has a source below the mark's, so none can surround those votes.
+A handover then sends the key with history, and the target sets no floor
+for it. A failed write, or a record the host rolls back, leaves the key
+without history: it waits for its floor again after a handover, which
+costs liveness, not safety. The write is meant only for the record the
+runner holds: it checks the stored record before the log record and
+again before the store write, and fails if the host removed or changed
+it. This is best effort, as the store has no conditional write. A change
+between the last check and the write is overwritten with a record whose
+history is true of the key and which the log vouches for. After a failed write the runner tries again
+in a later epoch, at most 3 times per process, since each try writes a
+log record. The promotion fixes the clock reading taken
+at the import for the key's whole life: without it, each handover target
+would floor the key again from its own, later clock reading. A key
+without a floor of its own (a record stored before floors) earns
+nothing.
 
 A record is about 420 bytes on the dev platform, 60 more for each
 pending update, and 150 to 250 more with a cloud KMS ciphertext in the
@@ -284,6 +321,58 @@ shares, so it starts over with the setup's first config. The new log has
 another log ID, so no share from before ever opens in it, even if the host
 shows the shares again later. Verifiers that pin a minimum config version
 refuse to import into it.
+
+### Share set
+
+The AAD binds a record to the log, not to the import that wrote it. A
+share record carries `history` and `source_floor`, so an old record of
+the same key under the same log is a claim the host could replay: a key
+that earned history, left this runner, voted elsewhere and came back
+without history (HSH-01 review, SF1). So the log commits to the stored
+records.
+
+Each record carries the share set: the root of the stored share records
+(`markstore.ShareSetRoot`: sha256 over `signer-share-set-v1` and, in key
+order, each validator key and the sha256 of its sealed record as
+stored), and, while a write is under way, the root of the set after it.
+
+- A share write (an import, a handover's share, a promotion) first writes
+  a log record whose current root is the set before and whose pending
+  root is the set after, then the share record. Share writes go one at a
+  time. The next record carries the set after as its current root.
+- A start reads every listed record and computes the root over the ones
+  that unseal and parse. A stored object that does not (sealed under
+  another setup or log, corrupt, or no record) never loads and is no
+  part of the set; the runner names it in the start's errors, and the
+  operator removes it. If the root is the newest log record's current or
+  pending root, the runner loads the records as they are. A cut between the two writes leaves one of the
+  two sets, and the set before holds the key's earlier record or none:
+  never more history than the set after.
+- Any other set means a replayed, hidden or changed record, or a store
+  write that failed after it landed. The runner cannot tell which record,
+  so it loads every key without history and with a source floor of at
+  least the restart floor epoch now, the bounds of an import without
+  history. It rewrites the records so and writes a log record that vouches
+  for them. A record the reset could not write back stays out of the
+  vouched set, so the next start resets again, and every start does so
+  until the store takes that record; so does a start cut in the
+  middle. This costs every key one wait for its floor, never
+  safety.
+- After a share write the newest record keeps its pending root until the
+  next record, which carries the set after as current. So a pending root
+  in the newest record does not mean a write was cut. It also vouches
+  for the set before, which holds no more history.
+- While the runner runs it keeps the sha256 of each record it loaded or
+  wrote. A handover's read and a promotion refuse a record the host
+  changed since; after a restart that record goes through the rule
+  above.
+- A log record written before share sets (`SMARK1`), or one with no share
+  set, vouches for the empty set only. The first start of this image on
+  such a log with shares resets once.
+
+The log is the anchor because the host cannot roll it back: records are
+written once under a lock, and the newest one wins (see "Rules"). The
+share records alone have no such anchor.
 
 ## Config state API
 

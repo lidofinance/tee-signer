@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +21,20 @@ type shareStore struct {
 	mu   sync.Mutex
 	m    map[string][]byte
 	hide bool
+	puts map[string]int // writes per name
+	// failPut, if set, fails each write it returns true for, without
+	// storing it. The store calls it outside its lock, so it may block.
+	failPut func(k string) bool
+	// landPut, if set, stores each write it returns true for and then
+	// fails it, as a write whose reply was lost.
+	landPut func(k string) bool
+}
+
+// putsOf is how many times k was written.
+func (s *shareStore) putsOf(k string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.puts[k]
 }
 
 func (s *shareStore) Get(k string) ([]byte, error) {
@@ -32,8 +47,21 @@ func (s *shareStore) Get(k string) ([]byte, error) {
 }
 func (s *shareStore) Put(k string, v []byte) error {
 	s.mu.Lock()
+	fail := s.failPut
+	s.mu.Unlock()
+	if fail != nil && fail(k) {
+		return errors.New("test store: write failed")
+	}
+	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.m[k] = append([]byte(nil), v...)
+	if s.landPut != nil && s.landPut(k) {
+		return errors.New("test store: reply lost")
+	}
+	if s.puts == nil {
+		s.puts = map[string]int{}
+	}
+	s.puts[k]++
 	return nil
 }
 func (s *shareStore) List(prefix string) ([]string, error) {

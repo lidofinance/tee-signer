@@ -29,7 +29,8 @@ func TestRequest(t *testing.T) {
 	}
 	for name, b := range map[string][]byte{
 		"version 0": append([]byte{0}, enc[1:]...),
-		"version 2": append([]byte{2}, enc[1:]...),
+		"version 1": append([]byte{1}, enc[1:]...), // before history and source_floor
+		"version 3": append([]byte{3}, enc[1:]...),
 		"trailing":  append(bytes.Clone(enc), 0),
 		"short":     enc[:len(enc)-1],
 		"huge part": append(enc[:3+len(q.Nonce)], 0xff, 0xff, 0xff, 0xff),
@@ -181,6 +182,13 @@ func TestResponse(t *testing.T) {
 		!bytes.Equal(back.Origin.Attestation.UserData, []byte{1}) || back.Shares[2].Pubkey[0] != 2 {
 		t.Fatalf("%+v", back)
 	}
+	// A page of version 1, before history and source_floor, is refused,
+	// as a version 1 target refuses this one.
+	for _, v := range []byte{0, 1, 3} {
+		if _, err := DecodeResponse(append([]byte{v}, enc[1:]...)); err == nil {
+			t.Fatalf("a response of version %d decoded", v)
+		}
+	}
 	// A share with another mark than the page's is refused.
 	m2 := mark
 	m2.SourceEpoch++
@@ -190,13 +198,63 @@ func TestResponse(t *testing.T) {
 	if _, err := DecodeResponse(enc); err == nil || !strings.Contains(err.Error(), "handed-over mark") {
 		t.Fatalf("another mark: %v", err)
 	}
-	for _, v := range []byte{0, 2} {
-		if _, err := DecodeResponse(append([]byte{v}, enc[1:]...)); err == nil {
-			t.Fatalf("a response of version %d decoded", v)
-		}
-	}
 	ud := OriginUserData([32]byte{1}, r.Origin.Key)
 	if bytes.Equal(ud, OriginUserData([32]byte{2}, r.Origin.Key)) || len(ud) != 32 {
 		t.Fatal("origin user data does not bind the order")
+	}
+}
+
+// HSH-01: history and source_floor are in the header, so the HPKE
+// associated data and the origin signature bind them; a share claims its
+// own history only under a mark with a vote, and then names no floor.
+func TestShareHistory(t *testing.T) {
+	to, _ := sealedimport.Generate()
+	_, okey, _ := ed25519.GenerateKey(rand.Reader)
+	opub := [32]byte(okey.Public().(ed25519.PublicKey))
+	mark := backend.Watermark{HasAttestation: true, SourceEpoch: 10, TargetEpoch: 11}
+	s, _ := share(t, to, mark, okey)
+	s.SourceFloor = 1234
+	var err error
+	if s.Sealed, err = sealedimport.SealAAD(func() *backend.Identity { id := &backend.Identity{}; to.Fill(id); return id }(),
+		s.AAD(testCarryHash), &[32]byte{7}); err != nil {
+		t.Fatal(err)
+	}
+	s.SignOrigin(okey)
+	enc, err := s.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := DecodeShare(enc)
+	if err != nil || back.History || back.SourceFloor != 1234 {
+		t.Fatalf("round trip: %+v %v", back, err)
+	}
+	// A lowered floor, or history claimed: neither opens nor verifies.
+	low, hist := *back, *back
+	low.SourceFloor--
+	hist.History, hist.SourceFloor = true, 0
+	for name, x := range map[string]*Share{"lowered floor": &low, "history": &hist} {
+		if _, err := to.OpenAAD(x.Sealed, x.AAD(testCarryHash)); err == nil {
+			t.Fatalf("a share opened with a %s", name)
+		}
+		if err := x.VerifyOrigin(opub); err == nil {
+			t.Fatalf("the origin signature verified with a %s", name)
+		}
+	}
+	// The rules.
+	bad := *back
+	bad.History = true
+	if _, err := bad.Encode(); err == nil || !strings.Contains(err.Error(), "names a source floor") {
+		t.Fatalf("history with a floor: %v", err)
+	}
+	blocks := backend.Watermark{HasBlock: true, BlockSlot: 80}
+	bad = *back
+	bad.History, bad.SourceFloor, bad.Interchange = true, 0, &blocks
+	if _, err := bad.Encode(); err == nil || !strings.Contains(err.Error(), "without a vote") {
+		t.Fatalf("history under a mark without a vote: %v", err)
+	}
+	flag := bytes.Clone(enc)
+	flag[HeaderLen-9] = 2
+	if _, err := DecodeShare(flag); err == nil {
+		t.Fatal("history flag 2 decoded")
 	}
 }

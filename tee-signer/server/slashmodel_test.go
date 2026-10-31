@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/lidofinance/tee-signer/platform"
@@ -42,19 +43,36 @@ import (
 
 // faultLog makes the next Create fail before it applies (failNext) or
 // apply and then fail (dropNext), as wormfake's fault plan does over HTTP.
+// The flags have a lock: a promotion writes the log from its own
+// goroutine.
 type faultLog struct {
 	markstore.Log
+	mu                 sync.Mutex
 	failNext, dropNext bool
 }
 
+func (l *faultLog) set(fail, drop bool) {
+	l.mu.Lock()
+	l.failNext, l.dropNext = l.failNext || fail, l.dropNext || drop
+	l.mu.Unlock()
+}
+
 func (l *faultLog) Create(ctx context.Context, name string, data []byte) error {
-	if l.failNext {
-		l.failNext = false
+	l.mu.Lock()
+	fail := l.failNext
+	l.failNext = false
+	l.mu.Unlock()
+	if fail {
 		return errors.New("injected: store down")
 	}
 	err := l.Log.Create(ctx, name, data)
-	if err == nil && l.dropNext {
+	l.mu.Lock()
+	drop := err == nil && l.dropNext
+	if drop {
 		l.dropNext = false
+	}
+	l.mu.Unlock()
+	if drop {
 		return context.DeadlineExceeded
 	}
 	return err
@@ -126,6 +144,7 @@ func startRunner(base *tgtEnv) (*modelRunner, error) {
 
 func (r *modelRunner) close() {
 	if r.ok {
+		r.e.srv.promotions.Wait()
 		r.e.signer.Close()
 		r.ok = false
 	}
@@ -318,10 +337,10 @@ func runModel(t *testing.T, ops []byte) (signed int) {
 				runners[active] = nr
 			}
 		case 10: // the next create of the active runner fails before it applies
-			r.log.failNext = true
+			r.log.set(true, false)
 			trace = append(trace, fmt.Sprintf("runner %d: next create fails", active))
 		case 11: // the next create applies and loses its reply
-			r.log.dropNext = true
+			r.log.set(false, true)
 			trace = append(trace, fmt.Sprintf("runner %d: next create loses its reply", active))
 		case 12: // a clone from the same state
 			if len(runners) >= 3 {

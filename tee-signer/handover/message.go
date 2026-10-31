@@ -19,15 +19,15 @@ import (
 // carries it. The request carries the target's identity and its published
 // setup as bytes, which the source decodes and checks.
 //
-//	request  = version:u8(1) nonce_len:u16 nonce identity_len:u32 identity
+//	request  = version:u8(2) nonce_len:u16 nonce identity_len:u32 identity
 //	           policy_len:u32 policy order_len:u32 order start:u32
-//	response = version:u8(1) mark[26] total:u32 origin_proof
+//	response = version:u8(2) mark[26] total:u32 origin_proof
 //	           count:u16 {share_len:u16 share} carry_len:u32 carry
 //	origin_proof = origin_key[32] nonce_len:u16 nonce attestation_len:u32
 //	           attestation (wire.EncodeAttestation)
 //	share    = header sealed_len:u16 sealed origin_sig[64]
 //	header   = pubkey[48] share_pubkey[48] index:u64 interchange[25]
-//	           origin:u8 reserved[32]
+//	           origin:u8 reserved[32] history:u8 source_floor:u64
 //
 // identity is the target's IDENTITY answer for nonce, policy its published
 // setup, order the signed handover order. start pages through the shares;
@@ -39,7 +39,11 @@ import (
 // layout is that of earlier builds, which also handed over keys made in
 // key generation (origin 2, with that order's hash). DecodeShare refuses
 // any other origin and reserved bytes that are not zero, so such a share
-// never counts as an imported one. The carry (carry.go) holds the key set
+// never counts as an imported one. history and source_floor are the
+// share's own vote history state at the source (HSH-01): history 1 when
+// its record there has history, else 0 and the source floor its sealed
+// record holds (0: none). The mark is the device mark of every key, so it
+// says nothing about one key's history. The carry (carry.go) holds the key set
 // the source hands over and the day's exits of its mark log. The HPKE
 // associated data is CtxHandoverShare over the header and the carry's
 // hash, so neither the mark, the origin nor the carry changes without the
@@ -59,8 +63,11 @@ import (
 // Type is HANDOVER.
 const Type wire.MsgType = 0x32
 
-// Version is the version byte of the request and response.
-const Version = 1
+// Version is the version byte of the request and response. Version 2
+// added history and source_floor to the share header; a runner of either
+// version refuses the other's request and response, so no floor is lost
+// between them.
+const Version = 2
 
 // Caps of the request's parts.
 const (
@@ -186,19 +193,30 @@ func DecodeRequest(p []byte) (*Request, error) {
 // Share is one handed-over share.
 type Share struct {
 	backend.SealedImportRequest
-	Origin    uint8    // OriginImported
-	OriginSig [64]byte // by the source's origin key over the header
+	Origin uint8 // OriginImported
+	// History: the key's own vote history is in the source's core (its
+	// record there has history). SourceFloor: without it, the source floor
+	// of its sealed record at the source, 0 for none.
+	History     bool
+	SourceFloor uint64
+	OriginSig   [64]byte // by the source's origin key over the header
 }
 
 // HeaderLen is the length of a handed-over share's header.
-const HeaderLen = wireadmin.SealedHeaderLen + 1 + 32
+const HeaderLen = wireadmin.SealedHeaderLen + 1 + 32 + 1 + 8
 
-// Header is the share's header: IMPORT_SHARE_SEALED's header, origin:u8
-// and 32 reserved zero bytes.
+// Header is the share's header: IMPORT_SHARE_SEALED's header, origin:u8,
+// 32 reserved zero bytes, history:u8 and source_floor:u64.
 func (s *Share) Header() []byte {
 	h := wireadmin.SealedHeader(&s.SealedImportRequest)
 	h = append(h, s.Origin)
-	return append(h, make([]byte, 32)...)
+	h = append(h, make([]byte, 32)...)
+	hist := byte(0)
+	if s.History {
+		hist = 1
+	}
+	h = append(h, hist)
+	return binary.BigEndian.AppendUint64(h, s.SourceFloor)
 }
 
 // CarriesMark reports whether the share's interchange maxima are mark. A
@@ -211,11 +229,18 @@ func (s *Share) CarriesMark(mark backend.Watermark) bool {
 	return s.Interchange != nil && *s.Interchange == mark
 }
 
-// CheckOrigin refuses a key origin other than OriginImported. Origin 2
-// was a key made in key generation inside the source, in earlier builds.
+// CheckOrigin refuses a key origin other than OriginImported (origin 2
+// was a key made in key generation inside the source, in earlier builds),
+// and applies the history rules: history only under a mark with a vote,
+// and then no source floor.
 func (s *Share) CheckOrigin() error {
-	if s.Origin != OriginImported {
+	switch {
+	case s.Origin != OriginImported:
 		return fmt.Errorf("handover: key origin %d, want 1 (imported)", s.Origin)
+	case s.History && s.SourceFloor != 0:
+		return errors.New("handover: a share with its own history names a source floor")
+	case s.History && (s.Interchange == nil || !s.Interchange.HasAttestation):
+		return errors.New("handover: a share with its own history carries a mark without a vote")
 	}
 	return nil
 }
@@ -263,10 +288,14 @@ func DecodeShare(p []byte) (*Share, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Share{SealedImportRequest: req, Origin: p[wireadmin.SealedHeaderLen]}
-	if !bytes.Equal(p[wireadmin.SealedHeaderLen+1:HeaderLen], make([]byte, 32)) {
+	o := p[wireadmin.SealedHeaderLen:HeaderLen]
+	if !bytes.Equal(o[1:33], make([]byte, 32)) {
 		return nil, errors.New("handover: the reserved bytes after the key origin are not zero")
 	}
+	if o[33] > 1 {
+		return nil, errors.New("handover: bad history flag")
+	}
+	s := &Share{SealedImportRequest: req, Origin: o[0], History: o[33] == 1, SourceFloor: binary.BigEndian.Uint64(o[34:])}
 	copy(s.OriginSig[:], p[HeaderLen+2+n:])
 	if err := s.CheckOrigin(); err != nil {
 		return nil, err

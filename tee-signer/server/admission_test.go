@@ -28,11 +28,11 @@ func TestSSIStorage01SecondShareDoesNotReplaceTheFirst(t *testing.T) {
 	stale := oneKey(t, e) // the list a request read before either share
 	pk := newPubkey(t)
 	a, b := newSecret(t), newSecret(t)
-	ka, err := e.srv.addShareOf(pk, &a, 7, nil, "handover", stale)
+	ka, err := e.srv.addShareOf(pk, &a, 7, nil, "handover", nil, stale)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.srv.addShareOf(pk, &b, 8, nil, "handover", stale); err == nil {
+	if _, err := e.srv.addShareOf(pk, &b, 8, nil, "handover", nil, stale); err == nil {
 		t.Fatal("a second share of a loaded validator was taken")
 	}
 	e.restart()
@@ -57,7 +57,7 @@ func TestShareAdmissionConcurrent(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			sec := newSecret(t)
-			if k, err := e.srv.addShareOf(pk, &sec, uint64(i), &testMark, "handover", stale); err == nil {
+			if k, err := e.srv.addShareOf(pk, &sec, uint64(i), &testMark, "handover", nil, stale); err == nil {
 				won[i] = &k
 			}
 		}()
@@ -122,7 +122,7 @@ func TestAPSTATE02RepeatedShareInAPage(t *testing.T) {
 func oneKey(t *testing.T, e *tgtEnv) []backend.ValidatorKey {
 	t.Helper()
 	sec := newSecret(t)
-	if _, err := e.srv.addShareOf(newPubkey(t), &sec, 1, nil, "sealed", nil); err != nil {
+	if _, err := e.srv.addShareOf(newPubkey(t), &sec, 1, nil, "sealed", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	return e.signer.Keys()

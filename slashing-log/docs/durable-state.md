@@ -203,16 +203,13 @@ shares it holds, never in a mark:
 - The mark the runner signs under comes from the locked mark log, read at
   the claim after the restore. No commit holds a mark (the hint is not in
   the copy, and the hint can only make the claim refuse).
-- A share record holds one bound: a share imported without vote history
-  keeps its source floor (`source_floor`, `marklog.md`). The host stores
-  the record, so an older commit can bring back an older import's lower
-  floor, or none. Until a follow-up change anchors these floors in the mark
-  log, the log's mark is the only bound the host cannot roll back.
-- Apart from that floor, a share carries no slashing state. An older
-  commit has fewer shares, or the shares before a later import of the same
-  validator: the runner then
-  holds less, which costs liveness, and signs every message under the
-  log's mark either way.
+- A share record carries `history` and `source_floor`, which bound votes.
+  The mark log vouches for the set of share records (marklog.md, "Share
+  set"). An older commit is not that set, so a restart from it loads every
+  key without history and with a fresh source floor: each key waits for
+  its floor once, which costs liveness. With fewer shares, or the shares
+  before a later import of the same validator, the runner holds less and
+  signs every message under the log's mark either way.
 - The sealing key in an older commit is the one the shares of that commit
   are sealed with (the key changes only on a first start, which the commit
   records). Nothing opens with a mixed set.
@@ -347,7 +344,12 @@ under an approver-signed handover order (`signer-protocol/docs/protocol.md`,
   seals each page from that read. After the tombstone, also after a
   restart, it answers that target only, with the same mark.
 - Each share's header adds its key origin (always imported) to the
-  sealed import's header. The page carries the carry: the key set handed over and the
+  sealed import's header, and the key's own vote history state from its
+  sealed record: whether it has history (an import with vote history, or
+  a vote this runner signed at or above its source floor), and else its
+  source floor (HSH-01, HANDOVER version 2; marklog.md, "Source gate").
+  The handed-over mark is the device mark of every key and does not say
+  that one key has history. The page carries the carry: the key set handed over and the
   day's exits of the mark log. Each share is sealed under the HPKE
   associated data `signer-handover-share-v1` over its header and the
   carry's hash. The runner signs each header with an origin key it makes

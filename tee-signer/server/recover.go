@@ -115,7 +115,7 @@ func (s *Server) checkAfterPanic(wait time.Duration) {
 
 // lockers are the server's locks.
 func (s *Server) lockers() []sync.Locker {
-	ls := []sync.Locker{&s.sharesMu, &s.blockedMu, &s.admitMu, &s.exits.mu, &s.attestLimit.mu}
+	ls := []sync.Locker{&s.sharesMu, &s.blockedMu, &s.admitMu, &s.shareSetMu, &s.promoteMu, &s.exits.mu, &s.attestLimit.mu}
 	if u := s.Updates; u != nil {
 		ls = append(ls, &u.writeMu, &u.mu, &u.srcMu)
 	}

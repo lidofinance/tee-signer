@@ -218,6 +218,12 @@ type MarkLog interface {
 	// one the next record carries.
 	SourceGate() (uint64, bool)
 	SetSourceGate(floor uint64, on bool)
+	// ShareSet is the share set commitment the log holds (nil: the empty
+	// set); SetShareSet sets the one the next record carries, and
+	// RecordShareSet writes a record with it.
+	ShareSet() *markstore.ShareSet
+	SetShareSet(s *markstore.ShareSet)
+	RecordShareSet(ctx context.Context, s *markstore.ShareSet) error
 	Status() string
 }
 
@@ -268,6 +274,31 @@ func (h *Hooks) SourceFloor(pk backend.Pubkey) (uint64, bool) {
 		f, on = max(f, kf), true
 	}
 	return f, on
+}
+
+// Earns reports whether a vote of pk with this source, which the core
+// signed, gives pk vote history of its own (Server.promote): pk has none
+// yet, it has an import floor, and the source is at or above every floor
+// that holds for it. Every vote pk may have cast before its import has a
+// target below the import floor. The core wrote this source into the mark
+// before it signed, so no later vote here, or at a handover target, has a
+// lower source. A vote with a source at or above the floor neither
+// surrounds nor is surrounded by a vote whose target is below it, so the
+// floor is redundant from then on. A key without an import floor (a record
+// stored before floors) earns nothing: no floor bounds what it signed
+// before. sign() refuses a source below the floor before the core signs;
+// this check repeats it.
+func (h *Hooks) Earns(pk backend.Pubkey, source uint64) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	kf, ok := h.keyFloor[pk]
+	if !ok || h.history[pk] {
+		return false
+	}
+	if h.gateOn {
+		kf = max(kf, h.gateFloor)
+	}
+	return source >= kf
 }
 
 // ImportFloor is the source floor for a validator that comes in now
@@ -336,6 +367,31 @@ func (h *Hooks) decideGate() error {
 			"floor_epoch", floor, "log_source", h.mark.SourceEpoch, "log_has_vote", h.mark.HasAttestation)
 	}
 	return nil
+}
+
+// ShareSet is the mark log's share set commitment (nil: the empty set);
+// ok is false without a mark log, where stored share records are not
+// committed.
+func (h *Hooks) ShareSet() (set *markstore.ShareSet, ok bool) {
+	if h.marks == nil {
+		return nil, false
+	}
+	return h.marks.ShareSet(), true
+}
+
+// SetShareSet sets the commitment the mark log's next record carries.
+func (h *Hooks) SetShareSet(s *markstore.ShareSet) {
+	if h.marks != nil {
+		h.marks.SetShareSet(s)
+	}
+}
+
+// RecordShareSet writes a mark log record with commitment s.
+func (h *Hooks) RecordShareSet(ctx context.Context, s *markstore.ShareSet) error {
+	if h.marks == nil {
+		return ErrNoMarkLog
+	}
+	return h.marks.RecordShareSet(ctx, s)
 }
 
 // HandOverTo ends the mark log for a handover to the runner of target's
