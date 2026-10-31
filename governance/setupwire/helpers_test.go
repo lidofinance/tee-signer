@@ -156,7 +156,7 @@ func samples(t testing.TB) map[string]*Setup {
 		return &Setup{ClusterID: [32]byte{id, 0xc1}, HandoverGeneration: 1, Chain: sampleChain(),
 			Safety: Safety{MaxSignEpochsAheadOfClock: 2,
 				SlashingMarkPrewrite: SlashingMarkPrewrite{BlockSlots: 16, SourceEpochs: 2, TargetEpochs: 2}},
-			MaxKeys: maxKeys, SlashingLogMinLockDays: lockDays,
+			MaxKeys: maxKeys, SlashingLogMinLockDays: lockDays, SigningMode: SigningModeThreshold,
 			Locked: sampleLocked(), Open: sampleOpen(), PolicySalts: testPolicySalts(),
 			SignerName: name, Platform: p, PlatformSalt: sha256.Sum256([]byte("test platform salt " + name))}
 	}
@@ -175,32 +175,48 @@ func samples(t testing.TB) map[string]*Setup {
 	azure.Open.GloasForkEpoch = nil
 	// Two slot time changes: 4 s slots from epoch 100000, 3 s from 200000.
 	azure.Locked.SlotTimeChanges = []SlotTimeChange{{Epoch: 100_000, SecondsPerSlot: 4}, {Epoch: 200_000, SecondsPerSlot: 3}}
-	gcp := base("signer-3", 1, 64, 1, PlatformConfig{Platform: PlatformGCP,
-		SlashingLogStore:    Store{Bucket: "signer-marks-gcp"},
-		EncryptedStateStore: &Store{Bucket: "signer-state_gcp"},
-		SealingKeyRelease: KeyRelease{WIFProvider: "//iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/signer/providers/attest",
-			KMSKey: "projects/p/locations/global/keyRings/signer/cryptoKeys/seal", AttestAudience: "signer-runner-identity"}})
-	gcp.Locked.AllowedImageMeasurements = nil
-	gcp.Locked.AllowedFeeRecipients = nil
-	gcp.Locked.ExitAllowedValidators = nil
-	gcp.Locked.AllowedDepositAmounts = nil
-	gcp.Locked.BareRootDomains = 0
-	gcp.Locked.AllowedBuilderRequestAuthDataRoots = nil
-	gcp.Locked.AllowUnverifiedNonslashableSigning = true
-	gcp.Open = Open{}
+	gcpOf := func(name string, id byte) *Setup {
+		g := base(name, id, 64, 1, PlatformConfig{Platform: PlatformGCP,
+			SlashingLogStore:    Store{Bucket: "signer-marks-gcp"},
+			EncryptedStateStore: &Store{Bucket: "signer-state_gcp"},
+			SealingKeyRelease: KeyRelease{WIFProvider: "//iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/signer/providers/attest",
+				KMSKey: "projects/p/locations/global/keyRings/signer/cryptoKeys/seal", AttestAudience: "signer-runner-identity"}})
+		g.Locked.AllowedImageMeasurements = nil
+		g.Locked.AllowedFeeRecipients = nil
+		g.Locked.ExitAllowedValidators = nil
+		g.Locked.AllowedDepositAmounts = nil
+		g.Locked.BareRootDomains = 0
+		g.Locked.AllowedBuilderRequestAuthDataRoots = nil
+		g.Locked.AllowUnverifiedNonslashableSigning = true
+		g.Open = Open{}
+		return g
+	}
+	gcp := gcpOf("signer-3", 1)
+	// gcp-single: a single-node GCP signer of its own cluster, which needs
+	// the approvers' acceptance of the risk in the setup.
+	gcpSingle := gcpOf("signer-solo", 5)
+	gcpSingle.SigningMode = SigningModeSingle
+	gcpSingle.Platform.SealingKeyRelease.UnsafeSingleKeyAccepted = true
 	// dev: local directories, no key release, no change delay (as on a
-	// devnet).
-	dev := base("signer-dev", 4, 16, 7, PlatformConfig{Platform: PlatformDev,
-		SlashingLogStore:    Store{Dir: "/var/lib/signer/marks"},
-		EncryptedStateStore: &Store{Dir: "/var/lib/signer/state-copy"}})
-	dev.Locked.ChangeDelaySeconds = u64p(0)
+	// devnet). dev-single holds whole keys, as a single-node devnet signer
+	// does; dev-threshold holds shares of splits. The runner tests and the
+	// end-to-end tests start from one or the other.
+	devOf := func(mode SigningMode) *Setup {
+		d := base("signer-dev", 4, 16, 7, PlatformConfig{Platform: PlatformDev,
+			SlashingLogStore:    Store{Dir: "/var/lib/signer/marks"},
+			EncryptedStateStore: &Store{Dir: "/var/lib/signer/state-copy"}})
+		d.Locked.ChangeDelaySeconds = u64p(0)
+		d.SigningMode = mode
+		return d
+	}
 	// nitro-peers: the Nitro signer of a cluster with an Azure peer
 	// (sharedneu) and a GCP peer.
 	nitroPeers := base("signer-1", 1, 1024, 3650, nitro.Platform)
 	nitroPeers.Locked.ChangeDelaySeconds = nil
 	nitroPeers.Platform.PeerAttestationHosts = []string{"confidentialcomputing.googleapis.com:443", "sharedneu.neu.attest.azure.net:443",
 		"www.googleapis.com:443"}
-	return map[string]*Setup{"setup-nitro": nitro, "setup-azure": azure, "setup-gcp": gcp, "setup-dev": dev, "setup-nitro-peers": nitroPeers}
+	return map[string]*Setup{"setup-nitro": nitro, "setup-azure": azure, "setup-gcp": gcp, "setup-gcp-single": gcpSingle,
+		"setup-dev-single": devOf(SigningModeSingle), "setup-dev-threshold": devOf(SigningModeThreshold), "setup-nitro-peers": nitroPeers}
 }
 
 // rawSetup encodes s without the checks, to feed the decoder values the

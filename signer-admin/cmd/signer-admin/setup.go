@@ -16,14 +16,15 @@ import (
 )
 
 // The setup file is the human setup format of setupwire ("key = value",
-// setup format 1) with one
+// setup format 2) with one
 // [signer NAME] section per signer. The lines before the first section
 // belong to every signer: setup_format_version, handover_generation, the
 // chain, the safety settings, max_keys, slashing_log_min_lock_days and both
 // config groups, and any platform key that is the same for all
 // (allowed_client_ca, for example). A section holds the keys of one signer:
 // platform, stores, sealing key release, network entry names. NAME becomes the
-// signer's signer_name. The tool draws cluster_id and the salts: the policy
+// signer's signer_name. signing_mode (threshold or single) is shared: a
+// single-mode file has one section. The tool draws cluster_id and the salts: the policy
 // salts once for the cluster, so every signer with the same public values
 // has the same policy_root, and one platform salt per signer. So the file
 // names neither signer_name nor cluster_id nor any salt.
@@ -159,7 +160,16 @@ func cmdSetup(args []string, out io.Writer) error {
 	// With more signers, or with one signer that is not on GCP, the flag
 	// is refused: the acceptance is one signer's decision, so there the key
 	// in that signer's section says it.
+	// signing_mode is a public value, the same for every signer (buildSetups
+	// compares them). A single-mode cluster is one signer that holds whole
+	// keys; a threshold-mode cluster of one signer could hold no key.
+	if m := setups[0].SigningMode; m == setupwire.SigningModeSingle && len(setups) != 1 {
+		return fmt.Errorf("signing_mode = single: the file has %d signers; a single-mode setup is for one signer that holds whole keys (use signing_mode = threshold for a split)", len(setups))
+	}
 	if *allowGCPSingle {
+		if s := setups[0]; s.SigningMode != setupwire.SigningModeSingle {
+			return fmt.Errorf("-allow-gcp-unsafe-single-key: the file says signing_mode = %s; the acceptance is for a single-mode setup (signing_mode = single)", s.SigningMode)
+		}
 		if len(setups) != 1 {
 			return fmt.Errorf("-allow-gcp-unsafe-single-key: the file has %d signers; it is for a one-signer GCP cluster (put sealing_key_release.unsafe_single_key_accepted = true in a signer's section to accept it there)", len(setups))
 		}
@@ -182,7 +192,7 @@ func cmdSetup(args []string, out io.Writer) error {
 	// the operator sees it when the setup is made, not only in the file.
 	for _, s := range setups {
 		k := &s.Platform.SealingKeyRelease
-		if err := setupwire.CheckThresholdOn(&s.Platform, s.Chain.GenesisForkVersion, len(setups), len(setups)); err != nil {
+		if err := setupwire.CheckThresholdOn(s, len(setups), len(setups)); err != nil {
 			return fmt.Errorf("signer %s: a cluster of %d signer(s) can hold no key: %w", s.SignerName, len(setups), err)
 		}
 		if k.UnsafeSingleKeyAccepted && !k.NoLockAccepted && setupwire.IsMainnet(s.Chain.GenesisForkVersion) {
@@ -222,7 +232,7 @@ func cmdSetup(args []string, out io.Writer) error {
 			return fmt.Errorf("%s exists; remove the old setups first (each run draws a new cluster_id)", p)
 		}
 	}
-	fprintf(out, "cluster_id 0x%x\n", clusterID)
+	fprintf(out, "cluster_id 0x%x\nsigning_mode %s\n", clusterID, setups[0].SigningMode)
 	for i, s := range setups {
 		p := filepath.Join(*dir, s.SignerName+".setup")
 		f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)

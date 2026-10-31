@@ -49,7 +49,7 @@ func keySetServer(t *testing.T) *httptest.Server {
 // reports the limit that the handover orders check.
 func TestDevRunnerAttestationEgress(t *testing.T) {
 	listed, other := keySetServer(t), keySetServer(t)
-	s, err := setupwire.DecodeSetup(sampleSetup(t, "dev"))
+	s, err := setupwire.DecodeSetup(sampleSetup(t, "dev-single"))
 	if err != nil {
 		t.Fatal(err)
 	}

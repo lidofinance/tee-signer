@@ -299,10 +299,11 @@ func parseAddress(s string) (backend.Address, error) {
 
 // The enum names of setupwire, indexed by value.
 var (
-	presetNames     = setupwire.PresetNames()
-	groupNames      = setupwire.GroupNames()
-	imageNames      = setupwire.ImageKindNames()
-	rootDomainNames = setupwire.RootDomainNames()
+	presetNames      = setupwire.PresetNames()
+	signingModeNames = setupwire.SigningModeNames()
+	groupNames       = setupwire.GroupNames()
+	imageNames       = setupwire.ImageKindNames()
+	rootDomainNames  = setupwire.RootDomainNames()
 )
 
 func enumValue(names []string, s string) (uint8, bool) {
@@ -503,6 +504,7 @@ func ParseSetup(name string, data []byte) (*setupwire.Setup, error) {
 	p.safety(&s.Safety)
 	s.MaxKeys = uint32(scalar(p, "max_keys", parseUint(32)))
 	s.SlashingLogMinLockDays = uint32(scalar(p, "slashing_log_min_lock_days", parseUint(32)))
+	s.SigningMode = setupwire.SigningMode(scalar(p, "signing_mode", enumParser(signingModeNames, "threshold or single")))
 	p.platform(&s.Platform)
 	p.locked(&s.Locked)
 	p.open(&s.Open)
@@ -794,6 +796,11 @@ func FormatSetup(s *setupwire.Setup) ([]byte, error) {
 	w.kv("slashing_mark_prewrite.target_epochs", s.Safety.SlashingMarkPrewrite.TargetEpochs)
 	w.kv("max_keys", s.MaxKeys)
 	w.kv("slashing_log_min_lock_days", s.SlashingLogMinLockDays)
+	w.blank()
+	w.note("signing_mode: public, fixed for the life of the signer. threshold: the signer holds shares of t-of-n")
+	w.note("splits with n >= 2 and refuses a 1 of 1 import order. single: the signer holds whole keys and takes")
+	w.note("1 of 1 import orders only; one failed mark log, plus a hostile gateway, can then sign a slashable pair.")
+	w.kv("signing_mode", s.SigningMode)
 	w.blank()
 	w.note("platform: private, fixed")
 	formatPlatform(w, &s.Platform)

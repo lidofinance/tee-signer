@@ -20,7 +20,7 @@ import (
 // testnetSetup is the dev sample setup on a chain with these genesis values.
 func testnetSetup(t *testing.T, fork, root string) []byte {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "governance", "setupwire", "testdata", "setup-dev.bin"))
+	raw, err := os.ReadFile(filepath.Join("..", "governance", "setupwire", "testdata", "setup-dev-single.bin"))
 	if err != nil {
 		t.Fatal(err)
 	}

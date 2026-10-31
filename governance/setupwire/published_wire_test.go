@@ -12,8 +12,9 @@ import (
 // publishedGolden is sha256 of the Published encoding of each sample
 // setup, so a change to the encoding fails here.
 var publishedGolden = map[string]string{
-	"setup-dev.bin":   "86479e6acfee1b2827318ac21d19399d800d4e754cd6d726ccf6b101e91cd7e2",
-	"setup-nitro.bin": "cb6dc95dc1db38e96ff61e1cccd54f0b0745d2cc9a0577ee3b8c2618c8311a2c",
+	"setup-dev-single.bin":    "3bbe942d8bdce241e308ca775fde6f3b769fb5de3c87c9a05cec29a4aead7e43",
+	"setup-dev-threshold.bin": "ce6a67628fc608b685c454995b8766c9c102f5fbb5220018dbb2357e34863037",
+	"setup-nitro.bin":         "de2900482bf743aa2635c56b0abc375e337c419a97e1c46c13673667a30f8c02",
 }
 
 func TestPublished(t *testing.T) {

@@ -44,7 +44,10 @@
 //     the leaves and salts), which its identity carries;
 //   - the target's attestation verifies with the order's settings (so its
 //     measurement is the order's image) over the IDENTITY user data;
-//   - its cluster_id, chain and safety values are this runner's, its
+//   - its cluster_id, chain, safety values and signing_mode are this
+//     runner's (a single-mode source hands whole keys, which only a
+//     single-mode target may hold, and a threshold source hands shares,
+//     which a single-mode target would hold as if they were keys), its
 //     handover_generation is one higher, and version 0 of both its groups
 //     is this runner's config in force, leaf by leaf (expectedTarget);
 //   - its state shows version 0 of both groups with the hashes of its
@@ -681,14 +684,15 @@ func (h *sourceHandover) handover(ctx context.Context, payload []byte) ([]byte, 
 // expectedTarget is the public part a target of this runner must publish,
 // with the target's own salts, max_keys and slashing_log_min_lock_days
 // (which the handover leaves to the target's operator): the same
-// cluster_id, chain and safety values, handover_generation one higher, and
+// cluster_id, chain, safety values and signing_mode, handover_generation
+// one higher, and
 // version 0 of both groups equal to the values in force here.
 func expectedTarget(src *setupwire.Setup, locked *setupwire.Locked, open *setupwire.Open, target *setupwire.Policy) (*setupwire.Policy, error) {
 	if src.HandoverGeneration == ^uint64(0) {
 		return nil, errors.New("handover: this setup's handover_generation has no successor")
 	}
 	return &setupwire.Policy{ClusterID: src.ClusterID, HandoverGeneration: src.HandoverGeneration + 1, Chain: src.Chain, Safety: src.Safety,
-		MaxKeys: target.MaxKeys, SlashingLogMinLockDays: target.SlashingLogMinLockDays, Locked: *locked, Open: *open, Salts: target.Salts}, nil
+		SigningMode: src.SigningMode, MaxKeys: target.MaxKeys, SlashingLogMinLockDays: target.SlashingLogMinLockDays, Locked: *locked, Open: *open, Salts: target.Salts}, nil
 }
 
 // checkTargetPolicy compares the target's public part with expectedTarget
@@ -718,7 +722,7 @@ func checkTargetPolicy(src *setupwire.Setup, locked *setupwire.Locked, open *set
 		}
 	}
 	if len(diff) > 0 {
-		return fmt.Errorf("handover: the target's setup differs from this signer's in %s (want the same cluster_id, chain and safety, "+
+		return fmt.Errorf("handover: the target's setup differs from this signer's in %s (want the same cluster_id, chain, safety and signing_mode, "+
 			"handover_generation %d, and version 0 of both groups equal to the values in force here)", strings.Join(diff, ", "), want.HandoverGeneration)
 	}
 	return nil

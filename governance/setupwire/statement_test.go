@@ -58,6 +58,7 @@ func statementSetup(t testing.TB) *Setup {
 		Safety:                 Safety{MaxSignEpochsAheadOfClock: 2, SlashingMarkPrewrite: SlashingMarkPrewrite{BlockSlots: 32, SourceEpochs: 2, TargetEpochs: 2}},
 		MaxKeys:                1024,
 		SlashingLogMinLockDays: 3650,
+		SigningMode:            SigningModeThreshold,
 		Locked: Locked{
 			Approvers:                           ApproverSet{Keys: [][32]byte{approverPub(1), approverPub(2), approverPub(3)}, ApprovalsNeeded: 2},
 			ChangeDelaySeconds:                  &delay,
@@ -352,7 +353,7 @@ func buildVectors(t *testing.T) []byte {
 	s := statementSetup(t)
 	human := humanForms(t)
 	var v vectors
-	v.Description = "Golden vectors of the attestation statement, setup format 1 (docs/attestation-statement.md). " +
+	v.Description = "Golden vectors of the attestation statement, setup format 2 (docs/attestation-statement.md). " +
 		"Hex is 0x-prefixed; every hash is SHA-256. Made by backend/setupwire TestStatementVectors -update; the test recomputes them."
 	v.Contexts = map[string]string{}
 	for _, c := range []struct {

@@ -26,8 +26,9 @@ func IsMainnet(genesisForkVersion backend.Version) bool {
 // networks, the only chains a testnet build runs on, keep 2-of-3.
 //
 // A single-node signer (t = n = 1) passes on every chain, mainnet
-// included, and on every platform; on GCP only with the setup's acceptance
-// of the risk (CheckThresholdOn). That is the
+// included. CheckThresholdOn adds the rules of the setup: t = n = 1 only
+// with signing_mode = single, and on GCP only with the setup's acceptance
+// of the risk. That is the
 // decision of the scope cut to single-node signers (the removal of key
 // generation among runners), not a consequence of the rule: with one
 // signing set there is nothing to overlap, and the cut accepts that one
@@ -53,17 +54,32 @@ const UnsafeSingleKeyWarning = "a single-node (1 of 1) signer on GCP holds the w
 	"a changed binding lets any principal, the admin's own account included, decrypt the sealing key outside any TEE, open the sealed key from the state bucket and sign a slashable pair; " +
 	"the protection is the project's IAM governance and the watchdog, not the TEE"
 
-// CheckThresholdOn is CheckThreshold for a signer with the platform part
-// p of its setup. A GCP signer holds a key alone (a single-node split,
-// t = n = 1) only when its setup accepts that
-// (sealing_key_release.unsafe_single_key_accepted, UnsafeSingleKeyWarning);
-// without the acceptance the split is refused on every chain, also with
-// sealing_key_release.no_lock_accepted. The setup has no single-node mode
-// of its own: a split of t = n = 1 in an import order is the single-node
-// trigger, so this check sits where that order's t and n are read.
-func CheckThresholdOn(p *PlatformConfig, genesisForkVersion backend.Version, t, n int) error {
-	if p.Platform == PlatformGCP && t == 1 && n == 1 && !p.SealingKeyRelease.UnsafeSingleKeyAccepted {
-		return fmt.Errorf("threshold 1 of 1 on gcp: a single-node signer on GCP is refused unless its setup accepts the risk (sealing_key_release.unsafe_single_key_accepted = true, signer-admin setup -allow-gcp-unsafe-single-key): %s", UnsafeSingleKeyWarning)
+// CheckThresholdOn is CheckThreshold for a signer with setup s: the split
+// must also fit the setup's signing_mode. A single-mode signer takes
+// t = n = 1 only, and on GCP only with the setup's acceptance of the risk
+// (sealing_key_release.unsafe_single_key_accepted, UnsafeSingleKeyWarning;
+// Setup.Check refuses a single-mode GCP setup without it, this checks it
+// again where the order's t and n are read). A threshold-mode signer
+// refuses t = n = 1, so a single-node signer exists only where the
+// approvers signed a setup that says so. The runner checks import orders
+// with it (tee-signer/server checkSplit); signer-admin setup and
+// import-draft check the same rule early.
+func CheckThresholdOn(s *Setup, t, n int) error {
+	switch s.SigningMode {
+	case SigningModeSingle:
+		if t != 1 || n != 1 {
+			return fmt.Errorf("threshold %d of %d: the setup says signing_mode = single, which takes whole keys (1 of 1) only; a split needs a setup with signing_mode = threshold", t, n)
+		}
+		p := &s.Platform
+		if p.Platform == PlatformGCP && !p.SealingKeyRelease.UnsafeSingleKeyAccepted {
+			return fmt.Errorf("threshold 1 of 1 on gcp: a single-node signer on GCP is refused unless its setup accepts the risk (sealing_key_release.unsafe_single_key_accepted = true, signer-admin setup -allow-gcp-unsafe-single-key): %s", UnsafeSingleKeyWarning)
+		}
+	case SigningModeThreshold:
+		if n == 1 {
+			return fmt.Errorf("threshold %d of 1: the setup says signing_mode = threshold, so this signer holds shares of splits with n >= 2, never a whole key; a single-node signer needs a setup with signing_mode = single", t)
+		}
+	default:
+		return fmt.Errorf("signing_mode %d: unknown, want threshold or single", s.SigningMode)
 	}
-	return CheckThreshold(genesisForkVersion, t, n)
+	return CheckThreshold(s.Chain.GenesisForkVersion, t, n)
 }

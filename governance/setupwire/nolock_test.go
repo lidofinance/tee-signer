@@ -42,7 +42,7 @@ func TestNoLockAccepted(t *testing.T) {
 			t.Errorf("trailing byte %d accepted", last)
 		}
 	}
-	for _, name := range []string{"setup-nitro", "setup-azure", "setup-dev"} {
+	for _, name := range []string{"setup-nitro", "setup-azure", "setup-dev-single", "setup-dev-threshold"} {
 		s := samples(t)[name]
 		s.Platform.SealingKeyRelease.NoLockAccepted = true
 		if _, err := s.Encode(); err == nil || !strings.Contains(err.Error(), "no_lock_accepted") {

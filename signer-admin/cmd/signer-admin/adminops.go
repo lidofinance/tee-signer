@@ -269,12 +269,13 @@ func cmdImportDraft(args []string, out io.Writer) error {
 		return fmt.Errorf("%s: no share index 1 to %d for %s", *splitPath, split.N, m.name)
 	}
 	// The target's own rule, so an order its runner refuses is not drafted
-	// (CheckThresholdOn: a 1 of 1 order to a GCP signer needs the setup's
-	// acceptance). A 1 of 1 order to a GCP signer is unsafe even with it,
+	// (CheckThresholdOn: the split must fit the setup's signing_mode, 1 of 1
+	// only for single and never for threshold, and a 1 of 1 order to a GCP
+	// signer needs the setup's acceptance). A 1 of 1 order to a GCP signer is unsafe even with it,
 	// so the drafter confirms it with -allow-gcp-unsafe-single-key and
 	// sees the warning; show prints the same line to each approver.
-	if err := setupwire.CheckThresholdOn(&m.setup.Platform, m.setup.Chain.GenesisForkVersion, int(split.T), int(split.N)); err != nil {
-		return err
+	if err := setupwire.CheckThresholdOn(m.setup, int(split.T), int(split.N)); err != nil {
+		return fmt.Errorf("%s (signing_mode %s): %w", m.name, m.setup.SigningMode, err)
 	}
 	if m.setup.Platform.Platform == setupwire.PlatformGCP && split.T == 1 && split.N == 1 {
 		if !*allowGCPSingle {
@@ -305,8 +306,8 @@ func cmdImportDraft(args []string, out io.Writer) error {
 	if err := writeActive(*outPath, m.setupRaw, lockedRaw); err != nil {
 		return err
 	}
-	fprintf(out, "import order for %s (setup %s): %d validators, %d of %d, share index %d, not after %s\n", m.name, hex8(m.setupHash),
-		len(b.Validators), b.T, b.N, b.ShareIndex, when(b.NotAfter))
+	fprintf(out, "import order for %s (setup %s, signing_mode %s): %d validators, %d of %d, share index %d, not after %s\n", m.name, hex8(m.setupHash),
+		m.setup.SigningMode, len(b.Validators), b.T, b.N, b.ShareIndex, when(b.NotAfter))
 	fprintf(out, "  approvers in force: locked version %d, %d of %d sign\n", r.version, locked.Approvers.ApprovalsNeeded, len(locked.Approvers.Keys))
 	fprintf(out, "order_sha256 %s\nwrote %s and %s\n", fullHex(importorder.Hash(raw)), *outPath, *outPath+".active")
 	return nil
@@ -360,6 +361,10 @@ func showImport(out io.Writer, path string, raw []byte, activePath string) error
 			fprintf(out, "target: the active values are not of this order's target\n")
 		} else {
 			fprintf(out, "target: %s, the setup of the active values; approvers of its locked version %d\n", a.setup.SignerName, a.ref.version)
+			fprintf(out, "target signing_mode = %s\n", a.setup.SigningMode)
+			if err := setupwire.CheckThresholdOn(a.setup, int(b.T), int(b.N)); err != nil {
+				fprintf(out, "WARNING %s: its runner refuses this order: %v\n", a.setup.SignerName, err)
+			}
 			// What import-draft printed to the drafter, for each approver
 			// before sign.
 			if single && a.setup.Platform.Platform == setupwire.PlatformGCP {

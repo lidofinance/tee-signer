@@ -19,10 +19,11 @@ import (
 
 var quietLog = slog.New(slog.NewTextHandler(io.Discard, nil))
 
-// sampleSetup is the sample setup of backend/setupwire for a platform.
-func sampleSetup(t *testing.T, platformName string) []byte {
+// sampleSetup is the sample setup setup-<name> of governance/setupwire
+// (nitro, azure, gcp, dev-single, ...).
+func sampleSetup(t *testing.T, name string) []byte {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join("..", "governance", "setupwire", "testdata", "setup-"+platformName+".bin"))
+	b, err := os.ReadFile(filepath.Join("..", "governance", "setupwire", "testdata", "setup-"+name+".bin"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +185,7 @@ func TestStateCopyFromSetup(t *testing.T) {
 func TestSetupSource(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "setup.bin")
-	if err := os.WriteFile(path, sampleSetup(t, "dev"), 0o600); err != nil {
+	if err := os.WriteFile(path, sampleSetup(t, "dev-single"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var events []string

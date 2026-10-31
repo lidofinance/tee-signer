@@ -68,7 +68,7 @@ func TestPolicyFromLeavesRefuses(t *testing.T) {
 			o[1].Value = append(slices.Clone(o[1].Value), 0)
 			return p, l, o
 		}, "trailing"},
-		{"format 2", func(p, l, o []Leaf) ([]Leaf, []Leaf, []Leaf) { p[0].Value = []byte{2}; return p, l, o }, "setup_format_version 2"},
+		{"format 1", func(p, l, o []Leaf) ([]Leaf, []Leaf, []Leaf) { p[0].Value = []byte{1}; return p, l, o }, "setup_format_version 1"},
 		{"zero salt", func(p, l, o []Leaf) ([]Leaf, []Leaf, []Leaf) { l[0].Salt = [32]byte{}; return p, l, o }, "salt"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

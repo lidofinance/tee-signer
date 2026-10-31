@@ -15,13 +15,14 @@ import (
 // cloudSetupText is the runbook's cluster file
 // (governance/docs/setup-phase-cloud-test.md, step 0): an Azure signer on
 // sharedneu, a Nitro signer with the lines nitroExtra, and a GCP signer.
-// format is the shared format line's value.
-func cloudSetupText(t *testing.T, format int, nitroExtra, azureExtra string) string {
+// format is the shared format line's value, mode the signing_mode line's.
+func cloudSetupText(t *testing.T, format int, mode, nitroExtra, azureExtra string) string {
 	t.Helper()
 	dir := t.TempDir()
 	keys := approvers(t, dir, 3)
 	var b strings.Builder
 	fmt.Fprintf(&b, `setup_format_version = %d
+signing_mode = %s
 handover_generation = 1
 genesis_validators_root = 0x4b36000000000000000000000000000000000000000000000000000000000000
 genesis_fork_version = 0x00000010
@@ -37,7 +38,7 @@ slashing_mark_prewrite.target_epochs = 2
 allowed_client_ca = %s
 max_keys = 8192
 slashing_log_min_lock_days = 1
-`, format, genesisTime(), secondsPerSlot, slotsPerEpoch, base64.StdEncoding.EncodeToString(caDER(t)))
+`, format, mode, genesisTime(), secondsPerSlot, slotsPerEpoch, base64.StdEncoding.EncodeToString(caDER(t)))
 	b.WriteString(lockedText(keys, 2, 0, fee1))
 	b.WriteString(openText())
 	b.WriteString(`
@@ -78,7 +79,7 @@ sealing_key_release.attest_audience = signer-runner-identity
 // section, the setup is made with the acceptance and the run prints the
 // warning. One dev signer on a test chain still makes a setup.
 func TestSetupSingleSignerOnEveryPlatform(t *testing.T) {
-	full := cloudSetupText(t, 1, "", "")
+	full := cloudSetupText(t, 2, "single", "", "")
 	for _, name := range []string{"gsigner-1", "gsigner-2", "gsigner-3"} {
 		shared, section := signerSection(t, full, name)
 		dir := t.TempDir()
@@ -102,7 +103,10 @@ func TestSetupSingleSignerOnEveryPlatform(t *testing.T) {
 			}
 			continue
 		}
-		wantIn(t, mustTool(t, "setup", "-out", filepath.Join(dir, "setups"), file), name+" setup_sha256")
+		wantIn(t, mustTool(t, "setup", "-out", filepath.Join(dir, "setups"), file), name+" setup_sha256", "signing_mode single")
+		// The same signer with signing_mode = threshold could hold no key.
+		thr := writeFile(t, filepath.Join(dir, "threshold.conf"), strings.Replace(shared, "signing_mode = single\n", "signing_mode = threshold\n", 1)+"\n[signer "+name+"]"+section)
+		wantIn(t, failTool(t, "setup", "-out", filepath.Join(dir, "thr"), thr), "signer "+name, "can hold no key", "signing_mode = threshold", "signing_mode = single")
 	}
 
 	dir := t.TempDir()
@@ -110,17 +114,22 @@ func TestSetupSingleSignerOnEveryPlatform(t *testing.T) {
 	mustTool(t, "setup", "-out", filepath.Join(dir, "setups"), one)
 }
 
-// -allow-gcp-unsafe-single-key is for a one-signer GCP file: with the
-// runbook's three signers it is refused, and names the key in a signer's
-// section as the way to accept there; with one signer that is not on GCP
-// it is refused too, and says so.
+// signing_mode and -allow-gcp-unsafe-single-key, checked before any
+// setup is made: a single-mode file has one signer; the flag needs
+// signing_mode = single, one signer, and that signer on GCP. Each refusal
+// says which rule and how to fix it.
 func TestSetupAllowGCPSingleFlagScope(t *testing.T) {
-	full := cloudSetupText(t, 1, "", "")
 	dir := t.TempDir()
-	three := writeFile(t, filepath.Join(dir, "three.conf"), full)
+	three := writeFile(t, filepath.Join(dir, "three.conf"), cloudSetupText(t, 2, "threshold", "", ""))
 	wantIn(t, failTool(t, "setup", "-allow-gcp-unsafe-single-key", "-out", filepath.Join(dir, "three"), three),
-		"-allow-gcp-unsafe-single-key: the file has 3 signers", "one-signer GCP cluster", "sealing_key_release.unsafe_single_key_accepted = true in a signer's section")
-	mustTool(t, "setup", "-out", filepath.Join(dir, "three"), three)
+		"-allow-gcp-unsafe-single-key: the file says signing_mode = threshold", "signing_mode = single")
+	wantIn(t, mustTool(t, "setup", "-out", filepath.Join(dir, "three"), three), "signing_mode threshold")
+	full := cloudSetupText(t, 2, "single", "", "")
+	threeSingle := writeFile(t, filepath.Join(dir, "three-single.conf"), full)
+	for _, extra := range [][]string{nil, {"-allow-gcp-unsafe-single-key"}} {
+		wantIn(t, failTool(t, append(append([]string{"setup"}, extra...), "-out", filepath.Join(dir, "three-single"), threeSingle)...),
+			"signing_mode = single: the file has 3 signers", "signing_mode = threshold for a split")
+	}
 	for _, name := range []string{"gsigner-1", "gsigner-2"} {
 		shared, section := signerSection(t, full, name)
 		one := writeFile(t, filepath.Join(dir, name+".conf"), shared+"\n[signer "+name+"]"+section)
@@ -128,6 +137,11 @@ func TestSetupAllowGCPSingleFlagScope(t *testing.T) {
 			"-allow-gcp-unsafe-single-key: signer "+name+" is on", "not on GCP")
 		mustTool(t, "setup", "-out", filepath.Join(dir, name), one)
 	}
+	// The key in a threshold file is refused too: the acceptance belongs
+	// to a single-mode setup.
+	shared, section := signerSection(t, cloudSetupText(t, 2, "threshold", "", ""), "gsigner-3")
+	keyed := writeFile(t, filepath.Join(dir, "keyed.conf"), shared+"\n[signer gsigner-3]"+section+"sealing_key_release.unsafe_single_key_accepted = true\n")
+	wantIn(t, failTool(t, "setup", "-out", filepath.Join(dir, "keyed"), keyed), "unsafe_single_key_accepted needs signing_mode = single")
 }
 
 // On mainnet a GCP runner starts only with sealing_key_release.no_lock_accepted
@@ -138,7 +152,7 @@ func TestSetupAllowGCPSingleFlagScope(t *testing.T) {
 // and both WARNING lines; the flag itself never sets no_lock_accepted.
 func TestSetupMainnetGCPSingleNeedsNoLockAccepted(t *testing.T) {
 	const name = "gsigner-3"
-	shared, section := signerSection(t, cloudSetupText(t, 1, "", ""), name)
+	shared, section := signerSection(t, cloudSetupText(t, 2, "single", "", ""), name)
 	mainnet := strings.Replace(shared, "genesis_fork_version = 0x00000010\n", "genesis_fork_version = 0x00000000\n", 1)
 	if mainnet == shared {
 		t.Fatal("cloudSetupText changed its genesis_fork_version line")
@@ -160,7 +174,7 @@ func TestSetupMainnetGCPSingleNeedsNoLockAccepted(t *testing.T) {
 	// A real split (3 of 4) on a mainnet cluster with a GCP signer that
 	// accepts neither still makes its setups: the acceptances are only
 	// for a key held alone.
-	threeFile := writeFile(t, filepath.Join(dir, "three.conf"), strings.Replace(cloudSetupText(t, 1, "", ""), "genesis_fork_version = 0x00000010\n", "genesis_fork_version = 0x00000000\n", 1))
+	threeFile := writeFile(t, filepath.Join(dir, "three.conf"), strings.Replace(cloudSetupText(t, 2, "threshold", "", ""), "genesis_fork_version = 0x00000010\n", "genesis_fork_version = 0x00000000\n", 1))
 	mustTool(t, "setup", "-out", filepath.Join(dir, "three"), threeFile)
 }
 
@@ -174,7 +188,7 @@ func TestSetupMainnetGCPSingleNeedsNoLockAccepted(t *testing.T) {
 // platform. A 1 of 1 order to a dev signer needs no flag.
 func TestImportDraftSingleGCP(t *testing.T) {
 	const name = "gsigner-3"
-	shared, section := signerSection(t, cloudSetupText(t, 1, "", ""), name)
+	shared, section := signerSection(t, cloudSetupText(t, 2, "single", "", ""), name)
 	dir := t.TempDir()
 	file := writeFile(t, filepath.Join(dir, "setup.conf"), shared+"\n[signer "+name+"]"+section)
 	mustTool(t, "setup", "-allow-gcp-unsafe-single-key", "-out", filepath.Join(dir, "setups"), file)
@@ -197,35 +211,58 @@ func TestImportDraftSingleGCP(t *testing.T) {
 		t.Fatalf("show without the active values claims to know the platform:\n%s", out)
 	}
 
-	// The same setup without the acceptance, as the runner would refuse
-	// the order: refused here too, flag or not, with the way to accept.
+	// A single-mode GCP setup without the acceptance is refused as a
+	// setup (setupwire.Setup.Check), so no order to it can be drafted.
 	s, err := setupwire.DecodeSetup(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.Platform.SealingKeyRelease.UnsafeSingleKeyAccepted = false
-	plain, err := s.Encode()
-	if err != nil {
-		t.Fatal(err)
-	}
-	plainCl := fakeClusterOf(t, filepath.Join(dir, "plain"), name, plain)
-	for _, extra := range [][]string{nil, {"-allow-gcp-unsafe-single-key"}} {
-		wantIn(t, failTool(t, append([]string{"import-draft", "-cluster", plainCl, "-signer", name, "-split", splitPath, "-out", filepath.Join(dir, "plain.bin")}, extra...)...),
-			"single-node signer on GCP", "unsafe_single_key_accepted = true")
+	if _, err := s.Encode(); err == nil || !strings.Contains(err.Error(), "unsafe_single_key_accepted = true") {
+		t.Fatalf("single-mode gcp setup without the acceptance: %v, want a refusal", err)
 	}
 
-	// A dev signer holds a key alone without any flag or warning.
-	fc := newFakeCluster(t)
-	mustTool(t, "pin", "-cluster", fc.cluster)
-	_, _, devSplit := split(t, fc.dir, 1, 1, []string{"s1"})
-	devBody := fc.path("dev.bin")
-	out = mustTool(t, "import-draft", "-cluster", fc.cluster, "-signer", "s1", "-split", devSplit, "-out", devBody)
+	// A single-mode dev signer holds a key alone without any flag or
+	// warning.
+	devDir := t.TempDir()
+	devConf := writeFile(t, filepath.Join(devDir, "setup.conf"), setupText(devDir, caDER(t), genesisTime(), lockedText(approvers(t, devDir, 3), 2, 0, fee1), "x1"))
+	mustTool(t, "setup", "-out", filepath.Join(devDir, "setups"), devConf)
+	devCl := fakeClusterOf(t, filepath.Join(devDir, "cl"), "x1", mustRead(t, filepath.Join(devDir, "setups", "x1.setup")))
+	_, _, devSplit := split(t, devDir, 1, 1, []string{"x1"})
+	devBody := filepath.Join(devDir, "dev.bin")
+	out = mustTool(t, "import-draft", "-cluster", devCl, "-signer", "x1", "-split", devSplit, "-out", devBody)
+	wantIn(t, out, "signing_mode single")
 	if strings.Contains(out, "WARNING") {
 		t.Fatalf("a 1 of 1 order to a dev signer warns:\n%s", out)
 	}
-	if out := mustTool(t, "show", devBody); strings.Contains(out, "WARNING") || strings.Contains(out, "holds the whole key") {
-		t.Fatalf("show of a 1 of 1 order to a dev signer, with its active values, warns:\n%s", out)
+	if out := mustTool(t, "show", devBody); strings.Contains(out, "WARNING") || strings.Contains(out, "holds the whole key") || !strings.Contains(out, "target signing_mode = single") {
+		t.Fatalf("show of a 1 of 1 order to a dev signer, with its active values:\n%s", out)
 	}
+}
+
+// import-draft refuses a split that does not fit the target's
+// signing_mode, as its runner would (setupwire.CheckThresholdOn): 1 of 1
+// to a signer of a threshold cluster, a share of a 2-of-3 split to a
+// single-mode signer. show names the target's mode.
+func TestImportDraftSigningMode(t *testing.T) {
+	fc := newFakeCluster(t)
+	mustTool(t, "pin", "-cluster", fc.cluster)
+	_, _, one := split(t, fc.dir, 1, 1, []string{"s1"})
+	wantIn(t, failTool(t, "import-draft", "-cluster", fc.cluster, "-signer", "s1", "-split", one, "-out", fc.path("one.bin")),
+		"s1 (signing_mode threshold)", "signing_mode = threshold", "signing_mode = single")
+	_, _, three := split(t, fc.dir, 2, 3, []string{"s1", "s2", "s3"})
+	body := fc.path("three.bin")
+	wantIn(t, mustTool(t, "import-draft", "-cluster", fc.cluster, "-signer", "s1", "-split", three, "-out", body), "signing_mode threshold", "2 of 3")
+	wantIn(t, mustTool(t, "show", body), "target signing_mode = threshold")
+
+	dir := t.TempDir()
+	conf := writeFile(t, filepath.Join(dir, "setup.conf"), setupText(dir, caDER(t), genesisTime(), lockedText(approvers(t, dir, 3), 2, 0, fee1), "x1"))
+	mustTool(t, "setup", "-out", filepath.Join(dir, "setups"), conf)
+	raw := mustRead(t, filepath.Join(dir, "setups", "x1.setup"))
+	cl := fakeClusterOf(t, filepath.Join(dir, "cl"), "x1", raw)
+	_, _, share := split(t, dir, 2, 3, []string{"x1", "y", "z"})
+	wantIn(t, failTool(t, "import-draft", "-cluster", cl, "-signer", "x1", "-split", share, "-out", filepath.Join(dir, "share.bin")),
+		"x1 (signing_mode single)", "takes whole keys (1 of 1) only")
 }
 
 // signerSection cuts one signer's section out of a cluster file and

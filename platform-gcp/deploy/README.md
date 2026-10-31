@@ -13,7 +13,8 @@ config, client CA, WIF provider, KMS key, identity audience
 (`sealing_key_release`), mark log (required) and state copy buckets, signer
 name, and optional network entry names. `signer-admin/cmd/setup-tool encode`
 makes the binary setup from a human `key = value` file
-(`governance/setuptext/testdata/setup-gcp.conf` is an example).
+(`governance/setuptext/testdata/setup-gcp.conf` is an example of a signer
+in a threshold cluster, `setup-gcp-single.conf` of a single-node signer).
 
 > **A single-node (1 of 1) signer on GCP is unsafe, and the runner refuses
 > it unless the setup accepts the risk.** Cloud KMS has no lock on the rule
@@ -26,10 +27,11 @@ makes the binary setup from a human `key = value` file
 > TEE, open the sealed key from the state bucket and sign a slashable
 > pair. AWS and Azure can lock their rule, and the runner checks the lock
 > (`signer-protocol/docs/protocol.md`, "Key rule lock"); GCP cannot, so a
-> GCP runner refuses an import order with t = n = 1. In a t-of-n split the
-> same change yields one share; with 1 of 1 it yields the key.
+> GCP setup with `signing_mode = single` is refused, and no runner starts
+> from it, unless it accepts the risk. In a t-of-n split the same change
+> yields one share; with 1 of 1 it yields the key.
 >
-> To accept the risk, put
+> To accept the risk, set `signing_mode = single` and put
 > `sealing_key_release.unsafe_single_key_accepted = true` in the signer's
 > setup file (with `signer-admin setup`, the flag
 > `-allow-gcp-unsafe-single-key` sets it for a one-signer GCP cluster; a
@@ -556,8 +558,8 @@ assumes the launcher's log is named `confidential-space-launcher`).
   no AWS SDK, no Azure code), which has no plaintext import at all (only the
   debug builds for local tests have it).
 - A share of a 1 of 1 split (the signer holds the whole key) is refused
-  unless the setup says `sealing_key_release.unsafe_single_key_accepted =
-  true`; the refusal says why, and the runner logs the warning at every
+  unless the setup says `signing_mode = single` and
+  `sealing_key_release.unsafe_single_key_accepted = true`; the refusal says why, and the runner logs the warning at every
   such import it takes ("Setup" above).
 
 ## Limits

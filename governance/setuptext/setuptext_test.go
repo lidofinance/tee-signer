@@ -55,7 +55,10 @@ func TestParseSetupRefusals(t *testing.T) {
 		{"format set twice", nitro + "setup_format_version = 1\n", "setup_format_version: set again"},
 		{"key missing", replaceLine(t, nitro, "approvals_needed", ""), "approvals_needed is missing"},
 		{"format missing", replaceLine(t, nitro, "setup_format_version", ""), "setup_format_version is missing"},
-		{"format 2", replaceLine(t, nitro, "setup_format_version", "setup_format_version = 2"), `setup_format_version: "2", want 1`},
+		{"format 1", replaceLine(t, nitro, "setup_format_version", "setup_format_version = 1"), `setup_format_version: "1", want 2`},
+		{"signing_mode missing", replaceLine(t, nitro, "signing_mode", ""), "signing_mode is missing"},
+		{"signing_mode unknown", replaceLine(t, nitro, "signing_mode", "signing_mode = solo"), `signing_mode: "solo": want threshold or single`},
+		{"signing_mode as a number", replaceLine(t, nitro, "signing_mode", "signing_mode = 2"), `signing_mode: "2": want threshold or single`},
 		{"old format key", nitro + "format = 2\n", `unknown key "format"`},
 		{"old safety key", nitro + "max_epochs_ahead = 2\n", `unknown key "max_epochs_ahead"`},
 		{"old locked key", nitro + "k = 2\n", `unknown key "k"`},
@@ -297,7 +300,7 @@ func TestParsePeerHosts(t *testing.T) {
 	if !strings.Contains(out, "\npeer_attestation_hosts = sharedneu.neu.attest.azure.net:443\n") {
 		t.Fatalf("human form:\n%s", out)
 	}
-	if strings.Contains(nitro, "peer_attestation_hosts") || !strings.Contains(nitro, "\nsetup_format_version = 1\n") {
+	if strings.Contains(nitro, "peer_attestation_hosts") || !strings.Contains(nitro, "\nsetup_format_version = 2\n") {
 		t.Fatal("a setup without hosts names them, or another format")
 	}
 }

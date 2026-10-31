@@ -114,7 +114,7 @@ A refusal caused by the restart floor carries
 
 | Type | Name | Request payload | OK body |
 | --- | --- | --- | --- |
-| 0x01 | HEALTH | empty | JSON of `backend.Health`; `setup` holds the setup state, `key_lock` the key rule lock and `single_key` the single-key acceptance ("Key rule lock"), `image` the image check ("Image check"), all unattested |
+| 0x01 | HEALTH | empty | JSON of `backend.Health`; `setup` holds the setup state, `key_lock` the key rule lock and `single_key` the single-key acceptance and `signing_mode` the setup's signing mode ("Key rule lock"), `image` the image check ("Image check"), all unattested |
 | 0x02 | PUBLIC_KEYS | empty | `count:u32` then `count` x key |
 | 0x03 | SIGN | `pubkey[48] kind:u8 domain[32] message`; kind 5: `pubkey[48] kind:u8 message` | `signature[96]` |
 | 0x04 | ATTEST | `nonce_len:u16 nonce version:u8` (nonce at most 1024 bytes, version 3) | `version:u8 setup_state attestation`, see below |
@@ -285,7 +285,7 @@ key_origin: reserved[4] imported_keys:u32 reserved[32]
 ```
 
 - `setup_hash`: SHA-256 over the context `signer-setup-v1`, `policy_root`
-  and `platform_commitment` (setup format 1, `attestation-verify/docs/attestation-statement.md`).
+  and `platform_commitment` (setup format 2, `attestation-verify/docs/attestation-statement.md`).
   A runner without a setup (the flag path of tests and local runners) puts the SHA-256 of its `-config` file here and zeros in the
   rest.
 - Per group, the state in force: the active version and the hash of the
@@ -349,11 +349,36 @@ platform has no real attestation`, and on other chains HEALTH's
 chains the runner starts; a failed read leaves
 `key_release_hash` zero and logs a warning.
 
+A signer holds keys alone (single-node, 1 of 1) only when its setup says
+so: `signing_mode`, a leaf of the public part of the setup (setup format
+2, `attestation-verify/docs/attestation-statement.md`), is `threshold` or
+`single`. The runner checks the split of every import order against it
+(`setupwire.CheckThresholdOn`, issue #23): a single-mode runner takes
+t = n = 1 only and refuses any share of a split with n > 1; a
+threshold-mode runner refuses t = n = 1 and applies the threshold rule
+(2t > n, and 2t - n >= 2 on mainnet) to every other split. Both
+refusals are `BAD_KEY` and name the setup's mode. The runner also checks
+each key against the mode on every import path (sealed, handover, the
+debug plain import) and at restart: a single-mode runner refuses a key
+whose public key is not the validator key, a threshold-mode runner one
+whose public key is the validator key (a share of a degenerate split is
+the whole key). An import is refused with `BAD_KEY`, and so is a split
+with a commitment at the point at infinity. At restart the record stays
+in the store, the key is not loaded, the start goes on and logs "some
+stored shares did not load" with the key's name and a request to remove
+the record; a handover from this runner refuses until it is removed,
+because the stored and loaded key sets differ. Single mode is allowed
+on every chain, mainnet included, on AWS and Azure. A handover keeps the
+mode: the source refuses a target whose published `signing_mode` differs
+from its own, as it refuses any other public value that differs.
+
 A GCP signer holds a key alone only with a second, separate acceptance:
-an import order with t = n = 1 is refused on GCP on every chain, with or
-without `no_lock_accepted`, unless the setup says
+a GCP setup with `signing_mode = single` is refused, so no runner starts
+from it, and an import order with t = n = 1 is refused on GCP on every
+chain, with or without `no_lock_accepted`, unless the setup says
 `sealing_key_release.unsafe_single_key_accepted = true`
-(`setupwire.CheckThresholdOn`). The refusal says why and how to accept.
+(`setupwire.Setup.Check`, `setupwire.CheckThresholdOn`). The acceptance
+is refused in a threshold-mode setup. The refusal says why and how to accept.
 Why it is unsafe (`setupwire.UnsafeSingleKeyWarning`): a 1 of 1 signer
 holds the whole validator key, and on GCP the rule that releases the
 sealing key is the IAM bindings of the Workload Identity pool and the KMS
@@ -375,13 +400,16 @@ setup` refuses it without. The human form carries the warning above the
 key; a GCP runner logs it at start and at every 1 of 1 import.
 `signer-admin import-draft` drafts a 1 of 1 order to a GCP signer only
 with `-allow-gcp-unsafe-single-key` and prints the WARNING line, and
-`show` of that order prints it to each approver before `sign`. The setup
-has no single-node mode of its own; t = n = 1 in an import order is the
-single-node trigger. On the other platforms a single-node signer is not a
-split, so the mainnet overlap rule (2t - n >= 2) does not apply to it; it
-applies to every real split. Tests: TestThresholdOnGCP,
-TestUnsafeSingleKeyAccepted (setupwire), TestImportSingleNode,
-TestHealthSingleKey (tee-signer/server),
+`show` of that order prints it to each approver before `sign`. A
+single-node signer is not a split, so the mainnet overlap rule
+(2t - n >= 2) does not apply to it; it applies to every real split.
+Tests: TestThresholdOn, TestSigningMode, TestSigningModeAcceptance,
+TestSampleSigningModes, TestUnsafeSingleKeyAccepted (setupwire),
+TestImportSigningMode, TestImportSampleSigningModes,
+TestSingleModeRefusesAnotherKey, TestThresholdModeRefusesAWholeKey,
+TestImportDegenerateSplit, TestHealthSingleKey,
+TestHandoverKeepsSigningMode (tee-signer/server),
+TestImportDraftSigningMode,
 TestSetupSingleSignerOnEveryPlatform, TestSetupAllowGCPSingleFlagScope,
 TestSetupMainnetGCPSingleNeedsNoLockAccepted, TestImportDraftSingleGCP
 (signer-admin).
@@ -391,12 +419,15 @@ HEALTH reports the result as `key_lock`: `locked`, `not_locked`, `none`
 `single_key` says whether the signer holds a key alone where that is
 unsafe: on GCP `accepted` (the setup says
 `sealing_key_release.unsafe_single_key_accepted`) or `refused`, and `n/a`
-on the other platforms. Runners without a setup leave all three out. The
+on the other platforms. `signing_mode` is the setup's `threshold` or
+`single`. Runners without a setup leave all four out. The
 setup state above does not carry them: its layout is the statement the
 circuits prove, and IDENTITY shares its version byte with ATTEST. So
 `key_lock` is not attested, and neither is `single_key`: the acceptance
 sits in the private part of the setup, which a verifier sees only as
-`platform_commitment`. The prover reads `key_lock` on the connection whose
+`platform_commitment`. `signing_mode` in HEALTH is not attested either,
+but it is a public leaf under `policy_root`, which the setup state
+carries, so a verifier with the published leaves checks it there. The prover reads `key_lock` on the connection whose
 IDENTITY it verified and pushes it along with the proof; the watchdog shows "key rule
 locked: yes, no, not possible (GCP) or unread" per signer and warns on no
 or unread for a mainnet cluster. A zero `key_release_hash` in the proof
