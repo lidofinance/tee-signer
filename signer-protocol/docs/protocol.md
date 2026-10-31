@@ -117,9 +117,9 @@ A refusal caused by the restart floor carries
 | 0x01 | HEALTH | empty | JSON of `backend.Health`; `setup` holds the setup state, `key_lock` the key rule lock and `single_key` the single-key acceptance ("Key rule lock"), `image` the image check ("Image check"), all unattested |
 | 0x02 | PUBLIC_KEYS | empty | `count:u32` then `count` x key |
 | 0x03 | SIGN | `pubkey[48] kind:u8 domain[32] message`; kind 5: `pubkey[48] kind:u8 message` | `signature[96]` |
-| 0x04 | ATTEST | `nonce_len:u16 nonce version:u8` (nonce at most 1024 bytes, version 3) | `version:u8 setup_state attestation`, see below |
+| 0x04 | ATTEST | `nonce_len:u16 nonce version:u8` (nonce at most 1024 bytes, version 1) | `version:u8 setup_state attestation`, see below |
 | 0x05 | IMPORT_SHARE | see below (debug build, dev platform only) | key |
-| 0x06 | IDENTITY | `nonce_len:u16 nonce version:u8` (version 3) | identity, see below |
+| 0x06 | IDENTITY | `nonce_len:u16 nonce version:u8` (version 1) | identity, see below |
 | 0x07 | IMPORT_SHARE_SEALED | see below | key |
 | 0x09 | APPROVE_EXIT | a signed exit approval (governance/exitapproval) | empty |
 | 0x08 | CONFIG_UPDATE | the signed update, see below (a runner with a setup) | `version:u8 outcome:u8 setup_state` |
@@ -492,7 +492,7 @@ fails when a default-flavour binary holds its name.
 ### ATTEST body
 
 ```
-version:u8 (3)  setup_state
+version:u8 (1)  setup_state
 platform_len:u8 platform  format_len:u8 format
 user_data_len:u16 user_data  doc_len:u32 document
 ```
@@ -529,7 +529,7 @@ platform but `dev`. The release build, which the cloud images use, has no
 ### IDENTITY body
 
 ```
-version:u8 (3)  setup_state  kem:u16 kdf:u16 aead:u16  import_key_len:u16 import_key
+version:u8 (1)  setup_state  kem:u16 kdf:u16 aead:u16  import_key_len:u16 import_key
 tls_key_hash_len:u8 tls_key_hash  attestation (as in ATTEST, from platform_len on)
 ```
 
@@ -742,7 +742,7 @@ A runner with a setup takes approver-signed config updates (code in
 
 ```
 request = update                           1 .. 65536 bytes, governance/setupwire's 'U' layout
-answer  = version:u8 (3)  outcome:u8  setup_state
+answer  = version:u8 (1)  outcome:u8  setup_state
 ```
 
 - `update` is the signed update as `signer-admin` makes it: the body
