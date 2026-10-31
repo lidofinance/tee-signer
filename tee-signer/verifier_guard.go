@@ -2,7 +2,7 @@
 
 // A build set that must not compile. A cloud runner built without
 // verifierselect links every attestation verifier of
-// attestation-verify/runnerclient, the dev one included, which accepts
+// attestation-verify/runnerclient/verify, the dev one included, which accepts
 // unsigned documents. scripts/common.sh (runner_tags) sets verifierselect
 // with the platform tag of every runner build, and runnerbuild, which only
 // the runner builds have: the module tests build with the platform tags

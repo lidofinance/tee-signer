@@ -66,7 +66,7 @@ checks() {
       b="$BUILD/$HOST_ARCH/bin/runner-aws-debugimport"; [ -x "$b" ] && dbg+=(RUNNER_AWS_DEBUG_BIN="$b")
       env "${dbg[@]}" go test $RACE -count=1 -v ./... || return 1
       local p
-      for p in azure aws gcp dev; do go test $RACE -count=1 -tags "verifierselect,platform_$p" ./runnerclient || return 1; done ;;
+      for p in azure aws gcp dev; do go test $RACE -count=1 -tags "verifierselect,platform_$p" ./runnerclient/verify || return 1; done ;;
     devkit)
       go test $RACE -count=1 -v ./... || return 1
       go test $RACE -count=1 -tags lockcheck ./lockorder || return 1 ;;

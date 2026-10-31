@@ -55,7 +55,11 @@ The azure branch is `azureid.Verify`, a small package of its own so that
 
 `runnerclient` builds a runner client from settings. The signing
 client (`backend.cloud.config`), its `cloud-import` tool and
-`signer-admin/cmd/share-import` all use it, so they apply the same checks:
+`signer-admin/cmd/share-import` all use it, so they apply the same checks.
+The settings and the verifiers are in `runnerclient/verify`, which the
+runner links for its handover checks without the client (dialing, TLS,
+`signer-protocol/remote`); `runnerclient.Attestation` is
+`verify.Attestation`.
 
 ```go
 c := runnerclient.Connection{
@@ -86,7 +90,7 @@ cl, err := c.New() // refuses a bad or incomplete configuration
   INDEX=HEX` and `-gcp-hwmodel NAME`, both repeated, `-nitro-root-sha256`,
   `-gcp-image-digest`, `-gcp-audience`, `-gcp-issuer`, `-gcp-jwks-file`,
   `-gcp-service-account`.
-- Setup settings, for every verifier (`setup.go`). After the platform check, every
+- Setup settings, for every verifier (`verify/setup.go`). After the platform check, every
   connection checks the setup state of the verified identity:
 
   | Setting | Flag | Rule |

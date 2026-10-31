@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
+	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/verify"
 	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/platform"
@@ -77,7 +77,7 @@ type tgtEnv struct {
 // generation 2: approvers 1 to 3, k = 2, max_keys 1024, changed by change.
 func newTgtEnv(t *testing.T, platName string, change func(s *setupwire.Setup)) *tgtEnv {
 	t.Helper()
-	if !runnerclient.Available(runnerclient.VerifierDev) {
+	if !verify.Available(verify.VerifierDev) {
 		t.Skip("the made-up source has a dev document: build with platform_dev and verifierselect, or without verifierselect")
 	}
 	raw, err := os.ReadFile(filepath.Join("..", "..", "governance", "setupwire", "testdata", "setup-dev.bin"))

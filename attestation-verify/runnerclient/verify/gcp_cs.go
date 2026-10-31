@@ -1,6 +1,6 @@
 //go:build !verifierselect || platform_gcp
 
-package runnerclient
+package verify
 
 import (
 	"context"
@@ -13,8 +13,8 @@ import (
 	"strings"
 
 	"github.com/lidofinance/tee-signer/attestation-verify"
+	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/internal/optset"
 	"github.com/lidofinance/tee-signer/signer-protocol"
-	"github.com/lidofinance/tee-signer/signer-protocol/remote"
 )
 
 // What a Confidential Space runner puts in its attestation
@@ -110,7 +110,7 @@ func (a *Attestation) gcp() (gcpSettings, error) {
 }
 
 // gcpVerifier returns the gcp-cs verifier for the settings.
-func (a *Attestation) gcpVerifier(o *options) (remote.VerifyFunc, error) {
+func (a *Attestation) gcpVerifier(o *optset.Options) (VerifyFunc, error) {
 	g, err := a.newGCP(o)
 	if err != nil {
 		return nil, err
@@ -119,7 +119,7 @@ func (a *Attestation) gcpVerifier(o *options) (remote.VerifyFunc, error) {
 }
 
 // gcpDocumentVerifier returns the gcp-cs document verifier.
-func (a *Attestation) gcpDocumentVerifier(o *options) (DocumentVerifier, error) {
+func (a *Attestation) gcpDocumentVerifier(o *optset.Options) (DocumentVerifier, error) {
 	g, err := a.newGCP(o)
 	if err != nil {
 		return nil, err
@@ -127,14 +127,14 @@ func (a *Attestation) gcpDocumentVerifier(o *options) (DocumentVerifier, error) 
 	return g.verifyDocument, nil
 }
 
-func (a *Attestation) newGCP(o *options) (*gcpVerifier, error) {
+func (a *Attestation) newGCP(o *optset.Options) (*gcpVerifier, error) {
 	s, err := a.gcp()
 	if err != nil {
 		return nil, err
 	}
 	return &gcpVerifier{
 		opts: s.opts,
-		keys: &keySource{name: "Confidential Space", issuer: s.issuer, http: o.http, pinned: s.pinned},
+		keys: &keySource{name: "Confidential Space", issuer: s.issuer, http: o.HTTP, pinned: s.pinned},
 	}, nil
 }
 

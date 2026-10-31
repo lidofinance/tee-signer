@@ -7,7 +7,7 @@
 // operator's tool (signer-admin/cmd/handover-target) passes the sealed pages
 // on with the order. Every release build with a setup serves it: the
 // verifier of the source's origin proof is the one of this runner's own
-// platform (attestation-verify/runnerclient, tag verifierselect).
+// platform (attestation-verify/runnerclient/verify, tag verifierselect).
 //
 // Each request is checked in full, and refused with nothing stored when a
 // check fails:
@@ -59,7 +59,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
+	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/verify"
 	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-protocol"
@@ -71,7 +71,7 @@ import (
 type HandoverImportOptions struct {
 	// VerifierOptions go to the source's verifier (the platform's HTTP
 	// client for the key sets).
-	VerifierOptions []runnerclient.Option
+	VerifierOptions []verify.Option
 	// LimitedEgress and PeerEndpoints: on a runner that reaches only its
 	// setup's peer hosts (setup.AttestationEgress), every host the source's
 	// verifier fetches a key set from must be one of them.
@@ -88,7 +88,7 @@ func (s *Server) EnableHandoverImport(o HandoverImportOptions) error {
 	case s.Hooks == nil || !s.Hooks.Mode().MarkLog:
 		return errors.New("handover import needs the mark log")
 	}
-	s.imp = &importer{s: s, opt: o, verifiers: map[[32]byte]runnerclient.DocumentVerifier{}, proven: map[[64]byte]bool{}}
+	s.imp = &importer{s: s, opt: o, verifiers: map[[32]byte]verify.DocumentVerifier{}, proven: map[[64]byte]bool{}}
 	if cur := s.importing(); cur != nil {
 		s.Log.Warn("handover import in progress: nothing is signed until every handed-over share is in",
 			"order", hex.EncodeToString(cur.Hash[:6]), "keys_held", len(s.Signer.Keys()))
@@ -110,7 +110,7 @@ type importer struct {
 	mark *backend.Watermark
 	// verifiers are the source verifiers by order hash, so a key set is
 	// fetched once.
-	verifiers map[[32]byte]runnerclient.DocumentVerifier
+	verifiers map[[32]byte]verify.DocumentVerifier
 	// proven holds the origin keys whose proof verified: order hash, then
 	// the key.
 	proven map[[64]byte]bool
@@ -158,18 +158,18 @@ func (im *importer) checkOrder(o *handoverorder.Order, hash [32]byte) error {
 // sourceVerifier is the verifier of the order's source: the settings the
 // order names, a verifier built into this runner, the dev verifier on the
 // dev platform only, and key set hosts this runner reaches.
-func (im *importer) sourceVerifier(b *handoverorder.Body, hash [32]byte) (runnerclient.DocumentVerifier, error) {
+func (im *importer) sourceVerifier(b *handoverorder.Body, hash [32]byte) (verify.DocumentVerifier, error) {
 	im.mu.Lock()
 	defer im.mu.Unlock()
 	if v, ok := im.verifiers[hash]; ok {
 		return v, nil
 	}
 	p := b.Source
-	a := runnerclient.RunnerAttestation(&p)
+	a := verify.RunnerAttestation(&p)
 	switch {
-	case !runnerclient.Available(a.Verifier):
+	case !verify.Available(a.Verifier):
 		return nil, fmt.Errorf("the source's verifier %q is not built into this runner", a.Verifier)
-	case a.Verifier == runnerclient.VerifierDev && !im.dev():
+	case a.Verifier == verify.VerifierDev && !im.dev():
 		return nil, fmt.Errorf("the source has the dev verifier, which accepts unsigned documents; refused on platform %s", im.s.Platform.Name)
 	}
 	if im.opt.LimitedEgress {

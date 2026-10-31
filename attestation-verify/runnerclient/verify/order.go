@@ -1,4 +1,4 @@
-package runnerclient
+package verify
 
 import (
 	"encoding/hex"

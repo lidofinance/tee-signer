@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/attestation-verify/internal/testgen"
+	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/verify"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
@@ -47,8 +48,8 @@ func TestDocumentVerifiers(t *testing.T) {
 	}{
 		{"aws-nitro", nitroGood(), []Option{withNitroRoots(nitro.ca.Root)}, nitroDoc},
 		{"azure-maa", Attestation{Verifier: VerifierAzureMAA, MAAHost: maa.host, CCEPolicySHA256: goodHostData},
-			[]Option{WithHTTPClient(maa.srv.Client())}, maaDoc},
-		{"gcp-cs", gcpGood(maa.issuer), []Option{WithHTTPClient(maa.srv.Client())}, gcpDoc},
+			[]Option{verify.WithHTTPClient(maa.srv.Client())}, maaDoc},
+		{"gcp-cs", gcpGood(maa.issuer), []Option{verify.WithHTTPClient(maa.srv.Client())}, gcpDoc},
 		{"dev", Attestation{Verifier: VerifierDev}, nil, devDoc},
 	}
 	for _, c := range cases {

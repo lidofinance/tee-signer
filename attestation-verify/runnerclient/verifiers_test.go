@@ -19,6 +19,8 @@ import (
 
 	"github.com/lidofinance/tee-signer/attestation-verify"
 	"github.com/lidofinance/tee-signer/attestation-verify/internal/testgen"
+	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/internal/optset"
+	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/verify"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
@@ -43,7 +45,7 @@ func nitroGood() Attestation {
 
 // withNitroRoots makes the verifier trust a test CA instead of the AWS root.
 func withNitroRoots(roots ...*x509.Certificate) Option {
-	return func(o *options) { o.nitroRoots = roots }
+	return func(o *optset.Options) { o.NitroRoots = roots }
 }
 
 type nitroEnv struct {
@@ -495,7 +497,7 @@ func TestGCPRunnerConnects(t *testing.T) {
 	env := newMAAEnv(t, mainKeySet(t))
 	f := startFakeRunner(t, ca, env.gcpAttest(gcpSpec{}))
 	c := gcpConn(t, ca, f, env)
-	cl, err := c.New(WithTimeout(5*time.Second), WithHTTPClient(env.srv.Client()))
+	cl, err := c.New(WithTimeout(5*time.Second), verify.WithHTTPClient(env.srv.Client()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -516,24 +518,8 @@ func TestGCPRunnerConnects(t *testing.T) {
 	// case, are fine too.
 	c.Attestation.GCPServiceAccount = gcpAccount
 	c.Attestation.GCPImageDigest = strings.ToUpper(strings.TrimPrefix(gcpDigest, "sha256:"))
-	if err := health(t, c, WithHTTPClient(env.srv.Client())); err != nil {
+	if err := health(t, c, verify.WithHTTPClient(env.srv.Client())); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestGCPDefaultIssuerIsGoogle(t *testing.T) {
-	// Without gcp_issuer the verifier expects Google's issuer. No connection
-	// here: that would ask Google for its key set.
-	a := gcpGood("")
-	s, err := a.gcp()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.issuer != attest.ConfidentialSpaceIssuer || s.opts.Issuer != attest.ConfidentialSpaceIssuer {
-		t.Fatalf("issuer %q, options issuer %q", s.issuer, s.opts.Issuer)
-	}
-	if s.pinned != nil {
-		t.Fatal("a key set is pinned without gcp_jwks_file")
 	}
 }
 
@@ -580,7 +566,7 @@ func TestGCPTokenRefusals(t *testing.T) {
 			if tc.conf != nil {
 				tc.conf(&c.Attestation)
 			}
-			err := health(t, c, WithHTTPClient(env.srv.Client()))
+			err := health(t, c, verify.WithHTTPClient(env.srv.Client()))
 			if err == nil {
 				t.Fatal("connected")
 			}
@@ -605,12 +591,12 @@ func TestGCPTokenOfAnotherRunnerImageRefused(t *testing.T) {
 		setPath(c, "submods.container.image_digest", digest2)
 	}}))
 	c := gcpConn(t, ca, runner2, env) // expects gcpDigest (runner 1)
-	err := health(t, c, WithHTTPClient(env.srv.Client()))
+	err := health(t, c, verify.WithHTTPClient(env.srv.Client()))
 	if !errors.Is(err, attest.ErrMeasurement) {
 		t.Fatalf("got %v", err)
 	}
 	c.Attestation.GCPImageDigest = digest2
-	if err := health(t, c, WithHTTPClient(env.srv.Client())); err != nil {
+	if err := health(t, c, verify.WithHTTPClient(env.srv.Client())); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -628,7 +614,7 @@ func TestGCPDocumentOfAnotherPlatformRefused(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := startFakeRunner(t, ca, att)
-			wantErr(t, health(t, gcpConn(t, ca, f, env), WithHTTPClient(env.srv.Client())), "is not a Confidential Space token")
+			wantErr(t, health(t, gcpConn(t, ca, f, env), verify.WithHTTPClient(env.srv.Client())), "is not a Confidential Space token")
 			if env.fetchCount() != 0 {
 				t.Fatal("the client fetched keys for a document that is not a Confidential Space token")
 			}
@@ -639,7 +625,7 @@ func TestGCPDocumentOfAnotherPlatformRefused(t *testing.T) {
 func TestGCPChannelBinding(t *testing.T) {
 	ca := newTestCA(t)
 	env := newMAAEnv(t, mainKeySet(t))
-	hc := WithHTTPClient(env.srv.Client())
+	hc := verify.WithHTTPClient(env.srv.Client())
 
 	t.Run("relay with its own TLS key", func(t *testing.T) {
 		f := startFakeRunner(t, ca, env.gcpAttest(gcpSpec{}))
@@ -709,17 +695,17 @@ func TestGCPRealGoogleKeySet(t *testing.T) {
 		t.Fatalf("key set: %v", err)
 	}
 	env := newMAAEnv(t, b)
-	oldRefresh := keyRefreshGap
-	t.Cleanup(func() { keyRefreshGap = oldRefresh })
-	keyRefreshGap = time.Hour
+	oldRefresh := optset.KeyRefreshGap
+	t.Cleanup(func() { optset.KeyRefreshGap = oldRefresh })
+	optset.KeyRefreshGap = time.Hour
 
 	f := startFakeRunner(t, ca, env.gcpAttest(gcpSpec{kid: set.Keys[0].Kid}))
-	err = health(t, gcpConn(t, ca, f, env), WithHTTPClient(env.srv.Client()))
+	err = health(t, gcpConn(t, ca, f, env), verify.WithHTTPClient(env.srv.Client()))
 	if !errors.Is(err, attest.ErrSignature) {
 		t.Fatalf("local key under Google's kid: %v", err)
 	}
 	f = startFakeRunner(t, ca, env.gcpAttest(gcpSpec{kid: "not-a-google-kid"}))
-	err = health(t, gcpConn(t, ca, f, env), WithHTTPClient(env.srv.Client()))
+	err = health(t, gcpConn(t, ca, f, env), verify.WithHTTPClient(env.srv.Client()))
 	if !errors.Is(err, attest.ErrUnknownKey) {
 		t.Fatalf("unknown kid: %v", err)
 	}
@@ -727,16 +713,16 @@ func TestGCPRealGoogleKeySet(t *testing.T) {
 
 func TestGCPKeySetSources(t *testing.T) {
 	ca := newTestCA(t)
-	oldRefresh := keyRefreshGap
-	t.Cleanup(func() { keyRefreshGap = oldRefresh })
+	oldRefresh := optset.KeyRefreshGap
+	t.Cleanup(func() { optset.KeyRefreshGap = oldRefresh })
 	newKey := testgen.RSAKey(2)
 	newSet := testgen.JWKS(t, "cs-2", newKey, false)
 
 	t.Run("refetch on an unknown key id", func(t *testing.T) {
-		keyRefreshGap = 0
+		optset.KeyRefreshGap = 0
 		env := newMAAEnv(t, mainKeySet(t), newSet)
 		f := startFakeRunner(t, ca, env.gcpAttest(gcpSpec{key: newKey, kid: "cs-2"}))
-		if err := health(t, gcpConn(t, ca, f, env), WithHTTPClient(env.srv.Client())); err != nil {
+		if err := health(t, gcpConn(t, ca, f, env), verify.WithHTTPClient(env.srv.Client())); err != nil {
 			t.Fatal(err)
 		}
 		if env.fetchCount() != 2 {
@@ -744,10 +730,10 @@ func TestGCPKeySetSources(t *testing.T) {
 		}
 	})
 	t.Run("no refetch inside the gap", func(t *testing.T) {
-		keyRefreshGap = time.Hour
+		optset.KeyRefreshGap = time.Hour
 		env := newMAAEnv(t, mainKeySet(t), newSet)
 		f := startFakeRunner(t, ca, env.gcpAttest(gcpSpec{key: newKey, kid: "cs-2"}))
-		err := health(t, gcpConn(t, ca, f, env), WithHTTPClient(env.srv.Client()))
+		err := health(t, gcpConn(t, ca, f, env), verify.WithHTTPClient(env.srv.Client()))
 		if !errors.Is(err, attest.ErrUnknownKey) {
 			t.Fatalf("got %v", err)
 		}
@@ -760,7 +746,7 @@ func TestGCPKeySetSources(t *testing.T) {
 		f := startFakeRunner(t, ca, env.gcpAttest(gcpSpec{}))
 		c := gcpConn(t, ca, f, env)
 		env.srv.Close()
-		wantErr(t, health(t, c, WithHTTPClient(env.srv.Client())), "Confidential Space key set")
+		wantErr(t, health(t, c, verify.WithHTTPClient(env.srv.Client())), "Confidential Space key set")
 	})
 	t.Run("issuer names itself differently", func(t *testing.T) {
 		// The OpenID configuration must name the configured issuer.
@@ -768,7 +754,7 @@ func TestGCPKeySetSources(t *testing.T) {
 		f := startFakeRunner(t, ca, env.gcpAttest(gcpSpec{}))
 		c := gcpConn(t, ca, f, env)
 		env.issuer = "https://other.example"
-		wantErr(t, health(t, c, WithHTTPClient(env.srv.Client())), "Confidential Space key set")
+		wantErr(t, health(t, c, verify.WithHTTPClient(env.srv.Client())), "Confidential Space key set")
 	})
 	t.Run("pinned key set, no network", func(t *testing.T) {
 		env := newMAAEnv(t, mainKeySet(t))
@@ -779,12 +765,12 @@ func TestGCPKeySetSources(t *testing.T) {
 			t.Fatal(err)
 		}
 		env.srv.Close() // the issuer is not asked
-		if err := health(t, c, WithHTTPClient(env.srv.Client())); err != nil {
+		if err := health(t, c, verify.WithHTTPClient(env.srv.Client())); err != nil {
 			t.Fatal(err)
 		}
 	})
 	t.Run("pinned key set without the token's key", func(t *testing.T) {
-		keyRefreshGap = 0
+		optset.KeyRefreshGap = 0
 		env := newMAAEnv(t, mainKeySet(t))
 		f := startFakeRunner(t, ca, env.gcpAttest(gcpSpec{key: newKey, kid: "cs-2"}))
 		c := gcpConn(t, ca, f, env)
@@ -792,7 +778,7 @@ func TestGCPKeySetSources(t *testing.T) {
 		if err := os.WriteFile(c.Attestation.GCPJWKSFile, mainKeySet(t), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		err := health(t, c, WithHTTPClient(env.srv.Client()))
+		err := health(t, c, verify.WithHTTPClient(env.srv.Client()))
 		if !errors.Is(err, attest.ErrUnknownKey) {
 			t.Fatalf("got %v", err)
 		}

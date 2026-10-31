@@ -3,8 +3,9 @@
 // HANDOVER_ORDER and HANDOVER as a source (signer-protocol docs/protocol.md,
 // "Handover"), so every image can hand its shares to the next one. Every
 // release build with a setup serves it: the attestation verifier it checks
-// a target with is the one of its own platform (attestation-verify/runnerclient,
-// tag verifierselect), the same one its own import uses.
+// a target with is the one of its own platform
+// (attestation-verify/runnerclient/verify, tag verifierselect), the same one
+// its own import uses.
 //
 // The order. k approvers in force sign a handover order that names this
 // runner's setup as the source and one target: its setup_hash, its image
@@ -89,7 +90,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
+	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/verify"
 	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-core/core"
@@ -104,7 +105,7 @@ import (
 type HandoverSourceOptions struct {
 	// VerifierOptions go to the target's verifier (the platform's HTTP
 	// client for the key sets).
-	VerifierOptions []runnerclient.Option
+	VerifierOptions []verify.Option
 	// LimitedEgress and PeerEndpoints: on a runner that reaches only its
 	// setup's peer hosts (setup.AttestationEgress), every host the target's
 	// verifier fetches a key set from must be one of them.
@@ -152,7 +153,7 @@ type sourceHandover struct {
 	proofOrder [32]byte
 	// verifier is the target verifier of verifierOrder, kept so its key
 	// set is fetched once for every page.
-	verifier      runnerclient.DocumentVerifier
+	verifier      verify.DocumentVerifier
 	verifierOrder [32]byte
 }
 
@@ -317,16 +318,16 @@ func (u *Updates) TrustedTime() (uint64, error) {
 // targetVerifier is the verifier of the order's target: the settings the
 // order names, a verifier built into this runner, the dev verifier on the
 // dev platform only, and key set hosts this runner reaches.
-func (h *sourceHandover) targetVerifier(b *handoverorder.Body, hash [32]byte) (runnerclient.DocumentVerifier, error) {
+func (h *sourceHandover) targetVerifier(b *handoverorder.Body, hash [32]byte) (verify.DocumentVerifier, error) {
 	if h.verifier != nil && h.verifierOrder == hash {
 		return h.verifier, nil
 	}
 	p := b.Target
-	a := runnerclient.RunnerAttestation(&p)
+	a := verify.RunnerAttestation(&p)
 	switch {
-	case !runnerclient.Available(a.Verifier):
+	case !verify.Available(a.Verifier):
 		return nil, fmt.Errorf("handover order: target verifier %q is not built into this runner", a.Verifier)
-	case a.Verifier == runnerclient.VerifierDev && !h.dev():
+	case a.Verifier == verify.VerifierDev && !h.dev():
 		return nil, fmt.Errorf("handover order: the dev verifier accepts unsigned documents, refused on platform %s", h.s.Platform.Name)
 	}
 	if h.opt.LimitedEgress {

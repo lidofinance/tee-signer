@@ -59,6 +59,7 @@ import (
 
 	"github.com/lidofinance/tee-signer/attestation-verify"
 	"github.com/lidofinance/tee-signer/attestation-verify/internal/testgen"
+	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/verify"
 	remoteadmin "github.com/lidofinance/tee-signer/signer-admin/remote/admin"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
@@ -530,7 +531,7 @@ func TestE2EAzureRunner(t *testing.T) {
 		return Connection{Address: r.addr, ClientCert: cert, ClientKey: key,
 			Attestation: Attestation{Verifier: VerifierAzureMAA, MAAHost: env.host, CCEPolicySHA256: goodHostData}}
 	}
-	opts := []Option{WithHTTPClient(env.srv.Client())}
+	opts := []Option{verify.WithHTTPClient(env.srv.Client())}
 
 	t.Run("runner and verifier agree", func(t *testing.T) {
 		c := conn(good)
@@ -589,7 +590,7 @@ func TestE2EAzureRunner(t *testing.T) {
 		other := newMAAEnv(t, mainKeySet(t))
 		c := conn(good)
 		c.Attestation.MAAHost = other.host
-		if err := health(t, c, WithHTTPClient(other.srv.Client())); !errors.Is(err, attest.ErrIssuer) {
+		if err := health(t, c, verify.WithHTTPClient(other.srv.Client())); !errors.Is(err, attest.ErrIssuer) {
 			t.Fatalf("got %v", err)
 		}
 	})
@@ -762,7 +763,7 @@ func TestE2EAzureRunnerMarkLogLostState(t *testing.T) {
 		}
 		c := Connection{Address: r.addr, ClientCert: cert, ClientKey: key,
 			Attestation: Attestation{Verifier: VerifierAzureMAA, MAAHost: env.host, CCEPolicySHA256: goodHostData}}
-		cl, err := c.New(WithHTTPClient(env.srv.Client()), WithTimeout(10*time.Second))
+		cl, err := c.New(verify.WithHTTPClient(env.srv.Client()), WithTimeout(10*time.Second))
 		if err != nil {
 			t.Fatal(err)
 		}

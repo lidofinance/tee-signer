@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/lidofinance/tee-signer/attestation-verify"
+	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/verify"
 )
 
 // cloud.json settings -> order runner -> settings: the order carries
@@ -29,7 +30,7 @@ func TestOrderRunnerRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", a.Verifier, err)
 		}
-		back := RunnerAttestation(&p)
+		back := verify.RunnerAttestation(&p)
 		if back.Verifier != a.Verifier || back.SetupSHA256 != strings.Repeat("51", 1)+strings.Repeat("00", 31) {
 			t.Fatalf("%s: %+v", a.Verifier, back)
 		}
@@ -113,7 +114,7 @@ func TestEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	back := RunnerAttestation(&p)
+	back := verify.RunnerAttestation(&p)
 	if got := back.Endpoints(); !reflect.DeepEqual(got, cs) {
 		t.Fatalf("from the order: %v", got)
 	}
