@@ -246,7 +246,6 @@ func importCmd(args []string) error {
 	dir := fs.String("pages", "", "the folder handover-source wrote")
 	parallel := fs.Int("parallel", 4, "requests at a time, each on its own connection")
 	per := fs.Int("batch", 32, "shares per request")
-	asImported := fs.Bool("as-imported", false, "skip the origin checks: for a target that cannot check the source's origin proof")
 	limit := fs.Int("limit", 0, "store at most this many new shares, then stop (a first look, or a test of the resume); 0: all")
 	fs.Parse(args)
 	if *connPath == "" || *orderPath == "" || *dir == "" {
@@ -391,10 +390,6 @@ func importCmd(args []string) error {
 	fmt.Fprintf(os.Stderr, "importing %d shares in %d requests (%d at a time), %d held already, total %d; mark target %d source %d block %d\n",
 		len(seen)-skipped, len(work), *parallel, skipped, m.Total, m.Mark.TargetEpoch, m.Mark.SourceEpoch, m.Mark.BlockSlot)
 
-	var flags uint8
-	if *asImported {
-		flags = handover.ImportAsImported
-	}
 	start := time.Now()
 	jobs := make(chan batch)
 	var mu sync.Mutex
@@ -421,7 +416,7 @@ func importCmd(args []string) error {
 				for _, i := range b.idx {
 					p.Shares = append(p.Shares, b.page.Shares[i])
 				}
-				r, err := send(ctx, c, &handover.ImportRequest{Flags: flags, Order: order, Page: &p})
+				r, err := send(ctx, c, &handover.ImportRequest{Order: order, Page: &p})
 				mu.Lock()
 				if err != nil {
 					firstErr = cmpErr(firstErr, err)

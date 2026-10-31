@@ -68,14 +68,9 @@ func Seal(id *backend.Identity, req *backend.SealedImportRequest, secret *[32]by
 // import's header: for a share in another message (handover), whose
 // header says more. The caller must have verified id first.
 func SealAAD(id *backend.Identity, aad []byte, secret *[32]byte) ([]byte, error) {
-	k, d, a := Suite()
-	if id.ImportKEM != k || id.ImportKDF != d || id.ImportAEAD != a {
-		return nil, fmt.Errorf("sealedimport: runner offers suite %#04x/%#04x/%#04x, want %#04x/%#04x/%#04x (hybrid ML-KEM-768-X25519)",
-			id.ImportKEM, id.ImportKDF, id.ImportAEAD, k, d, a)
-	}
-	pub, err := kem.NewPublicKey(id.ImportKey)
+	pub, err := recipient(id)
 	if err != nil {
-		return nil, fmt.Errorf("sealedimport: import key: %w", err)
+		return nil, err
 	}
 	enc, s, err := hpke.NewSender(pub, kdf, aead, []byte(info))
 	if err != nil {
@@ -88,6 +83,27 @@ func SealAAD(id *backend.Identity, aad []byte, secret *[32]byte) ([]byte, error)
 	out := binary.BigEndian.AppendUint16(nil, uint16(len(enc)))
 	out = append(out, enc...)
 	return append(out, ct...), nil
+}
+
+// CheckRecipient reports whether shares can be sealed to id: it offers
+// this package's suite and a valid import key. A runner with sealed import
+// off offers neither.
+func CheckRecipient(id *backend.Identity) error {
+	_, err := recipient(id)
+	return err
+}
+
+func recipient(id *backend.Identity) (hpke.PublicKey, error) {
+	k, d, a := Suite()
+	if id.ImportKEM != k || id.ImportKDF != d || id.ImportAEAD != a {
+		return nil, fmt.Errorf("sealedimport: runner offers suite %#04x/%#04x/%#04x, want %#04x/%#04x/%#04x (hybrid ML-KEM-768-X25519)",
+			id.ImportKEM, id.ImportKDF, id.ImportAEAD, k, d, a)
+	}
+	pub, err := kem.NewPublicKey(id.ImportKey)
+	if err != nil {
+		return nil, fmt.Errorf("sealedimport: import key: %w", err)
+	}
+	return pub, nil
 }
 
 // Open decrypts the share in req. The caller still checks that the share's

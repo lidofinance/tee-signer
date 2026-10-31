@@ -382,8 +382,10 @@ fresh log, carries that config as version 0 of both groups.
 - The origin proof must verify with the verifier and image the order names
   for the source (the dev verifier on the dev platform only), and every
   share's header under the origin key. A runner that cannot check the
-  proof refuses, unless the request asks to skip the origin checks
-  (`handover-target import -as-imported`).
+  proof refuses. A request that asks to skip these checks is refused.
+- A target with sealed import off refuses the reservation, and a source
+  refuses a target whose identity offers no import key or another suite,
+  before it writes its tombstone.
 - Each share opens with this boot's import key under its header and the
   carry's hash, so a lowered mark, an edited origin or an edited carry does
   not open. The carried exits go into the mark log before the import ends. The mark log is raised

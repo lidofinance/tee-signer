@@ -795,6 +795,12 @@ func (h *sourceHandover) checkTarget(ctx context.Context, q *handover.Request, b
 			return bad("the target is reserved for another order (kind %d, %x)", st.Order.Kind, st.Order.Hash[:8])
 		}
 	}
+	// Before the tombstone: a target that cannot take sealed shares (sealed
+	// import off, or another suite) would leave this runner retired with
+	// nowhere to hand over to.
+	if err := sealedimport.CheckRecipient(id); err != nil {
+		return bad("the target cannot take sealed shares: %v", err)
+	}
 	return id, pub.Policy, nil
 }
 

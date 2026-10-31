@@ -31,8 +31,9 @@
 //     source holds as generated (made inside a runner of an earlier build)
 //     keeps that origin and its order hash; any other counts as imported. A
 //     build without the source's verifier, or the dev
-//     verifier off the dev platform, refuses, unless the request asks to
-//     count every share as imported (ImportAsImported);
+//     verifier off the dev platform, refuses. A request that asks to skip
+//     these checks (ImportAsImported) is refused: only the source's
+//     shares may fill or end the import;
 //   - every share opens with this boot's import key under its header and,
 //     the hash of the page's carry (the mark, the origin, the key set and
 //     the day's exits are in the associated data), and is the share of its
@@ -195,7 +196,6 @@ func (im *importer) sourceVerifier(b *handoverorder.Body, hash [32]byte) (runner
 // checkOrigin verifies the page's origin proof (once per order and key)
 // and the origin signature of each share in fresh.
 func (im *importer) checkOrigin(ctx context.Context, b *handoverorder.Body, hash [32]byte, page *handover.Response, fresh []int) error {
-	const hint = " (a target that cannot check the origin may skip the origin checks: handover-target import -as-imported)"
 	var id [64]byte
 	copy(id[:32], hash[:])
 	copy(id[32:], page.Origin.Key[:])
@@ -206,11 +206,11 @@ func (im *importer) checkOrigin(ctx context.Context, b *handoverorder.Body, hash
 		verify, err := im.sourceVerifier(b, hash)
 		if err != nil {
 			im.s.Log.Warn("handover import refused: origin proof", "err", err)
-			return backend.Refused(backend.StatusBadKey, "handover import: origin proof: %v%s", err, hint)
+			return backend.Refused(backend.StatusBadKey, "handover import: origin proof: %v", err)
 		}
 		if err := verify(ctx, page.Origin.Nonce, handover.OriginUserData(hash, page.Origin.Key), page.Origin.Attestation); err != nil {
 			im.s.Log.Warn("handover import refused: origin proof", "err", err)
-			return backend.Refused(backend.StatusBadKey, "handover import: origin proof: %v%s", err, hint)
+			return backend.Refused(backend.StatusBadKey, "handover import: origin proof: %v", err)
 		}
 		im.mu.Lock()
 		im.proven[id] = true
@@ -287,6 +287,10 @@ func (im *importer) start(ctx context.Context, hash [32]byte, total uint32) erro
 // replaced, not reused.
 func (im *importer) reserve(ctx context.Context, o *handoverorder.Order, hash [32]byte) ([]byte, error) {
 	s := im.s
+	if s.ImportKey == nil {
+		// A source would retire for a target that cannot take its shares.
+		return nil, backend.Refused(backend.StatusUnsupported, "handover import: sealed share import is disabled (-sealed-import=false); a handover target needs it")
+	}
 	if err := im.checkOrder(o, hash); err != nil {
 		return nil, err
 	}
@@ -337,6 +341,12 @@ func (im *importer) importShares(ctx context.Context, payload []byte) ([]byte, e
 	if err != nil {
 		return nil, im.refuse("%v", err)
 	}
+	if q.Flags&handover.ImportAsImported != 0 {
+		// Without the origin checks anyone with the target's admin role
+		// could fill and end the import with shares of their own, before
+		// the source hands over.
+		return nil, im.refuse("the origin checks are required; a request that skips them (as imported) is no longer taken")
+	}
 	o, err := handoverorder.Decode(q.Order)
 	if err != nil {
 		return nil, im.refuse("%v", err)
@@ -348,9 +358,8 @@ func (im *importer) importShares(ctx context.Context, payload []byte) ([]byte, e
 	}
 	page := q.Page
 	// The page's mark and every share's maxima within the clock horizon
-	// before anything is written (SHC-02), also under ImportAsImported,
-	// which skips the origin checks: a far-future mark would raise the
-	// locked log and stop this runner until real time passed it.
+	// before anything is written (SHC-02): a far-future mark would raise
+	// the locked log and stop this runner until real time passed it.
 	if markstore.IsTombstone(page.Mark) {
 		return nil, im.refuse("the page carries the handover tombstone as its mark")
 	}
@@ -414,8 +423,7 @@ func (im *importer) importShares(ctx context.Context, payload []byte) ([]byte, e
 		return nil, err
 	}
 
-	asImported := q.Flags&handover.ImportAsImported != 0
-	if len(fresh) > 0 && !asImported {
+	if len(fresh) > 0 {
 		if err := im.checkOrigin(ctx, b, hash, page, fresh); err != nil {
 			return nil, err
 		}
@@ -446,7 +454,7 @@ func (im *importer) importShares(ctx context.Context, payload []byte) ([]byte, e
 	// above, or else one held already.
 	authed := len(fresh) > 0
 	if !authed && cur != nil && cur.Hash == hash {
-		authed = im.carryOpens(ctx, b, hash, page, carryHash, asImported)
+		authed = im.carryOpens(ctx, b, hash, page, carryHash)
 	}
 
 	if starting && len(fresh) == 0 {
@@ -508,7 +516,7 @@ func (im *importer) importShares(ctx context.Context, payload []byte) ([]byte, e
 		stored++
 	}
 	s.Log.Info("handover import: request", "order", hex.EncodeToString(hash[:6]), "shares", len(page.Shares), "stored", stored,
-		"held_before", len(page.Shares)-len(fresh), "as_imported", asImported, "ms", time.Since(start).Milliseconds())
+		"held_before", len(page.Shares)-len(fresh), "ms", time.Since(start).Milliseconds())
 	return im.answer(ctx, hash, page, outcomes, authed)
 }
 
@@ -523,13 +531,13 @@ func (s *Server) loadedShare(pk backend.Pubkey) (backend.Pubkey, bool) {
 }
 
 // carryOpens reports whether a share of page that this runner holds
-// already opens under the page's carry, with its origin checked unless
-// asImported: then the carry came from the source with it. A request of
-// held shares only can end the import only so.
-func (im *importer) carryOpens(ctx context.Context, b *handoverorder.Body, hash [32]byte, page *handover.Response, carryHash [32]byte, asImported bool) bool {
+// already opens under the page's carry, with its origin checked: then the
+// carry came from the source with it. A request of held shares only can
+// end the import only so.
+func (im *importer) carryOpens(ctx context.Context, b *handoverorder.Body, hash [32]byte, page *handover.Response, carryHash [32]byte) bool {
 	for i := range page.Shares {
 		sh := &page.Shares[i]
-		if !asImported && im.checkOrigin(ctx, b, hash, page, []int{i}) != nil {
+		if im.checkOrigin(ctx, b, hash, page, []int{i}) != nil {
 			continue
 		}
 		sec, err := im.s.ImportKey.OpenAAD(sh.Sealed, sh.AAD(carryHash))

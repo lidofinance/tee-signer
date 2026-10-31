@@ -36,9 +36,10 @@ const ImportVersion = 1
 
 // Request flags.
 const (
-	// ImportAsImported skips the origin checks (the source's origin proof
-	// and each header's signature): for a target built without the
-	// verifier of the source's platform, by the operator's choice.
+	// ImportAsImported asked the target to skip the origin checks (the
+	// source's origin proof and each header's signature). Runners refuse
+	// a request that sets it: only the source's shares may fill or end an
+	// import.
 	ImportAsImported uint8 = 1
 )
 

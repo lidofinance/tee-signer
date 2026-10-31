@@ -661,18 +661,23 @@ func TestHandoverImportNeedsAnEmptyTarget(t *testing.T) {
 	refusedImport(t, err, backend.StatusBadRequest, "pending")
 }
 
-// Off the dev platform the dev source's proof is refused; the operator can
-// skip the origin checks instead.
-func TestHandoverImportAsImported(t *testing.T) {
+// Off the dev platform the dev source's proof is refused, and a request
+// that asks to skip the origin checks is refused too: nothing is stored
+// and no import starts.
+func TestHandoverImportNeedsTheOriginChecks(t *testing.T) {
 	e := newTgtEnv(t, "nitro", nil)
 	src := newSource(t, 5, testMark)
 	order, hash := e.order([]byte{1, 2}, nil)
 	page := src.pages(e.sealTo(), hash, 8)[0]
 	_, err := e.imp(order, page, 0)
-	refusedImport(t, err, backend.StatusBadKey, "-as-imported")
-	r := e.mustImp(order, page, handover.ImportAsImported)
-	if !r.Done || r.Imported != 5 {
-		t.Fatalf("%+v", r)
+	refusedImport(t, err, backend.StatusBadKey, "origin proof")
+	_, err = e.imp(order, page, handover.ImportAsImported)
+	refusedImport(t, err, backend.StatusBadRequest, "origin checks are required")
+	if n := len(e.srv.Signer.Keys()); n != 0 {
+		t.Fatalf("%d keys stored", n)
+	}
+	if o := e.srv.importing(); o != nil {
+		t.Fatalf("an import slot is set: %x", o.Hash[:8])
 	}
 }
 

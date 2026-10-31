@@ -7,10 +7,9 @@ import (
 
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/slashing-log"
-	"github.com/lidofinance/tee-signer/tee-signer/handover"
 )
 
-// SHC-02: a handover import, ImportAsImported included, takes the page's
+// SHC-02: a handover import takes the page's
 // mark and each share's maxima only within the clock horizon, and never the
 // tombstone. Before, a far-future mark raised the locked log and stopped
 // the runner until real time passed it. The refusal comes before any
@@ -25,7 +24,7 @@ func TestSHC02HandoverMarkAboveTheHorizonRefused(t *testing.T) {
 			src := newSource(t, 2, mark)
 			order, hash := e.order([]byte{1, 2}, nil)
 			page := src.pages(e.sealTo(), hash, 8)[0]
-			if _, err := e.imp(order, page, handover.ImportAsImported); err == nil {
+			if _, err := e.imp(order, page, 0); err == nil {
 				t.Fatal("the import took the mark")
 			} else if backend.StatusOf(err) != backend.StatusBadRequest {
 				t.Logf("refused: %v", err)
