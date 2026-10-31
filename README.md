@@ -48,6 +48,13 @@ every module builds and tests on its own.
 | [devkit](devkit) | Test helpers: fuzz oracles and driver, goroutine leak and lock order checks |
 | [tests](tests) | End-to-end tests across modules, against the built runners |
 
+## Security scope
+
+[SECURITY-SCOPE.md](SECURITY-SCOPE.md) marks each module as PERIMETER (runs
+in the TEE and guards keys or slashing; untrusted input must not get past it)
+or PERIPHERY (untrusted by design), with the reason. Deep review goes to the
+perimeter first. `scripts/loc.sh zones` sums the code of each zone.
+
 ## Build
 
 Inside an Ubuntu 22.04 or 24.04 workbench (native, WSL2 or a VM), with Go

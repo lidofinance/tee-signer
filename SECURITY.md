@@ -23,7 +23,8 @@ Please include:
 Please refer to the [Lido Bug Bounty page on Immunefi](https://immunefi.com/bounty/lido) for details on what is considered within the bug bounty program's scope.
 
 Issues affecting key custody, slashing safety or approval checks are especially
-important in this repository.
+important in this repository. [SECURITY-SCOPE.md](SECURITY-SCOPE.md) marks which
+modules are the perimeter, where untrusted input must not get past.
 
 This code is not audited and not for production use yet. Test keys and test networks only.
 
