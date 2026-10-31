@@ -104,7 +104,7 @@ func TestRoundTrip(t *testing.T) {
 }
 
 // The hash is over the body only: signatures do not change it, and it is
-// under the handover order's context, not another order's.
+// under the handover order's context, not the import order's.
 func TestHash(t *testing.T) {
 	s := sampleSetup(t)
 	b := sampleBody(s)
