@@ -117,7 +117,10 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
 - `trusted-time/nts`: the cgo binding; `KeyExchange` (TLS 1.3 only, ALPN
   `ntske/1`, the ALPN check Go leaves to the caller, `ExportKeyingMaterial`
   with the label and contexts from Rust, certificate validity checked against
-  a clock the caller passes); `Association.Query` over a connected UDP socket
+  a clock the caller passes, not the system clock: a zero time from that
+  clock stops the exchange before the dial, and during the handshake
+  becomes `nts.NoTrustedTime` (1970), which no certificate covers. Go's
+  `crypto/x509` would read a zero time as `time.Now()`); `Association.Query` over a connected UDP socket
   (refused packets do not end the wait: they may be forgeries); pinned roots
   per operator in `roots/` with their source in `roots.go`.
 - `runner/clock.NTS`: polls each server every 32 s (at least 16 s apart,
@@ -135,11 +138,27 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   exactly when |drift_ppm| > 500 + drift_err_ppm. The HTTPS-date quorum is
   the coarse check (NTS time outside -30 s to +31 s of it is refused: 30 s
   plus the Date header's 1 s resolution), the certificate clock of NTS-KE
-  and the NTP era. Its `Anchored` clock ages on `CLOCK_MONOTONIC_RAW` too.
+  (no reading: NTS-KE is refused) and the NTP era. Its `Anchored` clock ages on `CLOCK_MONOTONIC_RAW` too.
   There is no fallback to it.
+
+  Residual: the HTTPS-date sources' own TLS checks their certificates
+  against the system clock, because the platform HTTP clients set no
+  `Time` (`httpsdate.go`). A host that sets the system clock and holds
+  leaked certificates for a majority of the coarse hosts can answer their
+  `Date` headers itself, move the coarse clock, and with it the time NTS-KE
+  checks certificates at. Without such certificates, setting the system
+  clock moves neither. Dropping HTTPS-date as a clock source (#61) may
+  close this; until then it is the residual.
 - `tee-signer/platforms_nts.go`: `-nts-clock` (or `RUNNER_NTS_CLOCK=1`) gives a
   tagged runner the NTS clock, with `-nts-coarse-urls`, `-nts-wait` and
-  `-nts-max-bound` (or their variables; a set flag wins). `-clock https-date`
+  `-nts-max-bound` (or their variables; a set flag wins). With no quorum
+  within `-nts-wait` (90 s by default) the start fails and the runner exits
+  with the peers' status in its error line, which goes to the host on
+  Nitro. The supervisor starts it again: `restartPolicy` `OnFailure` on
+  ACI, `tee-restart-policy=OnFailure` on Confidential Space, the operator
+  or the parent's service manager on Nitro. A runner that went on without
+  a quorum would load no share (each share's restart floor reads the
+  clock) and would not load them once the quorum formed. `-clock https-date`
   next to it is refused, since main would replace the NTS clock with it.
   The clock dials through the platform (`platform.Platform.Dial`; nil is
   the default dialer). `runner -nts-clock-check`
@@ -250,7 +269,13 @@ as the calling user, with `--network none`. It stops if the compiler is not
 the commit named in `scripts/common.sh`. The image is built locally and its
 layer holds files with the date of the build, so a rebuild is not expected to
 have the same digest. The pins that count are the base image digest, the
-commit of rustc and the rust-std hash from the release manifest.
+commit of rustc and the sums of each target's standard library
+(`NTS_STD_SHA256_x86_64` and `NTS_STD_SHA256_aarch64` in
+`scripts/common.sh`: the sha256 of the sorted file sums under
+`lib/rustlib/<target>`). rustup checks the aarch64 rust-std only against
+the release manifest it downloads from the same server, so the pin is what
+keeps a changed download out of the build. A Rust update changes all
+three.
 
 ## Crates and where they live
 

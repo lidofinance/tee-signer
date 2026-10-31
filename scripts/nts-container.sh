@@ -3,13 +3,14 @@
 # architecture, as an unprivileged user, with no network. Not for the host.
 #
 # In: NTS_TARGET (Rust target), NTS_CROOT (where the sources are mounted),
-# NTS_RUSTC_COMMIT (the compiler this build is pinned to), NTS_TEST (1: run the
+# NTS_RUSTC_COMMIT (the compiler this build is pinned to), NTS_STD_SHA256 (the
+# standard library of NTS_TARGET this build is pinned to), NTS_TEST (1: run the
 # tests of signer-nts and signer-nts-core first, on x86_64 only).
 # Out, in /out: libsigner_nts.a, and the no_std checks of the core:
 # core-features.txt (cargo tree -e features) and libsigner_nts_nostd_check.a.
 set -euo pipefail
 umask 022
-: "${NTS_TARGET:?}" "${NTS_CROOT:?}" "${NTS_RUSTC_COMMIT:?}" "${CARGO_HOME:?}" "${CARGO_TARGET_DIR:?}"
+: "${NTS_TARGET:?}" "${NTS_CROOT:?}" "${NTS_RUSTC_COMMIT:?}" "${NTS_STD_SHA256:?}" "${CARGO_HOME:?}" "${CARGO_TARGET_DIR:?}"
 
 mkdir -p "$HOME" "$CARGO_HOME"
 
@@ -46,6 +47,14 @@ got="$(rustc -vV | sed -n 's/^commit-hash: //p')"
 [ "$got" = "$NTS_RUSTC_COMMIT" ] || { echo "rustc is $got, this build is pinned to $NTS_RUSTC_COMMIT" >&2; exit 1; }
 installed="$(rustup target list --installed)"
 grep -qx "$NTS_TARGET" <<<"$installed" || { echo "the standard library for $NTS_TARGET is not installed" >&2; exit 1; }
+# rustup checked the aarch64 rust-std only against the release manifest it
+# downloaded from the same server; this checks the installed files against
+# the pin.
+nts_std_sum() {
+  (cd "$(rustc --print sysroot)/lib/rustlib/$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+}
+got="$(nts_std_sum "$NTS_TARGET")"
+[ "$got" = "$NTS_STD_SHA256" ] || { echo "the standard library for $NTS_TARGET sums to $got, this build is pinned to $NTS_STD_SHA256" >&2; exit 1; }
 
 # Every absolute path the compiler or cargo could write into the archive is
 # mapped to a fixed one: the mount point of the sources, the crates, the cargo

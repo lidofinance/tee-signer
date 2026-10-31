@@ -4,8 +4,10 @@ package clock
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"math"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -452,4 +454,41 @@ func testClock() time.Time { return testStart.Add(time.Duration(nts.Monotonic() 
 func opt(o ntstest.NTPOptions) ntstest.NTPOptions {
 	o.Clock = testClock
 	return o
+}
+
+// Without a coarse time the certificate clock gives the zero time, and
+// KeyExchange refuses it before it dials: the cause shows in the error,
+// and no certificate is checked at the system clock.
+func TestNTSCertificateClockWithoutCoarseTime(t *testing.T) {
+	n := &NTS{Coarse: &coarseClock{Err: errors.New("no coarse reading")}}
+	if got := n.certTime(); !got.IsZero() {
+		t.Fatalf("certificate time without a coarse reading: %v", got)
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	dialed := make(chan struct{}, 1)
+	go func() {
+		if c, err := l.Accept(); err == nil {
+			dialed <- struct{}{}
+			c.Close()
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err = nts.KeyExchange(ctx, nts.KEConfig{Host: "nts.test", Addr: l.Addr().String(), Roots: x509.NewCertPool(), Time: n.certTime})
+	if err == nil || !strings.Contains(err.Error(), "no trusted time") {
+		t.Fatalf("key exchange without a coarse time: %v", err)
+	}
+	select {
+	case <-dialed:
+		t.Fatal("key exchange dialed without a certificate time")
+	case <-time.After(100 * time.Millisecond):
+	}
+	n.Coarse = &coarseClock{}
+	if got := n.certTime(); got.Year() < 2026 {
+		t.Fatalf("certificate time with a coarse reading: %v", got)
+	}
 }
