@@ -24,6 +24,12 @@ func TestEncodeMainnetGCPSingleNeedsNoLockAccepted(t *testing.T) {
 	if mainnet == string(text) {
 		t.Fatal("the sample changed its genesis_fork_version line")
 	}
+	// A 1-of-1 GCP signer holds a whole key: signing_mode = single.
+	singleMode := strings.Replace(mainnet, "\nsigning_mode = threshold\n", "\nsigning_mode = single\n", 1)
+	if singleMode == mainnet {
+		t.Fatal("the sample changed its signing_mode line")
+	}
+	mainnet = singleMode
 	dir := t.TempDir()
 	write := func(name, extra string) string {
 		p := filepath.Join(dir, name)
