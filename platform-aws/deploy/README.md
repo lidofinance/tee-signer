@@ -90,19 +90,37 @@ SETUP=signer-2.bin platform-aws/deploy/parent-run.sh               # on the pare
   sealing key, so keep those shares and that blob together, apart from
   the old set. Then put the copy back as `sealing/datakey.kms` with the
   old shares and start. The runner uses it only if `shares/` lists
-  something at that start. A wrong copy shows as shares that do not
-  unseal: move the current blob aside again and try the next copy.
-- The share check is weak on its own: any object under `shares/` passes
-  it. The barrier behind it is the mark log, whose claim refuses stored
-  shares without a record that opens, but before the lock the admin can
-  plant such a record too
-  (`kms:Encrypt` under a mark log key's context). So for mainnet, create
-  the key with its final, locked policy, or, if the key had a mutable
+  something at that start. A wrong copy stops the start with "the stored
+  sealing key opens 0 of N stored shares": move the current blob aside
+  again and try the next copy.
+- Any object under `shares/` makes the platform take the stored blob, and
+  the host writes the store. So the runner treats a key from a stored
+  blob as unproven: before it loads a share or seals a new one, every
+  share listed at that start must unseal under the key, and at least one
+  must be listed (`server.ProveSealingKey`). Otherwise the start stops
+  and names the shares that did not open. A planted blob next to junk
+  under `shares/`, or next to the runner's own shares, fails this. Remove
+  what does not belong under `shares/`, and if no share opens, move the
+  blob aside as well, then restart. While the image check holds the
+  shares sealed, the check cannot run, so the runner seals no share
+  until a restart with the image allowed.
+- That check needs a share sealed under the planted key, and whoever
+  planted the key can make one: the key is theirs, and the share's AAD
+  (setup_hash, log_id, public key) is public. On a fresh store the mark
+  log's claim then refuses stored shares without a record that opens, but
+  before the lock the admin can plant such a record too (`kms:Encrypt`
+  under a mark log key's context). So the runner's checks raise the cost
+  of the attack; only a key that never had a mutable phase rules it out.
+  For mainnet, create the key with its final, locked policy:
+  `key_policy_locked = true` in `main.tf` and `target/main.tf`, or
+  `create-key` with the locked policy (below). If the key had a mutable
   phase, check its CloudTrail history before the first start: no
   `CreateGrant`, no `Encrypt` under a context other than
   `purpose=record-creds`, and every `PutKeyPolicy` reviewed. CloudTrail
   must have logged KMS management events in the key's region for the
-  whole mutable phase, or the history proves nothing.
+  whole mutable phase, or the history proves nothing. With a locked
+  creation, the history to check is one `CreateKey` whose policy hashes
+  to the `key_release_sha256` the verifiers pin.
 - KMS grants are eventually consistent: a grant can take up to about five
   minutes to show in `ListGrants`. Start the runner at least five minutes
   after the last `CreateGrant` in CloudTrail, or run `aws kms list-grants`
@@ -115,7 +133,16 @@ SETUP=signer-2.bin platform-aws/deploy/parent-run.sh               # on the pare
   policy with `scripts/kms-policy.sh render`, check the PCRs against the
   build and the principals against the deploy, and run it through the
   lock check (`policyLock` in `platform-aws/nitro`, as its tests do)
-  before `create-key`.
+  before `create-key`. `main.tf` and `target/main.tf` do the same with
+  `key_policy_locked = true`: the admin gets no `kms:PutKeyPolicy` and
+  Terraform sets `bypass_policy_lockout_safety_check`. Run Terraform as
+  `admin_role_arn` then, since no other principal can read the key
+  afterwards. The policy never changes again: a new image gets a new key
+  (`target/main.tf`, a handover), so set `prev_pcrs` at creation if a
+  rollback image should keep this key. The variable has no default.
+  Setting it to true on an existing key makes Terraform lock that key's
+  policy for good, so keep `false` for a devnet key that should stay
+  mutable.
 - The routes follow from the setup over a fixed port map: KMS and STS of
   the key release region on vsock 8000 and 8001, `www.cloudflare.com` on
   8002, the mark bucket on 8004, NTS-KE on 8005 to 8008, and the setup's
@@ -662,7 +689,7 @@ The full order of a deploy, with the setup, is in
    `udprelay` for the parent's arch), then `scripts/nitro-eif.sh` (with
    `ARCH=aarch64` for Graviton). Note the PCRs it prints.
 2. `terraform apply` of `main.tf` with `pcr0`, `pcr1`, `pcr2`, the
-   `admin_role_arn`, `ami_id`, `subnet_id` and, if wanted, `mark_bucket`,
+   `admin_role_arn`, `key_policy_locked` (true for mainnet, see "Setup"), `ami_id`, `subnet_id` and, if wanted, `mark_bucket`,
    `entry_cidrs`, `ssh_public_key` and `ssh_cidrs`. Terraform state stays
    outside the repo.
 3. The writer credentials (see "Clone guard", steps 2 and 3).

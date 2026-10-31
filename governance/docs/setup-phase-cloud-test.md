@@ -291,7 +291,10 @@ AWS (Terraform in `<terraform-dir>`):
 1. Copy this repo's `platform-aws/deploy/main.tf` over the folder's (keep a backup).
    `generic.auto.tfvars`: `pcr0`, `pcr1`, `pcr2` from the build,
    `prev_pcrs` the PCRs of the image before it, if any (so a rollback needs
-   no policy change), `mark_bucket = "<S3_BUCKET>"`.
+   no policy change), `mark_bucket = "<S3_BUCKET>"`, and
+   `key_policy_locked = false`: this test's key exists and stays mutable,
+   and `true` would make Terraform lock its policy for good. A mainnet key
+   is created with `true` (`platform-aws/deploy/README.md`, AWS-KMS-02).
 2. `terraform plan`. Expect two changes and no other: `aws_kms_key.enclave`
    (the PCRs, and `kms:Encrypt` for the admin only with exactly
    `purpose=record-creds`) and `aws_s3_bucket_policy.marks[0]` (create: the
