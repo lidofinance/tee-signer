@@ -34,7 +34,8 @@ Every commit is signed (GPG or SSH, with a key on your GitHub account).
   build changes. All required CI checks must pass.
   On a pull request CI fuzzes only the modules the change touches and
   the modules that depend on them (`scripts/affected.sh`); a docs-only
-  change fuzzes nothing. A push to main fuzzes everything.
+  change fuzzes nothing. A push to main fuzzes everything, and a nightly
+  run (`fuzz-nightly.yml`) fuzzes every target for 30 s.
 - Get at least one reviewer approval. The author does not count.
 - Squash when merging; the final commit follows the rules above.
 

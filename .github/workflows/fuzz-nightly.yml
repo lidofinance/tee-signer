@@ -1,0 +1,62 @@
+# Every fuzz target of main, each for longer than on a pull request: the
+# Go targets for 30 s, the C targets (signer-core, markformat) for 30 s.
+# Runs nightly and by hand (workflow_dispatch). On a failure the logs and
+# any new input under testdata/fuzz are uploaded as an artifact.
+name: fuzz-nightly
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-nightly
+  cancel-in-progress: false
+
+env:
+  GOWORK: "off"
+  GOTOOLCHAIN: local
+  NO_NETWORK: "1"
+  FUZZ_ALL: "1"
+
+jobs:
+  fuzz:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: false
+      - run: bash scripts/deps.sh
+      # The vectors come from their pinned releases (sha256 checked).
+      - run: bash signer-core/scripts/fetch.sh
+      - run: make fuzz FUZZ_TIME=30s
+      # The C targets run even when a Go target failed.
+      - if: ${{ !cancelled() }}
+        run: make fuzz-core FUZZ_SECONDS=30
+      # New inputs: the Go targets write them to testdata/fuzz, libFuzzer
+      # writes crash files to its working folder.
+      - if: failure()
+        run: |
+          mkdir -p logs/new-inputs
+          git ls-files --others --exclude-standard -- '*testdata/fuzz/*' 'markformat/crash-*' 'markformat/timeout-*' 'markformat/leak-*' |
+            while read -r f; do
+              mkdir -p "logs/new-inputs/$(dirname "$f")"
+              cp "$f" "logs/new-inputs/$f"
+            done
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-nightly-logs
+          path: |
+            logs/
+            signer-core/build/*/fuzz/logs/
+            signer-core/build/*/fuzz/artifacts-ci/
