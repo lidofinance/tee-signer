@@ -142,7 +142,14 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   There is no fallback to it.
 - `tee-signer/platforms_nts.go`: `-nts-clock` (or `RUNNER_NTS_CLOCK=1`) gives a
   tagged runner the NTS clock, with `-nts-coarse-urls`, `-nts-wait` and
-  `-nts-max-bound` (or their variables; a set flag wins). `-clock https-date`
+  `-nts-max-bound` (or their variables; a set flag wins). With no quorum
+  within `-nts-wait` (90 s by default) the start fails and the runner exits
+  with the peers' status in its error line, which goes to the host on
+  Nitro. The supervisor starts it again: `restartPolicy` `OnFailure` on
+  ACI, `tee-restart-policy=OnFailure` on Confidential Space, the operator
+  or the parent's service manager on Nitro. A runner that went on without
+  a quorum would load no share (each share's restart floor reads the
+  clock) and would not load them once the quorum formed. `-clock https-date`
   next to it is refused, since main would replace the NTS clock with it.
   The clock dials through the platform (`platform.Platform.Dial`; nil is
   the default dialer). `runner -nts-clock-check`

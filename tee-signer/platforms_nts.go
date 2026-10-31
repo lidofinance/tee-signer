@@ -25,8 +25,12 @@ package main
 // relay. With the NTS clock on, -clock must be platform (the default): the
 // runner refuses -clock https-date, which would replace the NTS clock.
 //
-// If no quorum forms in the wait the runner starts anyway and every signing
-// request is refused until one forms (the clock's Now fails).
+// If no quorum forms in the wait the start fails and the runner exits, as
+// for any other start failure: the supervisor (ACI and Confidential Space
+// restart on failure; on Nitro the operator or the parent's service
+// manager) starts it again. A runner that went on without a quorum would
+// load no share, since each share's restart floor reads the clock, and it
+// would not load them when the quorum formed later.
 
 import (
 	"context"
@@ -112,6 +116,11 @@ func withNTSClock(f platformFunc) platformFunc {
 		}
 		n, err := startNTSClock(context.Background(), p.HTTPClient, dial, o.Param("region", ""), log)
 		if err != nil {
+			// main never gets this platform, so it cannot report the
+			// error to the host (Nitro: the enclave has no console).
+			if p.ReportExit != nil {
+				p.ReportExit("runner: " + err.Error())
+			}
 			if p.Close != nil {
 				_ = p.Close()
 			}
@@ -200,7 +209,8 @@ func publicNTSServers() ([]clock.NTSServer, error) {
 func rawLocal() time.Time { return time.Unix(0, nts.Monotonic()) }
 
 // startNTSClock takes the first coarse reading and the first quorum (up to
-// -nts-wait), then keeps both running and logs a status line.
+// -nts-wait), then keeps both running and logs a status line. No quorum in
+// the wait is an error: the runner does not start without the clock.
 func startNTSClock(ctx context.Context, client *http.Client, dial nts.DialFunc, region string, log *slog.Logger) (*clock.NTS, error) {
 	wait, err := ntsDuration(*ntsWaitFlag, "RUNNER_NTS_WAIT", 90*time.Second)
 	if err != nil {
@@ -229,10 +239,12 @@ func startNTSClock(ctx context.Context, client *http.Client, dial nts.DialFunc, 
 		log.Error("nts: no coarse (HTTPS-date) reading at start", "err", err)
 	}
 	go coarse.Run(ctx)
-	for n.Refresh(ctx) != nil {
-		if time.Now().After(deadline) {
-			log.Error("nts: no quorum at start; signing is refused until one forms", "waited", wait, "status", statusLine(n.Status()))
+	for {
+		if err = n.Refresh(ctx); err == nil {
 			break
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("nts clock: no quorum after %v (peers %s): %w", wait, statusLine(n.Status()), err)
 		}
 		time.Sleep(5 * time.Second)
 	}
