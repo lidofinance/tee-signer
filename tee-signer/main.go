@@ -149,7 +149,7 @@ func run() (err error) {
 		markRaiseSlot = flag.Int("mark-raise-slot", -1, "slot of each epoch at which the mark is raised for the next epoch; -1 = three quarters into the epoch (24 of 32)")
 		stateSpec     = flag.String("state-store", "", "durable copy of the sealed state (shares, wrapped sealing key, handover order bodies) in an object store, same syntax as -mark-store; restored at start on azure, gcp and dev (docs/durable-state.md)")
 		stateCreate   = flag.Bool("state-create", false, "start a state copy of which no commit opens under this key release with every object it needs (after a new key, with the shares moved by the handover)")
-		stateRefresh  = flag.Duration("state-refresh", 24*time.Hour, "write the whole state into the state copy again when the oldest object its newest commit needs is this old, so a locked store's retention never ends on one; 0 = never")
+		stateRefresh  = flag.Duration("state-refresh", 24*time.Hour, "write the whole state into the state copy again when the oldest object its newest commit needs is this old, so a locked store's retention never ends on one; with a setup, at most half of slashing_log_min_lock_days; 0 = never without a setup")
 		logJSON       = flag.Bool("log-json", false, "JSON logs")
 		maxConns      = flag.Int("max-conns", server.DefaultMaxConns, "connections open at once over every listener, TLS handshakes included; more are closed at once")
 		maxHandshakes = flag.Int("max-handshakes", server.DefaultMaxHandshakes, "TLS handshakes at once; more are closed at once")
@@ -396,8 +396,14 @@ func run() (err error) {
 	if markOn {
 		go raiseMarks(ctx, signer, plat.Clock, *markRaiseSlot, log)
 	}
-	if copyStore != nil && *stateRefresh > 0 {
-		go copyStore.refresh(ctx, *stateRefresh)
+	if copyStore != nil {
+		var lockDays uint32
+		if boot.setup != nil {
+			lockDays = boot.setup.Wire.SlashingLogMinLockDays
+		}
+		if age := refreshAge(*stateRefresh, lockDays); age > 0 {
+			go copyStore.refresh(ctx, age)
+		}
 	}
 	if srv.ReadHandover(); srv.HandedOver() {
 		log.Warn("this signer was handed over to another image: the runner answers HEALTH, keys, attestation and HANDOVER only")

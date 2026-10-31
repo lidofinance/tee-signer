@@ -176,9 +176,12 @@ back.
   below.
 - No copy yet but local state (a disk that survived, the copy turned on
   later): its local state becomes the first commit.
-- Refresh. `-state-refresh` (default 24 hours) writes the whole state as
-  segment 0 when the oldest object the newest commit needs is that old, so
-  on a locked bucket no object the state needs comes out of retention.
+- Refresh. The runner writes the whole state as segment 0 when the oldest
+  object the newest commit needs is half of the setup's
+  `slashing_log_min_lock_days` old, so on a locked bucket no object the
+  state needs comes out of retention. It checks at least every hour.
+  `-state-refresh` (default 24 hours) can make that age shorter, never
+  longer. Without a setup, `-state-refresh` alone sets it.
 
 ### Where to keep it
 
@@ -408,7 +411,7 @@ parent, which is untrusted, so its state gives no way into the enclave.
 | --- | --- |
 | `-state-store` | the copy, same syntax as `-mark-store` (`file:`, `s3:`, `gcs:`, `azblob:`) |
 | `-state-create` | start over when no commit opens under this key release with every object it needs |
-| `-state-refresh` | write the whole state again when the oldest object the newest commit needs is this old (default 24h, 0 off) |
+| `-state-refresh` | write the whole state again when the oldest object the newest commit needs is this old (default 24h); with a setup at most half of `slashing_log_min_lock_days`; 0 off without a setup |
 
 Images: `platform-gcp/deploy` `STATE_STORE`; `platform-azure/deploy` `STATE_STORE_N`. Both
 are off unless set. Setting one changes the command line, and with it the
