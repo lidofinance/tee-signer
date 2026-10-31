@@ -12,6 +12,10 @@
 # enclave's measurements"). It pins the IAM role of the parent instance;
 # PCR4 (instance ID) is left out so a node can move to a new instance.
 #
+# The template (platform-aws/deploy/kms-key-policy.json.tmpl; JSON takes no
+# comments) must stay in step with the key policy in platform-aws/deploy/
+# main.tf and target/main.tf. The Go tests check the template only.
+#
 # Environment for render: ACCOUNT_ID (111122223333), ADMIN_ROLE
 # (signer-kms-admin), PARENT_INSTANCE_ROLE (signer-parent), PARENT_ROLE_ARN.
 set -euo pipefail

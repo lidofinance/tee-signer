@@ -47,7 +47,11 @@ variable "pcr2" {}
 variable "pcr3" {
   description = "SHA-384 of 48 zero bytes and the parent role ARN: scripts/kms-policy.sh pcr3 arn:aws:iam::ACCOUNT:role/signer-parent"
 }
-variable "admin_role_arn" { description = "role that administers the key (can change its policy!)" }
+variable "admin_role_arn" { description = "role that administers the key; with key_policy_locked = false it can also change the key policy" }
+variable "key_policy_locked" {
+  description = "true: create the KMS key with its final policy, which no principal may change (no kms:PutKeyPolicy), so the key never has a mutable phase and its CloudTrail history is one CreateKey. Required on mainnet: the runner refuses a key policy someone can change, and a key that was mutable needs its CloudTrail history checked (README, AWS-KMS-02). The policy can then never change: a new image needs a new key (target/main.tf), so set prev_pcrs now if a rollback image should keep the key. Once locked, the admin can never tag or untag the key, change its description or turn off its rotation (no kms:TagResource, kms:UntagResource, kms:UpdateKeyDescription or kms:DisableKeyRotation, and no way to grant them), so any later Terraform change to aws_kms_key.enclave fails; only deletion stays possible. Terraform must run as admin_role_arn, the only principal left that can read the key. false: the admin keeps kms:PutKeyPolicy (tests, devnets). No default: on an existing key, setting true makes Terraform lock its policy for good."
+  type        = bool
+}
 variable "node_key" {
   description = "this node's record key, the runner's -record-key"
   default     = "node-1"
@@ -108,18 +112,26 @@ resource "aws_iam_instance_profile" "parent" {
   role = aws_iam_role.parent.name
 }
 
+# Keep the statements in step with kms-key-policy.json.tmpl and
+# target/main.tf: the Go tests run the template through the lock check,
+# not this file.
 resource "aws_kms_key" "enclave" {
   description         = "signer-runner sealing key, enclave-only"
   enable_key_rotation = true
+  # KMS refuses a policy that does not let the caller change it later
+  # unless this is set. A mistake in a locked policy is permanent.
+  bypass_policy_lockout_safety_check = var.key_policy_locked
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
+        # With key_policy_locked nobody holds kms:PutKeyPolicy, so the
+        # policy below is the key's whole history (AWS-KMS-02).
         Sid       = "KeyAdministration"
         Effect    = "Allow"
         Principal = { AWS = var.admin_role_arn }
-        Action = ["kms:Describe*", "kms:Get*", "kms:List*", "kms:PutKeyPolicy",
-        "kms:EnableKeyRotation", "kms:ScheduleKeyDeletion", "kms:CancelKeyDeletion"]
+        Action = concat(["kms:Describe*", "kms:Get*", "kms:List*"], var.key_policy_locked ? [] : ["kms:PutKeyPolicy"],
+        ["kms:EnableKeyRotation", "kms:ScheduleKeyDeletion", "kms:CancelKeyDeletion"])
         Resource = "*"
       },
       {
@@ -131,8 +143,9 @@ resource "aws_kms_key" "enclave" {
         # keys {signer-key, signer-setup} (platform-aws/nitro). Only the
         # enclave makes those (GenerateDataKey with its attestation as
         # recipient), so the admin cannot plant a sealing key or a mark log
-        # key. The admin also holds kms:PutKeyPolicy: the fix holds fully
-        # once the key policy is locked.
+        # key. With key_policy_locked = false the admin also holds
+        # kms:PutKeyPolicy, and this holds fully only once the policy is
+        # locked by hand; key_policy_locked = true creates it locked.
         Sid       = "OperatorEncryptsRecordCredentials"
         Effect    = "Allow"
         Principal = { AWS = var.admin_role_arn }

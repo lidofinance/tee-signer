@@ -378,20 +378,25 @@ func (k Keys) recordCredentials(ctx context.Context, store platform.Store, key s
 // under the locked policy too, and its decryption does not show who chose
 // the key. A new key costs nothing while no share is sealed. The ignored
 // blob is kept under another name first (setAside), never destroyed.
-func (k Keys) dataKey(ctx context.Context, store platform.Store) ([]byte, error) {
+//
+// Any object under sharePrefix passes that check, and the host writes the
+// store. So stored reports whether the key came from the stored blob: the
+// runner then uses it only once every stored share opens under it, and
+// seals no new share before (platform.Platform.SealingKeyStored).
+func (k Keys) dataKey(ctx context.Context, store platform.Store) (key []byte, stored bool, err error) {
 	rsaKey, recipient, err := k.Recipient()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	shares, err := store.List(sharePrefix)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	blob, err := store.Get(dataKeyBlob)
 	if err == nil && len(shares) == 0 {
 		if err := setAside(store, blob); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		err = platform.ErrNotFound
 	}
@@ -400,25 +405,27 @@ func (k Keys) dataKey(ctx context.Context, store platform.Store) ([]byte, error)
 		out, err := k.Client.GenerateDataKey(ctx, &kms.GenerateDataKeyInput{
 			KeyId: aws.String(k.KeyID), KeySpec: types.DataKeySpecAes256, EncryptionContext: k.sealingContext(), Recipient: recipient})
 		if err != nil {
-			return nil, fmt.Errorf("nitro: kms GenerateDataKey: %w", err)
+			return nil, false, fmt.Errorf("nitro: kms GenerateDataKey: %w", err)
 		}
 		if err := store.Put(dataKeyBlob, out.CiphertextBlob); err != nil {
-			return nil, err
+			return nil, false, err
 		}
-		return DecryptEnvelopedData(out.CiphertextForRecipient, rsaKey)
+		key, err := DecryptEnvelopedData(out.CiphertextForRecipient, rsaKey)
+		return key, false, err
 	case err != nil:
-		return nil, err
+		return nil, false, err
 	}
 	out, err := k.Client.Decrypt(ctx, &kms.DecryptInput{
 		KeyId: aws.String(k.KeyID), CiphertextBlob: blob, EncryptionContext: k.sealingContext(), Recipient: recipient})
 	if notAuthentic(err) {
-		return nil, fmt.Errorf("nitro: the stored sealing key %s does not decrypt under this KMS key and setup_hash %x: "+
+		return nil, false, fmt.Errorf("nitro: the stored sealing key %s does not decrypt under this KMS key and setup_hash %x: "+
 			"it belongs to another setup or key, or the host put it there; a new setup starts on an empty store (%v)", dataKeyBlob, k.Setup, err)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("nitro: kms Decrypt: %w", err)
+		return nil, false, fmt.Errorf("nitro: kms Decrypt: %w", err)
 	}
-	return DecryptEnvelopedData(out.CiphertextForRecipient, rsaKey)
+	key, err = DecryptEnvelopedData(out.CiphertextForRecipient, rsaKey)
+	return key, true, err
 }
 
 // setAside copies a sealing blob that dataKey ignores to
@@ -543,7 +550,7 @@ func New(o platform.Options) (*platform.Platform, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	key, err := keys.dataKey(ctx, agent)
+	key, stored, err := keys.dataKey(ctx, agent)
 	if err != nil {
 		return fail(err)
 	}
@@ -573,6 +580,9 @@ func New(o platform.Options) (*platform.Platform, error) {
 		ReportExit: func(text string) { _ = agent.ReportExit(text) },
 		Keys:       keys,
 		KeyRule:    rule,
+		// AWS-KMS-02: a stored blob may be one the key admin made before
+		// the key policy was locked.
+		SealingKeyStored: stored,
 		// PCR0 to PCR2 of the documents KMS took as recipient.
 		SelfImage: seen.Get,
 	}
