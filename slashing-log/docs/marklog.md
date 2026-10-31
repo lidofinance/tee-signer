@@ -362,6 +362,32 @@ holds its true mark.
 
 ## What it does not cover
 
+- Known issue: one vote pins the device source. The record holds one
+  source bound for every key, the highest source any key signed, and a
+  restart applies it to every key. A client with the signing role can
+  send, for one key, a vote whose source is above the epoch the chain
+  justified, for example the shape of a vote under finality while the
+  chain does not finalize. The core signs it, which is right for that
+  key, and the log's source bound moves to it. Until the host restarts
+  the runner nothing changes, since the RAM rules are per key; the host
+  can restart it at any time. After the restart every other key refuses
+  its honest votes until the chain justifies that epoch, which during
+  non-finality may take long and which the stopped keys cannot help
+  bring about. In signing_mode single the whole validator set behind the
+  signer stops attesting; in threshold mode one member of the cluster
+  does. A handover carries the bound to the target, so a new image does
+  not clear it. It cannot cause a slashing: it only refuses votes. The
+  runner raises an alarm when such a vote is signed, before any restart
+  (`tee-signer/server/sourcewatch.go`): a vote whose source is more than
+  one epoch above the highest source of the votes it signed for the
+  epoch before logs at error level, and HEALTH shows
+  `device_source_alarm` until the runner restarts. The alarm also fires
+  when a long non-finality period ends and the chain justifies a much
+  newer epoch at once; then the operator checks that the chain justified
+  the epoch the alarm names. Do not restart a runner with the alarm on
+  until the chain has justified that epoch. The planned fix is a source
+  bound per key in the record, with batched writes, so a restart gives
+  the raised bound only to the key that signed it.
 - An admin who also controls key release (the AWS KMS key policy, the GCP
   WIF provider and the KMS key's IAM, the Azure key's release policy) can
   decrypt the sealed share, make key blobs and forge records. The store

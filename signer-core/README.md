@@ -443,6 +443,11 @@ No EIP-3076 test is skipped. Two notes on how they apply:
   do not have this problem: the source bound is the highest source signed or
   imported, `source_epochs` is not used, and `sc_signer_cover_epoch` covers
   targets and blocks only, so a restarted signer signs again with its first
-  vote (`test_nonfinality_restart`).
+  vote (`test_nonfinality_restart`). The other side of one source bound:
+  a single vote whose source is above the justified epoch raises it for
+  every key, and after a restart every key refuses votes below it until
+  the chain justifies that epoch. The runner raises an alarm for such a
+  vote; the known issue and the planned per-key fix are in
+  `slashing-log/docs/marklog.md`, "What it does not cover".
 - Real hardware. The OP-TEE TA dev kit build of the core has run on QEMU
   only.
