@@ -621,6 +621,13 @@ A reboot ends them and needs `parent-run.sh` again. The store under
 A runner that fails sends the line it prints (`runner: ...`) to the host
 agent before it exits (hostagent EXIT). The agent writes it with the time to
 `/var/lib/signer-runner/last-exit.txt` (`-exit-file`) and to its log.
+
+Nothing in this deploy restarts the enclave after it exits. A start
+failure ends it, and that includes an NTS outage at start: with no NTS
+quorum within `-nts-wait` (90 s) the runner exits rather than run without
+keys. On mainnet, run the enclave step of `parent-run.sh`
+(`nitro-cli run-enclave`) under a service unit that restarts on failure,
+or restart it by hand. The reason for each exit is in `last-exit.txt`.
 Nothing else leaves the enclave this way: one line of printable ASCII, at
 most 2048 bytes, the same text a console would show. An enclave that is not
 in debug mode has no console.

@@ -230,7 +230,7 @@ func startNTSClock(ctx context.Context, client *http.Client, dial nts.DialFunc, 
 		rctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		err = coarse.Refresh(rctx)
 		cancel()
-		if err == nil || time.Now().After(deadline) {
+		if err == nil || time.Now().Add(2*time.Second).After(deadline) {
 			break
 		}
 		time.Sleep(2 * time.Second)
@@ -243,7 +243,7 @@ func startNTSClock(ctx context.Context, client *http.Client, dial nts.DialFunc, 
 		if err = n.Refresh(ctx); err == nil {
 			break
 		}
-		if time.Now().After(deadline) {
+		if time.Now().Add(5 * time.Second).After(deadline) {
 			return nil, fmt.Errorf("nts clock: no quorum after %v (peers %s): %w", wait, statusLine(n.Status()), err)
 		}
 		time.Sleep(5 * time.Second)

@@ -57,10 +57,13 @@ func (c *KEConfig) dial(ctx context.Context, network, addr string) (net.Conn, er
 	return d.DialContext(ctx, network, addr)
 }
 
-// NoTrustedTime is the certificate time when the trusted clock has none: a
-// nonzero time before any certificate's NotBefore, so every chain fails.
-// crypto/tls hands a zero time to crypto/x509 as CurrentTime, and
-// crypto/x509 replaces a zero CurrentTime with time.Now(), the host's clock.
+// NoTrustedTime is the certificate time when the trusted clock has none:
+// one second after the Unix epoch, before every certificate a CA issues.
+// crypto/x509 refuses a certificate when now.Before(NotBefore) (isValid in
+// verify.go) and checks every certificate of the chain, so every chain
+// fails, expired ones included. It is not the zero time because crypto/tls
+// hands a zero time to crypto/x509 as CurrentTime, and crypto/x509 replaces
+// a zero CurrentTime with time.Now(), the host's clock.
 var NoTrustedTime = time.Unix(1, 0)
 
 // certTime is f with a zero time replaced by NoTrustedTime.
@@ -81,7 +84,7 @@ func KeyExchange(ctx context.Context, cfg KEConfig) (*KEResult, error) {
 		return nil, errors.New("nts: KEConfig needs Host, Roots and Time")
 	}
 	if cfg.Time().IsZero() {
-		return nil, fmt.Errorf("nts-ke %s: no trusted time to check the certificate", cfg.Host)
+		return nil, fmt.Errorf("nts-ke %s: no trusted time to check the certificate (the certificate clock has no reading)", cfg.Host)
 	}
 	addr := cfg.Addr
 	if addr == "" {

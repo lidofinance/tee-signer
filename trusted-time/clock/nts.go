@@ -258,13 +258,14 @@ func (n *NTS) Refresh(ctx context.Context) error {
 }
 
 // certTime is the time NTS-KE checks certificate validity at: the coarse
-// clock's, not the host's. Without a coarse time it is nts.NoTrustedTime,
-// which no certificate covers. Never the zero time: crypto/x509 reads that
-// as the system clock, which the host sets.
+// clock's, not the host's. Without a coarse time it is the zero time, which
+// nts.KeyExchange takes as "no trusted time": it refuses before the dial,
+// and during the handshake checks at nts.NoTrustedTime, never at the
+// system clock.
 func (n *NTS) certTime() time.Time {
 	t, err := n.Coarse.Now()
 	if err != nil {
-		return nts.NoTrustedTime
+		return time.Time{}
 	}
 	return t
 }
