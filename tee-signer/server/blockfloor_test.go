@@ -65,6 +65,7 @@ func TestLateImportGetsABlockFloor(t *testing.T) {
 	}
 	e.restart()
 	f2 := e.floorOf()
+	e.clock.add((f2 - e.signer.EpochAt(e.now())) * testEpoch) // the slots of f2-1 have started
 	for i, pk := range []backend.Pubkey{pka, pkb} {
 		wantSlashing(t, e.signMsg(pk, &backend.BeaconBlockHeader{Slot: (f2-1)*8 + 4, ProposerIndex: uint64(5 + i), BodyRoot: backend.Root{0xb1}}),
 			"after a restart: a block below the restart floor")

@@ -113,7 +113,7 @@ func TestSLBOUND01LateImportGetsItsOwnSourceFloor(t *testing.T) {
 	if err := e.importSealed(pkb, skb, 6, nil); err != nil {
 		t.Fatal(err)
 	}
-	e.clock.add((late - e.signer.EpochAt(e.now())) * testEpoch)
+	e.clock.add((late + 1 - e.signer.EpochAt(e.now())) * testEpoch) // the slots of late+1 have started
 	wantSlashSource(t, e.signMsg(pkb, vote(gate, late+1)), "same process: B at the log's gate, below its import")
 	// A's vote at the gate puts the gate's floor into the log's source, so
 	// a restart drops the gate.
@@ -126,7 +126,7 @@ func TestSLBOUND01LateImportGetsItsOwnSourceFloor(t *testing.T) {
 		t.Fatal("the gate is still on after the log's source reached it")
 	}
 	f2 := e.floorOf()
-	e.clock.add((f2 - e.signer.EpochAt(e.now())) * testEpoch)
+	e.clock.add((f2 + 1 - e.signer.EpochAt(e.now())) * testEpoch) // the slots of f2+1 have started
 	wantSlashSource(t, e.signMsg(pkb, vote(gate, f2+1)), "after a restart: B below its import floor")
 	if err := e.signMsg(pkb, vote(late, f2+1)); err != nil {
 		t.Fatalf("after a restart: B at its import floor %d: %v", late, err)
