@@ -41,9 +41,10 @@ func newKVFixture(t *testing.T) *kvFixture {
 	kvfx := newTLSFixture(t)
 	kv := newFakeKV(t, kvfx, "signer-kek-1", key)
 	kv.hostData = testHostData
+	kv.maaHost = m.client.Endpoint
 	tokens := &fakeTokens{token: kv.accessToken}
 	return &kvFixture{maa: m, kv: kv, key: key, tokens: tokens, releaser: &Releaser{MAA: m.client,
-		KV: &KeyVault{Endpoint: kv.host(), Tokens: tokens, HTTP: kv.srv.Client(), Roots: kvfx.pool}}}
+		KV: &KeyVault{Endpoint: kv.host(), Tokens: tokens, HTTP: kv.srv.Client(), Roots: kvfx.pool, MAAHost: m.client.Endpoint}}}
 }
 
 func samePrivateKey(a, b *rsa.PrivateKey) bool { return a.N.Cmp(b.N) == 0 && a.D.Cmp(b.D) == 0 }
@@ -337,7 +338,7 @@ func TestKeyReleaseHash(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := r.Hash
-	policy := `{"version":"1.0.0","anyOf":[{"authority":"https://` + f.kv.host() + `","allOf":[{"claim":"x-ms-sevsnpvm-hostdata","equals":"` + testHostData + `"}]}]}`
+	policy := renderSKRPolicy(t, f.maa.client.Endpoint, testHostData)
 	want := backend.KeyReleaseHash(backend.KeyReleaseAzure, []byte("https://"+f.kv.host()+"/keys/signer-kek-1/0123456789abcdef0123456789abcdef"),
 		[]byte{1}, []byte{0}, []byte("application/json; charset=utf-8"), []byte(policy))
 	if h != want {
@@ -366,10 +367,13 @@ func TestKeyReleaseHash(t *testing.T) {
 	}
 }
 
-// The lock is release_policy.immutable of the Get Key answer: true is
-// locked; false or absent is not. An answer without a policy is an error.
+// The lock needs release_policy.immutable of the Get Key answer and a
+// policy for one image: an immutable rendered template is locked; false or
+// absent immutable is not, nor is an immutable policy with no authority.
+// An answer without a policy is an error.
 func TestKeyRuleOfFixtures(t *testing.T) {
-	data := base64.RawURLEncoding.EncodeToString([]byte(`{"version":"1.0.0","anyOf":[]}`))
+	data := base64.RawURLEncoding.EncodeToString([]byte(renderSKRPolicy(t, "maa.example", testHostData)))
+	empty := base64.RawURLEncoding.EncodeToString([]byte(`{"version":"1.0.0","anyOf":[]}`))
 	answer := func(rp string) []byte {
 		return []byte(`{"key":{"kid":"https://v.vault.azure.net/keys/k/1"},"attributes":{"exportable":true},"release_policy":` + rp + `}`)
 	}
@@ -380,13 +384,14 @@ func TestKeyRuleOfFixtures(t *testing.T) {
 		{"immutable", `{"contentType":"application/json; charset=utf-8","data":"` + data + `","immutable":true}`, backend.KeyLockLocked},
 		{"mutable", `{"contentType":"application/json; charset=utf-8","data":"` + data + `","immutable":false}`, backend.KeyLockNotLocked},
 		{"flag absent", `{"contentType":"application/json; charset=utf-8","data":"` + data + `"}`, backend.KeyLockNotLocked},
+		{"immutable, no authority", `{"contentType":"application/json; charset=utf-8","data":"` + empty + `","immutable":true}`, backend.KeyLockNotLocked},
 	} {
-		r, _, err := keyRuleOf(answer(c.rp))
+		r, _, err := keyRuleOf(answer(c.rp), "maa.example")
 		if err != nil || r.Lock != c.want || r.Hash == ([32]byte{}) {
 			t.Errorf("%s: %+v %v, want %s", c.name, r, err, c.want)
 		}
 	}
-	if _, _, err := keyRuleOf(answer(`null`)); err == nil {
+	if _, _, err := keyRuleOf(answer(`null`), "maa.example"); err == nil {
 		t.Error("an answer without a release policy gave a rule")
 	}
 }

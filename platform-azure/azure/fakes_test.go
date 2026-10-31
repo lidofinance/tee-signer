@@ -28,6 +28,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -336,8 +337,10 @@ type fakeKV struct {
 	accessToken string
 	// hostData, if set, is the release policy: the MAA token must state it.
 	hostData string
-	enc      string // enc of the answer; "" is CKM_RSA_AES_KEY_WRAP
-	alg      string // JWS algorithm; "" is PS256
+	// maaHost is the authority of the default release policy.
+	maaHost string
+	enc     string // enc of the answer; "" is CKM_RSA_AES_KEY_WRAP
+	alg     string // JWS algorithm; "" is PS256
 	// mangle can change the payload and the signing before the JWS is made.
 	signKey *rsa.PrivateKey
 	x5c     [][]byte
@@ -346,7 +349,7 @@ type fakeKV struct {
 	// jwk releases the key as JWK JSON instead of PKCS#8.
 	jwk bool
 	// Get Key: the release policy's immutable flag and the policy JSON
-	// (default: one MAA authority and hostData), and noRead answers 403 as
+	// (default: deploy/skr-policy.json.tmpl for maaHost and hostData), and noRead answers 403 as
 	// Key Vault does to an identity without read access to the key.
 	immutable bool
 	policy    string
@@ -375,7 +378,7 @@ func (kv *fakeKV) serveGetKey(w http.ResponseWriter, r *http.Request) {
 	}
 	policy := kv.policy
 	if policy == "" {
-		policy = `{"version":"1.0.0","anyOf":[{"authority":"https://` + kv.host() + `","allOf":[{"claim":"x-ms-sevsnpvm-hostdata","equals":"` + kv.hostData + `"}]}]}`
+		policy = renderSKRPolicy(kv.t, kv.maaHost, kv.hostData)
 	}
 	json.NewEncoder(w).Encode(map[string]any{
 		"key": map[string]any{"kid": kv.kid(kv.keyVersion()), "kty": "RSA-HSM",
@@ -567,4 +570,15 @@ func jwkOf(k *rsa.PrivateKey) string {
 		"p": b64n(k.Primes[0]), "q": b64n(k.Primes[1])}
 	b, _ := json.Marshal(m)
 	return string(b)
+}
+
+// renderSKRPolicy renders deploy/skr-policy.json.tmpl as deploy.sh
+// key-create does (envsubst of the two variables).
+func renderSKRPolicy(t testing.TB, maaHost, hostData string) string {
+	t.Helper()
+	tmpl, err := os.ReadFile("../deploy/skr-policy.json.tmpl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.NewReplacer("${MAA_ENDPOINT}", maaHost, "${CCE_POLICY_SHA256}", hostData).Replace(string(tmpl))
 }
