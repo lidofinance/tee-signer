@@ -35,7 +35,9 @@ import (
 // and its cloud.json for the source's image and settings, and the target's
 // cloud.json for the target's: its setup_sha256 (what signer-admin pin
 // wrote, or -target-setup-sha256), image and verifier settings. It does not
-// connect to the target. The target's image must be on the source's
+// connect to the target. The target must be on the source's cloud
+// (handoverorder.Runner.CheckSameCloud): a release runner links only its own
+// platform's verifier. The target's image must be on the source's
 // allowed-images list in force. The draft, show, sign and assemble steps
 // work offline.
 // handover.bin.active holds the source's setup and its locked group in
@@ -198,6 +200,12 @@ func cmdHandoverDraft(args []string, out io.Writer) error {
 	target, err := tconn.Attestation.OrderRunner(tname, th)
 	if err != nil {
 		return fmt.Errorf("target %s: %w", *targetCloud, err)
+	}
+	// A release runner checks the target with its own platform's verifier
+	// only, so the target must be on the source's cloud. Checked here, before
+	// the tool connects to the source.
+	if err := target.CheckSameCloud(m.setup.Platform.Platform); err != nil {
+		return fmt.Errorf("%w (%s, %s)", err, m.name, *targetCloud)
 	}
 
 	// The source: its attested state, and its settings from its cloud.json.

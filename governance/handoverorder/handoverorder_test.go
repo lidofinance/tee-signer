@@ -342,3 +342,30 @@ func TestHashedSignature(t *testing.T) {
 		t.Fatalf("hashed under the import order context: %v", err)
 	}
 }
+
+// A runner hands over only to a runner on its own cloud: each platform
+// takes its own verifier's target and refuses the other three.
+func TestCheckSameCloud(t *testing.T) {
+	for _, p := range []setupwire.Platform{setupwire.PlatformNitro, setupwire.PlatformAzure, setupwire.PlatformGCP, setupwire.PlatformDev} {
+		want, ok := VerifierOf(p)
+		if !ok {
+			t.Fatalf("platform %s has no verifier", p)
+		}
+		for v := VerifierNitro; v <= VerifierDev; v++ {
+			r := &Runner{Name: "t", Verifier: v}
+			err := r.CheckSameCloud(p)
+			if v == want {
+				if err != nil {
+					t.Errorf("%s to %s: %v", p, v, err)
+				}
+				continue
+			}
+			if err == nil || !strings.Contains(err.Error(), "only between runners on the same cloud") {
+				t.Errorf("%s to %s: %v, want the same-cloud refusal", p, v, err)
+			}
+		}
+	}
+	if err := (&Runner{Verifier: VerifierDev}).CheckSameCloud(0); err == nil {
+		t.Error("an unknown source platform passed")
+	}
+}
