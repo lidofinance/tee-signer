@@ -587,7 +587,7 @@ func (h *sourceHandover) handover(ctx context.Context, payload []byte) ([]byte, 
 			// A tombstone write that failed before left the flag set; it
 			// stays set then.
 			was := s.handedOver.Swap(true)
-			shares, err := h.readShares(true)
+			shares, err := h.readShares(true, b.LeftBehind)
 			if err != nil {
 				s.handedOver.Store(was)
 				s.sharesMu.Unlock()
@@ -630,7 +630,7 @@ func (h *sourceHandover) handover(ctx context.Context, payload []byte) ([]byte, 
 				"shares", len(shares), "target", mark.TargetEpoch, "source", mark.SourceEpoch, "block", mark.BlockSlot)
 		} else {
 			// A restart after the tombstone: read the shares again.
-			shares, err := h.readShares(false)
+			shares, err := h.readShares(false, nil)
 			if err != nil {
 				return nil, backend.Refused(backend.StatusStorage, "stored shares: %v", err)
 			}
@@ -803,8 +803,9 @@ func (h *sourceHandover) checkTarget(ctx context.Context, q *handover.Request, b
 }
 
 // readShares reads every stored share once, with its key origin from its
-// sealed record. check also wants them to be the loaded keys.
-func (h *sourceHandover) readShares(check bool) ([]handedShare, error) {
+// sealed record. check also wants them to be the loaded keys, and as many
+// as the mark log vouched for, less the keys of the order's left_behind.
+func (h *sourceHandover) readShares(check bool, leftBehind [][48]byte) ([]handedShare, error) {
 	s := h.s
 	names, err := ListShares(s.Platform.Store)
 	if err != nil {
@@ -851,10 +852,27 @@ func (h *sourceHandover) readShares(check bool) ([]handedShare, error) {
 		}
 		// The host can hide a record at a start; the log's count cannot
 		// go down, so a shrunk set waits for the record to come back (or
-		// for a new import of that key).
-		if held := s.SharesHeld(); uint64(len(out)) < uint64(held) {
-			return fail(fmt.Errorf("%d shares stored, the mark log vouched for %d on this runner: a share record is missing; "+
-				"put it back and restart, or import that key again, before the handover", len(out), held))
+		// for a new import of that key), unless the approvers named the
+		// keys they accept to leave behind. The runner cannot tell which
+		// key a missing record held, so it checks the count, and that no
+		// named key is among the shares it hands over.
+		for _, pk := range leftBehind {
+			if _, ok := slices.BinarySearchFunc(out, backend.Pubkey(pk), func(a handedShare, pk backend.Pubkey) int { return bytes.Compare(a.pk[:], pk[:]) }); ok {
+				return fail(fmt.Errorf("the order's left_behind names %s, whose share is stored here: refusing to leave a stored share behind",
+					backend.Pubkey(pk).String()[:18]))
+			}
+		}
+		if held, n := uint64(s.SharesHeld()), uint64(len(out)); n < held && n+uint64(len(leftBehind)) != held {
+			if len(leftBehind) == 0 {
+				return fail(fmt.Errorf("%d shares stored, the mark log vouched for %d on this runner: a share record is missing; "+
+					"put it back and restart, or import that key again, before the handover; a share that is gone for good "+
+					"needs an order whose left_behind names its key", n, held))
+			}
+			return fail(fmt.Errorf("%d shares stored, the mark log vouched for %d on this runner, and the order's left_behind names %d keys: "+
+				"it must name exactly the %d missing", n, held, len(leftBehind), held-n))
+		} else if n >= held && len(leftBehind) > 0 {
+			return fail(fmt.Errorf("the order's left_behind names %d keys, but no share record is missing here (%d stored, %d vouched for)",
+				len(leftBehind), n, held))
 		}
 		for _, k := range loaded {
 			i, ok := slices.BinarySearchFunc(out, k.Pubkey, func(a handedShare, pk backend.Pubkey) int { return bytes.Compare(a.pk[:], pk[:]) })

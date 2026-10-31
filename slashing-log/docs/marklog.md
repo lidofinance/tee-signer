@@ -373,7 +373,9 @@ stored), and, while a write is under way, the root of the set after it.
   missing: the host hid it, or the write after its log record was cut.
   The runner logs this at start and refuses a handover until the record
   is back or that key is imported again; else the hidden share would
-  stay on a source that handed over. A record from before the count
+  stay on a source that handed over. A share that is gone for good needs
+  a handover order whose `left_behind` names its key (protocol.md,
+  "Handover"). A record from before the count
   reads as count 0, and the first start of this image sets it.
 - A log record written before share sets (`SMARK1`), or one with no share
   set, vouches for the empty set only. The first start of this image on

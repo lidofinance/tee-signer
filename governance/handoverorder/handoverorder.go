@@ -9,7 +9,8 @@
 // the verifier, the image and what that verifier needs.
 //
 //	body   = 'H' version:u8(1) cluster_id[32] chain_hash[32] not_after:u64
-//	         source target
+//	         source target [left_behind]
+//	left_behind = count:u8(1 to 32) {group_pubkey[48]}, ascending
 //	runner = name:str setup_hash[32] settings
 //	settings = verifier:u8 image:
 //	           aws-nitro: pcr0..pcr2[144] pcr3[48] has:u8 [pcr8[48]]
@@ -33,6 +34,12 @@
 // the settings the source checks its attestation with. The target's image
 // must be on the source's allowed-images list in force.
 //
+// left_behind is absent unless the approvers name keys whose share the
+// source may leave behind: a share record that is gone for good, so the
+// source holds fewer shares than its mark log vouched for. The source
+// then hands over only if exactly that many are missing and none of the
+// named keys is among its stored shares. A count of 0 is never written.
+//
 // The order's hash is SHA-256 over CtxHandoverOrder and the body, so it
 // names what the approvers signed; the signatures are not in it.
 package handoverorder
@@ -50,9 +57,11 @@ import (
 
 const (
 	Version = 1
-	// MaxSize bounds a body and a signed order. Two runners at every cap
-	// and eight signatures take under 3 KB.
+	// MaxSize bounds a body and a signed order. Two runners at every cap,
+	// MaxLeftBehind keys and eight signatures take under 5 KB.
 	MaxSize = 8 << 10
+	// MaxLeftBehind bounds left_behind.
+	MaxLeftBehind = 32
 
 	kindBody  = 'H'
 	kindOrder = 'T'
@@ -68,6 +77,9 @@ type Body struct {
 	NotAfter uint64
 	Source   Runner
 	Target   Runner
+	// LeftBehind are the group pubkeys whose share the approvers accept
+	// the source leaves behind, ascending; empty for none.
+	LeftBehind [][48]byte
 }
 
 // Order is a signed handover order.
@@ -103,6 +115,17 @@ func (b *Body) Check() error {
 	if b.Source.SetupHash == b.Target.SetupHash {
 		return errors.New("handover order: source and target have the same setup_sha256")
 	}
+	if len(b.LeftBehind) > MaxLeftBehind {
+		return fmt.Errorf("handover order: left_behind names %d keys, at most %d", len(b.LeftBehind), MaxLeftBehind)
+	}
+	for i, pk := range b.LeftBehind {
+		if pk == ([48]byte{}) {
+			return errors.New("handover order: left_behind names a zero key")
+		}
+		if i > 0 && bytes.Compare(b.LeftBehind[i-1][:], pk[:]) >= 0 {
+			return errors.New("handover order: left_behind keys must be ascending, each once")
+		}
+	}
 	return nil
 }
 
@@ -124,6 +147,12 @@ func (b *Body) Encode() ([]byte, error) {
 	p = binary.BigEndian.AppendUint64(p, b.NotAfter)
 	p = appendRunner(p, &b.Source)
 	p = appendRunner(p, &b.Target)
+	if len(b.LeftBehind) > 0 {
+		p = append(p, uint8(len(b.LeftBehind)))
+		for _, pk := range b.LeftBehind {
+			p = append(p, pk[:]...)
+		}
+	}
 	if len(p) > MaxSize {
 		return nil, fmt.Errorf("handover order: body of %d bytes, at most %d", len(p), MaxSize)
 	}
@@ -193,6 +222,20 @@ func DecodeBody(raw []byte) (*Body, error) {
 	}
 	if p, err = readRunner(p, &b.Target); err != nil {
 		return nil, err
+	}
+	if len(p) > 0 {
+		n := int(p[0])
+		if n == 0 || n > MaxLeftBehind {
+			return nil, fmt.Errorf("handoverorder: left_behind count %d, want 1 to %d", n, MaxLeftBehind)
+		}
+		p = p[1:]
+		for range n {
+			var e []byte
+			if e, p, err = take(p, 48); err != nil {
+				return nil, err
+			}
+			b.LeftBehind = append(b.LeftBehind, [48]byte(e))
+		}
 	}
 	if len(p) != 0 {
 		return nil, fmt.Errorf("handoverorder: %d trailing bytes", len(p))

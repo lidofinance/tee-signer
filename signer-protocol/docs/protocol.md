@@ -856,6 +856,16 @@ The operator's steps, with the tools of this tree:
    first.
 2. The order (`signer-admin handover-draft`, then the approvers' signatures)
    goes to the source in HANDOVER_ORDER.
+   If a share record is gone for good (the source holds fewer shares than
+   its mark log vouched for, and no keystore is left to import the key
+   again), the order's `left_behind` (`-left-behind`) names the group
+   pubkey of each lost share. The approvers sign that they accept the
+   loss. The source then hands over the rest, but only if exactly that
+   many records are missing and none of the named keys is stored. It
+   cannot tell which key a missing record held, so the approvers must
+   get the names right; a wrong name leaves the actual key behind all
+   the same. Without `left_behind` the source refuses the handover
+   while a record is missing.
 3. The target starts with no keys. `handover-target identity -order`
    pushes the order to the target, which reserves itself for it (below),
    then reads its IDENTITY for a fresh nonce over a connection pinned
@@ -915,7 +925,7 @@ HANDOVER. Before anything changes, the source checks:
   under the share lock.
 
 Then the source stops signing, reads every stored share once, checks that
-they are its loaded keys, and writes the tombstone that names the target
+they are its loaded keys and as many as its mark log vouched for, and writes the tombstone that names the target
 into the mark log (under the lock of config writes, and only if the config
 in force is still the one checked). Only then does it seal the first page.
 From the tombstone on, also after a restart, the source signs nothing,

@@ -143,6 +143,14 @@ func formatBody(w *strings.Builder, b *Body) {
 		kv(r.pre+"setup_sha256", hexOf(r.r.SetupHash[:]))
 		w.WriteString(FormatSettings(r.pre, r.r))
 	}
+	if len(b.LeftBehind) > 0 {
+		w.WriteString("\n")
+		note("LEFT BEHIND, %d key(s): the source hands over without their shares, which the approvers accept as lost.", len(b.LeftBehind))
+		note("The source hands over only if that many share records are missing and none of these keys is stored.")
+		for _, pk := range b.LeftBehind {
+			kv("left_behind", hexOf(pk[:]))
+		}
+	}
 }
 
 // Format checks the body and writes its human form.

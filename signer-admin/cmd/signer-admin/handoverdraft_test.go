@@ -201,7 +201,18 @@ func TestHandoverFlowDevRunner(t *testing.T) {
 	}
 	// A second order while this one is pending: the runner refuses it.
 	body2 := filepath.Join(dir, "handover2.bin")
-	step("second draft", "handover-draft", "-cluster", cl, "-signer", "s1", "-target-cloud", tcloud, "-not-after", "13h", "-out", body2)
+	// The second draft leaves one key behind; draft and show print it.
+	lost := strings.Repeat("5a", 48)
+	out = failTool(t, "handover-draft", "-cluster", cl, "-signer", "s1", "-target-cloud", tcloud, "-left-behind", "0x1234", "-out", body2)
+	wantIn(t, out, "96 hex digits")
+	out = step("second draft", "handover-draft", "-cluster", cl, "-signer", "s1", "-target-cloud", tcloud, "-not-after", "13h",
+		"-left-behind", "0x"+lost, "-out", body2)
+	wantIn(t, out, "LEFT BEHIND", "0x"+lost, "the number of missing share records is 1")
+	if b2, _, _, err := readHandover(body2); err != nil || len(b2.LeftBehind) != 1 || hex.EncodeToString(b2.LeftBehind[0][:]) != lost {
+		t.Fatalf("second draft's left_behind: %v", err)
+	}
+	out = step("show second draft", "show", body2)
+	wantIn(t, out, "LEFT BEHIND", "left_behind = 0x"+lost)
 	for _, i := range []int{0, 1} {
 		mustTool(t, "sign", "-key", keys[i].file, body2)
 	}

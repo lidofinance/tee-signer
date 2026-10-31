@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -139,6 +141,28 @@ func loadHandoverActive(path string, b *handoverorder.Body) (*orderActive, error
 	return a, nil
 }
 
+// parseLeftBehind reads -left-behind: comma-separated pubkeys of 96 hex
+// digits, with or without 0x, returned ascending. Empty: none.
+func parseLeftBehind(s string) ([][48]byte, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, nil
+	}
+	var out [][48]byte
+	for _, f := range strings.Split(s, ",") {
+		b, err := hex.DecodeString(strings.TrimPrefix(strings.ToLower(strings.TrimSpace(f)), "0x"))
+		if err != nil || len(b) != 48 {
+			return nil, fmt.Errorf("-left-behind %q: want 96 hex digits per key", f)
+		}
+		pk := [48]byte(b)
+		if slices.Contains(out, pk) {
+			return nil, fmt.Errorf("-left-behind names 0x%x twice", pk)
+		}
+		out = append(out, pk)
+	}
+	slices.SortFunc(out, func(a, b [48]byte) int { return bytes.Compare(a[:], b[:]) })
+	return out, nil
+}
+
 // parseSetupHash reads 64 hex digits, with or without 0x.
 func parseSetupHash(what, s string) ([32]byte, error) {
 	b, err := hex.DecodeString(strings.TrimPrefix(strings.ToLower(strings.TrimSpace(s)), "0x"))
@@ -155,6 +179,8 @@ func cmdHandoverDraft(args []string, out io.Writer) error {
 	targetCloud := fs.String("target-cloud", "", "the target's cloud.json: its address is not used; its attestation settings and setup_sha256 are")
 	targetSetup := fs.String("target-setup-sha256", "", "the target's setup_hash, 64 hex digits (default: the setup_sha256 of the target's cloud.json; both must agree when both are set)")
 	targetName := fs.String("target-name", "", "a name for the target (default: the source's name with b appended)")
+	leftBehind := fs.String("left-behind", "", "comma-separated validator (group) pubkeys, 96 hex digits each, whose share the source may leave behind: "+
+		"only for a share record that is gone for good; the source hands over only if exactly these many records are missing and none of these keys is stored")
 	notAfter := fs.String("not-after", handoverDefaultNotAfter, "no handover starts under the order from then on: RFC 3339 time, or a duration from now (12h, 1d)")
 	outPath := fs.String("out", "handover.bin", "the order body to sign; the source's setup and locked values in force go to the same name with .active")
 	if err := fs.Parse(args); err != nil {
@@ -162,7 +188,7 @@ func cmdHandoverDraft(args []string, out io.Writer) error {
 	}
 	if fs.NArg() != 0 || *source == "" || *targetCloud == "" {
 		return errors.New("usage: signer-admin handover-draft -cluster cluster.json -signer NAME -target-cloud target/cloud.json " +
-			"[-target-setup-sha256 HEX] [-target-name NAME] [-not-after 12h] [-out handover.bin]")
+			"[-target-setup-sha256 HEX] [-target-name NAME] [-left-behind PUBKEY,...] [-not-after 12h] [-out handover.bin]")
 	}
 	*cf.only = *source
 	c, err := cf.load()
@@ -220,6 +246,9 @@ func cmdHandoverDraft(args []string, out io.Writer) error {
 	if b.NotAfter, err = parseNotAfter(*notAfter, now()); err != nil {
 		return err
 	}
+	if b.LeftBehind, err = parseLeftBehind(*leftBehind); err != nil {
+		return err
+	}
 	raw, err := b.Encode()
 	if err != nil {
 		return err
@@ -257,6 +286,13 @@ func cmdHandoverDraft(args []string, out io.Writer) error {
 		map[bool]string{true: "a dev signer: the time lock", false: "the images minimum time lock, or the time lock in force when longer"}[dev],
 		st.flavor, when(b.NotAfter))
 	fprintf(out, "  the target's image is on the allowed list of the locked group in force (version %d)\n", r.version)
+	if len(b.LeftBehind) > 0 {
+		fprintf(out, "  LEFT BEHIND, %d key(s): the source hands over without their shares, which stay lost:\n", len(b.LeftBehind))
+		for _, pk := range b.LeftBehind {
+			fprintf(out, "    0x%x\n", pk)
+		}
+		fprintf(out, "  the source refuses the handover unless the number of missing share records is %d and none of these keys is stored\n", len(b.LeftBehind))
+	}
 	if st.state.Locked.Pending.Version != 0 || st.state.Open.Pending.Version != 0 {
 		fprintf(out, "  note: %s has a config update pending; it refuses the handover until the update is in force or replaced\n", m.name)
 	}

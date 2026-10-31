@@ -342,3 +342,63 @@ func TestHashedSignature(t *testing.T) {
 		t.Fatalf("hashed under the import order context: %v", err)
 	}
 }
+
+// left_behind: absent by default, so a body without it keeps its bytes; a
+// body with it round-trips, changes the hash, and shows in the human form.
+// A written count of 0, more than MaxLeftBehind keys, a zero key and keys
+// out of order are refused.
+func TestLeftBehind(t *testing.T) {
+	s := sampleSetup(t)
+	plain := sampleBody(s)
+	plainRaw := must(plain.Encode())
+	b := sampleBody(s)
+	b.LeftBehind = [][48]byte{{0x01}, {0x02}}
+	raw := must(b.Encode())
+	if len(raw) != len(plainRaw)+1+2*48 || !bytes.Equal(raw[:len(plainRaw)], plainRaw) {
+		t.Fatal("left_behind is not a trailing field")
+	}
+	back, err := DecodeBody(raw)
+	if err != nil || len(back.LeftBehind) != 2 || back.LeftBehind[1] != b.LeftBehind[1] {
+		t.Fatalf("decode: %v %v", back, err)
+	}
+	if Hash(raw) == Hash(plainRaw) {
+		t.Fatal("left_behind is not under the hash")
+	}
+	sraw := must(signed(t, b, 0, 1).Encode())
+	if o, err := Decode(sraw); err != nil || len(o.Body.LeftBehind) != 2 {
+		t.Fatalf("signed order: %v", err)
+	}
+	text := string(must(b.Format()))
+	for _, want := range []string{"LEFT BEHIND", "left_behind = 0x01", "left_behind = 0x02"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("human form lacks %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(string(must(plain.Format())), "left_behind") {
+		t.Fatal("human form names left_behind without any")
+	}
+
+	if _, err := DecodeBody(append(bytes.Clone(plainRaw), 0)); err == nil {
+		t.Error("a written count of 0 decoded")
+	}
+	if _, err := DecodeBody(raw[:len(raw)-1]); err == nil {
+		t.Error("a short left_behind decoded")
+	}
+	for want, keys := range map[string][][48]byte{
+		"at most":       make([][48]byte, MaxLeftBehind+1),
+		"zero key":      {{}},
+		"ascending":     {{0x02}, {0x01}},
+		"ascending, ea": {{0x01}, {0x01}},
+	} {
+		c := sampleBody(s)
+		c.LeftBehind = keys
+		if want == "at most" {
+			for i := range c.LeftBehind {
+				c.LeftBehind[i][0] = byte(i + 1)
+			}
+		}
+		if _, err := c.Encode(); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v", want, err)
+		}
+	}
+}
