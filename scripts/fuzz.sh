@@ -13,6 +13,10 @@
 #               mutation (FuzzDecodeShare: 4734 executions in 30 s, against
 #               about a million at 1s).
 #   FUZZ_INPUT_LIMIT  time one input may take (fuzzcheck.Watch), default 2s
+#   FUZZ_MODULES  the modules to fuzz, separated by spaces: unset or ALL for
+#               every module, none for no module. On a pull request CI sets
+#               it from scripts/affected.sh: the changed modules and those
+#               that depend on them, nothing for a docs-only change.
 #
 # Every target calls fuzzcheck.Watch(t) first; this script refuses one
 # that does not. Watch ends the fuzzing process when an input runs longer
@@ -34,6 +38,21 @@ budget="${FUZZ_TIME:-10s}"
 match="${FUZZ_MATCH:-.}"
 minimize="${FUZZ_MINIMIZE_TIME:-1s}"
 one="$LOGS/fuzz-one.log"
+if fuzz_everything; then
+  mods=("${GO_MODULES[@]}")
+else
+  mods=()
+  for m in $FUZZ_MODULES; do
+    [ "$m" != none ] || continue
+    [[ " ${GO_MODULES[*]} " == *" $m "* ]] || { echo "FUZZ_MODULES: $m is not a Go module of this repo" >&2; exit 1; }
+    mods+=("$m")
+  done
+  if [ ${#mods[@]} -eq 0 ]; then
+    log "fuzz: FUZZ_MODULES=$FUZZ_MODULES names no module, nothing to fuzz"
+    exit 0
+  fi
+  log "fuzz: only ${mods[*]} (FUZZ_MODULES)"
+fi
 : >"$LOGS/fuzz.log"
 n=0
 # The runner's targets build with the dev release build's tags (the files
@@ -85,7 +104,7 @@ failed() {
   exit 1
 }
 
-for mod in "${GO_MODULES[@]}"; do
+for mod in "${mods[@]}"; do
   [ -f "$ROOT/$mod/go.mod" ] || continue
   # package directory, file, then target name, for each func FuzzX in a _test.go
   while read -r dir file name; do
@@ -114,4 +133,4 @@ for mod in "${GO_MODULES[@]}"; do
       grep -o '^func Fuzz[A-Za-z0-9_]*' "$f" | sed "s#^func #$d ${f#./} #"
     done | sort)
 done
-log "fuzz: $n targets, $budget each, no failure"
+log "fuzz: $n targets in ${#mods[@]} modules, $budget each, no failure"

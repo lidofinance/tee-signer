@@ -32,6 +32,9 @@ Every commit is signed (GPG or SSH, with a key on your GitHub account).
   how you tested it. Note any checks you could not run.
 - Run `make check` and `make test-modules`; also run `make test` for runner
   build changes. All required CI checks must pass.
+  On a pull request CI fuzzes only the modules the change touches and
+  the modules that depend on them (`scripts/affected.sh`); a docs-only
+  change fuzzes nothing. A push to main fuzzes everything.
 - Get at least one reviewer approval. The author does not count.
 - Squash when merging; the final commit follows the rules above.
 

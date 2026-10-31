@@ -17,6 +17,14 @@ GO_MODULES=(devkit trusted-time signer-protocol markformat governance signer-cor
 # Go uses the go.mod of each module and its replace lines, never a workspace.
 export GOWORK=off
 
+# FUZZ_MODULES names the Go modules scripts/fuzz.sh fuzzes, separated by
+# spaces: unset or ALL for all of them, none for no module. On a pull
+# request CI sets it from scripts/affected.sh, which prints ALL for any
+# change to the C code or a shared input. fuzz_everything: FUZZ_MODULES is
+# unset or ALL, so every Go module and the C fuzz targets (signer-core,
+# markformat) run.
+fuzz_everything() { [ -z "${FUZZ_MODULES+x}" ] || [ "$FUZZ_MODULES" = ALL ]; }
+
 # supranational/blst, vendored in signer-core/third_party/blst at this pin
 # (signer-core/third_party/blst.sha256 lists its files).
 BLST_REPO="https://github.com/supranational/blst.git"

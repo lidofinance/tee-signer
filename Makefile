@@ -13,6 +13,8 @@ export RACE
 FUZZ_TIME ?= 3s
 FUZZ_SECONDS ?= 3
 MODEL_RUNS ?= 500
+# Exits 0 when FUZZ_MODULES is unset or ALL: the C fuzz targets run (scripts/common.sh).
+FUZZ_EVERYTHING := bash -c '. "$$1"; fuzz_everything' _ $(ROOT)/scripts/common.sh
 
 .DEFAULT_GOAL := help
 .PHONY: help deps check core nts build test test-modules e2e test-core test-rust fuzz fuzz-core model race release-gate handover-gate loc clean
@@ -24,10 +26,11 @@ help: ## list targets
 deps: ## apt packages (build tools, cross gcc, qemu-user, clang, cloc, jq)
 	bash $(ROOT)/scripts/deps.sh
 
-check: ## guards: module boundaries, secret scan, release gate self-test, gofmt
+check: ## guards: module boundaries, secret scan, release gate and affected.sh self-tests, gofmt
 	bash $(ROOT)/scripts/check-imports.sh
 	bash $(ROOT)/scripts/check-forbidden.sh
 	bash $(ROOT)/scripts/fetch-nts.sh --check
+	bash $(ROOT)/scripts/affected-test.sh
 	bash $(ROOT)/scripts/release-gate-test.sh
 	python3 -B $(ROOT)/scripts/bundle-licenses-test.py
 	@for m in */go.mod; do d=$${m%/go.mod}; out=$$(cd $$d && gofmt -l . | grep -v '^third_party/' || true); \
@@ -53,18 +56,20 @@ e2e: build ## tests/e2e against the built runners
 test: ## everything: guards, build, release gate, modules, e2e, signer-core suites, fuzz (FUZZ_TIME)
 	bash $(ROOT)/scripts/test.sh
 
-test-core: ## signer-core's own suites (VECTORS_DIR names fetched vectors when offline)
-	bash $(ROOT)/signer-core/scripts/test.sh
+test-core: ## signer-core's own suites (VECTORS_DIR names fetched vectors when offline); its short fuzz run as for fuzz-core
+	$(FUZZ_EVERYTHING) || export FUZZ=0; bash $(ROOT)/signer-core/scripts/test.sh
 
 test-rust: ## the Rust NTS crate's tests and checks (same as nts)
 	bash $(ROOT)/scripts/build-nts.sh
 
-fuzz: core nts ## every Go fuzz target for FUZZ_TIME each
+fuzz: core nts ## every Go fuzz target for FUZZ_TIME each; FUZZ_MODULES="a b" fuzzes only those modules
 	FUZZ_TIME=$(FUZZ_TIME) bash $(ROOT)/scripts/fuzz.sh
 
-fuzz-core: ## the C fuzz targets (ASan, UBSan): regression inputs, then FUZZ_SECONDS each
-	FUZZ_SECONDS=$(FUZZ_SECONDS) bash $(ROOT)/signer-core/scripts/fuzz.sh ci
-	$(MAKE) -C $(ROOT)/markformat fuzz FUZZ_SECONDS=$(FUZZ_SECONDS)
+fuzz-core: ## the C fuzz targets (ASan, UBSan): regression inputs, then FUZZ_SECONDS each; skipped when FUZZ_MODULES is set and not ALL
+	if $(FUZZ_EVERYTHING); then \
+		FUZZ_SECONDS=$(FUZZ_SECONDS) bash $(ROOT)/signer-core/scripts/fuzz.sh ci && \
+		$(MAKE) -C $(ROOT)/markformat fuzz FUZZ_SECONDS=$(FUZZ_SECONDS); \
+	else echo "fuzz-core: skipped, FUZZ_MODULES=$$FUZZ_MODULES leaves out signer-core and markformat"; fi
 
 model: core ## the slashing model test (tee-signer/server) with MODEL_RUNS seeds
 	cd $(ROOT)/tee-signer && SLASHMODEL_RUNS=$(MODEL_RUNS) go test $(RACE) -count=1 -v -timeout 60m \

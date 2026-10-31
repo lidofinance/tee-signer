@@ -67,7 +67,7 @@ make check          # module boundaries, secret scan, release gate self-test, go
 make test-modules   # vet and unit tests of every Go module, with -race
 make test           # all of it: build, gate, modules, e2e, signer-core suites, short fuzz
 make model          # the slashing model test, MODEL_RUNS seeds (default 500)
-make fuzz           # every Go fuzz target for FUZZ_TIME (default 3s)
+make fuzz           # every Go fuzz target for FUZZ_TIME (default 3s); FUZZ_MODULES="a b" only those modules
 make fuzz-core      # the C fuzz targets with ASan and UBSan
 make test-core      # signer-core's own suites
 ```
