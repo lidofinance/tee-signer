@@ -11,8 +11,11 @@
  *  - every call returns a defined status;
  *  - per validator, over the whole input and across restarts: no two signed
  *    attestations with the same target and different data, none surrounding
- *    another, none with source > target; no two different blocks, PTC votes
- *    or envelopes for one slot;
+ *    another, none with source > target, none whose target is not the
+ *    epoch of its slot; no two different blocks, PTC votes or envelopes
+ *    for one slot;
+ *  - no signed attestation, block, PTC vote or envelope has a slot that
+ *    has not started at the clock + SC_SLOT_MARGIN_SECONDS (the slot rule);
  *  - with flag F_VERIFY, attestation and block signatures verify under the
  *    share key over the signing root sc_signer_signing_root gives.
  * Stored records only change through the core, so rollback is out of scope;
@@ -275,7 +278,22 @@ static void check_status(int rc)
 {
     if (g_trace)
         fprintf(stderr, "  op %d v%d: %s\n", g_op, g_v, sc_status_name(rc));
-    FUZZ_CHECK(rc >= SC_OK && rc <= SC_ERR_POLICY_BUILDER_AUTH);
+    FUZZ_CHECK(rc >= SC_OK && rc <= SC_ERR_POLICY_TARGET_SLOT);
+}
+
+/* The slot rule, checked against the slot time changes in force. */
+static void check_slot_started(uint64_t slot)
+{
+    sc_slot_times t;
+    uint64_t at = W.host.now + SC_SLOT_MARGIN_SECONDS;
+    if (at < W.host.now)
+        at = UINT64_MAX;
+    sc_signer_get_slot_times(W.s, &t);
+    if (slot > sc_slot_at(&W.cfg, &t, at)) {
+        fprintf(stderr, "signed slot %llu before it started (now %llu)\n",
+                (unsigned long long)slot, (unsigned long long)W.host.now);
+        FUZZ_CHECK(!"slot not started");
+    }
 }
 
 static void record_slot(signed_t *h, int *n, uint64_t slot, const uint8_t root[32], const char *what)
@@ -299,6 +317,7 @@ static void record_attestation(int v, const sc_attestation_data *d)
     uint64_t s = d->source.epoch, t = d->target.epoch;
     sc_htr_attestation_data(d, root);
     FUZZ_CHECK(s <= t);
+    FUZZ_CHECK(W.cfg.slots_per_epoch && t == d->slot / W.cfg.slots_per_epoch);
     for (int i = 0; i < h->natt; i++) {
         const signed_t *p = &h->att[i];
         if (p->b == t && memcmp(p->root, root, 32) != 0)
@@ -354,6 +373,10 @@ static void op_attestation(fz_in *in, int v)
         d.slot = pick_slot(in);
         d.source.epoch = pick_epoch(in);
         d.target.epoch = sel & 0x40 ? d.source.epoch + (fz_u8(in) & 7) : pick_epoch(in);
+        /* The slot of the target's epoch, unless bit 0 keeps the picked one
+         * (then the target is most often not the slot's epoch). */
+        if (!(sel & 0x01) && W.cfg.slots_per_epoch)
+            d.slot = d.target.epoch * W.cfg.slots_per_epoch + d.slot % W.cfg.slots_per_epoch;
         pick_root(in, d.beacon_block_root);
         pick_root(in, d.source.root);
         pick_root(in, d.target.root);
@@ -366,6 +389,7 @@ static void op_attestation(fz_in *in, int v)
         return;
     FUZZ_CHECK(W.loaded[v]);
     signed_ok(v);
+    check_slot_started(d.slot);
     record_attestation(v, &d);
     sc_htr_attestation_data(&d, obj);
     verify_sig(v, attester, d.target.epoch, obj, sig);
@@ -394,6 +418,7 @@ static void op_block(fz_in *in, int v)
     if (rc != SC_OK)
         return;
     signed_ok(v);
+    check_slot_started(b.slot);
     sc_htr_beacon_block_header(&b, obj);
     record_slot(h->blk, &h->nblk, b.slot, obj, "blocks");
     h->has_block = 1;
@@ -423,6 +448,7 @@ static void op_ptc(fz_in *in, int v)
         return;
     FUZZ_CHECK(d.payload_present <= 1 && d.blob_data_available <= 1);
     signed_ok(v);
+    check_slot_started(d.slot);
     sc_htr_payload_attestation_data(&d, obj);
     record_slot(h->ptc, &h->nptc, d.slot, obj, "PTC votes");
 }
@@ -458,6 +484,7 @@ static void op_envelope(fz_in *in, int v)
         return;
     FUZZ_CHECK(e.builder_index == SC_BUILDER_INDEX_SELF_BUILD);
     signed_ok(v);
+    check_slot_started(e.payload.slot_number);
     sc_htr_payload_envelope(&e, obj);
     record_slot(h->env, &h->nenv, e.payload.slot_number, obj, "envelopes");
 }

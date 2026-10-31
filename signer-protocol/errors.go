@@ -43,6 +43,8 @@ const (
 	StatusSchedule Status = 26 // a new fork schedule changes an epoch the signer may sign before it applies
 	// Builder API authentication (signer-core SC_ERR_POLICY_BUILDER_AUTH).
 	StatusPolicyBuilderAuth Status = 27 // BuilderRequestAuth data not on builder_request_auth_roots
+	// Attestation data consistency (signer-core SC_ERR_POLICY_TARGET_SLOT).
+	StatusPolicyTargetSlot Status = 28 // attestation target epoch is not the epoch of its slot
 
 	StatusBadRequest     Status = 1000 // malformed frame or payload
 	StatusUnsupported    Status = 1001 // unknown message type or kind
@@ -69,6 +71,7 @@ var statusNames = map[Status]string{
 	StatusPolicyEnvelope: "SC_ERR_POLICY_ENVELOPE", StatusEquivocation: "SC_ERR_EQUIVOCATION",
 	StatusSelectionProof: "SC_ERR_SELECTION_PROOF", StatusSchedule: "SC_ERR_SCHEDULE",
 	StatusPolicyBuilderAuth: "SC_ERR_POLICY_BUILDER_AUTH",
+	StatusPolicyTargetSlot:  "SC_ERR_POLICY_TARGET_SLOT",
 	StatusBadRequest:        "BAD_REQUEST", StatusUnsupported: "UNSUPPORTED", StatusInternal: "INTERNAL",
 	StatusDomainMismatch: "DOMAIN_MISMATCH", StatusNotReady: "NOT_READY", StatusPlatform: "PLATFORM",
 	StatusForbidden: "FORBIDDEN", StatusRateLimited: "RATE_LIMITED",
@@ -89,7 +92,8 @@ func (s Status) IsSlashing() bool {
 
 // IsPolicy reports whether s is a signing-policy refusal.
 func (s Status) IsPolicy() bool {
-	return (s >= StatusPolicyFuture && s <= StatusPolicyEnvelope) || s == StatusSelectionProof || s == StatusDomainMismatch
+	return (s >= StatusPolicyFuture && s <= StatusPolicyEnvelope) || s == StatusSelectionProof ||
+		s == StatusPolicyTargetSlot || s == StatusDomainMismatch
 }
 
 // RefusedError is returned when the backend answers with a non-OK status.

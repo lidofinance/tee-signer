@@ -155,7 +155,11 @@ static void make_config(sc_config *c)
     c->commit_ahead.target_epochs = 1;
 }
 
-static void set_epoch(host_t *h, uint64_t epoch) { h->now = GENESIS_TIME + epoch * EPOCH_SECONDS + 7; }
+/* The clock 4 s into slot 3 of epoch, the slot of att(): its votes are due,
+ * and the slot rule refuses every later slot. */
+static void set_epoch(host_t *h, uint64_t epoch) { h->now = GENESIS_TIME + epoch * EPOCH_SECONDS + 40; }
+/* The clock secs seconds into slot (12-second slots). */
+static void set_slot(host_t *h, uint64_t slot, uint64_t secs) { h->now = GENESIS_TIME + slot * 12 + secs; }
 
 static void *g_mem[64];
 static int g_nmem;
@@ -308,12 +312,16 @@ static void test_attestations(void)
     a = att(E - 1, E, 1);
     CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig2), SC_OK);
     CHECK(memcmp(sig, sig2, 96) == 0); /* the refusal above left sig untouched */
+    a = att(E - 1, E + 1, 1); /* slot of epoch E + 1: not started */
+    CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_ERR_POLICY_FUTURE);
+    set_epoch(&h, E + 1);
     a = att(E - 2, E + 1, 1); /* would surround (E-1, E) */
     CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_ERR_SLASH_SOURCE);
     a = att(E - 1, E + 1, 1);
     CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_OK);
-    a = att(E, E + 3, 1); /* clock epoch E, horizon 2 */
+    a = att(E, E + 4, 1); /* clock epoch E + 1, horizon 2 */
     CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_ERR_POLICY_FUTURE);
+    set_epoch(&h, E + 2);
     a = att(E, E + 2, 1);
     CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_OK);
     a = att(E + 2, E + 1, 1);
@@ -324,12 +332,146 @@ static void test_attestations(void)
     h.fail_clock = 0;
     CHECK_RC(sc_sign_attestation(s, unknown, &a, sig), SC_ERR_UNKNOWN_VALIDATOR);
 
-    /* RANDAO: not slashable, but bounded by the clock. */
+    /* RANDAO: not slashable, but bounded by the clock horizon (no slot rule:
+     * a reveal for a later epoch moves no mark). */
+    set_epoch(&h, E);
     CHECK_RC(sc_sign_randao_reveal(s, k.pk, E + 2, sig), SC_OK);
     sc_htr_uint64(E + 2, obj);
     root_with(SC_DOMAIN_RANDAO, V_FULU, cfg.genesis_validators_root, obj, root);
     CHECK_RC(sc_bls_verify(k.share_pk, root, 32, sig), SC_OK);
     CHECK_RC(sc_sign_randao_reveal(s, k.pk, E + 3, sig), SC_ERR_POLICY_FUTURE);
+}
+
+/* An attestation whose target epoch is not the epoch of its slot can never
+ * be included: process_attestation asserts target.epoch ==
+ * compute_epoch_at_slot(slot). The signer refuses it before the repeat
+ * shortcut and before any mark moves. A data check only: the slot rule
+ * (test_slot_rule) is what keeps a vote from running ahead of the clock. */
+static void test_attestation_slot(void)
+{
+    host_t h = {0};
+    sc_config cfg;
+    sc_slashing_state st;
+    sc_repeat_roots rr;
+    uint8_t sig[96], root[32], obj[32];
+    make_config(&cfg);
+    set_epoch(&h, E);
+    sc_signer *s = new_signer(&h, &cfg, 8, 4);
+    vkeys k = add_validator(s, 1, 1000);
+
+    sc_attestation_data a = att(E - 1, E, 1);
+    CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_OK);
+    int writes = h.writes;
+
+    /* Target above the slot's epoch, inside the clock horizon. */
+    sc_attestation_data above = att(E, E + 2, 2);
+    above.slot = (E + 1) * 32 + 3;
+    CHECK_RC(sc_sign_attestation(s, k.pk, &above, sig), SC_ERR_POLICY_TARGET_SLOT);
+    /* Target below the slot's epoch. */
+    sc_attestation_data below = att(E, E + 1, 3);
+    below.slot = (E + 2) * 32;
+    CHECK_RC(sc_sign_attestation(s, k.pk, &below, sig), SC_ERR_POLICY_TARGET_SLOT);
+    /* Refused for its slot before the slashing check sees the target. */
+    sc_attestation_data dbl = att(E - 1, E, 4);
+    dbl.slot = (E + 1) * 32;
+    CHECK_RC(sc_sign_attestation(s, k.pk, &dbl, sig), SC_ERR_POLICY_TARGET_SLOT);
+    CHECK(!strcmp(sc_status_name(SC_ERR_POLICY_TARGET_SLOT), "SC_ERR_POLICY_TARGET_SLOT"));
+    CHECK(SC_ERR_POLICY_TARGET_SLOT == 28);
+
+    /* Nothing moved: the marks, the write count and the repeat root are
+     * those of the first vote. */
+    CHECK_RC(sc_signer_get_state(s, k.pk, &st), SC_OK);
+    CHECK(st.ram.target_epoch == E && st.ram.source_epoch == E - 1);
+    CHECK(h.writes == writes);
+    sc_htr_attestation_data(&a, obj);
+    root_with(SC_DOMAIN_BEACON_ATTESTER, V_FULU, cfg.genesis_validators_root, obj, root);
+    CHECK_RC(sc_signer_get_repeat_roots(s, k.pk, &rr), SC_OK);
+    CHECK((rr.flags & SC_REPEAT_HAS_ATTESTATION) && memcmp(rr.attestation_root, root, 32) == 0);
+
+    /* The honest votes of those epochs sign once their slots start, at
+     * either edge of the epoch. */
+    a = att(E, E + 1, 1);
+    a.slot = (E + 1) * 32;
+    set_slot(&h, a.slot, 0);
+    CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_OK);
+    a = att(E + 1, E + 2, 1);
+    a.slot = (E + 3) * 32 - 1;
+    set_slot(&h, a.slot, 0);
+    CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_OK);
+}
+
+/* The slot rule: a block or an attestation signs only once its slot has
+ * started, give or take SC_SLOT_MARGIN_SECONDS. The target/slot check ties
+ * the target to the slot; this rule keeps the slot from running ahead of
+ * the clock, so a caller cannot raise the marks over a vote or a proposal
+ * the validator has yet to make. */
+static void test_slot_rule(void)
+{
+    host_t h = {0};
+    sc_config cfg;
+    sc_slashing_state st;
+    uint8_t sig[96];
+    make_config(&cfg);
+    set_epoch(&h, E);
+    sc_signer *s = new_signer(&h, &cfg, 8, 4);
+    vkeys k = add_validator(s, 1, 1000);
+    const uint64_t first = (E + 1) * 32; /* first slot of epoch E + 1 */
+    CHECK(SC_SLOT_MARGIN_SECONDS == 2);
+
+    sc_attestation_data a = att(E - 1, E, 1);
+    a.slot = E * 32;
+    CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_OK);
+
+    /* Epoch boundary: 3 s before the next epoch's first slot starts (in the
+     * epoch's last slot), the margin does not reach it. */
+    sc_attestation_data next = att(E, E + 1, 2);
+    next.slot = first;
+    set_slot(&h, first - 1, 12 - SC_SLOT_MARGIN_SECONDS - 1);
+    CHECK_RC(sc_sign_attestation(s, k.pk, &next, sig), SC_ERR_POLICY_FUTURE);
+    CHECK_RC(sc_signer_get_state(s, k.pk, &st), SC_OK);
+    CHECK(st.ram.target_epoch == E);
+    /* Within the margin of its start it signs. */
+    set_slot(&h, first, 0);
+    h.now -= SC_SLOT_MARGIN_SECONDS;
+    CHECK_RC(sc_sign_attestation(s, k.pk, &next, sig), SC_OK);
+
+    /* Drift: the slot after the clock's slot is refused until now + margin
+     * reaches its start. */
+    vkeys k2 = add_validator(s, 3, SC_INDEX_UNKNOWN);
+    sc_attestation_data later = att(E, E + 1, 3);
+    later.slot = first + 5;
+    for (uint64_t t = 0; t < 12; t++) {
+        set_slot(&h, first + 4, t);
+        int started = t + SC_SLOT_MARGIN_SECONDS >= 12;
+        CHECK_RC(sc_sign_attestation(s, k2.pk, &later, sig),
+                 started ? SC_OK : SC_ERR_POLICY_FUTURE);
+    }
+
+    /* Blocks: the next slot is refused, the current one signs. */
+    sc_beacon_block_header b;
+    memset(&b, 0, sizeof b);
+    b.proposer_index = 1000;
+    set_slot(&h, first + 10, 4);
+    b.slot = first + 11;
+    CHECK_RC(sc_sign_block(s, k.pk, &b, sig), SC_ERR_POLICY_FUTURE);
+    b.slot = first + 10 + 32; /* inside the epoch horizon, a whole epoch ahead */
+    CHECK_RC(sc_sign_block(s, k.pk, &b, sig), SC_ERR_POLICY_FUTURE);
+    CHECK_RC(sc_signer_get_state(s, k.pk, &st), SC_OK);
+    CHECK(!(st.ram.flags & SC_WM_HAS_BLOCK));
+    b.slot = first + 10;
+    CHECK_RC(sc_sign_block(s, k.pk, &b, sig), SC_OK);
+    /* An honest proposal at the next slot still signs once it starts. */
+    b.slot = first + 11;
+    set_slot(&h, first + 11, 0);
+    CHECK_RC(sc_sign_block(s, k.pk, &b, sig), SC_OK);
+
+    /* Before genesis only slot 0 passes the slot rule. */
+    host_t h0 = {0};
+    h0.now = GENESIS_TIME - 100;
+    sc_signer *s0 = new_signer(&h0, &cfg, 1, 0);
+    vkeys k0 = add_validator(s0, 2, SC_INDEX_UNKNOWN);
+    b.slot = 1;
+    CHECK_RC(sc_sign_block(s0, k0.pk, &b, sig), SC_ERR_POLICY_FUTURE);
 }
 
 /* sc_sign_root: the six domain types that need no slashing protection sign
@@ -449,6 +591,7 @@ static void test_blocks(void)
     memset(b.parent_root, 1, 32);
     memset(b.state_root, 2, 32);
     memset(b.body_root, 3, 32);
+    set_slot(&h, b.slot, 0);
     CHECK_RC(sc_sign_block(s, k.pk, &b, sig), SC_OK);
     sc_htr_beacon_block_header(&b, obj);
     root_with(SC_DOMAIN_BEACON_PROPOSER, V_FULU, cfg.genesis_validators_root, obj, root);
@@ -462,6 +605,8 @@ static void test_blocks(void)
     b.proposer_index = 999;
     CHECK_RC(sc_sign_block(s, k.pk, &b, sig), SC_ERR_POLICY_INDEX);
     b.proposer_index = 1000;
+    CHECK_RC(sc_sign_block(s, k.pk, &b, sig), SC_ERR_POLICY_FUTURE); /* not started */
+    set_slot(&h, b.slot, 0);
     CHECK_RC(sc_sign_block(s, k.pk, &b, sig), SC_OK);
     b.slot = (E + 3) * 32;
     CHECK_RC(sc_sign_block(s, k.pk, &b, sig), SC_ERR_POLICY_FUTURE);
@@ -682,6 +827,7 @@ static void test_restart(void)
     CHECK(st.ram.target_epoch == E + 1 && st.ram.source_epoch == E &&
           st.ram.block_slot == E * 32 + 32);
 
+    set_epoch(&h, E + 2); /* the slots below have started */
     a = att(E - 1, E + 1, 1);
     CHECK_RC(sc_sign_attestation(s2, k.pk, &a, sig), SC_ERR_SLASH_SOURCE);
     a = att(E, E + 1, 1);
@@ -1021,6 +1167,7 @@ static void test_device_marks(void)
     /* A block inside the window needs no write; one past it raises the
      * target and block bounds, not the source bound. */
     sc_beacon_block_header b = blk((E + 1) * 32 + 5, 1);
+    set_slot(&h, b.slot, 0);
     CHECK_RC(sc_sign_block(s, k[1].pk, &b, sig), SC_OK);
     CHECK(h.writes == 1);
     set_epoch(&h, E + 2);
@@ -1048,6 +1195,7 @@ static void test_device_marks(void)
     CHECK_RC(sc_signer_get_state(s, k[2].pk, &st), SC_OK);
     CHECK(st.ram.target_epoch == E + 3 && st.ram.source_epoch == E &&
           st.ram.block_slot == (E + 4) * 32 - 1);
+    set_epoch(&h, E + 4);
     b = blk((E + 3) * 32, 2);
     CHECK_RC(sc_sign_block(s, k[2].pk, &b, sig), SC_ERR_SLASH_BLOCK);
     a = att(E + 1, E + 3, 2);
@@ -1059,7 +1207,7 @@ static void test_device_marks(void)
     CHECK(h.writes == 4);
 
     /* A failed write refuses and changes nothing. */
-    set_epoch(&h, E + 5);
+    set_epoch(&h, E + 6);
     h.fail_store = 1;
     CHECK_RC(sc_signer_get_state(s, k[1].pk, &st), SC_OK);
     a = att(E + 5, E + 6, 3);
@@ -1077,6 +1225,7 @@ static void test_device_marks(void)
     CHECK_RC(sc_signer_get_state(s, k[0].pk, &st), SC_OK);
     CHECK(st.committed.target_epoch == E + 10 && st.committed.source_epoch == E + 10 &&
           st.ram.target_epoch == E + 10);
+    set_epoch(&h, E + 7);
     a = att(E + 5, E + 7, 4);
     CHECK_RC(sc_sign_attestation(s, k[1].pk, &a, sig), SC_OK); /* inside the device mark */
     CHECK(h.writes == 6);
@@ -1275,6 +1424,7 @@ static void test_nonfinality_restart(uint64_t ahead)
     a = att(S, last, 0x34);
     CHECK_RC(sc_sign_attestation(s, k[1].pk, &a, sig), SC_ERR_SLASH_TARGET);
     /* a vote that surrounds a vote from before the restart (S, last), */
+    set_epoch(&h, bound + 2);
     a = att(S - 1, bound + 2, 0x35);
     CHECK_RC(sc_sign_attestation(s, k[1].pk, &a, sig), SC_ERR_SLASH_SOURCE);
     /* one that surrounds key 2's last vote (S, S+1), from before the leak, */
@@ -1373,7 +1523,7 @@ static void vote_writes(uint32_t scope, uint64_t ahead, uint32_t nkeys, int epoc
     for (int e = 0; e < epochs; e++) {
         uint64_t t = E + (uint64_t)e;
         sc_attestation_data a = att(finality ? t - 1 : E - 1, t, 1);
-        h.now = GENESIS_TIME + t * EPOCH_SECONDS + 7;
+        h.now = GENESIS_TIME + t * EPOCH_SECONDS + 40; /* in slot 3, as set_epoch */
         for (uint32_t i = 0; i < nkeys; i++)
             signed_ok += sc_sign_attestation(s, g_big_pk[i], &a, sig) == SC_OK;
     }
@@ -1795,6 +1945,9 @@ static void test_gloas_ptc(void)
     d = ptc((G - 1) * 32 + 31, 1); /* last slot before the fork */
     CHECK_RC(sc_sign_payload_attestation(s, k.pk, &d, sig), SC_ERR_POLICY_FORK);
     d = ptc(G * 32 + 4, 1);
+    /* Slot rule: the clock is in slot 3, so slot 4 has not started. */
+    CHECK_RC(sc_sign_payload_attestation(s, k.pk, &d, sig), SC_ERR_POLICY_FUTURE);
+    set_slot(&h, d.slot, 12 - SC_SLOT_MARGIN_SECONDS);
     CHECK_RC(sc_sign_payload_attestation(s, k.pk, &d, sig), SC_OK);
     sc_htr_payload_attestation_data(&d, obj);
     root_with(SC_DOMAIN_PTC_ATTESTER, V_GLOAS, cfg.genesis_validators_root, obj, root);
@@ -1807,7 +1960,11 @@ static void test_gloas_ptc(void)
     d = ptc(G * 32 + 3, 1);
     CHECK_RC(sc_sign_payload_attestation(s, k.pk, &d, sig), SC_ERR_EQUIVOCATION);
     d = ptc(G * 32 + 5, 0);
+    set_slot(&h, d.slot, 0);
     CHECK_RC(sc_sign_payload_attestation(s, k.pk, &d, sig), SC_OK);
+    /* A vote for a later slot would refuse the real one: slot rule. */
+    d = ptc(G * 32 + 6, 0);
+    CHECK_RC(sc_sign_payload_attestation(s, k.pk, &d, sig), SC_ERR_POLICY_FUTURE);
     d = ptc((G + 3) * 32, 0); /* clock epoch G, horizon 2 */
     CHECK_RC(sc_sign_payload_attestation(s, k.pk, &d, sig), SC_ERR_POLICY_FUTURE);
     d = ptc(G * 32 + 6, 2);
@@ -1841,6 +1998,7 @@ static void test_gloas_import(void)
         imp.flags = SC_WM_HAS_BLOCK;
         imp.block_slot = G * 32 + 10;
         CHECK_RC(sc_signer_import(s, k.pk, cfg.genesis_validators_root, &imp), SC_OK);
+        set_slot(&h, G * 32 + 11, 0);
         sc_payload_attestation_data d = ptc(G * 32 + 5, 1);
         CHECK_RC(sc_sign_payload_attestation(s, k.pk, &d, sig), SC_ERR_EQUIVOCATION);
         d = ptc(G * 32 + 10, 1);
@@ -1955,6 +2113,8 @@ static void test_gloas_envelope(void)
     /* Next block: each policy refusal, then the good one. */
     sc_beacon_block_header b2 = gblock(G * 32 + 9, 2);
     e2 = envelope_for(&b2, &cfg, 9);
+    CHECK_RC(sc_sign_block(s, k.pk, &b2, sig), SC_ERR_POLICY_FUTURE); /* not started */
+    set_slot(&h, b2.slot, 1);
     CHECK_RC(sc_sign_payload_envelope(s, k.pk, &e2, sig), SC_ERR_POLICY_ENVELOPE);
     CHECK_RC(sc_sign_block(s, k.pk, &b2, sig), SC_OK);
     e2.builder_index = 5;
@@ -1969,12 +2129,23 @@ static void test_gloas_envelope(void)
     e2.parent_beacon_block_root[0] ^= 1;
     CHECK_RC(sc_sign_payload_envelope(s, k.pk, &e2, sig), SC_ERR_POLICY_ENVELOPE);
     e2 = envelope_for(&b2, &cfg, 9);
-    e2.payload.slot_number++;
+    e2.payload.slot_number--;
     CHECK_RC(sc_sign_payload_envelope(s, k.pk, &e2, sig), SC_ERR_POLICY_ENVELOPE);
     e2 = envelope_for(&b2, &cfg, 9);
     CHECK_RC(sc_sign_payload_envelope(s, k.pk, &e2, sig), SC_OK);
     /* The old block's envelope no longer qualifies. */
     CHECK_RC(sc_sign_payload_envelope(s, k.pk, &e, sig), SC_ERR_POLICY_ENVELOPE);
+
+    /* Slot rule for envelopes: with a clock that reads the slot as not yet
+     * started (here set back), the envelope of the block is refused. */
+    sc_beacon_block_header b4 = gblock(G * 32 + 12, 4);
+    sc_payload_envelope e4 = envelope_for(&b4, &cfg, 4);
+    set_slot(&h, b4.slot, 0);
+    CHECK_RC(sc_sign_block(s, k.pk, &b4, sig), SC_OK);
+    set_slot(&h, b4.slot - 1, 12 - SC_SLOT_MARGIN_SECONDS - 1);
+    CHECK_RC(sc_sign_payload_envelope(s, k.pk, &e4, sig), SC_ERR_POLICY_FUTURE);
+    set_slot(&h, b4.slot, 6);
+    CHECK_RC(sc_sign_payload_envelope(s, k.pk, &e4, sig), SC_OK);
 
     /* Before the fork: refused even for a block signed then. */
     host_t h2 = {0};
@@ -2044,7 +2215,7 @@ static void test_gloas_restart(void)
         make_gloas_config(&cfg);
         cfg.mark_scope = scope ? SC_MARKS_PER_DEVICE : SC_MARKS_PER_VALIDATOR;
         cfg.commit_ahead.block_slots = 4;
-        set_epoch(&h, G);
+        set_slot(&h, G * 32 + 7, 0); /* every slot below has started */
         sc_signer *s = new_signer(&h, &cfg, 8, 0);
         vkeys k = add_validator(s, 45, 1000);
         sc_payload_attestation_data d = ptc(G * 32 + 4, 1);
@@ -2077,6 +2248,7 @@ static void test_gloas_restart(void)
         CHECK_RC(sc_signer_get_state(r, k2.pk, &st), SC_OK);
         uint64_t bound = st.committed.block_slot;
         CHECK(bound >= G * 32 + 7);
+        set_slot(&h, bound + 1, 0);
         CHECK_RC(sc_sign_payload_attestation(r, k2.pk, &d, sig), SC_ERR_EQUIVOCATION);
         d = ptc(bound, 0);
         CHECK_RC(sc_sign_payload_attestation(r, k2.pk, &d, sig), SC_ERR_EQUIVOCATION);
@@ -2584,8 +2756,9 @@ static void test_slot_times(void)
     bad = slot_times2(10, UINT64_MAX / 16, 0, 0);
     CHECK_RC(sc_slot_times_check(&cfg, &bad), SC_ERR_ARG); /* an epoch's length does not fit */
 
-    /* A signer made with the changes: in epoch 30 under them it signs up to
-     * epoch 32; a signer without them is in epoch 18 then. */
+    /* A signer made with the changes: in epoch 30 under them its horizon is
+     * epoch 32 and the slot rule counts 4-second slots; a signer without
+     * them is in epoch 18 then. */
     size_t sz = sc_signer_mem_size(4, 0);
     void *mem = malloc(sz);
     sc_host_ops ops = host_ops(&h);
@@ -2598,11 +2771,22 @@ static void test_slot_times(void)
     CHECK_RC(sc_signer_init_ext(mem, sz, 4, 0, &cfg, &t, &ops, &s), SC_OK);
     sc_signer_get_slot_times(s, &got);
     CHECK(got.count == 2 && got.changes[1].epoch == 20 && got.changes[1].seconds_per_slot == 4);
-    h.now = s20 + 10 * 4 * 32 + 5;
+    const uint64_t s963 = s20 + (10 * 32 + 3) * 4; /* start of slot 963, att()'s slot */
+    h.now = s963;
     vkeys k = add_validator(s, 21, 2000);
-    sc_attestation_data a = att(29, 32, 1), far = att(29, 33, 1);
-    CHECK_RC(sc_sign_attestation(s, k.pk, &far, sig), SC_ERR_POLICY_FUTURE);
+    sc_attestation_data a = att(29, 30, 1), far = att(29, 33, 1), ahead = att(29, 32, 1);
+    CHECK_RC(sc_sign_attestation(s, k.pk, &far, sig), SC_ERR_POLICY_FUTURE);   /* horizon */
+    CHECK_RC(sc_sign_attestation(s, k.pk, &ahead, sig), SC_ERR_POLICY_FUTURE); /* slot rule */
     CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_OK);
+    /* Slot 964 starts 4 s after slot 963: the margin reaches it at +2 s. */
+    vkeys k3 = add_validator(s, 23, 2002);
+    sc_attestation_data next = att(29, 30, 2);
+    next.slot = 964;
+    h.now = s963 + 1;
+    CHECK_RC(sc_sign_attestation(s, k3.pk, &next, sig), SC_ERR_POLICY_FUTURE);
+    h.now = s963 + 4 - SC_SLOT_MARGIN_SECONDS;
+    CHECK_RC(sc_sign_attestation(s, k3.pk, &next, sig), SC_OK);
+    h.now = s963;
     sc_signer *plain = new_signer(&h, &cfg, 4, 0);
     sc_signer_get_slot_times(plain, &got);
     CHECK(got.count == 0);
@@ -2842,6 +3026,8 @@ int main(int argc, char **argv)
     test_domains();
     test_registration_go(data_dir);
     test_attestations();
+    test_attestation_slot();
+    test_slot_rule();
     test_sign_root();
     test_blocks();
     test_exits();

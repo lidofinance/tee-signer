@@ -34,7 +34,12 @@ import (
 // for an earlier vote. The pre-history of an imported key is a vote and a
 // block from before the log began, as after a lost log. The oracle refuses
 // a double vote, a surround and a second block at a slot, across all
-// runners, the pre-history and the imported votes.
+// runners, the pre-history and the imported votes. It also refuses any
+// signed vote or block whose slot has not started (the core's slot rule,
+// 2 s margin), and an honest vote for the clock's epoch refused when no
+// vote, import, restart floor, cover write or commit-ahead window of that
+// key explains it (liveness: a hostile caller must not be able to block
+// the validator's own votes).
 //
 // FuzzSlashingModel takes the operations as bytes; TestSlashingModel runs
 // seeded sequences (SLASHMODEL_SEED picks one seed, SLASHMODEL_RUNS the
@@ -142,6 +147,10 @@ type modelVote struct {
 	source, target uint64
 	root           byte
 	who            string
+	// at is the epoch of the clock + 2 s when a runner signed the vote (0
+	// for pre-history and imports): a target above it was signed for a slot
+	// that had not started.
+	at uint64
 }
 
 // oracle holds every signature returned, and the pre-history of imports.
@@ -220,6 +229,51 @@ func runModel(t *testing.T, ops []byte) (signed int) {
 		t.Helper()
 		t.Fatalf("%s\ntrace:\n%s", fmt.Sprintf(format, args...), joinLines(trace))
 	}
+	// What may refuse an honest vote: the highest restart floor of any
+	// runner start (the log is shared), the floor of a key's first load,
+	// and, once a runner has started from the log, the bounds written ahead
+	// (commit-ahead windows and cover writes).
+	floorHi, coverHi, restarted := first.e.floorOf(), uint64(0), false
+	keyFloor := map[backend.Pubkey]uint64{}
+	noteStart := func(nr *modelRunner) {
+		if nr != nil && nr.ok {
+			floorHi = max(floorHi, nr.e.floorOf())
+			restarted = true
+		}
+	}
+	// started fails on a signed message whose slot has not started.
+	started := func(r *modelRunner, what string, slot uint64) {
+		t.Helper()
+		if lim := r.e.signer.SlotAt(r.e.now() + 2); slot > lim {
+			fail("%s at slot %d signed before it started (clock slot + 2 s: %d)", what, slot, lim)
+		}
+	}
+	// excused reports whether a slashing refusal of the honest vote (s, tg)
+	// has a cause: a vote of the key (signed by any runner, imported or
+	// pre-history) at or above tg or with a source above s, a restart floor,
+	// or after a restart a bound written ahead (commit-ahead or a cover
+	// write).
+	excused := func(r *modelRunner, pk backend.Pubkey, s, tg uint64) bool {
+		ahead := r.e.signer.Config().CommitAhead
+		hiS, hiT := uint64(0), uint64(0)
+		for _, vs := range [][]modelVote{sent[pk], o.votes[pk]} {
+			for _, v := range vs {
+				// A vote for a slot that had not started excuses nothing:
+				// that is the refusal the oracle is here to catch.
+				tv := v.target
+				if v.at != 0 {
+					tv = min(tv, v.at)
+				}
+				hiS, hiT = max(hiS, v.source), max(hiT, tv)
+			}
+		}
+		if restarted {
+			hiS, hiT = hiS+ahead.SourceEpochs, max(hiT+ahead.TargetEpochs, coverHi+ahead.TargetEpochs)
+		}
+		fl := max(floorHi, keyFloor[pk])
+		hiS, hiT = max(hiS, fl), max(hiT, fl)
+		return tg <= hiT || s < hiS
+	}
 	importKey := func(history bool) {
 		r := runners[active]
 		if !r.ok || len(keys) >= 6 {
@@ -243,6 +297,7 @@ func runModel(t *testing.T, ops []byte) (signed int) {
 			return
 		}
 		keys = append(keys, k)
+		keyFloor[pk] = r.e.floorOf() // the first load applies the floor too
 		if err := o.vote(pk, modelVote{source: pre.SourceEpoch, target: pre.TargetEpoch, root: 0xff, who: "pre-history"}); err != nil {
 			t.Fatal(err)
 		}
@@ -262,21 +317,41 @@ func runModel(t *testing.T, ops []byte) (signed int) {
 			}
 			k := keys[int(next())%len(keys)]
 			s, tg, root := max(epoch, 2)-2, epoch, byte(0)
+			skew := false
 			if op >= 3 && op != 16 {
 				// Hostile: any source from before the log began up to the
-				// clock, any target from it up to one epoch ahead.
+				// clock, any target from it up to one epoch ahead (the slot
+				// rule refuses those); one in four in the slot of the epoch
+				// after its target, which no chain includes.
 				lo := e0 - 6
 				s = lo + uint64(next())%(epoch+1-lo)
 				tg = s + uint64(next())%(epoch+2-s)
 				root = next() % 3
+				skew = next()%4 == 0
 			}
 			m := vote(s, tg)
 			m.BeaconBlockRoot[1] = root
+			if skew {
+				m.Slot += spe
+			}
+			at := r.e.signer.EpochAt(r.e.now() + 2)
 			err := r.e.signMsg(k.pk, m)
 			lost := op == 16
-			trace = append(trace, fmt.Sprintf("runner %d epoch %d: vote key %d (%d, %d) root %d lost=%v: %v", active, epoch, k.index, s, tg, root, lost, err))
+			trace = append(trace, fmt.Sprintf("runner %d epoch %d: vote key %d (%d, %d) slot %d root %d lost=%v: %v", active, epoch, k.index, s, tg, m.Slot, root, lost, err))
+			if skew && err == nil {
+				fail("vote (%d, %d) in a slot of epoch %d signed: it can never be included and only moves the target mark", s, tg, m.Slot/spe)
+			}
+			if honest := op < 3 || op == 16; honest && err != nil {
+				switch st := backend.StatusOf(err); {
+				case st == backend.StatusPolicyFuture || st == backend.StatusPolicyTargetSlot:
+					fail("honest vote (%d, %d) at slot %d refused: %v", s, tg, m.Slot, err)
+				case st.IsSlashing() && !excused(r, k.pk, s, tg):
+					fail("honest vote (%d, %d) refused, and no vote, import, floor, cover or commit-ahead of the key explains it: %v", s, tg, err)
+				}
+			}
 			if err == nil {
-				v := modelVote{source: s, target: tg, root: root}
+				started(r, "vote", m.Slot)
+				v := modelVote{source: s, target: tg, root: root, at: at}
 				sent[k.pk] = append(sent[k.pk], v)
 				if last[active] == nil {
 					last[active] = map[backend.Pubkey]modelVote{}
@@ -285,7 +360,7 @@ func runModel(t *testing.T, ops []byte) (signed int) {
 			}
 			if err == nil && !lost {
 				signed++
-				if err := o.vote(k.pk, modelVote{source: s, target: tg, root: root, who: fmt.Sprintf("runner %d", active)}); err != nil {
+				if err := o.vote(k.pk, modelVote{source: s, target: tg, root: root, who: fmt.Sprintf("runner %d", active), at: at}); err != nil {
 					fail("%v", err)
 				}
 			}
@@ -300,6 +375,7 @@ func runModel(t *testing.T, ops []byte) (signed int) {
 			err := r.e.signMsg(k.pk, m)
 			trace = append(trace, fmt.Sprintf("runner %d epoch %d: block key %d slot %d root %d: %v", active, epoch, k.index, slot, root, err))
 			if err == nil {
+				started(r, "block", slot)
 				signed++
 				if err := o.block(k.pk, slot, root); err != nil {
 					fail("%v", err)
@@ -314,6 +390,7 @@ func runModel(t *testing.T, ops []byte) (signed int) {
 			delete(last, active)
 			nr, err := startRunner(base)
 			trace = append(trace, fmt.Sprintf("runner %d: restart: %v", active, err))
+			noteStart(nr)
 			if nr != nil {
 				runners[active] = nr
 			}
@@ -329,6 +406,7 @@ func runModel(t *testing.T, ops []byte) (signed int) {
 			}
 			nr, err := startRunner(base)
 			trace = append(trace, fmt.Sprintf("clone runner %d: %v", len(runners), err))
+			noteStart(nr)
 			if nr != nil {
 				runners = append(runners, nr)
 			}
@@ -341,6 +419,7 @@ func runModel(t *testing.T, ops []byte) (signed int) {
 			if r.ok {
 				err := r.e.signer.CoverEpoch(epoch + 1)
 				trace = append(trace, fmt.Sprintf("runner %d: cover %d: %v", active, epoch+1, err))
+				coverHi = max(coverHi, epoch+1)
 			}
 		case 17: // import into a key that signed: a vote inside its last one, signed elsewhere
 			lv := last[active]
@@ -393,8 +472,9 @@ func runModel(t *testing.T, ops []byte) (signed int) {
 			err := r.e.signMsg(k.pk, m)
 			trace = append(trace, fmt.Sprintf("runner %d epoch %d: vote again key %d (%d, %d) root %d: %v", active, epoch, k.index, v.source, v.target, v.root, err))
 			if err == nil {
+				started(r, "vote again", m.Slot)
 				signed++
-				if err := o.vote(k.pk, modelVote{source: v.source, target: v.target, root: v.root, who: fmt.Sprintf("runner %d, again", active)}); err != nil {
+				if err := o.vote(k.pk, modelVote{source: v.source, target: v.target, root: v.root, who: fmt.Sprintf("runner %d, again", active), at: v.at}); err != nil {
 					fail("%v", err)
 				}
 			}
