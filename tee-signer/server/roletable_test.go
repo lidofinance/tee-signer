@@ -30,7 +30,9 @@ func pipeCall(t *testing.T, c net.Conn, id uint32, typ wire.MsgType, payload []b
 
 // Every message type of wire, wire/admin and handover, and some unknown ones,
 // against each client role: FORBIDDEN exactly where the role table of
-// docs/protocol.md says no.
+// docs/protocol.md says no. The unknown ones include 0x20 to 0x28, the
+// message numbers of the removed key generation: they stay refused for
+// every role.
 func TestRoleTable(t *testing.T) {
 	admin := []asn1.ObjectIdentifier{backend.AdminClientOID}
 	root := newTestCA(t, nil, nil, nil)
@@ -43,6 +45,9 @@ func TestRoleTable(t *testing.T) {
 		wireadmin.TypeImportSealed, wireadmin.TypeConfigUpdate, wireadmin.TypeApproveExit,
 		handover.TypeOrder, handover.Type, handover.TypeImport,
 		0x00, 0x0a, 0x1f, 0x29, 0x30, 0x34, 0x7f,
+	}
+	for typ := wire.MsgType(0x20); typ <= 0x28; typ++ {
+		types = append(types, typ)
 	}
 	// The types each role may send; the rest must be FORBIDDEN.
 	signing := map[wire.MsgType]bool{wire.TypeHealth: true, wire.TypePublicKeys: true, wire.TypeSign: true, wire.TypeIdentity: true}
