@@ -33,7 +33,8 @@ NITRO_CLI_DIR="$BUILD/third_party/aws-nitro-enclaves-cli"
 
 # NTS time client (nts/): a Rust static library, linked into the runner by the
 # build tag nts. The Rust toolchain is a Docker image (trusted-time/toolchain/toolchain.Dockerfile:
-# rust:1.94.1-slim-bookworm pinned by digest, plus the aarch64 standard library).
+# rust:1.94.1-slim-bookworm pinned by digest, plus the aarch64 standard library,
+# pinned by NTS_STD_SHA256_aarch64).
 # The crates are those of trusted-time/rust/Cargo.lock, fetched from crates.io
 # into NTS_CARGO_HOME by scripts/fetch-nts.sh. The output goes to build/nts/, not to
 # build/<arch>/, so that no file an image build uses is overwritten.
@@ -41,6 +42,13 @@ NTS_DIR="$ROOT/trusted-time/rust"
 NTS_CARGO_HOME="$BUILD/nts/cargo-home"
 NTS_IMAGE="signer-nts-toolchain:1.94.1-slim"
 NTS_RUSTC_COMMIT="e408947bfd200af42db322daf0fadfe7e26d3bd1"
+# The standard library of each target in the image: sha256 of the sorted
+# "sha256  path" list of every file under lib/rustlib/<target> of the
+# sysroot (nts_std_sum in nts-container.sh). The x86_64 one comes with the
+# base image; the aarch64 one is what rustup downloaded at image build, and
+# this pin is the only check of its bytes beyond rustup's own manifest.
+NTS_STD_SHA256_x86_64="bf5ce11b2dc442f3261fb3197d8412a26ed4114b196299d4284f4fbf8c919320"
+NTS_STD_SHA256_aarch64="9ebddcc2f45dafdc7e150626f7ed9bd981c7d4da85c33df46b46e7e2d7db8b88"
 NTS_OUT="$BUILD/nts"
 
 # nts_toolchain_image: builds the toolchain image if this Docker has none.

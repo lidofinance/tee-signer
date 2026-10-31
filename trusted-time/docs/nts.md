@@ -255,7 +255,13 @@ as the calling user, with `--network none`. It stops if the compiler is not
 the commit named in `scripts/common.sh`. The image is built locally and its
 layer holds files with the date of the build, so a rebuild is not expected to
 have the same digest. The pins that count are the base image digest, the
-commit of rustc and the rust-std hash from the release manifest.
+commit of rustc and the sums of each target's standard library
+(`NTS_STD_SHA256_x86_64` and `NTS_STD_SHA256_aarch64` in
+`scripts/common.sh`: the sha256 of the sorted file sums under
+`lib/rustlib/<target>`). rustup checks the aarch64 rust-std only against
+the release manifest it downloads from the same server, so the pin is what
+keeps a changed download out of the build. A Rust update changes all
+three.
 
 ## Crates and where they live
 

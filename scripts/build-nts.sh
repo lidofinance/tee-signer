@@ -63,10 +63,12 @@ for arch in "${archs[@]}"; do
   mkdir -p "$out" "$chk"
   tests=0
   [ "$arch" = x86_64 ] && [ "$run_tests" = 1 ] && tests=1
+  std_pin="NTS_STD_SHA256_$arch"
   docker run --rm --pull=never --network none --user "$(id -u):$(id -g)" \
     -e HOME=/tmp/home -e CARGO_HOME=/tmp/cargo-home -e CARGO_TARGET_DIR=/tmp/target \
     -e SOURCE_DATE_EPOCH=0 -e NTS_TARGET="$arch-unknown-linux-gnu" -e NTS_CROOT="$CROOT" \
     -e NTS_RUSTC_COMMIT="$NTS_RUSTC_COMMIT" -e NTS_TEST="$tests" \
+    -e NTS_STD_SHA256="${!std_pin}" \
     -v "$ROOT/scripts/nts-container.sh:/nts-container.sh:ro" \
     -v "$NTS_DIR:$CROOT/nts:ro" \
     -v "$NTS_CARGO_HOME:/crates:ro" \
