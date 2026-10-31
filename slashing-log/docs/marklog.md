@@ -56,16 +56,25 @@ a tombstone, a pending update at or below the active version, a body past
 version 0 without a copy, or an order of an unknown kind.
 
 Fail-closed reader rule. A record the reader refuses is skipped, unless
-it sits at or above the newest valid record and its start (magic `SMARK`
+it sits at or above the newest valid record, its start (magic `SMARK`
 and a digit of 1 or more, setup hash, signer, version, previous version,
 previous hash, log ID, owner, key blob) names this setup, signer and
-version with a key blob the runner's key release opens. Then a runner
-under this key release wrote it, most likely a newer image with a field
+version with a key blob the runner's key release opens, and its last 64
+bytes are an Ed25519 signature under the key inside that blob, with the
+context `signer-mark-v1`, over every byte before them. Then a runner
+under this key release signed it, most likely a newer image with a field
 this one does not know (a digit above 1), and the runner refuses to start
 (`markstore.ErrUnreadable`). Skipping it would fall back to the mark below
 it, and the runner could sign votes around the newer image's marks or
 miss the day's exits it counted. Every later record format keeps that
-start and the magic's form. A digit of 0 is no record.
+start, the magic's form and the signed tail. A digit of 0 is no record.
+
+The key blob alone proves nothing: it is a public field, and anyone who
+can read the log can copy it from a real record into an object of their
+own. Without the signature check such an object, under a compliance lock,
+would stop every start of the signer until the lock expires.
+`-mark-create` does not clear `ErrUnreadable`: the rule runs before the
+override is looked at, and setup images have no override.
 
 ### Source gate
 
@@ -379,6 +388,14 @@ holds its true mark.
   then reads the old log.
 - A signer down longer than half the retention period: the age check
   stops it, and it needs a new setup and a re-import.
+- Objects under future record names. Anyone who can write the log's
+  bucket (an admin, or the runner's own cloud identity) can create junk
+  under the next 17 version names. A writer gives up after 17 names in a
+  row that hold no valid record, so every later write fails, the core
+  signs nothing past the committed mark, and a start fails at its claim
+  record. On a locked bucket the junk stays for the retention period, so
+  the signer needs a new setup and a re-import. This costs liveness,
+  never a mark.
 - S3's default retention is a bucket setting. An admin with
   `s3:PutBucketObjectLockConfiguration` can lower it after the start's
   check, and records written after that get the shorter retention. GCS and
