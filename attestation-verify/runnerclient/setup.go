@@ -22,7 +22,9 @@ import (
 //   - Without it, a runner that reports a setup is refused, unless
 //     allow_unpinned_setup (tests with the dev verifier only). A runner on
 //     the flag path (no setup: setup_hash is the SHA-256 of its -config
-//     file and every other field is zero) is accepted, as before setups.
+//     file and every other field is zero) is accepted by the dev verifier
+//     only. Such a runner has no approvers and a client CA its host chose,
+//     so a cloud verifier needs setup_sha256 to reach one.
 //   - With min_locked_version or min_open_version, a runner whose effective
 //     version of that group is lower is refused. That keeps shares away
 //     from a runner whose host brought back an older config state (section
@@ -30,7 +32,10 @@ import (
 //   - With key_release_sha256, a runner whose key_release_hash differs is
 //     refused (T-125): its sealing key is released under another rule than
 //     the one the operator reviewed, or it read none. With mainnet set, an
-//     azure-maa or aws-nitro client needs it; gcp-cs never does.
+//     azure-maa or aws-nitro client needs it.
+//   - With mainnet set, a gcp-cs client needs gcp_project_id and
+//     gcp_service_account. GCP has no key rule hash, so these tie the
+//     runner to the operator's project.
 
 // setupPins are the setup settings, checked.
 type setupPins struct {
@@ -38,11 +43,13 @@ type setupPins struct {
 	pinned             bool
 	minLocked, minOpen uint64
 	allowUnpinned      bool
+	dev                bool         // the dev verifier: a flag path runner passes unpinned
 	keyRelease         backend.Root // zero: not pinned
 }
 
 func (a *Attestation) setupPins() (*setupPins, error) {
-	p := &setupPins{minLocked: a.MinLockedVersion, minOpen: a.MinOpenVersion, allowUnpinned: a.AllowUnpinnedSetup}
+	p := &setupPins{minLocked: a.MinLockedVersion, minOpen: a.MinOpenVersion, allowUnpinned: a.AllowUnpinnedSetup,
+		dev: a.Verifier == VerifierDev}
 	if a.SetupSHA256 != "" {
 		b, err := hex.DecodeString(strings.TrimPrefix(strings.ToLower(a.SetupSHA256), "0x"))
 		if err != nil || len(b) != 32 {
@@ -67,6 +74,16 @@ func (a *Attestation) setupPins() (*setupPins, error) {
 	// lock and no rule hash to pin.
 	if a.Mainnet && p.keyRelease == (backend.Root{}) && (a.Verifier == VerifierAzureMAA || a.Verifier == VerifierAWSNitro) {
 		return nil, fmt.Errorf("attestation: mainnet: an %s runner needs key_release_sha256, the key_release_hash of the key rule you reviewed", a.Verifier)
+	}
+	// A GCP runner has no rule hash. On mainnet the project and the service
+	// account tie it to the operator's account instead.
+	if a.Mainnet && a.Verifier == VerifierGCPCS {
+		switch {
+		case a.GCPProjectID == "":
+			return nil, errors.New("attestation: mainnet: a gcp-cs runner needs gcp_project_id, the project the runner runs in")
+		case a.GCPServiceAccount == "":
+			return nil, errors.New("attestation: mainnet: a gcp-cs runner needs gcp_service_account, the service account the runner runs as")
+		}
 	}
 	switch {
 	case !p.pinned && p.minLocked != 0:
@@ -98,6 +115,8 @@ func (p *setupPins) check(s *backend.SetupState, now time.Time) error {
 		return fmt.Errorf("runnerclient: the runner's setup_hash %s is not the pinned setup_sha256 %s", rootHex(s.SetupHash), rootHex(p.pin))
 	case !p.pinned && !FlagPath(s) && !p.allowUnpinned:
 		return fmt.Errorf("runnerclient: the runner reports setup %s and no setup_sha256 is pinned; pin the hash of the setup you built", rootHex(s.SetupHash))
+	case !p.pinned && FlagPath(s) && !p.dev:
+		return fmt.Errorf("runnerclient: the runner has no setup and no setup_sha256 is pinned (config hash %s); a cloud verifier reaches a flag path runner only with its hash pinned", rootHex(s.SetupHash))
 	case p.keyRelease != (backend.Root{}) && s.KeyReleaseHash != p.keyRelease:
 		return fmt.Errorf("runnerclient: the runner's key_release_hash %s is not the pinned key_release_sha256 %s", rootHex(s.KeyReleaseHash), rootHex(p.keyRelease))
 	}

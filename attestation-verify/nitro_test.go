@@ -424,3 +424,25 @@ func TestNitroSynthetic(t *testing.T) {
 		wantErr(t, err, ErrConfig)
 	})
 }
+
+// An expected PCR must be 48 bytes, and the document must have that index.
+// An empty expected value for an index the document lacks is refused, not
+// taken as a match.
+func TestNitroExpectedPCRMustBeComplete(t *testing.T) {
+	r := realNitroDocs[2] // evervault, PCR0 to PCR8 and no PCR31
+	doc := r.load(t)
+	o := r.opts(t)
+	o.PCRs[31] = []byte{}
+	_, err := VerifyNitro(doc, o)
+	wantErr(t, err, ErrConfig)
+
+	o = r.opts(t)
+	o.PCRs[31] = bytes.Repeat([]byte{1}, 48)
+	_, err = VerifyNitro(doc, o)
+	wantErr(t, err, ErrMeasurement)
+
+	o = r.opts(t)
+	o.PCRs[0] = o.PCRs[0][:32]
+	_, err = VerifyNitro(doc, o)
+	wantErr(t, err, ErrConfig)
+}

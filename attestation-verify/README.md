@@ -80,19 +80,20 @@ cl, err := c.New() // refuses a bad or incomplete configuration
   |---|---|---|
   | `azure-maa` | `maa_host`, `cce_policy_sha256` | `compliance_status` (default `azure-compliant-uvm`) |
   | `aws-nitro` | `nitro_pcrs`: PCR0, PCR1 and PCR2 by index, 96 hex digits each (`{"0": "...", "1": "...", "2": "..."}`) | more PCRs (3 for the parent role, 8 for the EIF signing certificate), `nitro_root_sha256` |
-  | `gcp-cs` | `gcp_image_digest` (`sha256:` and 64 hex digits), `gcp_audience`, `gcp_hwmodels` (for example `GCP_AMD_SEV`, `GCP_INTEL_TDX`) | `gcp_issuer` (default `https://confidentialcomputing.googleapis.com`), `gcp_jwks_file` (a pinned key set instead of the issuer's), `gcp_service_account` |
+  | `gcp-cs` | `gcp_image_digest` (`sha256:` and 64 hex digits), `gcp_audience`, `gcp_hwmodels` (for example `GCP_AMD_SEV`, `GCP_INTEL_TDX`) | `gcp_issuer` (default `https://confidentialcomputing.googleapis.com`), `gcp_jwks_file` (a pinned key set instead of the issuer's), `gcp_service_account`, `gcp_project_id` (both required with `mainnet`) |
 
   The command line tools take the same settings as flags: `-nitro-pcr
   INDEX=HEX` and `-gcp-hwmodel NAME`, both repeated, `-nitro-root-sha256`,
   `-gcp-image-digest`, `-gcp-audience`, `-gcp-issuer`, `-gcp-jwks-file`,
-  `-gcp-service-account`.
+  `-gcp-service-account`, `-gcp-project-id`.
 - Setup settings, for every verifier (`setup.go`). After the platform check, every
   connection checks the setup state of the verified identity:
 
   | Setting | Flag | Rule |
   |---|---|---|
-  | `setup_sha256` | `-setup-sha256` | The runner's `setup_hash` must equal it. Required for a runner that reports a setup: without it such a runner is refused. A runner on the flag path (no setup; `setup_hash` is the SHA-256 of its `-config` file, every other field zero) is accepted without it. |
+  | `setup_sha256` | `-setup-sha256` | The runner's `setup_hash` must equal it. Required for a runner that reports a setup: without it such a runner is refused. A runner on the flag path (no setup; `setup_hash` is the SHA-256 of its `-config` file, every other field zero) is accepted without it by the `dev` verifier only. Every other verifier needs the pin for it too: such a runner has no approvers and a client CA its host chose. |
   | `min_locked_version`, `min_open_version` | `-min-locked-version`, `-min-open-version` | Optional, need `setup_sha256`. The group's effective version must be at least this. A pending update counts once its effective activation time has passed on the client's clock. |
+  | `mainnet` | `-mainnet` | The runner signs for Ethereum mainnet. An `azure-maa` or `aws-nitro` setting then needs `key_release_sha256`; a `gcp-cs` setting needs `gcp_project_id` and `gcp_service_account`, since GCP has no key rule hash to pin. |
   | `allow_unpinned_setup` | `-allow-unpinned-setup` | Tests only: accepts a runner with a setup and no `setup_sha256`. Refused with any verifier but `dev`, and together with `setup_sha256`. |
 
   The signing client, `cloud-import` (again on the identity it seals

@@ -430,7 +430,7 @@ func launchAzureRunner(t *testing.T, bin string, ca *testCA, fakes *azureFakes, 
 		"-platform-opt", "maa_endpoint=" + hostPort(fakes.maa), "-platform-opt", "akv_endpoint=" + hostPort(fakes.kv),
 		"-platform-opt", "kid=signer-kek-1",
 		"-platform-opt", "test_snp_hostdata=" + hostData, "-platform-opt", "test_imds_url=" + fakes.imds.URL + "/token",
-		"-config", "../../governance/chains/chain.testnet.json", "-state-dir", filepath.Join(dir, "state"),
+		"-config", testnetChain, "-state-dir", filepath.Join(dir, "state"),
 		"-listen", listen, "-tls-client-ca", caFile, "-record", "none"}
 	cmd := exec.Command(bin, append(args, extra...)...)
 	cmd.Env = append(os.Environ(), "UVM_SECURITY_CONTEXT_DIR="+fakes.ctxDir, "SSL_CERT_FILE="+fakes.certFile)
@@ -528,7 +528,8 @@ func TestE2EAzureRunner(t *testing.T) {
 	conn := func(r azureRunner) Connection {
 		cert, key := ca.issue(t, t.TempDir(), "client", time.Time{})
 		return Connection{Address: r.addr, ClientCert: cert, ClientKey: key,
-			Attestation: Attestation{Verifier: VerifierAzureMAA, MAAHost: env.host, CCEPolicySHA256: goodHostData}}
+			Attestation: Attestation{Verifier: VerifierAzureMAA, MAAHost: env.host, CCEPolicySHA256: goodHostData,
+				SetupSHA256: configPin(t, testnetChain)}}
 	}
 	opts := []Option{WithHTTPClient(env.srv.Client())}
 
@@ -761,7 +762,8 @@ func TestE2EAzureRunnerMarkLogLostState(t *testing.T) {
 			cert, key = ca.issueAdmin(t, t.TempDir(), "admin")
 		}
 		c := Connection{Address: r.addr, ClientCert: cert, ClientKey: key,
-			Attestation: Attestation{Verifier: VerifierAzureMAA, MAAHost: env.host, CCEPolicySHA256: goodHostData}}
+			Attestation: Attestation{Verifier: VerifierAzureMAA, MAAHost: env.host, CCEPolicySHA256: goodHostData,
+				SetupSHA256: configPin(t, chain)}}
 		cl, err := c.New(WithHTTPClient(env.srv.Client()), WithTimeout(10*time.Second))
 		if err != nil {
 			t.Fatal(err)

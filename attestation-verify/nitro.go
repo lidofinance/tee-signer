@@ -388,7 +388,13 @@ func VerifyNitro(doc []byte, o NitroOptions) (*NitroDocument, error) {
 	}
 	if !o.AcceptAnyPCRs {
 		for i, want := range o.PCRs {
-			if got := d.PCRs[i]; !bytes.Equal(got, want) {
+			got, ok := d.PCRs[i]
+			switch {
+			case len(want) != 48:
+				return nil, fmt.Errorf("%w: expected pcr%d has %d bytes, want 48", ErrConfig, i, len(want))
+			case !ok:
+				return nil, fmt.Errorf("%w: the document has no pcr%d", ErrMeasurement, i)
+			case !bytes.Equal(got, want):
 				return nil, fmt.Errorf("%w: pcr%d is %x, want %x", ErrMeasurement, i, got, want)
 			}
 		}

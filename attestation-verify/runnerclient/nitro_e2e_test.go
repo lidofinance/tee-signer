@@ -125,6 +125,18 @@ type nitroRunner struct {
 	err     *error
 }
 
+// testnetChain is the -config of the e2e runners unless a test passes
+// another.
+const testnetChain = "../../governance/chains/chain.testnet.json"
+
+// nitroE2E is nitroGood pinned to the flag path state of a runner started
+// with testnetChain.
+func nitroE2E(t *testing.T) Attestation {
+	a := nitroGood()
+	a.SetupSHA256 = configPin(t, testnetChain)
+	return a
+}
+
 // launchNitroRunner starts the runner on the nitro platform with the fake
 // NSM and returns without waiting for it to listen. args are added to the
 // default flags.
@@ -139,7 +151,7 @@ func launchNitroRunner(t *testing.T, bin string, fake *fakeNSM, args ...string) 
 	}
 	t.Cleanup(func() { logFile.Close() })
 	base := []string{"-platform", "nitro", "-platform-opt", "test_nsm_url=" + fake.srv.URL,
-		"-config", "../../governance/chains/chain.testnet.json", "-state-dir", filepath.Join(dir, "state"),
+		"-config", testnetChain, "-state-dir", filepath.Join(dir, "state"),
 		"-listen", listen, "-record", "none"}
 	cmd := exec.Command(bin, append(base, args...)...)
 	cmd.Stdout, cmd.Stderr = logFile, logFile
@@ -219,7 +231,7 @@ func TestE2ENitroRunner(t *testing.T) {
 
 	conn := func(r nitroRunner) Connection {
 		cert, key := ca.issue(t, t.TempDir(), "client", time.Time{})
-		return Connection{Address: r.addr, ClientCert: cert, ClientKey: key, Attestation: nitroGood()}
+		return Connection{Address: r.addr, ClientCert: cert, ClientKey: key, Attestation: nitroE2E(t)}
 	}
 
 	t.Run("channel binding passes end to end", func(t *testing.T) {
@@ -397,7 +409,7 @@ func TestE2ENitroRunnerPinnedRootWithIntermediate(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		return Connection{Address: r.addr, ClientCert: cert, ClientKey: key, Attestation: nitroGood()}
+		return Connection{Address: r.addr, ClientCert: cert, ClientKey: key, Attestation: nitroE2E(t)}
 	}
 	int1 := root.subCA(t, "intermediate 1")
 	if err := health(t, chainFile(int1, true), opts...); err != nil {
@@ -434,7 +446,7 @@ func TestE2ENitroRunnerClientCertificateClock(t *testing.T) {
 	ahead := startNitroRunner(t, bin, ca, fake, "-platform-opt", "clock_offset=2h")
 	cert, key := ca.issue(t, t.TempDir(), "short", time.Now().Add(time.Hour))
 	conn := func(r nitroRunner) Connection {
-		return Connection{Address: r.addr, ClientCert: cert, ClientKey: key, Attestation: nitroGood()}
+		return Connection{Address: r.addr, ClientCert: cert, ClientKey: key, Attestation: nitroE2E(t)}
 	}
 	opts := []Option{withNitroRoots(env.ca.Root)}
 	if err := health(t, conn(normal), opts...); err != nil {

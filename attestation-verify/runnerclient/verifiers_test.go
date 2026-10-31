@@ -90,6 +90,7 @@ func nitroConn(t *testing.T, ca *testCA, f *fakeRunner) Connection {
 	t.Helper()
 	c := devConn(t, ca, f)
 	c.Attestation = nitroGood()
+	c.Attestation.SetupSHA256 = pinOf(fakeConfigHash)
 	return c
 }
 
@@ -487,6 +488,7 @@ func gcpConn(t *testing.T, ca *testCA, f *fakeRunner, e *maaEnv) Connection {
 	t.Helper()
 	c := devConn(t, ca, f)
 	c.Attestation = gcpGood(e.issuer)
+	c.Attestation.SetupSHA256 = pinOf(fakeConfigHash)
 	return c
 }
 

@@ -142,7 +142,7 @@ func TestFlagPathRunner(t *testing.T) {
 	if err := health(t, c); err != nil {
 		t.Fatalf("unpinned: %v", err)
 	}
-	c.Attestation.SetupSHA256 = pinOf(backend.Root{1, 2, 3})
+	c.Attestation.SetupSHA256 = pinOf(fakeConfigHash)
 	if err := health(t, c); err != nil {
 		t.Fatalf("pinned to its config hash: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestSetupStateHelpers(t *testing.T) {
 		!strings.HasSuffix(d, " imported_keys=1") {
 		t.Fatalf("order: %q", d)
 	}
-	flagPath := backend.SetupState{SetupHash: backend.Root{1, 2, 3}}
+	flagPath := backend.SetupState{SetupHash: fakeConfigHash}
 	if d := DescribeSetup(&flagPath, at); d != "setup_sha256=010203"+strings.Repeat("0", 58)+" flag_path=true" {
 		t.Fatalf("flag path: %q", d)
 	}

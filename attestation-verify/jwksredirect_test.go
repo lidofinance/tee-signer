@@ -1,0 +1,71 @@
+package attest
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/url"
+	"testing"
+)
+
+// checkJWKSURI keeps the key set on the issuer's host. A redirect from
+// that host to another one would undo it, so the fetch refuses a redirect
+// off the host of the URL it asked for.
+func TestJWKSRedirectToAnotherHostRefused(t *testing.T) {
+	iss, err := url.Parse(maaIssuer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const otherHost = "keys.other.example"
+	discovery, _ := json.Marshal(map[string]string{"issuer": maaIssuer, "jwks_uri": maaIssuer + "/certs"})
+	keys := jwksFor(t, "kid-b", testRSA(t, 1), false)
+	client := &http.Client{Transport: hostsTransport{
+		iss.Hostname(): http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/.well-known/openid-configuration":
+				w.Write(discovery)
+			case "/certs":
+				http.Redirect(w, r, "https://"+otherHost+"/certs", http.StatusFound)
+			default:
+				http.NotFound(w, r)
+			}
+		}),
+		otherHost: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(keys) }),
+	}}
+	if ks, err := DiscoverJWKS(context.Background(), client, maaIssuer); err == nil {
+		t.Fatalf("DiscoverJWKS took a key set through a redirect to %s (kids %v)", otherHost, ks.KeyIDs())
+	}
+	if client.CheckRedirect != nil {
+		t.Fatal("the fetch changed the caller's client")
+	}
+
+	// A redirect on the same host is still followed.
+	same := &http.Client{Transport: hostsTransport{
+		iss.Hostname(): http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/keys" {
+				http.Redirect(w, r, "/moved", http.StatusFound)
+				return
+			}
+			w.Write(keys)
+		}),
+	}}
+	if _, err := FetchJWKS(context.Background(), same, maaIssuer+"/keys"); err != nil {
+		t.Fatalf("same-host redirect: %v", err)
+	}
+	// The scheme's default port named or not is the same host.
+	for _, c := range []struct {
+		a, b string
+		same bool
+	}{
+		{"https://h.example/x", "https://H.example:443/y", true},
+		{"https://h.example:443/x", "https://h.example/y", true},
+		{"https://h.example/x", "https://h.example:8443/y", false},
+		{"https://h.example/x", "https://other.example/y", false},
+	} {
+		a, _ := url.Parse(c.a)
+		b, _ := url.Parse(c.b)
+		if (hostPort(a) == hostPort(b)) != c.same {
+			t.Errorf("%s and %s: same host %v, want %v", c.a, c.b, !c.same, c.same)
+		}
+	}
+}

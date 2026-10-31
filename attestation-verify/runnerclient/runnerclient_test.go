@@ -252,7 +252,7 @@ func startFakeRunnerExt(t *testing.T, ca *testCA, attest attestFn, cn, version s
 		t.Fatal(err)
 	}
 	f := &fakeRunner{ln: ln, spki: h[:], claimedKey: h[:], attest: attest, version: version,
-		state: backend.SetupState{SetupHash: backend.Root{1, 2, 3}}, frames: map[wire.MsgType]int{}}
+		state: backend.SetupState{SetupHash: fakeConfigHash}, frames: map[wire.MsgType]int{}}
 	t.Cleanup(func() { ln.Close() })
 	go func() {
 		for {
@@ -459,6 +459,23 @@ func mainKeySet(t *testing.T) []byte { return testgen.JWKS(t, "maa-1", testgen.R
 
 // ---- helpers ----
 
+// fakeConfigHash is the setup_hash of a fake runner on the flag path, the
+// SHA-256 of its -config file. A cloud verifier reaches such a runner only
+// with this hash pinned.
+var fakeConfigHash = backend.Root{1, 2, 3}
+
+// configPin is the setup_sha256 of a real runner on the flag path started
+// with -config path: the SHA-256 of that file.
+func configPin(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
+}
+
 func devConn(t *testing.T, ca *testCA, f *fakeRunner) Connection {
 	t.Helper()
 	cert, key := ca.issue(t, t.TempDir(), "client", time.Time{})
@@ -468,7 +485,8 @@ func devConn(t *testing.T, ca *testCA, f *fakeRunner) Connection {
 func maaConn(t *testing.T, ca *testCA, f *fakeRunner, e *maaEnv) Connection {
 	t.Helper()
 	c := devConn(t, ca, f)
-	c.Attestation = Attestation{Verifier: VerifierAzureMAA, MAAHost: e.host, CCEPolicySHA256: goodHostData}
+	c.Attestation = Attestation{Verifier: VerifierAzureMAA, MAAHost: e.host, CCEPolicySHA256: goodHostData,
+		SetupSHA256: pinOf(fakeConfigHash)}
 	return c
 }
 
