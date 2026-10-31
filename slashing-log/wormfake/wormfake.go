@@ -3,9 +3,9 @@
 // runner binary imports it). Each fake implements only the requests the
 // clients make:
 //
-//	S3     PUT object (If-None-Match: *), GET object (versionId),
-//	       GET bucket?versions (ListObjectVersions), with versioning and
-//	       Object Lock in compliance mode
+//	S3     PUT object (If-None-Match: *, optional per-object retention),
+//	       GET object (versionId), GET bucket?versions (ListObjectVersions),
+//	       with versioning and Object Lock in compliance mode
 //	GCS    POST upload (ifGenerationMatch=0), GET object (alt=media,
 //	       generation), GET list (versions=true), with a locked retention
 //	       policy
@@ -13,8 +13,8 @@
 //	       with a locked time-based retention policy
 //
 // and the lock self-check's read of the lock (S3 GET ?object-lock, GCS GET
-// bucket with its retentionPolicy, Azure the management plane's
-// immutability policy); and the faults the tests need: the store down, slow
+// bucket with its retentionPolicy, Azure the management plane's storage
+// account and container with its immutability policy); and the faults the tests need: the store down, slow
 // answers, a stale listing, a listing that leaves names out, a lock in the
 // wrong mode or with too short a retention, records that expired (a fake
 // clock and the admin deleting what the retention no longer keeps), and the
@@ -22,7 +22,9 @@
 // a new version of the name, a copy of an old record under a new name).
 // What the real locked store refuses, the fakes refuse; what it allows (S3
 // new versions and delete markers, new names anywhere, deleting an object
-// whose retention ended), they allow.
+// whose retention ended), they allow. On S3 each version keeps the
+// retention it got when it was written (its own, or the bucket default in
+// force then), so a later change of the default does not reach it.
 package wormfake
 
 import (
@@ -61,6 +63,7 @@ type version struct {
 	marker bool      // S3 delete marker
 	seq    int       // global write order, for stale listings
 	at     time.Time // written, on the fake clock
+	until  time.Time // S3: end of the version's retention (zero: none)
 }
 
 // Lock is the fake's retention lock, the one its lock read reports and its
@@ -69,6 +72,24 @@ type Lock struct {
 	None       bool // no lock at all (S3: no Object Lock configuration; GCS: no policy; Azure: no policy)
 	Compliance bool // S3 COMPLIANCE (else GOVERNANCE); GCS and Azure locked (else unlocked)
 	Days       int  // retention of each object
+	// NoDefault: S3 only. Object Lock is on (it cannot be turned off) but
+	// the bucket has no default retention rule, as after an admin removed
+	// it. New versions get no retention unless the PUT names one.
+	NoDefault bool
+	// VersionLevel: the Azure container has version-level immutability
+	// (immutableStorageWithVersioning enabled). Only the lock read reports
+	// it; the fake still refuses overwrites.
+	VersionLevel bool
+	// Migrating: a migration of the Azure container to version-level
+	// immutability is in progress (migrationState InProgress).
+	Migrating bool
+	// AccountVersionLevel: the Azure storage account has version-level
+	// immutability (immutableStorageWithVersioning enabled). Only the
+	// account read reports it.
+	AccountVersionLevel bool
+	// AppendWrites: the Azure policy allows protected append writes
+	// (allowProtectedAppendWritesAll). Only the lock read reports it.
+	AppendWrites bool
 }
 
 // Server is one fake store with one bucket or container.
@@ -82,6 +103,9 @@ type Server struct {
 	Auth func(r *http.Request) error
 	// PageSize bounds each listing page (default 3, so tests page).
 	PageSize int
+	// Subscription, if set, is the Azure container's subscription: the
+	// management plane answers 404 for any other, as Azure does.
+	Subscription string
 
 	mu       sync.Mutex
 	objects  map[string][]*version // name -> versions, oldest first
@@ -138,7 +162,13 @@ func (s *Server) AdminDeleteExpired() int {
 	for name, vs := range s.objects {
 		var left []*version
 		for _, v := range vs {
-			if now.Sub(v.at) >= keep {
+			expired := now.Sub(v.at) >= keep
+			if s.Kind == S3 {
+				// A delete marker has no retention (until is zero), so the
+				// admin may delete it at any time, as on S3.
+				expired = v.marker || !now.Before(v.until)
+			}
+			if expired {
 				n++
 				continue
 			}
@@ -325,8 +355,22 @@ func (s *Server) put(name string, data []byte, marker bool) *version {
 	s.seq++
 	v := &version{id: strconv.Itoa(1000 + s.seq), data: append([]byte(nil), data...), marker: marker, seq: s.seq,
 		at: time.Now().Add(s.offset)}
+	if s.Kind == S3 && !marker && !s.lock.None && !s.lock.NoDefault {
+		v.until = v.at.Add(time.Duration(s.lock.Days) * 24 * time.Hour)
+	}
 	s.objects[name] = append(s.objects[name], v)
 	return v
+}
+
+// RetainUntil is the end of the retention of name's current S3 version
+// (zero: none, or no such object).
+func (s *Server) RetainUntil(name string) time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if v := s.current(name); v != nil {
+		return v.until
+	}
+	return time.Time{}
 }
 
 // current returns the current version of name, nil if none or a marker.
@@ -451,11 +495,30 @@ func (s *Server) serveS3(w http.ResponseWriter, r *http.Request, body []byte) {
 				return
 			}
 		}
+		// Per-object retention: both headers or neither, only on a bucket
+		// with Object Lock, a date in the future. It replaces the default.
+		mode, date := r.Header.Get("x-amz-object-lock-mode"), r.Header.Get("x-amz-object-lock-retain-until-date")
+		var until time.Time
+		if mode != "" || date != "" {
+			t, err := time.Parse(time.RFC3339, date)
+			switch {
+			case s.lock.None:
+				s3err(w, http.StatusBadRequest, "InvalidRequest")
+				return
+			case mode != "COMPLIANCE" && mode != "GOVERNANCE", err != nil, !t.After(time.Now().Add(s.offset)):
+				s3err(w, http.StatusBadRequest, "InvalidArgument")
+				return
+			}
+			until = t
+		}
 		if r.Header.Get("If-None-Match") == "*" && s.current(key) != nil {
 			s3err(w, http.StatusPreconditionFailed, "PreconditionFailed")
 			return
 		}
 		v := s.put(key, body, false)
+		if !until.IsZero() {
+			v.until = until
+		}
 		w.Header().Set("x-amz-version-id", v.id)
 		w.WriteHeader(http.StatusOK)
 	case r.Method == http.MethodGet && key != "":
@@ -508,6 +571,10 @@ func (s *Server) serveS3(w http.ResponseWriter, r *http.Request, body []byte) {
 	case r.Method == http.MethodGet && key == "" && q.Has("object-lock"):
 		if s.lock.None {
 			s3err(w, http.StatusNotFound, "ObjectLockConfigurationNotFoundError")
+			return
+		}
+		if s.lock.NoDefault {
+			fmt.Fprint(w, `<ObjectLockConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><ObjectLockEnabled>Enabled</ObjectLockEnabled></ObjectLockConfiguration>`)
 			return
 		}
 		mode := "GOVERNANCE"
@@ -607,15 +674,59 @@ func azErr(w http.ResponseWriter, status int, code string) {
 // immutability policy, for the given subscription, resource group and
 // account.
 func (s *Server) ARMPath(sub, rg, account string) string {
-	return "/subscriptions/" + sub + "/resourceGroups/" + rg + "/providers/Microsoft.Storage/storageAccounts/" + account +
-		"/blobServices/default/containers/" + s.Bucket + "/immutabilityPolicies/default"
+	return s.armContainerPath(sub, rg, account) + "/immutabilityPolicies/default"
 }
 
-// serveARM answers the management plane's Get Immutability Policy for any
-// subscription, resource group and account, and this container.
+func armAccountPath(sub, rg, account string) string {
+	return "/subscriptions/" + sub + "/resourceGroups/" + rg + "/providers/Microsoft.Storage/storageAccounts/" + account
+}
+
+func (s *Server) armContainerPath(sub, rg, account string) string {
+	return armAccountPath(sub, rg, account) + "/blobServices/default/containers/" + s.Bucket
+}
+
+// armPolicy is the immutability policy's properties as ARM answers them.
+func (s *Server) armPolicy() map[string]any {
+	state := "Unlocked"
+	if s.lock.Compliance {
+		state = "Locked"
+	}
+	return map[string]any{"immutabilityPeriodSinceCreationInDays": s.lock.Days, "state": state,
+		"allowProtectedAppendWrites": false, "allowProtectedAppendWritesAll": s.lock.AppendWrites}
+}
+
+// serveARM answers the management plane's Get Storage Account, Get
+// Container and Get Immutability Policy for any subscription, resource
+// group and account, and this container.
 func (s *Server) serveARM(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(r.URL.Path, "/")
-	if r.Method != http.MethodGet || len(parts) != 15 || r.URL.Path != s.ARMPath(parts[2], parts[4], parts[8]) || r.URL.Query().Get("api-version") == "" {
+	if r.Method != http.MethodGet || len(parts) < 9 || r.URL.Query().Get("api-version") == "" {
+		http.Error(w, `{"error":{"code":"InvalidResourceType"}}`, http.StatusBadRequest)
+		return
+	}
+	if s.Subscription != "" && parts[2] != s.Subscription {
+		http.Error(w, `{"error":{"code":"ResourceNotFound"}}`, http.StatusNotFound)
+		return
+	}
+	if len(parts) == 9 && r.URL.Path == armAccountPath(parts[2], parts[4], parts[8]) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"name": parts[8], "type": "Microsoft.Storage/storageAccounts",
+			"properties": map[string]any{"immutableStorageWithVersioning": map[string]any{"enabled": s.lock.AccountVersionLevel}}})
+		return
+	}
+	if len(parts) == 13 && r.URL.Path == s.armContainerPath(parts[2], parts[4], parts[8]) {
+		vlw := map[string]any{"enabled": s.lock.VersionLevel}
+		if s.lock.Migrating {
+			vlw["migrationState"] = "InProgress"
+		}
+		props := map[string]any{"hasImmutabilityPolicy": !s.lock.None, "immutableStorageWithVersioning": vlw}
+		if !s.lock.None {
+			props["immutabilityPolicy"] = map[string]any{"etag": `"8d0"`, "properties": s.armPolicy()}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"name": s.Bucket, "etag": `"8d1"`,
+			"type": "Microsoft.Storage/storageAccounts/blobServices/containers", "properties": props})
+		return
+	}
+	if len(parts) != 15 || r.URL.Path != s.ARMPath(parts[2], parts[4], parts[8]) {
 		http.Error(w, `{"error":{"code":"InvalidResourceType"}}`, http.StatusBadRequest)
 		return
 	}
@@ -623,13 +734,9 @@ func (s *Server) serveARM(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":{"code":"ImmutabilityPolicyNotFound"}}`, http.StatusNotFound)
 		return
 	}
-	state := "Unlocked"
-	if s.lock.Compliance {
-		state = "Locked"
-	}
 	_ = json.NewEncoder(w).Encode(map[string]any{"name": "default", "etag": `"8d0"`,
 		"type":       "Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies",
-		"properties": map[string]any{"immutabilityPeriodSinceCreationInDays": s.lock.Days, "state": state, "allowProtectedAppendWrites": false}})
+		"properties": s.armPolicy()})
 }
 
 func (s *Server) serveAzure(w http.ResponseWriter, r *http.Request, body []byte) {

@@ -76,10 +76,13 @@ SETUP=signer-2.bin platform-aws/deploy/parent-run.sh               # on the pare
   no `/etc/signer`.
 
 With `mark_bucket` set, `main.tf` writes the bucket policy: the writer may
-create and read objects under `marks/` and `config/`, list versions and read
+create and read objects under `marks/` and `config/`, set each new object's
+retention (`s3:PutObjectRetention`, see "Mark log"), list versions and read
 the Object Lock configuration (the runner's lock check needs
 `s3:GetBucketObjectLockConfiguration`); the parent role is denied every
-write. The paths carry setup_hash, so one policy serves every setup of the
+write. A bucket policy written by an older `main.tf` lacks
+`s3:PutObjectRetention`: apply this one before the runner that sets
+retention starts, or its first record write fails with AccessDenied. The paths carry setup_hash, so one policy serves every setup of the
 image. The KMS key policy and the bucket policy are set once per EIF; a new
 chain or signer is a new setup on the parent. The order of a deploy is in
 `governance/docs/setup-phase-cloud-test.md`.
@@ -198,9 +201,29 @@ retention in compliance mode (`slashing-log/docs/marklog.md`). The mark log
 is required. The client signs with the enclave-held record credentials
 (`RecordCredentials`, `record/writer-credentials.kms`), so the parent cannot
 write records. The admin can add versions and delete markers but not delete
-or overwrite a locked version; the reader lists every version. The route
-`B.s3.R.amazonaws.com:443` on vsock port 8004 follows from the setup, on
-both sides.
+or overwrite a locked version; the reader lists every version.
+
+The lock check at start reads the bucket's default retention, but that
+default is a bucket setting: an admin with
+`s3:PutBucketObjectLockConfiguration` can lower or remove it at any time,
+and compliance mode protects only versions already written. So every PUT of
+the runner (records and config bodies) names its own retention:
+`x-amz-object-lock-mode: COMPLIANCE` and
+`x-amz-object-lock-retain-until-date` at least `slashing_log_min_lock_days`
+ahead (or the default the check read, if longer), plus an hour for the
+clock skew S3 allows on a signed request. That date replaces the default
+for the object and nobody can shorten it. A later change of the default
+then has no effect on the runner's objects. The date comes from the
+enclave's clock, which the host sets; it is the same clock that dates the
+signed request, and S3 refuses a request more than 15 minutes off.
+
+The Nitro platform restores no state copy (`-state-store` is restored on
+Azure, GCP and dev), so the bucket policy grants nothing under `state/`. A
+state copy in this bucket would need `state/*` with the same four actions
+as `marks/*`; it would then get the same per-object retention.
+
+The route `B.s3.R.amazonaws.com:443` on vsock port 8004 follows from the
+setup, on both sides.
 
 ## An overlay network on the parent
 

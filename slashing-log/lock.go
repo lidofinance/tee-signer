@@ -12,8 +12,12 @@ type Lock struct {
 	Kind string // what was read: "s3 object lock", "gcs retention policy", "azure immutability policy"
 	Mode string // as the store names it: S3 COMPLIANCE or GOVERNANCE, GCS and Azure locked or unlocked
 	// Compliance: nobody can delete or overwrite a locked object before its
-	// retention ends, and nobody can shorten the retention (S3 compliance
-	// mode, a locked GCS retention policy, a locked Azure policy).
+	// retention ends, and nobody can shorten that object's retention (S3
+	// compliance mode, a locked GCS retention policy, a locked Azure
+	// policy). On S3 this is the bucket default for new objects, which the
+	// admin can still lower or remove later; the S3 client therefore sets
+	// each object's own retention (Env.RetainDays). GCS and Azure lock the
+	// policy itself.
 	Compliance bool
 	Retention  time.Duration // how long each object stays locked
 }
@@ -22,6 +26,27 @@ type Lock struct {
 // the runner's own TLS, with the runner's own credentials.
 type Locker interface {
 	Lock(ctx context.Context) (Lock, error)
+}
+
+// VersionChecker is a Log whose store can keep overwritten objects as
+// previous versions that List and Get do not read (Azure version-level
+// immutability). CheckVersions fails, with ErrNoLock, when it does.
+type VersionChecker interface {
+	CheckVersions(ctx context.Context) error
+}
+
+// CheckVersions runs l's CheckVersions, if l has one. The state copy runs
+// it at every start: in such a store an admin could hide the newest
+// commits, and the restore would take an older one.
+func CheckVersions(ctx context.Context, l Log) error {
+	vc, ok := l.(VersionChecker)
+	if !ok {
+		return nil
+	}
+	if err := vc.CheckVersions(ctx); err != nil {
+		return fmt.Errorf("store %s: version check: %w", l, err)
+	}
+	return nil
 }
 
 // ErrNoLock: the store has no lock that keeps the log safe.

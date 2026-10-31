@@ -545,6 +545,7 @@ func setupMarkLog(ctx context.Context, plat *platform.Platform, hooks *state.Hoo
 	if platformName == "dev" && env.AWSCreds == nil {
 		env.AWSCreds = record.EnvCredentials()
 	}
+	env.RetainDays = retainDays(platformName, st)
 	if plat.Keys == nil {
 		return markClaim{}, fmt.Errorf("platform %s has no key release for the mark log", platformName)
 	}
@@ -586,6 +587,18 @@ func setupMarkLog(ctx context.Context, plat *platform.Platform, hooks *state.Hoo
 		"mark_key", fmt.Sprintf("%x", m.PublicKey()), "had_mark", found, "shares_stored", len(stored),
 		"log_id", fmt.Sprintf("%x", m.LogID()))
 	return markClaim{log: m, logID: m.LogID(), shares: stored}, nil
+}
+
+// retainDays is the retention each object the runner writes to the mark
+// log's store must carry by itself (markstore.Env.RetainDays): the setup's
+// slashing_log_min_lock_days wherever the store's lock is checked (a setup,
+// not the dev platform), else 0. On S3 the bucket's default retention can be
+// lowered after the check; an object's own compliance retention cannot.
+func retainDays(platformName string, st *setup.Setup) uint32 {
+	if st == nil || platformName == "dev" {
+		return 0
+	}
+	return st.Wire.SlashingLogMinLockDays
 }
 
 // markClaim is what the mark log's claim leaves for the server: the log

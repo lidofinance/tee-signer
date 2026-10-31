@@ -7,9 +7,15 @@
 //
 // Requests are signed with credentials only the enclave holds
 // (platform.Platform.RecordCredentials, the same path as the clone guard's
-// DynamoDB record). The bucket's Object Lock default retention locks every
-// record when it is written, so the client sends no retention headers; S3
-// requires Content-MD5 on a put to such a bucket, which it does send.
+// DynamoDB record). The bucket's default retention is a bucket setting: the
+// account admin can lower or remove it after the start's lock check, and
+// compliance mode only fixes the retention of versions already written. So
+// with RetainDays set (markstore.Env, from slashing_log_min_lock_days) every
+// PUT names its own retention: compliance mode until RetainDays from now, or
+// the default the lock check read if that is longer. Nobody can shorten it
+// afterwards, whatever happens to the default. The writer needs
+// s3:PutObjectRetention for that. S3 requires Content-MD5 on a put to an
+// Object Lock bucket, which the client sends.
 // Every header the client sets is signed, as the AWS SDKs do (the S3 SigV4
 // rules require host, x-amz-*, and Content-Type and Content-MD5 when
 // present). A request that fails before an answer (connection reset) is
@@ -32,6 +38,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/lidofinance/tee-signer/platform"
@@ -48,7 +55,26 @@ type Log struct {
 	HTTP     *http.Client
 	Creds    func(ctx context.Context) (platform.Credentials, error)
 	Now      func() time.Time
+	// RetainDays, if not 0, makes every Create set compliance retention
+	// for at least that many days on the new version.
+	RetainDays uint32
+
+	// defaultDays is the compliance default retention Lock last read. A
+	// per-object date replaces the default, so Create keeps the longer one.
+	// defaultRead: Lock has answered once. A log nobody checked (the state
+	// copy) reads the default at its first retained Create.
+	defaultDays atomic.Int64
+	defaultRead atomic.Bool
 }
+
+// retainSlack is added to every retention date. The date and the signed
+// x-amz-date both come from l.now(), the host's clock in the enclave. S3
+// refuses a request whose x-amz-date is more than 15 minutes from its own
+// clock (RequestTimeTooSkewed), so a date S3 accepts is at most 15 minutes
+// short of real time, and the hour covers that. This holds only while both
+// come from the same clock: a change that signs with one clock and dates
+// the retention with another must bound the second some other way.
+const retainSlack = time.Hour
 
 // Open parses "bucket=B,region=R[,endpoint=URL]".
 func Open(rest string, env markstore.Env) (markstore.Log, error) {
@@ -59,7 +85,15 @@ func Open(rest string, env markstore.Env) (markstore.Log, error) {
 	if env.AWSCreds == nil {
 		return nil, errors.New("s3log: no credentials: the store needs credentials only the enclave holds")
 	}
-	return &Log{Bucket: p["bucket"], Region: p["region"], Endpoint: p["endpoint"], HTTP: env.HTTP, Creds: env.AWSCreds}, nil
+	return &Log{Bucket: p["bucket"], Region: p["region"], Endpoint: p["endpoint"], HTTP: env.HTTP, Creds: env.AWSCreds,
+		RetainDays: env.RetainDays}, nil
+}
+
+func (l *Log) now() time.Time {
+	if l.Now != nil {
+		return l.Now()
+	}
+	return time.Now()
 }
 
 func (l *Log) String() string { return "s3://" + l.Bucket }
@@ -172,11 +206,7 @@ func (l *Log) do(ctx context.Context, method, key string, q url.Values, body []b
 		return nil, err
 	}
 	u.RawPath = uriEncode(u.Path, true)
-	now := time.Now
-	if l.Now != nil {
-		now = l.Now
-	}
-	t := now().UTC()
+	t := l.now().UTC()
 	ph := sha256.Sum256(body)
 	payload := hex.EncodeToString(ph[:])
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), strings.NewReader(string(body)))
@@ -229,12 +259,22 @@ func errorOf(resp *http.Response) error {
 // Create lists the name's versions and delete markers: anything besides
 // the one new version is a hidden record, markstore.ErrHidden (issue #5 R3).
 // After a put S3 refused it looks for a delete marker (checkMarker).
+// With RetainDays the put names its own compliance retention (retainUntil).
 func (l *Log) Create(ctx context.Context, name string, data []byte) error {
 	sum := md5.Sum(data)
 	hdr := http.Header{}
 	hdr.Set("If-None-Match", "*")
 	hdr.Set("Content-MD5", base64.StdEncoding.EncodeToString(sum[:]))
 	hdr.Set("Content-Type", "application/octet-stream")
+	if l.RetainDays > 0 && !l.defaultRead.Load() {
+		if _, err := l.Lock(ctx); err != nil {
+			return fmt.Errorf("s3log: default retention before a retained write: %w", err)
+		}
+	}
+	if until, ok := l.retainUntil(); ok {
+		hdr.Set("x-amz-object-lock-mode", "COMPLIANCE")
+		hdr.Set("x-amz-object-lock-retain-until-date", until.Format(time.RFC3339))
+	}
 	resp, err := l.send(ctx, http.MethodPut, name, nil, data, hdr)
 	if err != nil {
 		return err
@@ -247,6 +287,18 @@ func (l *Log) Create(ctx context.Context, name string, data []byte) error {
 		return l.checkMarker(ctx, name)
 	}
 	return errorOf(resp)
+}
+
+// retainUntil is the retention date of a new version: RetainDays or the
+// default Lock read, whichever is longer, plus retainSlack, rounded up to a
+// second. false: RetainDays is 0 and the put names no retention.
+func (l *Log) retainUntil() (time.Time, bool) {
+	if l.RetainDays == 0 {
+		return time.Time{}, false
+	}
+	days := max(int64(l.RetainDays), l.defaultDays.Load())
+	t := l.now().UTC().Add(time.Duration(days)*24*time.Hour + retainSlack)
+	return t.Add(time.Second - 1).Truncate(time.Second), true
 }
 
 // checkMarker runs after a create that S3 refused (412): a delete marker on
@@ -356,9 +408,11 @@ func (l *Log) listVersions(ctx context.Context, prefix string) ([]markstore.Entr
 }
 
 // Lock reads the bucket's Object Lock configuration (GetObjectLockConfiguration,
-// GET /?object-lock): the default retention every new record gets. The
-// credentials need s3:GetBucketObjectLockConfiguration. A bucket without
-// Object Lock answers 404 ObjectLockConfigurationNotFoundError.
+// GET /?object-lock): the default retention a new version gets when its put
+// names none. The credentials need s3:GetBucketObjectLockConfiguration. A
+// bucket without Object Lock answers 404 ObjectLockConfigurationNotFoundError.
+// The default can change after this read; with RetainDays set, Create does
+// not depend on it.
 func (l *Log) Lock(ctx context.Context) (markstore.Lock, error) {
 	resp, err := l.send(ctx, http.MethodGet, "", url.Values{"object-lock": {""}}, nil, nil)
 	if err != nil {
@@ -396,9 +450,13 @@ func (l *Log) Lock(ctx context.Context) (markstore.Lock, error) {
 	if days < 0 || days > 1<<20 {
 		return markstore.Lock{}, fmt.Errorf("s3log: object lock retention of %d days", days)
 	}
-	return markstore.Lock{Kind: "s3 object lock", Mode: r.Mode,
-		Compliance: c.Enabled == "Enabled" && r.Mode == "COMPLIANCE",
-		Retention:  time.Duration(days) * 24 * time.Hour}, nil
+	compliance := c.Enabled == "Enabled" && r.Mode == "COMPLIANCE"
+	if compliance {
+		l.defaultDays.Store(days)
+	}
+	l.defaultRead.Store(true)
+	return markstore.Lock{Kind: "s3 object lock", Mode: r.Mode, Compliance: compliance,
+		Retention: time.Duration(days) * 24 * time.Hour}, nil
 }
 
 // Get reads one object version.

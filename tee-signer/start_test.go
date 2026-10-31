@@ -167,7 +167,7 @@ func TestStateCopyFromSetup(t *testing.T) {
 			t.Fatal(err)
 		}
 		if copyStore == nil || opts.Durable == nil || s.stateSpec != "gcs:bucket=signer-state_gcp" || s.signerID != "signer-3" ||
-			copyStore.setupHash != s.setup.SHA256 {
+			copyStore.setupHash != s.setup.SHA256 || copyStore.retainDays != 0 || !copyStore.checkVersions {
 			t.Fatalf("state copy %+v, spec %q", copyStore, s.stateSpec)
 		}
 		if opts.Params["wif_provider"] == "" || opts.Params["attest_audience"] != "signer-runner-identity" {
@@ -176,6 +176,30 @@ func TestStateCopyFromSetup(t *testing.T) {
 	})
 	if !slices.Equal(events, []string{"setup", "platform"}) || !hooked {
 		t.Fatalf("events %v, start hook before the platform %v", events, hooked)
+	}
+}
+
+// Objects written to the mark log's store carry the setup's retention by
+// themselves wherever the lock is checked (a setup, not dev). The state copy
+// gets it only in the log's own store (TestStateCopyFromSetup: another
+// bucket, none).
+func TestRetainDays(t *testing.T) {
+	st, err := setup.Load(sampleSetup(t, "nitro"), "nitro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := st.Wire.SlashingLogMinLockDays
+	if want == 0 {
+		t.Fatal("sample setup without slashing_log_min_lock_days")
+	}
+	for _, c := range []struct {
+		platform string
+		st       *setup.Setup
+		want     uint32
+	}{{"nitro", st, want}, {"azure", st, want}, {"dev", st, 0}, {"nitro", nil, 0}} {
+		if got := retainDays(c.platform, c.st); got != c.want {
+			t.Fatalf("%s, setup %v: %d days, want %d", c.platform, c.st != nil, got, c.want)
+		}
 	}
 }
 

@@ -291,7 +291,8 @@ AWS (Terraform in `<terraform-dir>`):
 2. `terraform plan`. Expect two changes and no other: `aws_kms_key.enclave`
    (the PCRs, and `kms:Encrypt` for the admin only with exactly
    `purpose=record-creds`) and `aws_s3_bucket_policy.marks[0]` (create: the
-   writer may write `marks/*` and `config/*` and read the Object Lock
+   writer may write `marks/*` and `config/*`, set the retention of the
+   objects it writes (`s3:PutObjectRetention`) and read the Object Lock
    configuration). Then apply.
 3. Record credentials. The generic runner decrypts them with
    `purpose=record-creds`, so make a blob with that context:
@@ -310,8 +311,9 @@ Azure (`platform-azure/deploy/deploy.sh`, settings above):
 3. `key-create 1`: key `signer-gkek-1` with the release policy for that
    hash. `KEY_IMMUTABLE` stays false for the test.
 4. `key-role 1`, then `store-role 1` with `SETUP_FILE_1=setups/signer-1.setup`:
-   the data role and Reader on the container. Reader lets the lock check
-   read the immutability policy. Wait a few minutes for the roles to apply.
+   the data role on the container and Reader on its storage account.
+   Reader lets the lock check read the account and the container. Wait a
+   few minutes for the roles to apply.
 
 GCP (`platform-gcp/deploy/deploy.sh`, settings above):
 
@@ -391,8 +393,8 @@ them after a rollback.
 
 ## Not checked offline
 
-- Reader on the container scope grants
-  `immutabilityPolicies/read` for the lock check (Azure RBAC docs; not run).
+- Reader on the account scope grants `storageAccounts/read` and
+  `containers/read` for the lock check (Azure RBAC docs; not run).
 - `roles/storage.legacyBucketReader` holds `storage.buckets.get` (GCP role
   reference; not run).
 - `SIGNER_SETUP` near the 64 KB setup cap under a wildcard CCE rule, and the

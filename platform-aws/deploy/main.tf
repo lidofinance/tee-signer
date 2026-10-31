@@ -82,7 +82,7 @@ variable "nts_egress" {
 }
 
 variable "mark_bucket" {
-  description = "S3 bucket of the mark log (the setups' mark_store.bucket), made outside Terraform with Object Lock in compliance mode (its retention cannot be undone). When set, this file writes its bucket policy: the record writer (the enclave's credentials) may create and read records and update bodies under marks/ and config/ of any setup, list versions and read the Object Lock configuration (the runner's lock check); the parent role writes nothing; plain HTTP is refused. One policy for every setup of this image, so a new setup needs no change here. null: no bucket policy."
+  description = "S3 bucket of the mark log (the setups' mark_store.bucket), made outside Terraform with Object Lock and a default retention in compliance mode. When set, this file writes its bucket policy: the record writer (the enclave's credentials) may create and read records and update bodies under marks/ and config/ of any setup, give each new object its own compliance retention, list versions and read the Object Lock configuration (the runner's lock check); the parent role writes nothing; plain HTTP is refused. One policy for every setup of this image, so a new setup needs no change here. null: no bucket policy."
   type        = string
   default     = null
 }
@@ -232,8 +232,16 @@ resource "aws_iam_role_policy" "parent_no_record_writes" {
 # setup_hash, so the policy names the two prefixes and no setup: each
 # setup's log stays apart by its path and by the keys bound to setup_hash.
 # s3:GetBucketObjectLockConfiguration is the lock check at every start.
-# No delete and no retention change for anyone here; the compliance-mode
-# default retention keeps every version for its time. NoDeleteMarkers
+# The default retention is a bucket setting the account admin can lower or
+# remove later, so the runner gives every object it writes its own
+# compliance retention of slashing_log_min_lock_days (s3:PutObjectRetention,
+# needed for the x-amz-object-lock-* headers on PutObject). Compliance
+# retention can be extended, never shortened, so the permission cannot
+# unlock anything; a leaked writer key could only extend the retention of
+# objects under marks/ and config/, a cost, not a weakening. The state copy
+# has no prefix here: the Nitro platform does not restore one
+# (-state-store is restored on azure, gcp and dev only). No delete for
+# anyone here. NoDeleteMarkers
 # denies DeleteObject (which puts a delete marker on a versioned bucket)
 # and DeleteObjectVersion to every principal, the account's admins
 # included: a delete marker over a clone's record would let a second
@@ -250,7 +258,7 @@ resource "aws_s3_bucket_policy" "marks" {
         Sid       = "EnclaveWriterRecords"
         Effect    = "Allow"
         Principal = { AWS = aws_iam_user.record_writer.arn }
-        Action    = ["s3:PutObject", "s3:GetObject", "s3:GetObjectVersion"]
+        Action    = ["s3:PutObject", "s3:PutObjectRetention", "s3:GetObject", "s3:GetObjectVersion"]
         Resource  = ["arn:aws:s3:::${var.mark_bucket}/marks/*", "arn:aws:s3:::${var.mark_bucket}/config/*"]
       },
       {

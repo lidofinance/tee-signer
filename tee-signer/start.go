@@ -231,6 +231,10 @@ func startPlatform(ctx context.Context, a *startArgs, newPlatform platformFunc, 
 		}
 		if s.setup != nil {
 			copyStore.setupHash = s.setup.SHA256
+			copyStore.checkVersions = true
+		}
+		if s.stateSpec == s.markSpec {
+			copyStore.retainDays = retainDays(a.platformName, s.setup)
 		}
 		opts.Durable = copyStore.open
 	}

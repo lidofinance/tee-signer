@@ -21,8 +21,16 @@ type durableCopy struct {
 	// setupHash is the setup's setup_hash (zero on the flag path): the
 	// copy's names and AADs carry it.
 	setupHash [32]byte
-	log       *slog.Logger
-	store     *statestore.Store
+	// retainDays is markstore.Env.RetainDays: set when the copy is in the
+	// mark log's store (the same spec), so its objects get the log's
+	// retention by themselves too.
+	retainDays uint32
+	// checkVersions: refuse a store that keeps overwritten objects as hidden
+	// versions (markstore.CheckVersions). Set on the setup path, where the
+	// mark log gets its lock check.
+	checkVersions bool
+	log           *slog.Logger
+	store         *statestore.Store
 }
 
 func newDurableCopy(spec, signer string, create bool, log *slog.Logger) (*durableCopy, error) {
@@ -39,10 +47,14 @@ func (d *durableCopy) open(ctx context.Context, p *platform.Platform) (platform.
 	if p.Keys == nil {
 		return nil, fmt.Errorf("platform %s has no key release for the state copy", p.Name)
 	}
-	env := markstore.Env{HTTP: p.HTTPClient, AWSCreds: p.RecordCredentials}
+	env := markstore.Env{HTTP: p.HTTPClient, AWSCreds: p.RecordCredentials, RetainDays: d.retainDays}
 	if p.StorageToken != nil {
 		c := markstore.NewTokenCache(p.StorageToken, markstore.TokenRefreshAfter, markstore.TokenMaxAge)
 		env.Token, env.TokenRefused = c.Token, c.Invalidate
+	}
+	if p.ManagementToken != nil {
+		c := markstore.NewTokenCache(p.ManagementToken, markstore.TokenRefreshAfter, markstore.TokenMaxAge)
+		env.ARMToken, env.ARMTokenRefused = c.Token, c.Invalidate
 	}
 	if p.Name == "dev" && env.AWSCreds == nil {
 		env.AWSCreds = record.EnvCredentials()
@@ -53,6 +65,14 @@ func (d *durableCopy) open(ctx context.Context, p *platform.Platform) (platform.
 	}
 	if l == nil {
 		return p.Store, nil
+	}
+	if d.checkVersions {
+		vctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		err := markstore.CheckVersions(vctx, l)
+		cancel()
+		if err != nil {
+			return nil, fmt.Errorf("-state-store: %w", err)
+		}
 	}
 	s, err := statestore.Open(ctx, p.Store, l, d.signer, p.Keys, statestore.Options{SetupHash: d.setupHash, AllowCreate: d.create, Log: d.log})
 	if err != nil {
