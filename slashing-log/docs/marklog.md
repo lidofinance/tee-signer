@@ -80,6 +80,20 @@ the gate once the log's source reaches the floor. Which validator has its
 own history is in its sealed share record (`history`), set when an import
 with attestation maxima stored it.
 
+The gate covers only votes cast before the log started. A validator that
+comes in later without vote history may have voted elsewhere since, so
+its import sets a source floor of its own: the restart floor epoch of the
+clock at the import (SLBOUND-01). The share record keeps it
+(`source_floor`), and a restart sets it again. The validator signs no
+vote with a source below the higher of the two floors, also after the
+log's gate has dropped. Any validator added while the runner runs, with
+vote history or without, may also have proposed elsewhere: the core
+starts it from the device mark, whose block bound holds only what keys
+here signed. So the core takes the restart floor's block and target
+bounds with the key, in the same step that loads it. The key signs no
+block or PTC vote up to the last slot of the floor epoch and no vote
+with a target up to it (a restart floors every key again).
+
 A record is about 420 bytes on the dev platform, 60 more for each
 pending update, and 150 to 250 more with a cloud KMS ciphertext in the
 key blob.
@@ -213,7 +227,11 @@ roll the mark back.
   operator imports the shares again (sealed import to the new boot key, as
   after any new deployment). Either way the runner signs from the log's
   mark: the source bound comes from the log, the floor adds its target and
-  block bounds. `tests/e2e` `TestE2EMarkLogLostState*`,
+  block bounds. A share imported again without vote history (no EIP-3076
+  attestation maxima) also gets its own source floor, the restart floor
+  epoch at the import. Its first vote then waits about margin + 2 epochs:
+  the source must reach the floor and stay below the clock epoch.
+  `tests/e2e` `TestE2EMarkLogLostState*`,
   `TestE2EDurableState*` and `attestation-verify/runnerclient`
   `TestE2EAzureRunnerMarkLogLostState`, `TestE2EAzureRunnerDurableAndHandover`
   run this on each platform build.
