@@ -848,14 +848,21 @@ out without them (release gate, below).
 
 The operator's steps, with the tools of this tree:
 
-1. A target setup: the source's setup with `handover_generation` one
-   higher, the same `cluster_id`, chain and safety values, version 0 of
-   both groups equal to the source's config in force, its own salts,
-   `max_keys`, `slashing_log_min_lock_days`, stores and platform part. If
-   the target's image is new, an allowed-images update on the source
-   first.
-2. The order (`signer-admin handover-draft`, then the approvers' signatures)
-   goes to the source in HANDOVER_ORDER.
+1. A target setup (`signer-admin handover-setup`): the source's setup
+   with `handover_generation` one higher, the same `cluster_id`, chain and
+   safety values, version 0 of both groups equal to the source's config in
+   force, its own salts, `max_keys`, stores and platform part, and a
+   `slashing_log_min_lock_days` no lower than the source's. The tool takes
+   the private part from a file, everything else from the source's setup
+   and its attested config in force, and draws one set of policy salts for
+   all targets of the cluster. If the target's image is new, an
+   allowed-images update on the source first.
+2. The order (`signer-admin handover-draft -target-setup`, then the
+   approvers' signatures) goes to the source in HANDOVER_ORDER. The draft
+   refuses a target the source would refuse, and writes the target's
+   published setup into the `.active` file, so `signer-admin show` prints
+   the target's public values and the source's check of them before an
+   approver signs. The private part stays behind `platform_commitment`.
 3. The target starts with no keys. `handover-target identity -order`
    pushes the order to the target, which reserves itself for it (below),
    then reads its IDENTITY for a fresh nonce over a connection pinned

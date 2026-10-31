@@ -180,20 +180,8 @@ func cmdSetup(args []string, out io.Writer) error {
 	// sets no_lock_accepted, as each acceptance is its own decision. A
 	// GCP setup with an acceptance gets its WARNING line on every run, so
 	// the operator sees it when the setup is made, not only in the file.
-	for _, s := range setups {
-		k := &s.Platform.SealingKeyRelease
-		if err := setupwire.CheckThresholdOn(&s.Platform, s.Chain.GenesisForkVersion, len(setups), len(setups)); err != nil {
-			return fmt.Errorf("signer %s: a cluster of %d signer(s) can hold no key: %w", s.SignerName, len(setups), err)
-		}
-		if k.UnsafeSingleKeyAccepted && !k.NoLockAccepted && setupwire.IsMainnet(s.Chain.GenesisForkVersion) {
-			return fmt.Errorf("signer %s: the setup accepts a key held alone on GCP (sealing_key_release.unsafe_single_key_accepted) on mainnet, where a GCP runner starts only with the separate acceptance of a key rule without a lock: put sealing_key_release.no_lock_accepted = true in the signer's section (-allow-gcp-unsafe-single-key does not set it)", s.SignerName)
-		}
-		if k.NoLockAccepted {
-			fprintf(out, "WARNING signer %s: the setup accepts a key rule without a lock (sealing_key_release.no_lock_accepted): Cloud KMS has no lock on the rule that releases the sealing key, and a mainnet runner starts anyway\n", s.SignerName)
-		}
-		if k.UnsafeSingleKeyAccepted {
-			fprintf(out, "WARNING signer %s: the setup accepts a key held alone on GCP (sealing_key_release.unsafe_single_key_accepted): %s\n", s.SignerName, setupwire.UnsafeSingleKeyWarning)
-		}
+	if err := checkNewSetups(out, setups, len(setups)); err != nil {
+		return err
 	}
 	// One set of policy salts for the cluster, one platform salt per signer.
 	salts, err := setupwire.NewPolicySalts(toolRand)
@@ -243,6 +231,27 @@ func cmdSetup(args []string, out io.Writer) error {
 		pr, _ := s.PolicyRoot()
 		fprintf(out, "%s setup_sha256 %s %s\n", s.SignerName, fullHex(h), p)
 		fprintf(out, "%s policy_root %s\n", s.SignerName, fullHex(pr))
+	}
+	return nil
+}
+
+// checkNewSetups applies the cluster rules to new setups of a cluster of n
+// signers and prints a WARNING line for each acceptance a setup makes.
+func checkNewSetups(out io.Writer, setups []*setupwire.Setup, n int) error {
+	for _, s := range setups {
+		k := &s.Platform.SealingKeyRelease
+		if err := setupwire.CheckThresholdOn(&s.Platform, s.Chain.GenesisForkVersion, n, n); err != nil {
+			return fmt.Errorf("signer %s: a cluster of %d signer(s) can hold no key: %w", s.SignerName, n, err)
+		}
+		if k.UnsafeSingleKeyAccepted && !k.NoLockAccepted && setupwire.IsMainnet(s.Chain.GenesisForkVersion) {
+			return fmt.Errorf("signer %s: the setup accepts a key held alone on GCP (sealing_key_release.unsafe_single_key_accepted) on mainnet, where a GCP runner starts only with the separate acceptance of a key rule without a lock: put sealing_key_release.no_lock_accepted = true in the signer's section (-allow-gcp-unsafe-single-key does not set it)", s.SignerName)
+		}
+		if k.NoLockAccepted {
+			fprintf(out, "WARNING signer %s: the setup accepts a key rule without a lock (sealing_key_release.no_lock_accepted): Cloud KMS has no lock on the rule that releases the sealing key, and a mainnet runner starts anyway\n", s.SignerName)
+		}
+		if k.UnsafeSingleKeyAccepted {
+			fprintf(out, "WARNING signer %s: the setup accepts a key held alone on GCP (sealing_key_release.unsafe_single_key_accepted): %s\n", s.SignerName, setupwire.UnsafeSingleKeyWarning)
+		}
 	}
 	return nil
 }
