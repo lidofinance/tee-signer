@@ -27,6 +27,11 @@ type frameConn struct {
 	inflight    *gauge
 	maxInflight int64
 	read, held  int64
+	// refused latches a refusal of the gauge: every later Read fails
+	// without reading. io.ReadFull drops an error that comes with the
+	// bytes that fill its buffer, so the refusal must not depend on the
+	// Read that saw it.
+	refused bool
 }
 
 // next readies the connection for the next frame: the bytes of the last
@@ -51,6 +56,9 @@ func (f *frameConn) release() {
 }
 
 func (f *frameConn) Read(p []byte) (int, error) {
+	if f.refused {
+		return 0, errInflight
+	}
 	n, err := f.Conn.Read(p)
 	if n > 0 && !f.started {
 		f.started = true
@@ -60,7 +68,10 @@ func (f *frameConn) Read(p []byte) (int, error) {
 		f.read += int64(n)
 		if over := f.read - FreeFrameBytes - f.held; over > 0 {
 			if !f.inflight.take(over, f.maxInflight) {
-				return n, errInflight
+				// The bytes are dropped with the frame: the connection
+				// closes.
+				f.refused = true
+				return 0, errInflight
 			}
 			f.held += over
 		}
