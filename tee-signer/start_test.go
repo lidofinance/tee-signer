@@ -167,7 +167,7 @@ func TestStateCopyFromSetup(t *testing.T) {
 			t.Fatal(err)
 		}
 		if copyStore == nil || opts.Durable == nil || s.stateSpec != "gcs:bucket=signer-state_gcp" || s.signerID != "signer-3" ||
-			copyStore.setupHash != s.setup.SHA256 || copyStore.retainDays != 0 {
+			copyStore.setupHash != s.setup.SHA256 || copyStore.retainDays != 0 || !copyStore.checkVersions {
 			t.Fatalf("state copy %+v, spec %q", copyStore, s.stateSpec)
 		}
 		if opts.Params["wif_provider"] == "" || opts.Params["attest_audience"] != "signer-runner-identity" {

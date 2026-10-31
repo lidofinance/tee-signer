@@ -26,8 +26,8 @@
 #                             and Key Vault Reader on it (the runner reads the key's
 #                             release policy for key_release_hash)
 #   store-role N              identity N gets Storage Blob Data Contributor (records)
-#                             and Reader (the lock check reads the container's
-#                             immutability policy) on the containers of SETUP_FILE_N
+#                             on the containers of SETUP_FILE_N, and Reader (the lock
+#                             check reads the account and the container) on their accounts
 #   acr-create                container registry (Basic)
 #   acr-role N                identity N gets AcrPull on the registry
 #   image-push                az acr login, then docker push of the runner image
@@ -279,7 +279,7 @@ EOF
     printf '  %-22s %s\n' "acr-role $n" "$(identity_name "$n") pulls from $ACR_NAME"
   done
   for n in 1 2 3; do
-    printf '  %-22s %s\n' "store-role $n" "$(identity_name "$n") writes records to and reads the lock of the containers of SETUP_FILE_$n"
+    printf '  %-22s %s\n' "store-role $n" "$(identity_name "$n") writes records to the containers of SETUP_FILE_$n and reads their lock"
   done
   for n in 1 2 3; do
     printf '  %-22s %s\n' "group-deploy $n" "$(group_name "$n") in $(signer_location "$n"), $(network_describe "$n" 2>/dev/null || echo "no network entry"), setup SETUP_FILE_$n"
@@ -363,26 +363,29 @@ cmd_key_role() {
 }
 
 # store-role N: the mark log's container (and the state copy's, when it is
-# another one) of SETUP_FILE_N. Records need the data role. The lock check
-# at every start reads the container's immutability policy from the
-# management plane (platform-azure/azlog Lock), which needs
-# Microsoft.Storage/.../containers/immutabilityPolicies/read: Reader on the
-# container scope grants that read and no write. Without it the runner
-# stops at the lock check.
+# another one) of SETUP_FILE_N. Records need the data role on the
+# container. The lock check at every start reads the storage account and
+# the container from the management plane (platform-azure/azlog Lock),
+# which needs Microsoft.Storage/storageAccounts/read and
+# .../containers/read: Reader on the account scope grants those reads and
+# no write. Without it the runner stops at the lock check.
 cmd_store_role() {
-  local n="$1" principal scope scopes
+  local n="$1" principal scope scopes accounts
   check_signer "$n"
   need_setup "$n" >/dev/null
   scopes="$(store_scopes "$n")"
   [ -n "$scopes" ] || die "SETUP_FILE_$n names no Azure store"
-  gate "assign Storage Blob Data Contributor and Reader to $(identity_name "$n") on: $(tr '\n' ' ' <<<"$scopes")"
+  accounts="$(store_accounts "$n")"
+  gate "assign Storage Blob Data Contributor to $(identity_name "$n") on: $(tr '\n' ' ' <<<"$scopes"), and Reader on: $(tr '\n' ' ' <<<"$accounts")"
   principal="$(az identity show -g "$RG" -n "$(identity_name "$n")" --query principalId -o tsv)"
   while IFS= read -r scope; do
     az role assignment create --assignee-object-id "$principal" --assignee-principal-type ServicePrincipal \
       --role "Storage Blob Data Contributor" --scope "$scope" -o none
+  done <<<"$scopes"
+  while IFS= read -r scope; do
     az role assignment create --assignee-object-id "$principal" --assignee-principal-type ServicePrincipal \
       --role Reader --scope "$scope" -o none
-  done <<<"$scopes"
+  done <<<"$accounts"
 }
 
 cmd_acr_create() {

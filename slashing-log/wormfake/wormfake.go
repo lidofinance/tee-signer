@@ -13,8 +13,8 @@
 //	       with a locked time-based retention policy
 //
 // and the lock self-check's read of the lock (S3 GET ?object-lock, GCS GET
-// bucket with its retentionPolicy, Azure the management plane's
-// immutability policy); and the faults the tests need: the store down, slow
+// bucket with its retentionPolicy, Azure the management plane's storage
+// account and container with its immutability policy); and the faults the tests need: the store down, slow
 // answers, a stale listing, a listing that leaves names out, a lock in the
 // wrong mode or with too short a retention, records that expired (a fake
 // clock and the admin deleting what the retention no longer keeps), and the
@@ -76,6 +76,20 @@ type Lock struct {
 	// the bucket has no default retention rule, as after an admin removed
 	// it. New versions get no retention unless the PUT names one.
 	NoDefault bool
+	// VersionLevel: the Azure container has version-level immutability
+	// (immutableStorageWithVersioning enabled). Only the lock read reports
+	// it; the fake still refuses overwrites.
+	VersionLevel bool
+	// Migrating: a migration of the Azure container to version-level
+	// immutability is in progress (migrationState InProgress).
+	Migrating bool
+	// AccountVersionLevel: the Azure storage account has version-level
+	// immutability (immutableStorageWithVersioning enabled). Only the
+	// account read reports it.
+	AccountVersionLevel bool
+	// AppendWrites: the Azure policy allows protected append writes
+	// (allowProtectedAppendWritesAll). Only the lock read reports it.
+	AppendWrites bool
 }
 
 // Server is one fake store with one bucket or container.
@@ -89,6 +103,9 @@ type Server struct {
 	Auth func(r *http.Request) error
 	// PageSize bounds each listing page (default 3, so tests page).
 	PageSize int
+	// Subscription, if set, is the Azure container's subscription: the
+	// management plane answers 404 for any other, as Azure does.
+	Subscription string
 
 	mu       sync.Mutex
 	objects  map[string][]*version // name -> versions, oldest first
@@ -657,15 +674,59 @@ func azErr(w http.ResponseWriter, status int, code string) {
 // immutability policy, for the given subscription, resource group and
 // account.
 func (s *Server) ARMPath(sub, rg, account string) string {
-	return "/subscriptions/" + sub + "/resourceGroups/" + rg + "/providers/Microsoft.Storage/storageAccounts/" + account +
-		"/blobServices/default/containers/" + s.Bucket + "/immutabilityPolicies/default"
+	return s.armContainerPath(sub, rg, account) + "/immutabilityPolicies/default"
 }
 
-// serveARM answers the management plane's Get Immutability Policy for any
-// subscription, resource group and account, and this container.
+func armAccountPath(sub, rg, account string) string {
+	return "/subscriptions/" + sub + "/resourceGroups/" + rg + "/providers/Microsoft.Storage/storageAccounts/" + account
+}
+
+func (s *Server) armContainerPath(sub, rg, account string) string {
+	return armAccountPath(sub, rg, account) + "/blobServices/default/containers/" + s.Bucket
+}
+
+// armPolicy is the immutability policy's properties as ARM answers them.
+func (s *Server) armPolicy() map[string]any {
+	state := "Unlocked"
+	if s.lock.Compliance {
+		state = "Locked"
+	}
+	return map[string]any{"immutabilityPeriodSinceCreationInDays": s.lock.Days, "state": state,
+		"allowProtectedAppendWrites": false, "allowProtectedAppendWritesAll": s.lock.AppendWrites}
+}
+
+// serveARM answers the management plane's Get Storage Account, Get
+// Container and Get Immutability Policy for any subscription, resource
+// group and account, and this container.
 func (s *Server) serveARM(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(r.URL.Path, "/")
-	if r.Method != http.MethodGet || len(parts) != 15 || r.URL.Path != s.ARMPath(parts[2], parts[4], parts[8]) || r.URL.Query().Get("api-version") == "" {
+	if r.Method != http.MethodGet || len(parts) < 9 || r.URL.Query().Get("api-version") == "" {
+		http.Error(w, `{"error":{"code":"InvalidResourceType"}}`, http.StatusBadRequest)
+		return
+	}
+	if s.Subscription != "" && parts[2] != s.Subscription {
+		http.Error(w, `{"error":{"code":"ResourceNotFound"}}`, http.StatusNotFound)
+		return
+	}
+	if len(parts) == 9 && r.URL.Path == armAccountPath(parts[2], parts[4], parts[8]) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"name": parts[8], "type": "Microsoft.Storage/storageAccounts",
+			"properties": map[string]any{"immutableStorageWithVersioning": map[string]any{"enabled": s.lock.AccountVersionLevel}}})
+		return
+	}
+	if len(parts) == 13 && r.URL.Path == s.armContainerPath(parts[2], parts[4], parts[8]) {
+		vlw := map[string]any{"enabled": s.lock.VersionLevel}
+		if s.lock.Migrating {
+			vlw["migrationState"] = "InProgress"
+		}
+		props := map[string]any{"hasImmutabilityPolicy": !s.lock.None, "immutableStorageWithVersioning": vlw}
+		if !s.lock.None {
+			props["immutabilityPolicy"] = map[string]any{"etag": `"8d0"`, "properties": s.armPolicy()}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"name": s.Bucket, "etag": `"8d1"`,
+			"type": "Microsoft.Storage/storageAccounts/blobServices/containers", "properties": props})
+		return
+	}
+	if len(parts) != 15 || r.URL.Path != s.ARMPath(parts[2], parts[4], parts[8]) {
 		http.Error(w, `{"error":{"code":"InvalidResourceType"}}`, http.StatusBadRequest)
 		return
 	}
@@ -673,13 +734,9 @@ func (s *Server) serveARM(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":{"code":"ImmutabilityPolicyNotFound"}}`, http.StatusNotFound)
 		return
 	}
-	state := "Unlocked"
-	if s.lock.Compliance {
-		state = "Locked"
-	}
 	_ = json.NewEncoder(w).Encode(map[string]any{"name": "default", "etag": `"8d0"`,
 		"type":       "Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies",
-		"properties": map[string]any{"immutabilityPeriodSinceCreationInDays": s.lock.Days, "state": state, "allowProtectedAppendWrites": false}})
+		"properties": s.armPolicy()})
 }
 
 func (s *Server) serveAzure(w http.ResponseWriter, r *http.Request, body []byte) {
