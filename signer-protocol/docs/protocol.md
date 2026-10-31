@@ -907,7 +907,10 @@ HANDOVER. Before anything changes, the source checks:
   IDENTITY user data, so its measurement is the order's image;
 - the target's public part equals the source's values leaf by leaf:
   `cluster_id`, chain, safety, `handover_generation` + 1, and version 0
-  of both groups equal to the source's config in force;
+  of both groups equal to the source's config in force; its
+  `slashing_log_min_lock_days` is no lower than the source's, since a
+  shorter lock would let the host delete the marks the target takes over
+  sooner (`handoverorder.CheckTarget`, which `signer-admin` applies too);
 - the target's state: version 0 of both groups with its published group
   hashes, nothing pending, its setup's approver set, no key
   (`imported_keys` 0), reserved for this order (the order in its slot), and `max_keys`
