@@ -571,6 +571,11 @@ approves an update that allows the image.
   handover.
 - Keep the mark log bucket's retention lock; the runner refuses to start
   when it cannot read its newest valid record.
+- With a setup, every object under `shares/` counts against `max_keys`,
+  also one that never loads, and the runner removes none. When imports
+  fail for lack of room, move the records the start named as not loaded
+  out of `shares/`, restart, and import again (protocol.md,
+  IMPORT_SHARE_SEALED, "Room").
 - Clients must name a verifier and its expected values; there is no
   setting that skips the attestation check.
 

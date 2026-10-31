@@ -593,6 +593,19 @@ stored. The order travels in the request; the runner keeps nothing of
 it. `governance/importorder/testdata/vector.txt` is a test vector
 (body, hash, signed order).
 
+Room. With a setup, every object under `shares/` in the runner's store,
+every loaded key and every import in progress counts against the setup's
+`max_keys`; above it the import is refused with `SC_ERR_NOMEM` ("its
+setup's max_keys is N"). A stored record that never loads counts too: one
+sealed under another setup or log, or a corrupt one. The runner deletes
+nothing under `shares/`, so such a record keeps its slot until the
+operator moves it out. The start names each record that did not load
+("some stored shares did not load"). For a full store: compare the names
+under `shares/` with the keys the runner holds (`imported_keys` in
+IDENTITY, the start's log), move each record that does not load to a
+folder outside `shares/` (keep it, it may be the only copy of a share),
+restart the runner, and send the import again.
+
 The dealer fetches IDENTITY with a fresh nonce, verifies it, and seals the
 32-byte share with HPKE base mode to `import_key`: info
 `"signer-share-import-v1"`, associated data = the 129-byte header above
