@@ -30,8 +30,8 @@ var ErrLost = errors.New("markstore: another runner instance wrote this signer's
 var ErrHandedOver = errors.New("markstore: this signer was handed over to another image; it signs nothing new")
 
 // ErrUnreadable: at or above the newest valid record lies a record of this
-// signer, under this key release, that this runner cannot parse (a newer
-// image wrote it). The runner refuses to start rather than go back to an
+// signer, signed under a key of this key release, that this runner cannot
+// parse (a newer image wrote it). The runner refuses to start rather than go back to an
 // older mark (Claim, the fail-closed reader rule).
 var ErrUnreadable = errors.New("markstore: the newest record of this signer is one this runner cannot read")
 
@@ -312,12 +312,14 @@ func (m *MarkLog) pubOf(ctx context.Context, blob []byte) (ed25519.PublicKey, er
 //
 // strict is the fail-closed reader rule for the versions at and above the
 // newest valid record (Claim): an object this runner cannot parse whose
-// header (RecordHeader) names this setup, signer and version and whose key
-// blob the key release opens is a record a runner of this key release
-// wrote, most likely a newer image with a field this one does not know.
-// Skipping it would fall back to an older mark, so validAt fails instead
-// and the runner does not start. An object whose key blob does not open
-// was not written under this key release and is skipped as before.
+// header (RecordHeader) names this setup, signer and version, whose key
+// blob the key release opens, and whose last 64 bytes are a signature
+// under that key over the bytes before them is a record a runner of this
+// key release wrote, most likely a newer image with a field this one does
+// not know. Skipping it would fall back to an older mark, so validAt fails
+// instead and the runner does not start. Any other object is skipped: a
+// key blob alone proves nothing, since anyone who reads the log can copy
+// one from a real record.
 func (m *MarkLog) validAt(ctx context.Context, v uint64, es []Entry, strict bool) ([]*Record, [][]byte, error) {
 	var recs []*Record
 	var encs [][]byte
@@ -332,12 +334,12 @@ func (m *MarkLog) validAt(ctx context.Context, v uint64, es []Entry, strict bool
 		r, err := Parse(b)
 		if err != nil && strict {
 			if h, ok := RecordHeader(b); ok && h.Setup == m.setup && h.Signer == m.signer && h.Version == v {
-				_, perr := m.pubOf(ctx, h.KeyBlob)
+				pub, perr := m.pubOf(ctx, h.KeyBlob)
 				switch {
-				case perr == nil:
+				case perr == nil && h.Verify(pub):
 					return nil, nil, fmt.Errorf("%w: version %d (%s, magic %q) is a record of this signer under this key release that this runner cannot read (%v); "+
 						"a newer image wrote it, and going back to the record below it would lose its mark (refusing to start)", ErrUnreadable, v, e.Name, h.Magic, err)
-				case !errors.Is(perr, platform.ErrNotAuthentic):
+				case perr != nil && !errors.Is(perr, platform.ErrNotAuthentic):
 					return nil, nil, perr
 				}
 			}
