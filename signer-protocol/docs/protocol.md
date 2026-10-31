@@ -880,8 +880,8 @@ out without them (release gate, below).
 The operator's steps, with the tools of this tree:
 
 1. A target setup (`signer-admin handover-setup`): the source's setup
-   with `handover_generation` one higher, the same `cluster_id`, chain and
-   safety values, version 0 of both groups equal to the source's config in
+   with `handover_generation` one higher, the same `cluster_id`, chain,
+   safety values and `signing_mode`, version 0 of both groups equal to the source's config in
    force, its own salts, `max_keys`, stores and platform part, and a
    `slashing_log_min_lock_days` no lower than the source's. The tool takes
    the private part from a file, everything else from the source's setup

@@ -23,7 +23,7 @@ import (
 // allowed_client_ca, the stores, sealing_key_release and
 // peer_attestation_hosts; the lines before the first section belong to
 // every target. The tool takes everything else from the source:
-// cluster_id, signer_name, chain, safety, max_keys and
+// cluster_id, signer_name, chain, safety, signing_mode, max_keys and
 // slashing_log_min_lock_days from its setup, handover_generation one
 // higher, and version 0 of both groups from the config in force that the
 // source's attested IDENTITY names (the bodies above version 0 come from
@@ -131,7 +131,7 @@ func cmdHandoverSetup(args []string, out io.Writer) error {
 		}
 		src := m.setup
 		s := &setupwire.Setup{SignerName: src.SignerName, ClusterID: src.ClusterID, HandoverGeneration: src.HandoverGeneration + 1,
-			Chain: src.Chain, Safety: src.Safety, MaxKeys: src.MaxKeys, SlashingLogMinLockDays: src.SlashingLogMinLockDays,
+			Chain: src.Chain, Safety: src.Safety, SigningMode: src.SigningMode, MaxKeys: src.MaxKeys, SlashingLogMinLockDays: src.SlashingLogMinLockDays,
 			Platform: *pl, Locked: *tg.locked, Open: *tg.open}
 		if *maxKeys != 0 {
 			s.MaxKeys = uint32(*maxKeys)
@@ -162,7 +162,7 @@ func cmdHandoverSetup(args []string, out io.Writer) error {
 			return err
 		}
 		if a.src.setup.ClusterID != b.src.setup.ClusterID || !bytes.Equal(ae, be) || !bytes.Equal(ao, bo) ||
-			ap.HandoverGeneration != bp.HandoverGeneration || ap.Chain != bp.Chain || ap.Safety != bp.Safety ||
+			ap.HandoverGeneration != bp.HandoverGeneration || ap.Chain != bp.Chain || ap.Safety != bp.Safety || ap.SigningMode != bp.SigningMode ||
 			ap.MaxKeys != bp.MaxKeys || ap.SlashingLogMinLockDays != bp.SlashingLogMinLockDays {
 			return fmt.Errorf("%s and %s do not have the same public values in force; make their targets in separate runs only if they are separate clusters",
 				a.src.name, b.src.name)

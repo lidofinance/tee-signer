@@ -20,7 +20,7 @@ func TestFormatPolicy(t *testing.T) {
 				t.Errorf("%s: %q is not a line of the setup's form", name, line)
 			}
 		}
-		for _, key := range []string{"cluster_id", "handover_generation", "max_keys", "slashing_log_min_lock_days", "approvers", "approvals_needed"} {
+		for _, key := range []string{"cluster_id", "handover_generation", "max_keys", "slashing_log_min_lock_days", "signing_mode", "approvers", "approvals_needed"} {
 			if !strings.Contains(pol, "\n"+key+" = ") {
 				t.Errorf("%s: no %s line", name, key)
 			}

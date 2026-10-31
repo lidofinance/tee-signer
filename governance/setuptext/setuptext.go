@@ -778,12 +778,7 @@ func FormatSetup(s *setupwire.Setup) ([]byte, error) {
 	w.kv("signer_name", s.SignerName)
 	w.kv("cluster_id", hexOf(s.ClusterID[:]))
 	w.kv("handover_generation", s.HandoverGeneration)
-	formatPublic(w, &s.Chain, &s.Safety, s.MaxKeys, s.SlashingLogMinLockDays)
-	w.blank()
-	w.note("signing_mode: public, fixed for the life of the signer. threshold: the signer holds shares of t-of-n")
-	w.note("splits with n >= 2 and refuses a 1 of 1 import order. single: the signer holds whole keys and takes")
-	w.note("1 of 1 import orders only; one failed mark log, plus a hostile gateway, can then sign a slashable pair.")
-	w.kv("signing_mode", s.SigningMode)
+	formatPublic(w, &s.Chain, &s.Safety, s.MaxKeys, s.SlashingLogMinLockDays, s.SigningMode)
 	w.blank()
 	w.note("platform: private, fixed")
 	formatPlatform(w, &s.Platform)
@@ -800,9 +795,9 @@ func FormatSetup(s *setupwire.Setup) ([]byte, error) {
 	return []byte(w.b.String()), nil
 }
 
-// formatPublic writes the chain, the safety values, max_keys and
-// slashing_log_min_lock_days.
-func formatPublic(w *printer, c *setupwire.Chain, sf *setupwire.Safety, maxKeys, lockDays uint32) {
+// formatPublic writes the chain, the safety values, max_keys,
+// slashing_log_min_lock_days and signing_mode.
+func formatPublic(w *printer, c *setupwire.Chain, sf *setupwire.Safety, maxKeys, lockDays uint32, mode setupwire.SigningMode) {
 	w.blank()
 	w.note("chain: public, fixed for the life of the signer")
 	w.kv("genesis_validators_root", hexOf(c.GenesisValidatorsRoot[:]))
@@ -820,6 +815,11 @@ func formatPublic(w *printer, c *setupwire.Chain, sf *setupwire.Safety, maxKeys,
 	w.kv("slashing_mark_prewrite.target_epochs", sf.SlashingMarkPrewrite.TargetEpochs)
 	w.kv("max_keys", maxKeys)
 	w.kv("slashing_log_min_lock_days", lockDays)
+	w.blank()
+	w.note("signing_mode: public, fixed for the life of the signer. threshold: the signer holds shares of t-of-n")
+	w.note("splits with n >= 2 and refuses a 1 of 1 import order. single: the signer holds whole keys and takes")
+	w.note("1 of 1 import orders only; one failed mark log, plus a hostile gateway, can then sign a slashable pair.")
+	w.kv("signing_mode", mode)
 }
 
 // FormatPolicy checks the public part of a setup and writes its human form
@@ -833,7 +833,7 @@ func FormatPolicy(p *setupwire.Policy) ([]byte, error) {
 	w.note("The public part of a setup (setupwire.Published), salts not shown.")
 	w.kv("cluster_id", hexOf(p.ClusterID[:]))
 	w.kv("handover_generation", p.HandoverGeneration)
-	formatPublic(w, &p.Chain, &p.Safety, p.MaxKeys, p.SlashingLogMinLockDays)
+	formatPublic(w, &p.Chain, &p.Safety, p.MaxKeys, p.SlashingLogMinLockDays, p.SigningMode)
 	w.blank()
 	formatLocked(w, &p.Locked)
 	w.blank()

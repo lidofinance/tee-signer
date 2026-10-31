@@ -433,7 +433,7 @@ func showHandoverTarget(out io.Writer, a *orderActive) error {
 	if err := handoverorder.CheckTarget(a.setup, a.locked, a.open, p); err != nil {
 		fprintf(out, "WARNING target: %v; the source will refuse the handover\n", err)
 	} else {
-		fprintf(out, "target: the source accepts the target's public values (the same cluster_id, chain and safety, "+
+		fprintf(out, "target: the source accepts the target's public values (the same cluster_id, chain, safety and signing_mode, "+
 			"handover_generation %d, version 0 of both groups equal to the source's values in force, "+
 			"slashing_log_min_lock_days %d, the source's %d)\n", p.HandoverGeneration, p.SlashingLogMinLockDays, a.setup.SlashingLogMinLockDays)
 	}
