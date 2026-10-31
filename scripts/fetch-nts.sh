@@ -119,7 +119,12 @@ case "${1:-fetch}" in
       trap 'rm -rf "$tmp"' EXIT
       scratch_copy "$tmp"
       in_toolchain "$tmp" -v "$NTS_CARGO_HOME:/tmp/cargo-home" -- cargo fetch --locked
-      bash "$ROOT/scripts/nts-verify-crates.sh" "$LOCK" "$NTS_CARGO_HOME" >&2
+      rc=0
+      bash "$ROOT/scripts/nts-verify-crates.sh" "$LOCK" "$NTS_CARGO_HOME" >&2 || rc=$?
+      if [ "$rc" = 3 ]; then
+        echo "cargo fetch did not add the missing archives: remove $NTS_CARGO_HOME and run scripts/fetch-nts.sh again" >&2
+      fi
+      [ "$rc" = 0 ] || exit "$rc"
     elif [ "$rc" != 0 ]; then
       exit "$rc"
     fi

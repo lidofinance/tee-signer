@@ -181,6 +181,7 @@ trusted-time/toolchain/toolchain.Dockerfile     the toolchain image
 scripts/fetch-nts.sh          checks the lock, fetches the crates into build/nts/cargo-home,
                               checks the archives
 scripts/nts-verify-crates.sh  checks the crate archives against the sha256 in Cargo.lock
+scripts/nts-verify-crates-test.sh  its self-test on a fixture cache (make check)
 scripts/build-nts.sh          builds libsigner_nts.a for both architectures, runs
                               the Rust tests and the no_std checks of the core
 scripts/nts-container.sh      the part of build-nts.sh that runs in the container
@@ -226,6 +227,10 @@ bash scripts/test-nts.sh       # also the runners with the tag nts and the Go te
 bash scripts/nts-interop.sh    # network: NTS-KE and 3 queries per public operator
 ```
 
+Run the Rust tests through `make nts` or `make test-rust`, not bare `cargo`
+in `trusted-time/rust`: bare cargo uses `~/.cargo` and the network, and it
+does not check archives already in that cache.
+
 `make nts` and the scripts write to `build/nts/`. They do not touch
 `build/<arch>/bin`. The image builds take their runners from there, built by
 `scripts/build-runner.sh`, which builds the library into `build/nts/`
@@ -262,15 +267,17 @@ and it takes dependency features from the registry index files, which the
 lock does not cover. So nothing in the cache is trusted:
 
 - `fetch-nts.sh` runs `scripts/nts-verify-crates.sh` first: each archive in
-  the cache against its sha256 in the lock. All there and matching: no
-  fetch. Some missing: `cargo fetch`, then the same check again. One that
+  the cache against its sha256 in the lock. Each archive must be in at least
+  one registry folder of the cache, and every copy of it must match. All
+  there and matching: no fetch. Some missing: `cargo fetch`, then the same check again. One that
   differs (changed, cut short): the script stops and says to remove the
   cache. It also deletes the extracted sources (`registry/src`).
 - `build-nts.sh` mounts the cache read-only at `/crates` in each build
   container. `nts-container.sh` copies only the lock's archives out of it,
   checks the copies with `nts-verify-crates.sh`, and unpacks them into
   `/tmp/vendor`, a cargo directory source whose `.cargo-checksum.json` per
-  crate names the lock's sha256. cargo builds with crates.io replaced by
+  crate names the lock's sha256 and the sha256 of each unpacked file, which
+  cargo checks before it builds. cargo builds with crates.io replaced by
   that directory. The registry index, the extracted sources and every other
   file of the cache are never read in the build, so features come from the
   crates' own `Cargo.toml`. A changed archive stops the build.
