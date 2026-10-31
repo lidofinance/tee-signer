@@ -52,10 +52,18 @@
 //	    rotation, every new key) and write the signed update.
 //	signer-admin push -cluster cluster.json [-raise-min] update.signed
 //	    Send the signed update to every signer and print what each one says.
-//	signer-admin handover-draft -cluster cluster.json -signer NAME -target-cloud FILE
-//	                             [-target-setup-sha256 HEX] [-target-name NAME] [-not-after 12h] [-out handover.bin]
+//	signer-admin handover-setup -cluster cluster.json [-max-keys N] [-slashing-log-min-lock-days N] -out DIR FILE
+//	    Make the target setups of a handover (handoversetup.go): one
+//	    DIR/NAME.setup per [signer NAME] section of FILE, which holds the
+//	    targets' private part only. The rest comes from the sources' setups
+//	    and their config in force, with handover_generation one higher and
+//	    one new set of policy salts for all targets.
+//	signer-admin handover-draft -cluster cluster.json -signer NAME -target-cloud FILE -target-setup FILE
+//	                             [-target-name NAME] [-not-after 12h] [-out handover.bin]
 //	    Draft a handover order (handoverdraft.go): the source signer NAME hands
-//	    its shares to the one target of FILE's settings and setup_sha256.
+//	    its shares to the one target of the cloud.json's settings and the
+//	    setup file's setup_sha256. The target's published setup goes into
+//	    the .active file, and show prints its public values.
 //	    show, sign, assemble and push take it as they take an update;
 //	    push sends it to the source only.
 //
@@ -161,7 +169,8 @@ const usage = `usage:
   signer-admin approver-key -key FILE|openpgp:KEYGRIP | -openpgp FILE [-fingerprint HEX]
   signer-admin assemble [-active FILE] [-out update.signed] update.bin SIG...
   signer-admin push -cluster cluster.json [-raise-min] [-signers NAME,...] update.signed|handover.signed
-  signer-admin handover-draft -cluster cluster.json -signer NAME -target-cloud FILE [-target-setup-sha256 HEX] [-target-name NAME] [-not-after 12h] [-out handover.bin]
+  signer-admin handover-setup -cluster cluster.json [-max-keys N] [-slashing-log-min-lock-days N] -out DIR FILE
+  signer-admin handover-draft -cluster cluster.json -signer NAME -target-cloud FILE -target-setup FILE [-target-name NAME] [-not-after 12h] [-out handover.bin]
   signer-admin probe -cluster cluster.json [-signers NAME,...]
   signer-admin import-draft -cluster cluster.json -signer NAME -split FILE [-not-after 12h] [-allow-gcp-unsafe-single-key] [-out import.bin]
   signer-admin import -cluster cluster.json -signer NAME -order import.signed -shares FILE -commitments FILE
@@ -175,8 +184,8 @@ func run(args []string, out io.Writer) error {
 	cmds := map[string]func([]string, io.Writer) error{
 		"setup": cmdSetup, "pin": cmdPin, "status": cmdStatus, "draft": cmdDraft,
 		"show": cmdShow, "sign": cmdSign, "assemble": cmdAssemble, "push": cmdPush,
-		"handover-draft": cmdHandoverDraft,
-		"probe":          cmdProbe, "import-draft": cmdImportDraft, "import": cmdImport, "exit-draft": cmdExitDraft,
+		"handover-setup": cmdHandoverSetup, "handover-draft": cmdHandoverDraft,
+		"probe": cmdProbe, "import-draft": cmdImportDraft, "import": cmdImport, "exit-draft": cmdExitDraft,
 		"issue-client-cert": cmdIssueClientCert, "approver-key": cmdApproverKey,
 	}
 	cmd, ok := cmds[args[0]]

@@ -16,6 +16,12 @@ type orderActive struct {
 	setup  *setupwire.Setup
 	locked *setupwire.Locked
 	ref    ref
+	// open, openV0 and target: handover orders only (loadHandoverActive).
+	// openV0: the active file has no open update, so open is the setup's
+	// version 0.
+	open   *setupwire.Open
+	openV0 bool
+	target *setupwire.Published
 }
 
 // parseNotAfter reads -not-after: an RFC 3339 time, or a duration from now

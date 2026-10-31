@@ -15,6 +15,7 @@ import (
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
 	"github.com/lidofinance/tee-signer/governance/flavor"
 	"github.com/lidofinance/tee-signer/governance/handoverorder"
+	"github.com/lidofinance/tee-signer/governance/setuptext"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	adminapprover "github.com/lidofinance/tee-signer/signer-admin/approver"
 	remoteadmin "github.com/lidofinance/tee-signer/signer-admin/remote/admin"
@@ -25,21 +26,27 @@ import (
 // target it may hand its shares to.
 // The flow is the config update's:
 //
-//	signer-admin handover-draft -cluster cluster.json -signer NAME -target-cloud target/cloud.json [-out handover.bin]
+//	signer-admin handover-setup -cluster cluster.json -out targets targets.conf
+//	signer-admin handover-draft -cluster cluster.json -signer NAME -target-cloud target/cloud.json -target-setup targets/NAME.setup [-out handover.bin]
 //	signer-admin show handover.bin                      each approver, offline
 //	signer-admin sign -key approver.key handover.bin    each approver
 //	signer-admin assemble handover.bin sig...           k signatures of the approvers in force
 //	signer-admin push -cluster cluster.json handover.signed
 //
 // handover-draft reads the source's attested IDENTITY (its setup pinned)
-// and its cloud.json for the source's image and settings, and the target's
-// cloud.json for the target's: its setup_sha256 (what signer-admin pin
-// wrote, or -target-setup-sha256), image and verifier settings. It does not
-// connect to the target. The target's image must be on the source's
-// allowed-images list in force. The draft, show, sign and assemble steps
-// work offline.
-// handover.bin.active holds the source's setup and its locked group in
-// force, so show and assemble check the approvers and the image offline.
+// and its cloud.json for the source's image and settings, the target's
+// cloud.json for the target's image and verifier settings, and the target's
+// setup file (handover-setup wrote it), whose setup_hash the order names;
+// the setup_sha256 the target's cloud.json pins, if any, must be the same.
+// It does not connect to the target. The target's image must be on the
+// source's allowed-images list in force, and the target's public values
+// must pass the source's check (handoverorder.CheckTarget). The draft,
+// show, sign and assemble steps work offline.
+// handover.bin.active holds the source's setup, its locked and open groups
+// in force, and the target's published setup (setupwire.Published: the
+// public part and platform_commitment, never the private part). So show
+// and assemble check the approvers and the image offline, and show prints
+// the target's public values and what the source would say of them.
 //
 // The source acts on the order the images minimum time lock after it
 // arrives (7 days, 7 minutes on a testnet build; the time lock in force
@@ -94,7 +101,9 @@ func decodeHandover(path string, raw []byte) (*handoverorder.Body, []byte, *hand
 }
 
 // loadHandoverActive reads the active file of a handover order: the
-// source's setup and its locked group in force.
+// source's setup, its locked and open groups in force, and the target's
+// published setup. The open group and the target are absent from files of
+// older drafts.
 func loadHandoverActive(path string, b *handoverorder.Body) (*orderActive, error) {
 	var f activeFile
 	if err := readStrictJSON(path, &f); err != nil {
@@ -136,6 +145,37 @@ func loadHandoverActive(path string, b *handoverorder.Body) (*orderActive, error
 		}
 		a.locked, a.ref = u.Locked, ref{u.Version, uh}
 	}
+	a.open, a.openV0 = &a.setup.Open, true
+	if f.Open != "" {
+		ob, err := hex.DecodeString(f.Open)
+		if err != nil {
+			return nil, fmt.Errorf("%s: open: not hex", path)
+		}
+		u, err := setupwire.DecodeUpdateBody(ob)
+		if err != nil {
+			return nil, fmt.Errorf("%s: open: %w", path, err)
+		}
+		if u.Group != setupwire.GroupOpen || u.Matches(a.setup) != nil {
+			return nil, fmt.Errorf("%s: open: an update of another group or cluster", path)
+		}
+		a.open, a.openV0 = u.Open, false
+	}
+	if f.Target != "" {
+		tb, err := hex.DecodeString(f.Target)
+		if err != nil {
+			return nil, fmt.Errorf("%s: target: not hex", path)
+		}
+		if a.target, err = setupwire.DecodePublished(tb); err != nil {
+			return nil, fmt.Errorf("%s: target: %w", path, err)
+		}
+		th, err := a.target.SetupHash()
+		if err != nil {
+			return nil, fmt.Errorf("%s: target: %w", path, err)
+		}
+		if th != b.Target.SetupHash {
+			return nil, fmt.Errorf("%s: the target setup %s is not the order's target %s", path, hex8(th), hex8(b.Target.SetupHash))
+		}
+	}
 	return a, nil
 }
 
@@ -153,16 +193,16 @@ func cmdHandoverDraft(args []string, out io.Writer) error {
 	cf := addClusterFlags(fs)
 	source := fs.String("signer", "", "the source: the signer of cluster.json that hands its shares over")
 	targetCloud := fs.String("target-cloud", "", "the target's cloud.json: its address is not used; its attestation settings and setup_sha256 are")
-	targetSetup := fs.String("target-setup-sha256", "", "the target's setup_hash, 64 hex digits (default: the setup_sha256 of the target's cloud.json; both must agree when both are set)")
+	targetSetup := fs.String("target-setup", "", "the target's setup file (signer-admin handover-setup); the order names its setup_hash, and the setup_sha256 of the target's cloud.json, if set, must be the same")
 	targetName := fs.String("target-name", "", "a name for the target (default: the source's name with b appended)")
 	notAfter := fs.String("not-after", handoverDefaultNotAfter, "no handover starts under the order from then on: RFC 3339 time, or a duration from now (12h, 1d)")
 	outPath := fs.String("out", "handover.bin", "the order body to sign; the source's setup and locked values in force go to the same name with .active")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 || *source == "" || *targetCloud == "" {
+	if fs.NArg() != 0 || *source == "" || *targetCloud == "" || *targetSetup == "" {
 		return errors.New("usage: signer-admin handover-draft -cluster cluster.json -signer NAME -target-cloud target/cloud.json " +
-			"[-target-setup-sha256 HEX] [-target-name NAME] [-not-after 12h] [-out handover.bin]")
+			"-target-setup FILE [-target-name NAME] [-not-after 12h] [-out handover.bin]")
 	}
 	*cf.only = *source
 	c, err := cf.load()
@@ -171,28 +211,36 @@ func cmdHandoverDraft(args []string, out io.Writer) error {
 	}
 	m := c.members[0]
 
-	// The target: setup_sha256 and settings from its cloud.json.
+	// The target: its setup from the file, its settings from its
+	// cloud.json.
+	traw, err := os.ReadFile(*targetSetup)
+	if err != nil {
+		return err
+	}
+	tsetup, err := setupwire.DecodeSetup(traw)
+	if err != nil {
+		return fmt.Errorf("%s: %w", *targetSetup, err)
+	}
+	th, err := setupwire.SetupHash(traw)
+	if err != nil {
+		return fmt.Errorf("%s: %w", *targetSetup, err)
+	}
+	tpub, err := setupwire.PublishedOf(tsetup)
+	if err != nil {
+		return fmt.Errorf("%s: %w", *targetSetup, err)
+	}
+	tpubRaw, err := tpub.Encode()
+	if err != nil {
+		return fmt.Errorf("%s: %w", *targetSetup, err)
+	}
 	tconn, err := loadConn(*targetCloud)
 	if err != nil {
 		return err
 	}
-	var th [32]byte
-	switch {
-	case *targetSetup != "":
-		if th, err = parseSetupHash("-target-setup-sha256", *targetSetup); err != nil {
-			return err
+	if pinned := tconn.Attestation.SetupSHA256; pinned != "" {
+		if ph, err := parseSetupHash(*targetCloud+": setup_sha256", pinned); err != nil || ph != th {
+			return fmt.Errorf("%s (setup %s) is not the setup_sha256 %s of %s", *targetSetup, fullHex(th), pinned, *targetCloud)
 		}
-		if pinned := tconn.Attestation.SetupSHA256; pinned != "" {
-			if ph, err := parseSetupHash(*targetCloud+": setup_sha256", pinned); err != nil || ph != th {
-				return fmt.Errorf("-target-setup-sha256 %s is not the setup_sha256 %s of %s", hex8(th), pinned, *targetCloud)
-			}
-		}
-	case tconn.Attestation.SetupSHA256 != "":
-		if th, err = parseSetupHash(*targetCloud+": setup_sha256", tconn.Attestation.SetupSHA256); err != nil {
-			return err
-		}
-	default:
-		return fmt.Errorf("%s pins no setup_sha256; pin the target first (signer-admin pin of its build) or pass -target-setup-sha256", *targetCloud)
 	}
 	tname := cmpOr(*targetName, m.name+"b")
 	target, err := tconn.Attestation.OrderRunner(tname, th)
@@ -239,9 +287,20 @@ func cmdHandoverDraft(args []string, out io.Writer) error {
 	if lockedBody != nil {
 		locked = lockedBody.Locked
 	}
+	openBody, openRaw, err := values(m.setup, setupwire.GroupOpen, activeRef(st.state.Open), arch)
+	if err != nil {
+		return err
+	}
+	open := &m.setup.Open
+	if openBody != nil {
+		open = openBody.Open
+	}
 	dev := m.setup.Platform.Platform == setupwire.PlatformDev
 	if err := b.CheckImage(locked.AllowedImageMeasurements, dev); err != nil {
 		return fmt.Errorf("%w; add the image with a locked update first", err)
+	}
+	if err := handoverorder.CheckTarget(m.setup, locked, open, tpub.Policy); err != nil {
+		return fmt.Errorf("%s: %w", *targetSetup, err)
 	}
 	lim := st.flavor.Limits()
 	wait := lim.OrderWait(locked, dev)
@@ -257,6 +316,8 @@ func cmdHandoverDraft(args []string, out io.Writer) error {
 		map[bool]string{true: "a dev signer: the time lock", false: "the images minimum time lock, or the time lock in force when longer"}[dev],
 		st.flavor, when(b.NotAfter))
 	fprintf(out, "  the target's image is on the allowed list of the locked group in force (version %d)\n", r.version)
+	fprintf(out, "  target: the source accepts the target's public values (handover_generation %d, slashing_log_min_lock_days %d, max_keys %d)\n",
+		tpub.Policy.HandoverGeneration, tpub.Policy.SlashingLogMinLockDays, tpub.Policy.MaxKeys)
 	if st.state.Locked.Pending.Version != 0 || st.state.Open.Pending.Version != 0 {
 		fprintf(out, "  note: %s has a config update pending; it refuses the handover until the update is in force or replaced\n", m.name)
 	}
@@ -264,9 +325,12 @@ func cmdHandoverDraft(args []string, out io.Writer) error {
 		fprintf(out, "  note: %s has an order pending (kind %d, %s); a second handover order waits until it expired\n", m.name,
 			st.state.Order.Kind, hex8(st.state.Order.Hash))
 	}
-	af := activeFile{Setup: hex.EncodeToString(m.setupRaw)}
+	af := activeFile{Setup: hex.EncodeToString(m.setupRaw), Target: hex.EncodeToString(tpubRaw)}
 	if lockedRaw != nil {
 		af.Locked = hex.EncodeToString(lockedRaw)
+	}
+	if openRaw != nil {
+		af.Open = hex.EncodeToString(openRaw)
 	}
 	aj, err := json.MarshalIndent(af, "", "  ")
 	if err != nil {
@@ -320,6 +384,9 @@ func showHandover(out io.Writer, path string, file []byte, activePath string) er
 		}
 		wait := flavor.Default.Limits().OrderWait(a.locked, dev)
 		fprintf(out, "wait: %d s after it arrives at the source%s\n", wait, testnetWait(wait, flavor.Testnet.Limits().OrderWait(a.locked, dev)))
+		if err := showHandoverTarget(out, a); err != nil {
+			return err
+		}
 	}
 	if signed != nil {
 		for _, ap := range signed.Approvals {
@@ -332,6 +399,49 @@ func showHandover(out io.Writer, path string, file []byte, activePath string) er
 			fprintf(out, "signatures: complete and valid against the approver set %s in force\n", hex8(a.locked.Approvers.Hash()))
 		}
 	}
+	return nil
+}
+
+// showHandoverTarget prints the target's public values from the active
+// file and the source's check of them (handoverorder.CheckTarget), with a
+// WARNING line when the source would refuse the target, and a note when
+// the target takes fewer keys than the source.
+func showHandoverTarget(out io.Writer, a *orderActive) error {
+	if a.target == nil {
+		fprintf(out, "WARNING target: the active file has no target setup (a draft of an older signer-admin); its values cannot be shown\n")
+		return nil
+	}
+	p := a.target.Policy
+	th, err := a.target.SetupHash()
+	if err != nil {
+		return err
+	}
+	text, err := setuptext.FormatPolicy(p)
+	if err != nil {
+		return err
+	}
+	fprintf(out, "\n# target setup %s, public part (platform_commitment 0x%x)\n", fullHex(th), a.target.PlatformCommitment)
+	if _, err := out.Write(text); err != nil {
+		return err
+	}
+	fprintf(out, "\n")
+	if a.openV0 {
+		// handover-draft writes the open body only when the source's open
+		// group is above version 0.
+		fprintf(out, "note: the active file has no open update: the check takes the source's open group at version 0\n")
+	}
+	if err := handoverorder.CheckTarget(a.setup, a.locked, a.open, p); err != nil {
+		fprintf(out, "WARNING target: %v; the source will refuse the handover\n", err)
+	} else {
+		fprintf(out, "target: the source accepts the target's public values (the same cluster_id, chain and safety, "+
+			"handover_generation %d, version 0 of both groups equal to the source's values in force, "+
+			"slashing_log_min_lock_days %d, the source's %d)\n", p.HandoverGeneration, p.SlashingLogMinLockDays, a.setup.SlashingLogMinLockDays)
+	}
+	if p.MaxKeys < a.setup.MaxKeys {
+		fprintf(out, "note: the target's max_keys %d is below the source's %d; the source refuses the handover if it holds more shares\n",
+			p.MaxKeys, a.setup.MaxKeys)
+	}
+	fprintf(out, "the private part (stores, sealing key release, client CAs) is behind platform_commitment; check it with the target's operator\n")
 	return nil
 }
 

@@ -776,24 +776,7 @@ func FormatSetup(s *setupwire.Setup) ([]byte, error) {
 	w.kv("signer_name", s.SignerName)
 	w.kv("cluster_id", hexOf(s.ClusterID[:]))
 	w.kv("handover_generation", s.HandoverGeneration)
-	w.blank()
-	w.note("chain: public, fixed for the life of the signer")
-	c := &s.Chain
-	w.kv("genesis_validators_root", hexOf(c.GenesisValidatorsRoot[:]))
-	w.kv("genesis_fork_version", hexOf(c.GenesisForkVersion[:]))
-	w.kv("genesis_time", c.GenesisTime)
-	w.kv("seconds_per_slot", c.SecondsPerSlot)
-	w.kv("slots_per_epoch", c.SlotsPerEpoch)
-	w.kv("preset", c.Preset)
-	w.kv("voluntary_exit_fork_version", hexOf(c.VoluntaryExitForkVersion[:]))
-	w.blank()
-	w.note("safety: public, fixed; the floor margin is max_sign_epochs_ahead_of_clock + 1")
-	w.kv("max_sign_epochs_ahead_of_clock", s.Safety.MaxSignEpochsAheadOfClock)
-	w.kv("slashing_mark_prewrite.block_slots", s.Safety.SlashingMarkPrewrite.BlockSlots)
-	w.kv("slashing_mark_prewrite.source_epochs", s.Safety.SlashingMarkPrewrite.SourceEpochs)
-	w.kv("slashing_mark_prewrite.target_epochs", s.Safety.SlashingMarkPrewrite.TargetEpochs)
-	w.kv("max_keys", s.MaxKeys)
-	w.kv("slashing_log_min_lock_days", s.SlashingLogMinLockDays)
+	formatPublic(w, &s.Chain, &s.Safety, s.MaxKeys, s.SlashingLogMinLockDays)
 	w.blank()
 	w.note("platform: private, fixed")
 	formatPlatform(w, &s.Platform)
@@ -808,6 +791,64 @@ func FormatSetup(s *setupwire.Setup) ([]byte, error) {
 	formatSalts(w, openLeafNames, s.PolicySalts.Open)
 	w.kv("platform_salt", hexOf(s.PlatformSalt[:]))
 	return []byte(w.b.String()), nil
+}
+
+// formatPublic writes the chain, the safety values, max_keys and
+// slashing_log_min_lock_days.
+func formatPublic(w *printer, c *setupwire.Chain, sf *setupwire.Safety, maxKeys, lockDays uint32) {
+	w.blank()
+	w.note("chain: public, fixed for the life of the signer")
+	w.kv("genesis_validators_root", hexOf(c.GenesisValidatorsRoot[:]))
+	w.kv("genesis_fork_version", hexOf(c.GenesisForkVersion[:]))
+	w.kv("genesis_time", c.GenesisTime)
+	w.kv("seconds_per_slot", c.SecondsPerSlot)
+	w.kv("slots_per_epoch", c.SlotsPerEpoch)
+	w.kv("preset", c.Preset)
+	w.kv("voluntary_exit_fork_version", hexOf(c.VoluntaryExitForkVersion[:]))
+	w.blank()
+	w.note("safety: public, fixed; the floor margin is max_sign_epochs_ahead_of_clock + 1")
+	w.kv("max_sign_epochs_ahead_of_clock", sf.MaxSignEpochsAheadOfClock)
+	w.kv("slashing_mark_prewrite.block_slots", sf.SlashingMarkPrewrite.BlockSlots)
+	w.kv("slashing_mark_prewrite.source_epochs", sf.SlashingMarkPrewrite.SourceEpochs)
+	w.kv("slashing_mark_prewrite.target_epochs", sf.SlashingMarkPrewrite.TargetEpochs)
+	w.kv("max_keys", maxKeys)
+	w.kv("slashing_log_min_lock_days", lockDays)
+}
+
+// FormatPolicy checks the public part of a setup and writes its human form
+// without the salts: what a handover target publishes, for the approvers
+// to read before they sign the order.
+func FormatPolicy(p *setupwire.Policy) ([]byte, error) {
+	if err := p.Check(); err != nil {
+		return nil, err
+	}
+	w := &printer{}
+	w.note("The public part of a setup (setupwire.Published), salts not shown.")
+	w.kv("cluster_id", hexOf(p.ClusterID[:]))
+	w.kv("handover_generation", p.HandoverGeneration)
+	formatPublic(w, &p.Chain, &p.Safety, p.MaxKeys, p.SlashingLogMinLockDays)
+	w.blank()
+	formatLocked(w, &p.Locked)
+	w.blank()
+	formatOpen(w, &p.Open)
+	return []byte(w.b.String()), nil
+}
+
+// ParsePlatform reads a human file that holds the private part of a setup
+// only: platform, allowed_client_ca, the stores, sealing_key_release and
+// peer_attestation_hosts. Any other key is refused. The values are checked
+// with the setup they go into.
+func ParsePlatform(name string, data []byte) (*setupwire.PlatformConfig, error) {
+	p, err := newParser(name, data)
+	if err != nil {
+		return nil, err
+	}
+	c := &setupwire.PlatformConfig{}
+	p.platform(c)
+	if err := p.done(); err != nil {
+		return nil, err
+	}
+	return c, nil
 }
 
 func formatSalts(w *printer, names []string, salts setupwire.Salts) {

@@ -470,6 +470,11 @@ func TestHandoverSourceRefusals(t *testing.T) {
 		{"too small", func() *tgtEnv {
 			return newTargetOf(t, src, nil, nil, func(s *setupwire.Setup) { s.MaxKeys = 2 })
 		}, "max_keys is 2"},
+		// The target's mark log must stay locked at least as long as the
+		// source's: a shorter lock lets the host delete marks sooner.
+		{"a shorter mark log lock", func() *tgtEnv {
+			return newTargetOf(t, src, nil, nil, func(s *setupwire.Setup) { s.SlashingLogMinLockDays = src.setup.SlashingLogMinLockDays - 1 })
+		}, "slashing_log_min_lock_days"},
 	}
 	for _, c := range cases {
 		bad := c.target()

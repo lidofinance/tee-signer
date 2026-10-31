@@ -45,8 +45,10 @@
 //   - the target's attestation verifies with the order's settings (so its
 //     measurement is the order's image) over the IDENTITY user data;
 //   - its cluster_id, chain and safety values are this runner's, its
-//     handover_generation is one higher, and version 0 of both its groups
-//     is this runner's config in force, leaf by leaf (expectedTarget);
+//     handover_generation is one higher, version 0 of both its groups is
+//     this runner's config in force, leaf by leaf, and its
+//     slashing_log_min_lock_days is no lower than this runner's
+//     (handoverorder.CheckTarget);
 //   - its state shows version 0 of both groups with the hashes of its
 //     published groups, nothing pending, its setup's approver set, no key
 //     (key origin 0 and 0), this order in its slot (the target reserved
@@ -678,52 +680,6 @@ func (h *sourceHandover) handover(ctx context.Context, payload []byte) ([]byte, 
 	return out, nil
 }
 
-// expectedTarget is the public part a target of this runner must publish,
-// with the target's own salts, max_keys and slashing_log_min_lock_days
-// (which the handover leaves to the target's operator): the same
-// cluster_id, chain and safety values, handover_generation one higher, and
-// version 0 of both groups equal to the values in force here.
-func expectedTarget(src *setupwire.Setup, locked *setupwire.Locked, open *setupwire.Open, target *setupwire.Policy) (*setupwire.Policy, error) {
-	if src.HandoverGeneration == ^uint64(0) {
-		return nil, errors.New("handover: this setup's handover_generation has no successor")
-	}
-	return &setupwire.Policy{ClusterID: src.ClusterID, HandoverGeneration: src.HandoverGeneration + 1, Chain: src.Chain, Safety: src.Safety,
-		MaxKeys: target.MaxKeys, SlashingLogMinLockDays: target.SlashingLogMinLockDays, Locked: *locked, Open: *open, Salts: target.Salts}, nil
-}
-
-// checkTargetPolicy compares the target's public part with expectedTarget
-// leaf by leaf and names every leaf that differs.
-func checkTargetPolicy(src *setupwire.Setup, locked *setupwire.Locked, open *setupwire.Open, target *setupwire.Policy) error {
-	want, err := expectedTarget(src, locked, open, target)
-	if err != nil {
-		return err
-	}
-	wp, wl, wo, err := want.Leaves()
-	if err != nil {
-		return fmt.Errorf("handover: this runner's values do not make a target policy: %w", err)
-	}
-	gp, gl, gor, err := target.Leaves()
-	if err != nil {
-		return fmt.Errorf("handover: target policy: %w", err)
-	}
-	var diff []string
-	for _, g := range []struct {
-		what      string
-		want, got []setupwire.Leaf
-	}{{"public", wp, gp}, {"locked", wl, gl}, {"open", wo, gor}} {
-		for i := range g.want {
-			if !bytes.Equal(g.want[i].Value, g.got[i].Value) {
-				diff = append(diff, g.what+"."+g.want[i].Name)
-			}
-		}
-	}
-	if len(diff) > 0 {
-		return fmt.Errorf("handover: the target's setup differs from this signer's in %s (want the same cluster_id, chain and safety, "+
-			"handover_generation %d, and version 0 of both groups equal to the values in force here)", strings.Join(diff, ", "), want.HandoverGeneration)
-	}
-	return nil
-}
-
 // checkTarget makes the checks of the target: its published setup and
 // identity against the order, its attestation, its values against this
 // runner's, and its state. It returns the verified identity and policy.
@@ -765,7 +721,7 @@ func (h *sourceHandover) checkTarget(ctx context.Context, q *handover.Request, b
 		s.Log.Warn("handover refused: target attestation", "err", err)
 		return nil, nil, backend.Refused(backend.StatusBadKey, "target attestation: %v", err)
 	}
-	if err := checkTargetPolicy(s.Updates.SetupWire(), v.locked, v.open, pub.Policy); err != nil {
+	if err := handoverorder.CheckTarget(s.Updates.SetupWire(), v.locked, v.open, pub.Policy); err != nil {
 		return bad("%v", err)
 	}
 	_, ll, ol, err := pub.Policy.Leaves()
