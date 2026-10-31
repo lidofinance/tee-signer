@@ -72,7 +72,8 @@ func TestE2EAzureRunnerDurable(t *testing.T) {
 			cert, key = ca.issueAdmin(t, t.TempDir(), "admin")
 		}
 		c := Connection{Address: r.addr, ClientCert: cert, ClientKey: key,
-			Attestation: Attestation{Verifier: VerifierAzureMAA, MAAHost: hostPort(fakesA.maa), CCEPolicySHA256: hostData}}
+			Attestation: Attestation{Verifier: VerifierAzureMAA, MAAHost: hostPort(fakesA.maa), CCEPolicySHA256: hostData,
+				SetupSHA256: configPin(t, chain)}}
 		cl, err := c.New(WithHTTPClient(maaClient), WithTimeout(15*time.Second))
 		if err != nil {
 			t.Fatal(err)

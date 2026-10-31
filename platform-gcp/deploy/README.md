@@ -469,13 +469,14 @@ client's client certificate and key; it stops if one is missing.
 | `gcp_audience` | `signer-runner-identity` |
 | `gcp_hwmodels` | `["GCP_AMD_SEV"]` with `HARDWARE=amd-sev`. Production: `["GCP_INTEL_TDX"]` only |
 | `gcp_service_account` | `signer-workload@<gcp-project>.iam.gserviceaccount.com` |
+| `gcp_project_id` | `<gcp-project>`, the `PROJECT_ID` of the deploy. With `mainnet` set the client needs it and `gcp_service_account` |
 | `gcp_issuer` | not set: the default `https://confidentialcomputing.googleapis.com` |
 | `address` | `tcp:<signer-node-1-ip>:7100`. The address exists after `address-reserve`. Until then the file holds `tcp:SIGNER_IP:7100` (or set `SIGNER_ADDRESS`) |
 | `client_cert`, `client_key` | the signing client's client certificate and key from the setup's client CA |
 
 `runnerclient.Connection.New()` accepts the file. The command also prints the
 `share-import` flags: `-verifier gcp-cs -gcp-image-digest ... -gcp-audience
-signer-runner-identity -gcp-hwmodel GCP_AMD_SEV -gcp-service-account ...`.
+signer-runner-identity -gcp-hwmodel GCP_AMD_SEV -gcp-service-account ... -gcp-project-id ...`.
 
 ## Checking a running signer
 

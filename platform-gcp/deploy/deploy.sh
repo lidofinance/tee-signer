@@ -500,11 +500,11 @@ cmd_verifier_config() {
     # A testnet image (IMAGE_FLAVOR=testnet): the client takes it only with
     # allow_testnet_build.
     jq -n --arg addr "$addr" --arg cert "$cert" --arg key "$key" --arg digest "$digest" \
-      --arg aud "$IDENTITY_AUDIENCE" --arg hw "$GCP_HWMODELS" --arg sa "$SERVICE_ACCOUNT" \
+      --arg aud "$IDENTITY_AUDIENCE" --arg hw "$GCP_HWMODELS" --arg sa "$SERVICE_ACCOUNT" --arg project "$PROJECT_ID" \
       --arg flavor "$IMAGE_FLAVOR" '{
         address: $addr, client_cert: $cert, client_key: $key,
         attestation: {verifier: "gcp-cs", gcp_image_digest: $digest, gcp_audience: $aud,
-          gcp_hwmodels: [$hw], gcp_service_account: $sa}
+          gcp_hwmodels: [$hw], gcp_service_account: $sa, gcp_project_id: $project}
       } + (if $flavor == "testnet" then {allow_testnet_build: true} else {} end)' >"$dir/gcp-signer$CHAIN_SUFFIX.json"
   )
   chmod 600 "$dir/gcp-signer$CHAIN_SUFFIX.json"
@@ -520,7 +520,7 @@ cmd_verifier_config() {
     )
   fi
   case "$addr" in *SIGNER_IP*) echo "address has no IP yet: set SIGNER_ADDRESS, or run address-reserve and this command again" >&2 ;; esac
-  echo "share-import flags: -addr $addr -verifier gcp-cs -gcp-image-digest $digest -gcp-audience $IDENTITY_AUDIENCE -gcp-hwmodel $GCP_HWMODELS -gcp-service-account $SERVICE_ACCOUNT"
+  echo "share-import flags: -addr $addr -verifier gcp-cs -gcp-image-digest $digest -gcp-audience $IDENTITY_AUDIENCE -gcp-hwmodel $GCP_HWMODELS -gcp-service-account $SERVICE_ACCOUNT -gcp-project-id $PROJECT_ID"
 }
 
 cmd_logs() {
