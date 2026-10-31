@@ -244,6 +244,46 @@ func TestCertificateValidityUsesTheGivenClock(t *testing.T) {
 	r.Assoc.Close()
 }
 
+// A zero time from KEConfig.Time must not reach crypto/x509, which reads a
+// zero CurrentTime as "use the system clock", the host's clock. Here the
+// certificate is valid only around the system clock's time, so a handshake
+// that succeeds has used it.
+func TestKeyExchangeZeroTimeIsNotTheSystemClock(t *testing.T) {
+	now := time.Now()
+	cert, pool, err := ntstest.Certificate("nts.test", now.Add(-time.Hour), now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ke, err := ntstest.StartKE(cert, ntstest.NewStore(), ntstest.KEOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ke.Close()
+	cfg := KEConfig{Host: "nts.test", Addr: ke.Addr, Roots: pool, Time: func() time.Time { return time.Time{} }}
+	if r, err := KeyExchange(ctx(t, 5*time.Second), cfg); err == nil {
+		r.Assoc.Close()
+		t.Fatal("zero Time: the certificate was checked against the system clock")
+	}
+	// The clock fails after the first reading, during the handshake.
+	calls := 0
+	cfg.Time = func() time.Time {
+		if calls++; calls == 1 {
+			return now
+		}
+		return time.Time{}
+	}
+	if r, err := KeyExchange(ctx(t, 5*time.Second), cfg); err == nil || !strings.Contains(err.Error(), "certificate") {
+		if err == nil {
+			r.Assoc.Close()
+		}
+		t.Fatalf("zero Time during the handshake: %v", err)
+	}
+	cfg.Time = func() time.Time { return time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC) }
+	if _, err := KeyExchange(ctx(t, 5*time.Second), cfg); err == nil || !strings.Contains(err.Error(), "certificate") {
+		t.Fatalf("a clock in 2000 should refuse today's certificate: %v", err)
+	}
+}
+
 func TestKERefusals(t *testing.T) {
 	cases := []struct {
 		name string

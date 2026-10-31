@@ -257,6 +257,18 @@ func (n *NTS) Refresh(ctx context.Context) error {
 	return n.combine(coarse, coarseLocal)
 }
 
+// certTime is the time NTS-KE checks certificate validity at: the coarse
+// clock's, not the host's. Without a coarse time it is nts.NoTrustedTime,
+// which no certificate covers. Never the zero time: crypto/x509 reads that
+// as the system clock, which the host sets.
+func (n *NTS) certTime() time.Time {
+	t, err := n.Coarse.Now()
+	if err != nil {
+		return nts.NoTrustedTime
+	}
+	return t
+}
+
 // poll runs NTS-KE if needed, then one query. Only this peer's fields are
 // written, and Refresh runs one poll per peer at a time.
 func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time) {
@@ -272,15 +284,7 @@ func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time) {
 		kctx, cancel := context.WithTimeout(ctx, ntsExchangeTimeout)
 		r, err := nts.KeyExchange(kctx, nts.KEConfig{
 			Host: p.srv.Host, Addr: p.srv.KEAddr, Roots: p.srv.Roots, Dial: n.Dial,
-			// Certificate validity is checked against the coarse clock, not
-			// the host's. Without a coarse time the zero time fails the check.
-			Time: func() time.Time {
-				t, err := n.Coarse.Now()
-				if err != nil {
-					return time.Time{}
-				}
-				return t
-			},
+			Time: n.certTime,
 		})
 		cancel()
 		if err != nil {

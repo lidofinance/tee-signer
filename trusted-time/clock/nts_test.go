@@ -453,3 +453,18 @@ func opt(o ntstest.NTPOptions) ntstest.NTPOptions {
 	o.Clock = testClock
 	return o
 }
+
+// Without a coarse time the certificate clock gives a fixed time before
+// every certificate, never the zero time (crypto/x509 would read that as
+// the system clock).
+func TestNTSCertificateClockWithoutCoarseTime(t *testing.T) {
+	n := &NTS{Coarse: &coarseClock{Err: errors.New("no coarse reading")}}
+	got := n.certTime()
+	if got.IsZero() || got.Year() > 1970 {
+		t.Fatalf("certificate time without a coarse reading: %v", got)
+	}
+	n.Coarse = &coarseClock{}
+	if got := n.certTime(); got.Year() < 2026 {
+		t.Fatalf("certificate time with a coarse reading: %v", got)
+	}
+}

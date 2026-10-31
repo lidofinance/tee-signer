@@ -117,7 +117,10 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
 - `trusted-time/nts`: the cgo binding; `KeyExchange` (TLS 1.3 only, ALPN
   `ntske/1`, the ALPN check Go leaves to the caller, `ExportKeyingMaterial`
   with the label and contexts from Rust, certificate validity checked against
-  a clock the caller passes); `Association.Query` over a connected UDP socket
+  a clock the caller passes, never the host's: a zero time from that clock
+  stops the exchange before the dial, and during the handshake becomes
+  `nts.NoTrustedTime` (1970), which no certificate covers. Go's
+  `crypto/x509` would read a zero time as `time.Now()`); `Association.Query` over a connected UDP socket
   (refused packets do not end the wait: they may be forgeries); pinned roots
   per operator in `roots/` with their source in `roots.go`.
 - `runner/clock.NTS`: polls each server every 32 s (at least 16 s apart,
@@ -135,7 +138,7 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   exactly when |drift_ppm| > 500 + drift_err_ppm. The HTTPS-date quorum is
   the coarse check (NTS time outside -30 s to +31 s of it is refused: 30 s
   plus the Date header's 1 s resolution), the certificate clock of NTS-KE
-  and the NTP era. Its `Anchored` clock ages on `CLOCK_MONOTONIC_RAW` too.
+  (`nts.NoTrustedTime` when it has no reading) and the NTP era. Its `Anchored` clock ages on `CLOCK_MONOTONIC_RAW` too.
   There is no fallback to it.
 - `tee-signer/platforms_nts.go`: `-nts-clock` (or `RUNNER_NTS_CLOCK=1`) gives a
   tagged runner the NTS clock, with `-nts-coarse-urls`, `-nts-wait` and
