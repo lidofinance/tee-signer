@@ -291,7 +291,8 @@ AWS (Terraform in `<terraform-dir>`):
 2. `terraform plan`. Expect two changes and no other: `aws_kms_key.enclave`
    (the PCRs, and `kms:Encrypt` for the admin only with exactly
    `purpose=record-creds`) and `aws_s3_bucket_policy.marks[0]` (create: the
-   writer may write `marks/*` and `config/*` and read the Object Lock
+   writer may write `marks/*` and `config/*`, set the retention of the
+   objects it writes (`s3:PutObjectRetention`) and read the Object Lock
    configuration). Then apply.
 3. Record credentials. The generic runner decrypts them with
    `purpose=record-creds`, so make a blob with that context:

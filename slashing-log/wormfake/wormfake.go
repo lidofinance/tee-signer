@@ -3,9 +3,9 @@
 // runner binary imports it). Each fake implements only the requests the
 // clients make:
 //
-//	S3     PUT object (If-None-Match: *), GET object (versionId),
-//	       GET bucket?versions (ListObjectVersions), with versioning and
-//	       Object Lock in compliance mode
+//	S3     PUT object (If-None-Match: *, optional per-object retention),
+//	       GET object (versionId), GET bucket?versions (ListObjectVersions),
+//	       with versioning and Object Lock in compliance mode
 //	GCS    POST upload (ifGenerationMatch=0), GET object (alt=media,
 //	       generation), GET list (versions=true), with a locked retention
 //	       policy
@@ -22,7 +22,9 @@
 // a new version of the name, a copy of an old record under a new name).
 // What the real locked store refuses, the fakes refuse; what it allows (S3
 // new versions and delete markers, new names anywhere, deleting an object
-// whose retention ended), they allow.
+// whose retention ended), they allow. On S3 each version keeps the
+// retention it got when it was written (its own, or the bucket default in
+// force then), so a later change of the default does not reach it.
 package wormfake
 
 import (
@@ -61,6 +63,7 @@ type version struct {
 	marker bool      // S3 delete marker
 	seq    int       // global write order, for stale listings
 	at     time.Time // written, on the fake clock
+	until  time.Time // S3: end of the version's retention (zero: none)
 }
 
 // Lock is the fake's retention lock, the one its lock read reports and its
@@ -69,6 +72,10 @@ type Lock struct {
 	None       bool // no lock at all (S3: no Object Lock configuration; GCS: no policy; Azure: no policy)
 	Compliance bool // S3 COMPLIANCE (else GOVERNANCE); GCS and Azure locked (else unlocked)
 	Days       int  // retention of each object
+	// NoDefault: S3 only. Object Lock is on (it cannot be turned off) but
+	// the bucket has no default retention rule, as after an admin removed
+	// it. New versions get no retention unless the PUT names one.
+	NoDefault bool
 }
 
 // Server is one fake store with one bucket or container.
@@ -138,7 +145,13 @@ func (s *Server) AdminDeleteExpired() int {
 	for name, vs := range s.objects {
 		var left []*version
 		for _, v := range vs {
-			if now.Sub(v.at) >= keep {
+			expired := now.Sub(v.at) >= keep
+			if s.Kind == S3 {
+				// A delete marker has no retention (until is zero), so the
+				// admin may delete it at any time, as on S3.
+				expired = v.marker || !now.Before(v.until)
+			}
+			if expired {
 				n++
 				continue
 			}
@@ -325,8 +338,22 @@ func (s *Server) put(name string, data []byte, marker bool) *version {
 	s.seq++
 	v := &version{id: strconv.Itoa(1000 + s.seq), data: append([]byte(nil), data...), marker: marker, seq: s.seq,
 		at: time.Now().Add(s.offset)}
+	if s.Kind == S3 && !marker && !s.lock.None && !s.lock.NoDefault {
+		v.until = v.at.Add(time.Duration(s.lock.Days) * 24 * time.Hour)
+	}
 	s.objects[name] = append(s.objects[name], v)
 	return v
+}
+
+// RetainUntil is the end of the retention of name's current S3 version
+// (zero: none, or no such object).
+func (s *Server) RetainUntil(name string) time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if v := s.current(name); v != nil {
+		return v.until
+	}
+	return time.Time{}
 }
 
 // current returns the current version of name, nil if none or a marker.
@@ -451,11 +478,30 @@ func (s *Server) serveS3(w http.ResponseWriter, r *http.Request, body []byte) {
 				return
 			}
 		}
+		// Per-object retention: both headers or neither, only on a bucket
+		// with Object Lock, a date in the future. It replaces the default.
+		mode, date := r.Header.Get("x-amz-object-lock-mode"), r.Header.Get("x-amz-object-lock-retain-until-date")
+		var until time.Time
+		if mode != "" || date != "" {
+			t, err := time.Parse(time.RFC3339, date)
+			switch {
+			case s.lock.None:
+				s3err(w, http.StatusBadRequest, "InvalidRequest")
+				return
+			case mode != "COMPLIANCE" && mode != "GOVERNANCE", err != nil, !t.After(time.Now().Add(s.offset)):
+				s3err(w, http.StatusBadRequest, "InvalidArgument")
+				return
+			}
+			until = t
+		}
 		if r.Header.Get("If-None-Match") == "*" && s.current(key) != nil {
 			s3err(w, http.StatusPreconditionFailed, "PreconditionFailed")
 			return
 		}
 		v := s.put(key, body, false)
+		if !until.IsZero() {
+			v.until = until
+		}
 		w.Header().Set("x-amz-version-id", v.id)
 		w.WriteHeader(http.StatusOK)
 	case r.Method == http.MethodGet && key != "":
@@ -508,6 +554,10 @@ func (s *Server) serveS3(w http.ResponseWriter, r *http.Request, body []byte) {
 	case r.Method == http.MethodGet && key == "" && q.Has("object-lock"):
 		if s.lock.None {
 			s3err(w, http.StatusNotFound, "ObjectLockConfigurationNotFoundError")
+			return
+		}
+		if s.lock.NoDefault {
+			fmt.Fprint(w, `<ObjectLockConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><ObjectLockEnabled>Enabled</ObjectLockEnabled></ObjectLockConfiguration>`)
 			return
 		}
 		mode := "GOVERNANCE"

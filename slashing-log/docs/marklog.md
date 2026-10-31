@@ -169,7 +169,12 @@ roll the mark back.
   policy, Azure a locked container immutability policy. The retention
   must be at least the setup's `slashing_log_min_lock_days`. Otherwise the
   runner stops. The file log of the dev platform has no lock, and the
-  dev platform skips the check.
+  dev platform skips the check. On S3 the check reads the bucket's default
+  retention, which the admin can lower later, so wherever the check runs
+  the S3 client also gives each object it writes its own compliance
+  retention of at least `slashing_log_min_lock_days`
+  (`markstore.Env.RetainDays`); the state copy's objects get it too when
+  the copy uses the log's store.
 - Shares, listed once. The runner lists its stored shares once, before
   the claim. The claim learns from that list whether the node holds
   shares, and the runner loads only that list. A share that a later
@@ -294,10 +299,10 @@ has passed.
 | --- | --- | --- | --- |
 | Store | S3 bucket, versioning on, Object Lock default retention in compliance mode | Cloud Storage bucket with a locked retention policy (Bucket Lock) | Blob Storage container with a locked time-based retention policy |
 | What the admin cannot do | delete or overwrite a locked version ("can't be overwritten or deleted by any user, including the root user") | delete or replace a retained object; reduce or remove the locked policy | modify or delete a locked blob ("not even by users with account administrative privileges") |
-| What the admin can do | add versions and delete markers (the reader lists every version) | create new names | create new names |
+| What the admin can do | add versions and delete markers (the reader lists every version); lower or remove the default retention, which the runner's objects do not use (each PUT names its own compliance retention) | create new names | create new names |
 | Client | `platform-aws/s3log`, SigV4 of our own, `platform_aws` | `platform-gcp/gcslog`, JSON API, `platform_gcp` | `platform-azure/azlog`, Blob REST, `platform_azure` |
 | Credentials | the enclave's record credentials (an IAM key the enclave holds, as for DynamoDB) | the workload's federated token (Confidential Space, WIF; the same as for KMS) | the container group's managed identity, resource `https://storage.azure.com/` |
-| Lock check reads | `GET /?object-lock` (GetObjectLockConfiguration); needs `s3:GetBucketObjectLockConfiguration` | `GET /storage/v1/b/B?fields=retentionPolicy`; needs `storage.buckets.get` | the management plane's immutability policy of the container; needs a token for `https://management.azure.com/`, the subscription and the resource group, and read access to the policy |
+| Lock check reads | `GET /?object-lock` (GetObjectLockConfiguration); needs `s3:GetBucketObjectLockConfiguration`; every PUT also needs `s3:PutObjectRetention` | `GET /storage/v1/b/B?fields=retentionPolicy`; needs `storage.buckets.get` | the management plane's immutability policy of the container; needs a token for `https://management.azure.com/`, the subscription and the resource group, and read access to the policy |
 | `-mark-store` | `s3:bucket=B,region=R[,endpoint=URL]` | `gcs:bucket=B[,endpoint=URL]` | `azblob:account=A,container=C[,endpoint=URL][,subscription=S,resource_group=G[,arm_endpoint=URL]]` |
 
 `file:DIR` is a write-once file log for tests and the dev platform; the
@@ -380,9 +385,13 @@ holds its true mark.
 - A signer down longer than half the retention period: the age check
   stops it, and it needs a new setup and a re-import.
 - S3's default retention is a bucket setting. An admin with
-  `s3:PutBucketObjectLockConfiguration` can lower it after the start's
-  check, and records written after that get the shorter retention. GCS and
-  Azure lock the policy itself.
+  `s3:PutBucketObjectLockConfiguration` can lower or remove it after the
+  start's check. The runner's own objects are not affected, since each PUT
+  sets its own compliance retention. What stays open: the check reads the
+  default once per start, so a bucket whose default was removed is noticed
+  only at the next start. GCS and Azure lock the policy itself.
+- The flag path (`-mark-store` without a setup) runs no lock check and sets
+  no per-object retention. Only a setup gets either.
 - Real cloud stores: the tests use local fakes of the three APIs
   (`slashing-log/wormfake`). The lock reads
   are untested against the real APIs.

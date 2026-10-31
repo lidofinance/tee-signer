@@ -21,8 +21,12 @@ type durableCopy struct {
 	// setupHash is the setup's setup_hash (zero on the flag path): the
 	// copy's names and AADs carry it.
 	setupHash [32]byte
-	log       *slog.Logger
-	store     *statestore.Store
+	// retainDays is markstore.Env.RetainDays: set when the copy is in the
+	// mark log's store (the same spec), so its objects get the log's
+	// retention by themselves too.
+	retainDays uint32
+	log        *slog.Logger
+	store      *statestore.Store
 }
 
 func newDurableCopy(spec, signer string, create bool, log *slog.Logger) (*durableCopy, error) {
@@ -39,7 +43,7 @@ func (d *durableCopy) open(ctx context.Context, p *platform.Platform) (platform.
 	if p.Keys == nil {
 		return nil, fmt.Errorf("platform %s has no key release for the state copy", p.Name)
 	}
-	env := markstore.Env{HTTP: p.HTTPClient, AWSCreds: p.RecordCredentials}
+	env := markstore.Env{HTTP: p.HTTPClient, AWSCreds: p.RecordCredentials, RetainDays: d.retainDays}
 	if p.StorageToken != nil {
 		c := markstore.NewTokenCache(p.StorageToken, markstore.TokenRefreshAfter, markstore.TokenMaxAge)
 		env.Token, env.TokenRefused = c.Token, c.Invalidate
