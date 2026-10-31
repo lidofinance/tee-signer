@@ -133,7 +133,7 @@ func TestTestPKIRoles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rootDirect := RoleSigning // the admin mark on a leaf straight under the root
+	rootDirect := RoleNone // the admin mark on a leaf straight under the root
 	if buildflavor.AdminRootDirect {
 		rootDirect = RoleAdminRootDirect
 	}
@@ -262,8 +262,8 @@ func TestRoleOf(t *testing.T) {
 	bothCA := roleCA(t, root, "admin and attest CA", ca, admin, attest)
 	adminSub := roleCA(t, roleCA(t, root, "admin CA that may issue CAs", ca, admin), "admin sub CA", ca)
 	// A leaf with the admin mark straight under the root: admin only in a
-	// testnet build. Run under both tags.
-	rootDirect := RoleSigning
+	// testnet build, no role in a default build. Run under both tags.
+	rootDirect := RoleNone
 	if buildflavor.AdminRootDirect {
 		rootDirect = RoleAdminRootDirect
 	}
@@ -277,12 +277,12 @@ func TestRoleOf(t *testing.T) {
 	}{
 		"plain leaf under signing CA":   {roleLeaf(t, plainCA), RoleSigning},
 		"admin leaf under admin CA":     {roleLeaf(t, adminCA, admin), RoleAdmin},
-		"admin leaf under signing CA":   {roleLeaf(t, plainCA, admin), RoleSigning},
+		"admin leaf under signing CA":   {roleLeaf(t, plainCA, admin), RoleNone},
 		"plain leaf under admin CA":     {roleLeaf(t, adminCA), RoleSigning},
 		"admin leaf under the root":     {roleLeaf(t, root, admin), rootDirect},
 		"both marks under the root":     {roleLeaf(t, root, admin, attest), RoleAttestOnly},
 		"plain leaf under the root":     {roleLeaf(t, root), RoleSigning},
-		"admin leaf, unmarked sub CA":   {roleLeaf(t, adminSub, admin), RoleSigning},
+		"admin leaf, unmarked sub CA":   {roleLeaf(t, adminSub, admin), RoleNone},
 		"attest leaf under signing CA":  {roleLeaf(t, plainCA, attest), RoleAttestOnly},
 		"attest leaf under the root":    {roleLeaf(t, root, attest), RoleAttestOnly},
 		"plain leaf under attest CA":    {roleLeaf(t, attestCA), RoleAttestOnly},

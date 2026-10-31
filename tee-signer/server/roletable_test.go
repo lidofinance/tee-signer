@@ -53,8 +53,8 @@ func TestRoleTable(t *testing.T) {
 	}
 
 	// An admin leaf straight under the root: admin rights in a testnet build
-	// only. Run under both tags.
-	rootDirect := signing
+	// only, no rights in a default build. Run under both tags.
+	rootDirect := map[wire.MsgType]bool{}
 	if buildflavor.AdminRootDirect {
 		rootDirect = adminOK
 	}

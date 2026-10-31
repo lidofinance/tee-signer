@@ -1014,11 +1014,16 @@ A TLS client's role comes from its verified certificate chain
    mint an admin certificate, whatever path length that intermediate
    allows (ATTEST-ROLES-02).
 3. Admin-root-direct, testnet builds only (`buildflavor.AdminRootDirect`):
-   the leaf lists the admin mark and the root signed it directly. It has the
+   the leaf lists the admin mark and the self-signed root signed it
+   directly (an intermediate in `allowed_client_ca` does not count). It has the
    admin rights. It is meant for a test chain whose pinned client root has
    `pathlen:0`, so no admin intermediate can exist under it. There, whoever
    holds the root key can make admin certificates. Default builds never give this role.
-4. Signing: anything else.
+4. None: the leaf lists the admin mark but no rule above gave it a role,
+   for example a chain that ends at an admin intermediate listed in
+   `allowed_client_ca`. The connection gets no rights, so an admin
+   certificate never signs.
+5. Signing: anything else.
 
 The chain an admin certificate needs, under the root in
 `allowed_client_ca`:

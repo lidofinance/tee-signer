@@ -82,7 +82,7 @@ func roleCAPath(t *testing.T, parent *ca, name string, ekus []x509.ExtKeyUsage, 
 }
 
 // ATTEST-ROLES-02: an admin-marked CA below an unmarked intermediate gives
-// no admin role, and neither does an admin intermediate that may issue
+// no role, and neither does an admin intermediate that may issue
 // further CAs, or one whose chain ends at an intermediate of the CA file
 // instead of a root.
 func TestAdminNeedsRootIssuedPathLenZeroIntermediate(t *testing.T) {
@@ -102,8 +102,8 @@ func TestAdminNeedsRootIssuedPathLenZeroIntermediate(t *testing.T) {
 		cert tls.Certificate
 		want Role
 	}{
-		"admin leaf, admin CA under an unmarked CA": {roleLeaf(t, adminBelowSigning, admin), RoleSigning},
-		"admin leaf, admin CA without pathlen:0":    {roleLeaf(t, adminOpen, admin), RoleSigning},
+		"admin leaf, admin CA under an unmarked CA": {roleLeaf(t, adminBelowSigning, admin), RoleNone},
+		"admin leaf, admin CA without pathlen:0":    {roleLeaf(t, adminOpen, admin), RoleNone},
 		"admin leaf, admin CA with pathlen:0":       {roleLeaf(t, adminZero, admin), RoleAdmin},
 	} {
 		cs := handshake(t, rootCfg, tc.cert)
@@ -119,8 +119,8 @@ func TestAdminNeedsRootIssuedPathLenZeroIntermediate(t *testing.T) {
 		t.Fatal(err)
 	}
 	cs := handshake(t, interCfg, roleLeaf(t, adminBelowSigning, admin))
-	if got := RoleOf(&cs); got != RoleSigning {
-		t.Errorf("admin CA whose chain ends at an intermediate of the CA file: %v, want %v", got, RoleSigning)
+	if got := RoleOf(&cs); got != RoleNone {
+		t.Errorf("admin CA whose chain ends at an intermediate of the CA file: %v, want %v", got, RoleNone)
 	}
 }
 
@@ -208,5 +208,33 @@ func TestVerifyAtChecksChainAndDates(t *testing.T) {
 		if _, err := VerifyAt(tc.roots, tc.peer, tc.at); err == nil {
 			t.Errorf("%s: verified", name)
 		}
+	}
+}
+
+// A CA file that pins the admin intermediate next to the root: an admin
+// leaf sent without its intermediate verifies to the pinned intermediate
+// in two certificates, which is no admin chain. It gets no role, not the
+// signing role. Sent with its intermediate it is admin as before.
+func TestAdminLeafToPinnedAdminIntermediateGetsNoRole(t *testing.T) {
+	admin := backend.AdminClientOID
+	ca := []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
+	root := roleCAPath(t, nil, "root", nil, -1)
+	adminCA := roleCAPath(t, root, "admin CA", ca, 0, admin)
+	cfg, _, err := ServerConfig(append(certPEM(root.cert), certPEM(adminCA.cert)...), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	full := roleLeaf(t, adminCA, admin)
+	alone := tls.Certificate{Certificate: full.Certificate[:1], PrivateKey: full.PrivateKey}
+	cs := handshake(t, cfg, alone)
+	if len(cs.VerifiedChains) == 0 {
+		t.Fatal("the leaf alone did not verify")
+	}
+	if got := RoleOf(&cs); got != RoleNone {
+		t.Errorf("admin leaf alone, admin intermediate pinned: %v, want %v", got, RoleNone)
+	}
+	cs = handshake(t, cfg, full)
+	if got := RoleOf(&cs); got != RoleAdmin {
+		t.Errorf("admin leaf with its intermediate, admin intermediate pinned: %v, want %v", got, RoleAdmin)
 	}
 }
