@@ -128,6 +128,7 @@ func TestShareSetCutWriteLoadsTheSetBefore(t *testing.T) {
 	e.store.mu.Lock()
 	e.store.failPut = func(k string) bool { return k == shareKey(pka) }
 	e.store.mu.Unlock()
+	e.clock.add(testEpoch) // the slots of floor+2 have started
 	if err := e.signMsg(pka, vote(floor, floor+2)); err != nil {
 		t.Fatal(err)
 	}

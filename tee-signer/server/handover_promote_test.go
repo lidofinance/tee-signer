@@ -52,6 +52,7 @@ func TestPromoteOnFirstVoteAtFloor(t *testing.T) {
 	if r := e.recordOf(pk); !r.History || r.SourceFloor != 0 || e.store.putsOf(key) != puts+1 {
 		t.Fatalf("after a vote at the floor: history %t floor %d, %d writes", r.History, r.SourceFloor, e.store.putsOf(key)-puts)
 	}
+	e.clock.add(testEpoch) // the slots of floor+2 have started
 	if err := e.signMsg(pk, vote(floor, floor+2)); err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +102,7 @@ func TestPromotedKeyHandsOverWithHistory(t *testing.T) {
 		t.Fatalf("import %+v", imp)
 	}
 	f := tgt.floorOf()
-	tgt.clock.add((f - tgt.signer.EpochAt(tgt.now())) * testEpoch)
+	tgt.clock.add((f + 1 - tgt.signer.EpochAt(tgt.now())) * testEpoch) // the slots of f+1 have started
 	if f <= floor {
 		t.Fatalf("the target's floor %d is not above the source's %d", f, floor)
 	}
@@ -216,7 +217,7 @@ func TestPromoteRetriesAfterAFailedWrite(t *testing.T) {
 	if err := e.importSealed(pk, sk, 5, nil); err != nil {
 		t.Fatal(err)
 	}
-	e.clock.add((floor + 1 - e.signer.EpochAt(e.now())) * testEpoch)
+	e.clock.add((floor + 2 - e.signer.EpochAt(e.now())) * testEpoch) // the slots of floor+2 have started
 	key := shareKey(pk)
 	e.store.mu.Lock()
 	e.store.failPut = func(k string) bool { return k == key }
@@ -269,7 +270,7 @@ func TestPromoteFailingWriteIsBounded(t *testing.T) {
 		e.clock.add(testEpoch)
 		en := e.signer.EpochAt(e.now())
 		for j := range uint64(2) { // two votes in the epoch
-			if err := e.signMsg(pk, vote(floor, en+j)); err != nil {
+			if err := e.signMsg(pk, vote(floor, en-1+j)); err != nil { // the slots of en have started, not those of en+1
 				t.Fatal(err)
 			}
 			e.srv.promotions.Wait()

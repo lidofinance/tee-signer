@@ -45,10 +45,10 @@ func TestHSH01HandoverKeepsEachKeysHistoryState(t *testing.T) {
 	check := func(when string) {
 		t.Helper()
 		f := tgt.floorOf()
-		tgt.clock.add((f - tgt.signer.EpochAt(tgt.now())) * testEpoch)
+		tgt.clock.add((f + 1 - tgt.signer.EpochAt(tgt.now())) * testEpoch) // the slots of f+1 have started
 		e := tgt.signer.EpochAt(tgt.now())
-		wantSlashSource(t, tgt.attest(pka, floorA-1, e+1), when+": A (no history at the source) below its source floor")
-		if err := tgt.attest(pkb, start-3, e+1); err != nil {
+		wantSlashSource(t, tgt.attest(pka, floorA-1, e), when+": A (no history at the source) below its source floor")
+		if err := tgt.attest(pkb, start-3, e); err != nil {
 			t.Errorf("%s: B at its own history's source %d: %v", when, start-3, err)
 		}
 	}
