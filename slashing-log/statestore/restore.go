@@ -48,6 +48,19 @@ func (s *Store) list(ctx context.Context) (*listing, error) {
 	return idx, nil
 }
 
+// authenticTop is the highest version read so far that holds an object
+// this signer's key opens. Names alone do not count: anyone with write
+// access to the bucket can create a name at any version.
+func (idx *listing) authenticTop() uint64 {
+	var top uint64
+	for v, found := range idx.opened {
+		if len(found) > 0 {
+			top = max(top, v)
+		}
+	}
+	return top
+}
+
 // restored is the state one commit describes.
 type restored struct {
 	version    uint64
