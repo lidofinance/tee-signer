@@ -25,9 +25,10 @@ bad() { echo "check-imports: $*" >&2; fail=1; }
 # (space-separated prefixes). Nothing for any other package.
 host_only() {
   case "$1" in
-    # The enclave's side of the host agent.
-    platform-aws/hostagent/agentclient|platform-aws/hostagent/agentwire) ;;
+    # The enclave's side of the host agent and of the UDP relay.
+    platform-aws/hostagent/agentclient|platform-aws/hostagent/agentwire|platform-aws/udprelay/relayclient) ;;
     platform-aws/hostagent|platform-aws/hostagent/*) echo "platform-aws/cmd/" ;;
+    platform-aws/udprelay|platform-aws/udprelay/*) echo "platform-aws/cmd/" ;;
   esac
 }
 

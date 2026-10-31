@@ -28,7 +28,7 @@
 //     question), the runner's -clock https-date through the proxy, or the
 //     NTS clock of a runner built with the tag nts (-nts-clock, the release
 //     image's choice): NTS-KE through vsock-proxy routes for port 4460 and
-//     NTP through the parent's UDP relay (ntp_relay, runner/udprelay).
+//     NTP through the parent's UDP relay (ntp_relay, package relayclient).
 package nitro
 
 import (
@@ -51,7 +51,7 @@ import (
 
 	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/platform-aws/hostagent/agentclient"
-	"github.com/lidofinance/tee-signer/platform-aws/udprelay"
+	"github.com/lidofinance/tee-signer/platform-aws/udprelay/relayclient"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/transport"
 	"github.com/lidofinance/tee-signer/trusted-time/clock"
@@ -100,7 +100,7 @@ func ParseRoutes(s string) (map[string]transport.Addr, error) {
 
 // NetDial is the NTS clock's dialer in the enclave (platform.Platform.Dial):
 // TCP to a host:port of routes, which vsock-proxy forwards (NTS-KE, port
-// 4460), and UDP through the relay on the parent (NTP, package udprelay).
+// 4460), and UDP through the relay on the parent (NTP, package relayclient).
 // Neither is trusted: TLS and the NTS authenticator run end to end inside
 // the enclave, so the parent can delay or drop but not change an answer.
 func NetDial(routes map[string]transport.Addr, relay *transport.Addr) func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -116,7 +116,7 @@ func NetDial(routes map[string]transport.Addr, relay *transport.Addr) func(ctx c
 			if relay == nil {
 				return nil, fmt.Errorf("nitro: no UDP relay for %s (platform option ntp_relay)", addr)
 			}
-			c, err := udprelay.Dial(ctx, *relay, addr)
+			c, err := relayclient.Dial(ctx, *relay, addr)
 			if err != nil {
 				return nil, err
 			}
