@@ -18,6 +18,7 @@
 #   signer-core      its own suites (signer-core/scripts/test.sh: unit, SSZ and
 #                    BLS vectors, EIP-3076, symbols, fuzz replay)
 #   PCR3             scripts/kms-policy.sh self-test
+#   EIF check        scripts/eif-check-test.sh
 #   deploy names     scripts/side-by-side-test.sh
 #   fuzz             scripts/fuzz.sh: every Go fuzz target for FUZZ_TIME (3s),
 #                    or those of FUZZ_MODULES; the C fuzz targets of markformat
@@ -41,6 +42,9 @@ bash "$ROOT/scripts/build-runner.sh"
 log "release gate: self-test, and this tree's history holds no forbidden commit"
 bash "$ROOT/scripts/release-gate-test.sh"
 bash "$ROOT/scripts/release-gate.sh" tree "$ROOT"
+
+log "eif-check: self-test on made-up EIF files"
+bash "$ROOT/scripts/eif-check-test.sh"
 
 log "chains: governance/chains/chain.sh and the chain checks of the image builds and deploy steps"
 bash "$ROOT/scripts/chain-test.sh" >"$LOGS/test-chain.log" 2>&1 || { cat "$LOGS/test-chain.log"; exit 1; }

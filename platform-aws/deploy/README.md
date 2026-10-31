@@ -296,7 +296,11 @@ setup and of `main.tf` (`region`) must be the same.
 
 ### Check the EIF without hardware
 
-`nitro-eif.sh` ends with `scripts/eif-check.sh`. You can run it on any EIF:
+Approve PCRs only from your own reproducible rebuild of the source
+(`tee-signer/docs/runner.md`, "Building and verifying an image"), never from
+an EIF someone else built. `scripts/eif-check.sh` is an extra sanity check on
+top of that rebuild. `nitro-eif.sh` ends with it, and you can run it on an
+EIF:
 
 ```sh
 scripts/eif-check.sh build/nitro/runner-aarch64.eif aarch64 \
@@ -308,6 +312,8 @@ It reads the file and does not use nitro-cli. It checks:
 - the arch flag in the EIF header,
 - the kernel: for arm64 the `Image` header magic `ARMd` at offset 56 (for
   x86_64 `HdrS` at 0x202), and that the bytes are the blob file's,
+- each ramdisk is one cpio newc archive with only zero bytes after its
+  trailer (the kernel would unpack a second archive over the first),
 - `init` and the runner in the ramdisks are ELF files of the arch, and the
   runner has the sha256 of `build/<arch>/bin/runner-aws`,
 - with `--generic`, that the image holds no operator files (`/etc/signer`),
@@ -316,8 +322,9 @@ It reads the file and does not use nitro-cli. It checks:
   nitro-cli printed. On an x86_64 EIF the same code reproduces nitro-cli's
   PCRs.
 
-This shows the file is the one you meant to build. It does not show that the
-hardware measures it the same way.
+It reads only the files it knows. It does not show that the EIF holds
+nothing else, so it does not replace the rebuild, and it does not show that
+the hardware measures the EIF the same way.
 
 ### Check the PCRs on the parent
 
