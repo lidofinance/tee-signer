@@ -128,7 +128,7 @@ make release-gate  # the release gate: self-test, tree check, every runner build
 
 ```sh
 runner -platform dev|nitro|gcp|azure -setup platform|file:PATH -listen tcp:...,unix:...,vsock:any:7100 \
-       -record none [-clock ...] [-state-dir DIR]
+       -record none [-nts-clock ...] [-state-dir DIR]
 runner -platform dev -config chain.json -listen ... [-tls-client-ca ca.pem] [-mark-store ...] \
        [-record none|file:DIR|dynamodb:table=T,region=R -record-key NODE]
 ```
@@ -311,9 +311,9 @@ refusals are identical. Errors carry the core's status code
 | | Attestation | Sealing | Store | Clock |
 | --- | --- | --- | --- | --- |
 | dev | unsigned JSON | AES-GCM, fixed public key | files | system (and a test offset) |
-| nitro | NSM document via `/dev/nsm` | KMS data key with `Recipient` (PCR policy), CMS unwrap | host agent over vsock | NTS (NTS-KE via vsock-proxy, NTP via `udprelay`); also system, `nsm`, https-date |
-| gcp | launcher token, `eat_nonce`, audience `signer-runner-identity` (never the STS one) | Cloud KMS through Workload Identity Federation | files on a disk | NTS; also system, `token-iat`, https-date |
-| azure | MAA token over an SNP report the runner requests itself, runtime data the JSON object `backend.MAARuntimeData` | Key Vault release of an RSA key in process, with a fresh wrapping key and the MAA token as target | files | NTS; also system, `maa-iat`, https-date |
+| nitro | NSM document via `/dev/nsm` | KMS data key with `Recipient` (PCR policy), CMS unwrap | host agent over vsock | NTS (NTS-KE via vsock-proxy, NTP via `udprelay`); also system, `nsm` |
+| gcp | launcher token, `eat_nonce`, audience `signer-runner-identity` (never the STS one) | Cloud KMS through Workload Identity Federation | files on a disk | NTS; also system, `token-iat` |
+| azure | MAA token over an SNP report the runner requests itself, runtime data the JSON object `backend.MAARuntimeData` | Key Vault release of an RSA key in process, with a fresh wrapping key and the MAA token as target | files | NTS; also system, `maa-iat` |
 
 These are the `Sealer`, `Store`, `Clock` and `Attester` of `platform`. The
 Azure platform talks to the SNP device, MAA and Key Vault itself, in
@@ -345,7 +345,8 @@ partial signatures. A new platform is one prover plus one verifier.
   time. Where the host could move the platform clock, the runner uses the
   NTS clock (`trusted-time/docs/nts.md`): several NTS operators, a quorum
   with an error bound, signing refused above the bound. A quorum of HTTPS
-  `Date` headers (`-clock https-date`) is the other option.
+  `Date` headers is only its coarse check: it can be 2 s or more off, too
+  coarse for the slot rule's 2 s margin.
 - Treat the store as hostile. The host can read it, delete it and roll it
   back.
 
@@ -414,15 +415,14 @@ system clock of none of the three TEEs is trusted time, so the cloud
 runners use the NTS clock, and the mark log covers the rollback cases the
 floor cannot.
 
-The anchored clocks (`-clock https-date`, and the platform clocks `nsm`,
-`maa-iat` and `token-iat`) read every 15 s (`-clock-interval`) and add the
-local monotonic time since the last reading, at most 75 s
-(`-clock-max-advance`, default 5 intervals). They never return a lower
+The anchored clocks (the platform clocks `nsm`, `maa-iat` and
+`token-iat`) read every 15 s and add the local monotonic time since the
+last reading, at most 75 s (5 intervals). They never return a lower
 time than before. A host that speeds up the local timer gains at most
 75 s per reading, far below one epoch and the floor margin, and the next
 reading ends it. At the fifth missed reading in a row the clock fails and
-the signer refuses (`-clock-max-age`, default 5 intervals), so a blocked
-network stops signing instead of freezing time.
+the signer refuses, so a blocked network stops signing instead of
+freezing time.
 
 Cost per restart: votes for targets `E`, `E+1` and `E+2` and proposals in
 those epochs are refused. Non-slashable types are not affected by the

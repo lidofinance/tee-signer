@@ -25,8 +25,7 @@
 //     is in the identity, which the NSM document covers.
 //   - Clock: the enclave's system clock is set by the host. Options are
 //     clock=system (default, untrusted), clock=nsm (NSM timestamps, open
-//     question), the runner's -clock https-date through the proxy, or the
-//     NTS clock of a runner built with the tag nts (-nts-clock, the release
+//     question), or the NTS clock of a runner built with the tag nts (-nts-clock, the release
 //     image's choice): NTS-KE through vsock-proxy routes for port 4460 and
 //     NTP through the parent's UDP relay (ntp_relay, runner/udprelay).
 package nitro

@@ -147,8 +147,8 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   leaked certificates for a majority of the coarse hosts can answer their
   `Date` headers itself, move the coarse clock, and with it the time NTS-KE
   checks certificates at. Without such certificates, setting the system
-  clock moves neither. Dropping HTTPS-date as a clock source (#61) may
-  close this; until then it is the residual.
+  clock moves neither. HTTPS-date is no longer a signing clock, but it
+  is still the coarse check, so this residual stays.
 - `tee-signer/platforms_nts.go`: `-nts-clock` (or `RUNNER_NTS_CLOCK=1`) gives a
   tagged runner the NTS clock, with `-nts-coarse-urls`, `-nts-wait` and
   `-nts-max-bound` (or their variables; a set flag wins). With no quorum
@@ -158,8 +158,7 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   ACI, `tee-restart-policy=OnFailure` on Confidential Space, the operator
   or the parent's service manager on Nitro. A runner that went on without
   a quorum would load no share (each share's restart floor reads the
-  clock) and would not load them once the quorum formed. `-clock https-date`
-  next to it is refused, since main would replace the NTS clock with it.
+  clock) and would not load them once the quorum formed.
   The clock dials through the platform (`platform.Platform.Dial`; nil is
   the default dialer). `runner -nts-clock-check`
   queries the servers once and prints the result. A debug build (tag debugimport) can name
@@ -370,10 +369,10 @@ cannot turn it off or point it elsewhere:
 | Azure | `platform-azure/deploy/aci-template.json` command (CCE policy hash) | `login.microsoftonline.com`, `management.azure.com`, `www.cloudflare.com` | ACI's default outbound access, direct |
 | GCP | `platform-gcp/deploy/Dockerfile` entrypoint (image digest) | `cloudkms.googleapis.com`, `sts.googleapis.com`, `www.cloudflare.com` | the VM's external address, direct (implied allow-all egress) |
 
-The coarse URLs are the ones `-clock https-date` uses on that platform, so
-its egress already allows them. `-nts-max-bound` is not set: the default, 100 ms.
-The build scripts check the flags (`nitro-eif.sh`, `gcp/build-image.sh`,
-`azure/deploy.sh render`) and refuse a command that has `-clock`.
+The coarse URLs are hosts the platform's egress already allows.
+`-nts-max-bound` is not set: the default, 100 ms. The build scripts check
+the flags (`nitro-eif.sh`, `gcp/build-image.sh`, `azure/deploy.sh render`)
+and refuse a command without `-nts-clock`.
 
 The UDP relay (`platform-aws/udprelay`, `platform-aws/deploy/README.md`, "NTS clock in the
 enclave"): one vsock connection per NTP query; frames of a u16 length and

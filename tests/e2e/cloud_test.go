@@ -475,6 +475,7 @@ func TestE2ECloudFlagChecks(t *testing.T) {
 		{"cloud platform without a clone guard choice", "aws", []string{"-platform", "nitro", "-listen", "vsock:any:7100", "-tls-client-ca", caFile}, "set -mark-store"},
 		{"mark log and clone guard record together", "aws", []string{"-platform", "nitro", "-listen", "vsock:any:7100", "-tls-client-ca", caFile, "-mark-store", "s3:bucket=b,region=r", "-record", "dynamodb:table=t,region=r"}, "-mark-store replaces -record"},
 		{"network state flag in the release build", "dev", []string{"-platform", "dev", "-listen", devTCP, "-net-state-dir", "/tmp/ts"}, "flag provided but not defined: -net-state-dir"},
+		{"https-date signing clock", "dev", []string{"-platform", "dev", "-listen", devTCP, "-clock", "https-date", "-clock-urls", "https://a.example/"}, "flag provided but not defined: -clock"},
 		{"floor margin max_epochs_ahead", "dev", []string{"-platform", "dev", "-listen", devTCP, "-floor-margin", "1"}, "max_epochs_ahead + 1"},
 	}
 	for _, tc := range cases {

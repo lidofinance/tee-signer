@@ -160,13 +160,6 @@ func TestE2ENTSClockThroughRelay(t *testing.T) {
 		"-platform-opt", fmt.Sprintf("ntp_relay=tcp:127.0.0.1:%d", relayPort),
 		"-nts-clock", "-nts-coarse-urls", strings.Join(coarse, ","), "-nts-wait", "30s"}
 
-	// -clock https-date next to -nts-clock is refused.
-	if out, err := runnerCmd(bin, append([]string{"-config", c.path, "-state-dir", filepath.Join(dir, "s0"), "-listen", "unix:" + sock},
-		append(args, "-clock", "https-date", "-clock-urls", coarse[0])...)...).CombinedOutput(); err == nil ||
-		!strings.Contains(string(out), "-clock https-date would replace it") {
-		t.Fatalf("-clock https-date with -nts-clock: %v %s", err, out)
-	}
-
 	r := newRunnerOn(t, bin, "runner-nts-nitro", c, "unix:"+sock, args...)
 	r.start()
 	cl := client(t, "unix:"+sock)

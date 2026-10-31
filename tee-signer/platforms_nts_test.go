@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"errors"
-	"flag"
 	"log/slog"
 	"net"
 	"net/http"
@@ -71,8 +70,7 @@ func TestNTSStatusLine(t *testing.T) {
 	}
 }
 
-// Off by default; the flag or the variable turns it on; -clock https-date
-// next to it is refused before any server is asked.
+// Off by default; the flag or the variable turns it on.
 func TestNTSSwitch(t *testing.T) {
 	sys := clock.System{}
 	base := func(platform.Options) (*platform.Platform, error) { return &platform.Platform{Clock: sys}, nil }
@@ -93,14 +91,6 @@ func TestNTSSwitch(t *testing.T) {
 		}
 	}
 	defer func() { *ntsClockFlag = false }()
-	if flag.Lookup("clock") == nil {
-		flag.String("clock", "platform", "main.go's flag, for this test")
-	}
-	_ = flag.Set("clock", "https-date")
-	defer func() { _ = flag.Set("clock", "platform") }()
-	if _, err := ntsSwitch(base)(platform.Options{}); err == nil || !strings.Contains(err.Error(), "-clock https-date") {
-		t.Fatalf("with -clock https-date: %v", err)
-	}
 }
 
 // A set flag wins over its variable.
