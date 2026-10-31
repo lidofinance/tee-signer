@@ -349,6 +349,11 @@ func (r *Record) encodeBody() []byte {
 		if s.Pending != nil {
 			b = append(b, s.Pending[:]...)
 		}
+		// The count ends the record when it is known; a record from
+		// before the count ends with the roots.
+		if s.Held != 0 {
+			b = be.AppendUint32(b, s.Held)
+		}
 	}
 	return b
 }
@@ -500,6 +505,11 @@ func Parse(enc []byte) (*Record, error) {
 				var p [32]byte
 				rd.fixed(p[:])
 				s.Pending = &p
+			}
+			// A count of 0 is written as no count.
+			if len(rd.b) == 4 {
+				s.Held = rd.u32()
+				ok = ok && s.Held != 0
 			}
 			r.Shares = s
 		}

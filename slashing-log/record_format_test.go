@@ -18,7 +18,7 @@ func TestRecordFormatRoundTrip(t *testing.T) {
 	gate := uint64(1002)
 	r := Record{Setup: [32]byte{0x5e, 1}, Signer: "signer-1", Version: 3, PrevVersion: 2, PrevHash: [32]byte{2}, LogID: [32]byte{1},
 		Mark: mark(20), Time: 1_800_000_000, State: testSetup("signer-1").First.Clone(), SourceGate: &gate,
-		Shares: &ShareSet{Current: [32]byte{0xc1}, Pending: &[32]byte{0xc2}},
+		Shares: &ShareSet{Current: [32]byte{0xc1}, Pending: &[32]byte{0xc2}, Held: 3},
 		Exits: &ExitDay{Day: 20833, Stake: 64e9, Exits: []ExitEntry{
 			{Pubkey: backend.Pubkey{0xa1}, ValidatorIndex: 7, ExitEpoch: 100, Stake: 32e9, Nonce: [32]byte{1}},
 			{Pubkey: backend.Pubkey{0xa2}, ValidatorIndex: 7, ExitEpoch: 100, Stake: 32e9, Nonce: [32]byte{2}}}}}
@@ -37,6 +37,17 @@ func TestRecordFormatRoundTrip(t *testing.T) {
 	got, err = decode(signed(t, testKey(1), r), testKey(1), r.Setup, r.Signer, 3)
 	if err != nil || !sameShares(got.Shares, r.Shares) {
 		t.Fatalf("share set without a pending root: %+v, %v", got.Shares, err)
+	}
+	// A share set without the count (a record from before it) reads with
+	// Held 0; a count of 0 written out does not read.
+	r.Shares.Held = 0
+	noCount := signed(t, testKey(1), r)
+	got, err = decode(noCount, testKey(1), r.Setup, r.Signer, 3)
+	if err != nil || !sameShares(got.Shares, r.Shares) {
+		t.Fatalf("share set without a count: %+v, %v", got.Shares, err)
+	}
+	if _, err := Parse(append(append(bytes.Clone(noCount[:len(noCount)-64]), 0, 0, 0, 0), make([]byte, 64)...)); err == nil {
+		t.Error("a count of 0 parsed")
 	}
 	// Without exits, gate and share set: the presence bytes 0.
 	r.Exits, r.SourceGate, r.Shares = nil, nil, nil

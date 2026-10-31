@@ -127,9 +127,11 @@ type Server struct {
 	admitting map[backend.Pubkey]bool
 	// shareHash is the sha256 of each stored share record this runner
 	// loaded or wrote, nil without a mark log (putShare, checkShareBlob);
-	// shareSetMu orders share writes.
+	// shareSetMu orders share writes. shareHeld is the share set's Held:
+	// the most records the mark log vouched for on this signer.
 	shareSetMu sync.Mutex
 	shareHash  map[backend.Pubkey][32]byte
+	shareHeld  uint32
 	// promoting holds the keys whose share record promote is writing now,
 	// promoted those whose record it wrote in this process; promotions
 	// counts the writes in flight.
@@ -334,10 +336,21 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 		loaded++
 	}
 	if committed {
+		// Held never goes down: a record the host hides at this start
+		// still counts, so a handover waits until it is back.
+		held := uint32(0)
+		if set != nil {
+			held = set.Held
+		}
+		if uint64(len(pks)) < uint64(held) {
+			s.Log.Warn("fewer share records stored than the mark log vouched for: a handover is refused until the missing ones are back",
+				"records", len(pks), "vouched", held)
+		}
+		held = heldOf(held, len(pks))
 		s.shareSetMu.Lock()
-		s.shareHash = hashes
+		s.shareHash, s.shareHeld = hashes, held
 		s.shareSetMu.Unlock()
-		cur := &markstore.ShareSet{Current: markstore.ShareSetRoot(hashes)}
+		cur := &markstore.ShareSet{Current: markstore.ShareSetRoot(hashes), Held: held}
 		if reset {
 			// After the rewrites: a start cut before this record resets again.
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -351,6 +364,22 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 		}
 	}
 	return loaded, errors.Join(errs...)
+}
+
+// heldOf is the share set count after n records: held or n, the larger.
+func heldOf(held uint32, n int) uint32 {
+	if uint64(n) > uint64(held) {
+		return uint32(min(uint64(n), 1<<32-1))
+	}
+	return held
+}
+
+// SharesHeld is the most share records the mark log vouched for on this
+// signer (markstore.ShareSet.Held), 0 without a mark log.
+func (s *Server) SharesHeld() uint32 {
+	s.shareSetMu.Lock()
+	defer s.shareSetMu.Unlock()
+	return s.shareHeld
 }
 
 // putShare stores pk's sealed record blob. With a mark log the write goes
@@ -434,11 +463,17 @@ func (s *Server) writeShare(pk backend.Pubkey, blob []byte, replace bool) error 
 	next[pk] = sha256.Sum256(blob)
 	pending := markstore.ShareSetRoot(next)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	err := s.Hooks.RecordShareSet(ctx, &markstore.ShareSet{Current: markstore.ShareSetRoot(s.shareHash), Pending: &pending})
+	// The count covers the set after: a host that hides the new record
+	// after this write cannot shrink the set either. A write cut after
+	// this record leaves the count one above the stored set until that
+	// key is imported again.
+	count := heldOf(s.shareHeld, len(next))
+	err := s.Hooks.RecordShareSet(ctx, &markstore.ShareSet{Current: markstore.ShareSetRoot(s.shareHash), Pending: &pending, Held: count})
 	cancel()
 	if err != nil {
 		return fmt.Errorf("mark log share set: %w", err)
 	}
+	s.shareHeld = count
 	if err := held(); err != nil {
 		return err
 	}
@@ -451,7 +486,7 @@ func (s *Server) writeShare(pk backend.Pubkey, blob []byte, replace bool) error 
 		}
 	}
 	s.shareHash = next
-	s.Hooks.SetShareSet(&markstore.ShareSet{Current: pending})
+	s.Hooks.SetShareSet(&markstore.ShareSet{Current: pending, Held: s.shareHeld})
 	return nil
 }
 

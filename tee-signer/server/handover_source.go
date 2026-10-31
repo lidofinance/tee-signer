@@ -849,6 +849,13 @@ func (h *sourceHandover) readShares(check bool) ([]handedShare, error) {
 		if len(loaded) != len(out) {
 			return fail(fmt.Errorf("%d shares stored, %d loaded: refusing to hand over a different set", len(out), len(loaded)))
 		}
+		// The host can hide a record at a start; the log's count cannot
+		// go down, so a shrunk set waits for the record to come back (or
+		// for a new import of that key).
+		if held := s.SharesHeld(); uint64(len(out)) < uint64(held) {
+			return fail(fmt.Errorf("%d shares stored, the mark log vouched for %d on this runner: a share record is missing; "+
+				"put it back and restart, or import that key again, before the handover", len(out), held))
+		}
 		for _, k := range loaded {
 			i, ok := slices.BinarySearchFunc(out, k.Pubkey, func(a handedShare, pk backend.Pubkey) int { return bytes.Compare(a.pk[:], pk[:]) })
 			if !ok || out[i].share != k.SharePubkey {

@@ -40,7 +40,7 @@ enough.
 | target | 1, or 33 | presence byte, then the `setup_hash` a tombstone hands over to |
 | exits | 1, or 19 + 104 per exit | presence byte, then the day (8), the stake counted that day in Gwei (8), the number of exits (2, up to 200), and per exit the validator key (48), index (8), exit epoch (8), stake (8) and the approval's nonce (32) |
 | source gate | 1, or 9 | presence byte, then the source floor epoch (see "Source gate") |
-| share set | 1, 34 or 66 | presence byte, then the current root (32), a presence byte and the pending root (32) (see "Share set") |
+| share set | 1, 34, 38, 66 or 70 | presence byte, then the current root (32), a presence byte and the pending root (32), and the count (4, left out while 0) (see "Share set") |
 | signature | 64 | Ed25519 over the context `signer-mark-v1` and the fields above |
 
 Each group is the active version (8), the hash of the update that set it
@@ -366,6 +366,15 @@ stored), and, while a write is under way, the root of the set after it.
   wrote. A handover's read and a promotion refuse a record the host
   changed since; after a restart that record goes through the rule
   above.
+- The count is the most share records the log has vouched for on this
+  signer. A share write's first record carries the count of the set
+  after it. A reset keeps the count, and the runner never removes a
+  share record, so a set smaller than the count means a record is
+  missing: the host hid it, or the write after its log record was cut.
+  The runner logs this at start and refuses a handover until the record
+  is back or that key is imported again; else the hidden share would
+  stay on a source that handed over. A record from before the count
+  reads as count 0, and the first start of this image sets it.
 - A log record written before share sets (`SMARK1`), or one with no share
   set, vouches for the empty set only. The first start of this image on
   such a log with shares resets once.
