@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/governance/importorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-core/core"
@@ -25,7 +26,7 @@ import (
 // A handover keeps the signing_mode: a single-mode source hands whole
 // keys, which only a single-mode target may hold, and a threshold source
 // hands shares, which a single-mode target would hold as if they were
-// whole keys. checkTargetPolicy refuses a target of the other mode, in
+// whole keys. handoverorder.CheckTarget refuses a target of the other mode, in
 // both directions, and takes one of the same mode.
 func TestHandoverKeepsSigningMode(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "governance", "setupwire", "testdata", "setup-nitro.bin"))
@@ -44,7 +45,7 @@ func TestHandoverKeepsSigningMode(t *testing.T) {
 		target := src.Policy()
 		target.HandoverGeneration++
 		target.SigningMode = c.tgt
-		err = checkTargetPolicy(src, &src.Locked, &src.Open, target)
+		err = handoverorder.CheckTarget(src, &src.Locked, &src.Open, target)
 		if c.src == c.tgt {
 			if err != nil {
 				t.Errorf("%s to %s: %v", c.src, c.tgt, err)
