@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/lidofinance/tee-signer/devkit/fuzzcheck"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
@@ -137,6 +138,7 @@ func FuzzDecodeImport(f *testing.F) {
 	imp.Interchange = nil
 	f.Add(EncodeImport(imp))
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		req, err := DecodeImport(b)
 		if err != nil {
 			return
@@ -158,6 +160,7 @@ func FuzzDecodeImportSealed(f *testing.F) {
 	req.Interchange, req.Sealed = nil, nil
 	f.Add(must(EncodeImportSealed(&req)))
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		req, err := DecodeImportSealed(b)
 		if err != nil {
 			return
@@ -180,6 +183,7 @@ func FuzzDecodeConfigUpdateResponse(f *testing.F) {
 	f.Add(EncodeConfigUpdateResponse(ConfigAccepted, &st))
 	f.Add(EncodeConfigUpdateResponse(ConfigKnown, &backend.SetupState{}))
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		outcome, s, err := DecodeConfigUpdateResponse(b)
 		if err != nil {
 			return

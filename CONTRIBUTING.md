@@ -32,6 +32,10 @@ Every commit is signed (GPG or SSH, with a key on your GitHub account).
   how you tested it. Note any checks you could not run.
 - Run `make check` and `make test-modules`; also run `make test` for runner
   build changes. All required CI checks must pass.
+  On a pull request CI fuzzes only the modules the change touches and
+  the modules that depend on them (`scripts/affected.sh`); a docs-only
+  change fuzzes nothing. A push to main fuzzes everything, and a nightly
+  run (`fuzz-nightly.yml`) fuzzes every target for 30 s.
 - Get at least one reviewer approval. The author does not count.
 - Squash when merging; the final commit follows the rules above.
 
@@ -40,7 +44,8 @@ Every commit is signed (GPG or SSH, with a key on your GitHub account).
 - Keep modules independent, with their own build files, tests and README.
   Use public packages and local `go.mod` replacements between Go modules.
 - Keep test helpers and development-only code out of production builds.
-- Add fuzz tests for parsers of untrusted input.
+- Add fuzz tests for parsers of untrusted input. Each target calls
+  `fuzzcheck.Watch(t)` (devkit) first; `make fuzz` refuses one that does not.
 - Update dependency pins and checksums together.
 
 ## What never goes into the repo

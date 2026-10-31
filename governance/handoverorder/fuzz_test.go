@@ -24,6 +24,7 @@ func FuzzDecode(f *testing.F) {
 	f.Add(raw)
 	f.Add(body)
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		var o *Order
 		var err error
 		fuzzcheck.Bounded(t, len(b), func() { o, err = Decode(b) })
@@ -45,6 +46,7 @@ func FuzzDecode(f *testing.F) {
 func FuzzDecodeState(f *testing.F) {
 	f.Add((&State{Outcome: Known, Status: Done, Hash: [32]byte{7}, Arrived: 10, ActAt: 430, NotAfter: 43_210, Why: "why"}).Encode())
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		var s *State
 		var err error
 		fuzzcheck.Bounded(t, len(b), func() { s, err = DecodeState(b) })

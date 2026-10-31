@@ -17,6 +17,7 @@ func FuzzDecodeBody(f *testing.F) {
 		chunks: []chunkRef{{sum: [32]byte{1}, size: 9}}}},
 		ops: []entryOp{{key: "shares/aa", op: op{val: []byte{1, 2}}}, {key: "shares/bb", op: op{del: true}}}}), uint64(5))
 	f.Fuzz(func(t *testing.T, b []byte, version uint64) {
+		fuzzcheck.Watch(t)
 		var body *commitBody
 		var err error
 		fuzzcheck.Bounded(t, len(b), func() { body, err = decodeBody(b, version) })

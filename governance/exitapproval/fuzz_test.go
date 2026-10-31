@@ -25,6 +25,7 @@ func FuzzDecode(f *testing.F) {
 	}
 	f.Add(raw)
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		var s *Signed
 		var err error
 		fuzzcheck.Bounded(t, len(b), func() { s, err = Decode(b) })

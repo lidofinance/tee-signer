@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/lidofinance/tee-signer/devkit/fuzzcheck"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 )
 
@@ -26,6 +27,7 @@ func addSeeds(f *testing.F, dir, pattern string) {
 func FuzzFormatSetup(f *testing.F) {
 	addSeeds(f, wireTestdata, "setup-*.bin")
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		s, err := setupwire.DecodeSetup(b)
 		if err != nil {
 			return
@@ -50,6 +52,7 @@ func FuzzFormatUpdateBody(f *testing.F) {
 		}
 	}
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		u, err := setupwire.DecodeUpdateBody(b)
 		if err != nil {
 			return
@@ -64,6 +67,7 @@ func FuzzFormatUpdateBody(f *testing.F) {
 func FuzzFormatUpdate(f *testing.F) {
 	addSeeds(f, wireTestdata, "update-*.bin")
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		u, err := setupwire.DecodeUpdate(b)
 		if err != nil {
 			return
@@ -78,6 +82,7 @@ func FuzzFormatUpdate(f *testing.F) {
 func FuzzParseSetup(f *testing.F) {
 	addSeeds(f, "testdata", "setup-*.conf")
 	f.Fuzz(func(t *testing.T, text []byte) {
+		fuzzcheck.Watch(t)
 		s, err := ParseSetup("fuzz", text)
 		if err != nil || !s.Salted() {
 			return
@@ -100,6 +105,7 @@ func FuzzParseSetup(f *testing.F) {
 func FuzzParseUpdate(f *testing.F) {
 	addSeeds(f, "testdata", "update-*.conf")
 	f.Fuzz(func(t *testing.T, text []byte) {
+		fuzzcheck.Watch(t)
 		u, err := ParseUpdate("fuzz", text)
 		if err != nil {
 			return

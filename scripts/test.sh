@@ -19,7 +19,9 @@
 #                    BLS vectors, EIP-3076, symbols, fuzz replay)
 #   PCR3             scripts/kms-policy.sh self-test
 #   deploy names     scripts/side-by-side-test.sh
-#   fuzz             scripts/fuzz.sh: every Go fuzz target for FUZZ_TIME (3s)
+#   fuzz             scripts/fuzz.sh: every Go fuzz target for FUZZ_TIME (3s),
+#                    or those of FUZZ_MODULES; the C fuzz targets of markformat
+#                    and signer-core run only when FUZZ_MODULES is unset or ALL
 #   clock check      runner-dev -clock-check against public HTTPS sites
 #
 # Every go test runs with -race (RACE= turns it off). NO_NETWORK=1 skips
@@ -88,7 +90,12 @@ if [ "$HOST_ARCH" = x86_64 ] && command -v qemu-aarch64 >/dev/null && [ -x "$BUI
   summary "$LOGS/e2e-aarch64-qemu.log" | grep -E '^(ok|FAIL)'
 fi
 
-make -C "$ROOT/markformat" fuzz FUZZ_SECONDS="${FUZZ_SECONDS:-3}" >"$LOGS/fuzz-markformat.log" 2>&1 || { tail -40 "$LOGS/fuzz-markformat.log"; exit 1; }
+if fuzz_everything; then
+  make -C "$ROOT/markformat" fuzz FUZZ_SECONDS="${FUZZ_SECONDS:-3}" >"$LOGS/fuzz-markformat.log" 2>&1 || { tail -40 "$LOGS/fuzz-markformat.log"; exit 1; }
+else
+  log "C fuzz: skipped, FUZZ_MODULES=$FUZZ_MODULES leaves out signer-core and markformat"
+  export FUZZ=0
+fi
 
 log "signer-core: its own suites"
 bash "$ROOT/signer-core/scripts/test.sh" >"$LOGS/test-signer-core-c.log" 2>&1 || { tail -40 "$LOGS/test-signer-core-c.log"; exit 1; }

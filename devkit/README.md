@@ -4,7 +4,8 @@
 > Not audited. Not for production or mainnet funds. Interfaces and formats will
 > change without notice.
 
-Test helpers: `fuzzcheck` (no-panic and allocation oracles of the fuzz targets),
+Test helpers: `fuzzcheck` (no-panic, allocation and per-input time oracles of
+the fuzz targets; every target calls `fuzzcheck.Watch(t)` first),
 `leakcheck` (goroutine leak check for TestMain), `lockorder` (named lock order
 checks under `-tags lockcheck`) and `cfuzz` (the shared C fuzz driver for systems
 without libFuzzer).

@@ -19,6 +19,7 @@ func FuzzDecode(f *testing.F) {
 	f.Add(raw)
 	f.Add(body)
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		var o *Order
 		var err error
 		fuzzcheck.Bounded(t, len(b), func() { o, err = Decode(b) })
