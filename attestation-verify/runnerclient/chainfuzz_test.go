@@ -7,6 +7,7 @@ import (
 	"encoding/asn1"
 	"testing"
 
+	"github.com/lidofinance/tee-signer/devkit/fuzzcheck"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
@@ -19,6 +20,7 @@ func FuzzRunnerChain(f *testing.F) {
 		f.Add(v)
 	}
 	f.Fuzz(func(t *testing.T, v []byte) {
+		fuzzcheck.Watch(t)
 		c := &x509.Certificate{Extensions: []pkix.Extension{{Id: backend.RunnerChainOID, Value: v}}}
 		gfv, ok, err := runnerChain(c)
 		if err != nil {

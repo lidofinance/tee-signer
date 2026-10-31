@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/lidofinance/tee-signer/devkit/fuzzcheck"
 	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/platform/dev"
 	"github.com/lidofinance/tee-signer/signer-core/core"
@@ -470,6 +471,7 @@ func FuzzSlashingModel(f *testing.F) {
 		f.Add(modelOps(seed+100, 80))
 	}
 	f.Fuzz(func(t *testing.T, ops []byte) {
+		fuzzcheck.Watch(t)
 		if len(ops) > 400 {
 			ops = ops[:400]
 		}

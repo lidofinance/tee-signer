@@ -32,6 +32,7 @@ func FuzzDecodePublished(f *testing.F) {
 		f.Add(enc)
 	}
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		var p *Published
 		var err error
 		fuzzcheck.Bounded(t, len(b), func() { p, err = DecodePublished(b) })

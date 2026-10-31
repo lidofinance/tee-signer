@@ -31,6 +31,7 @@ func FuzzVerifyNitro(f *testing.F) {
 	}
 	opts := NitroOptions{Roots: []*x509.Certificate{ca.Root}, Now: now, AcceptAnyPCRs: true, AllowDebug: true, MaxAge: time.Minute}
 	f.Fuzz(func(t *testing.T, doc []byte) {
+		fuzzcheck.Watch(t)
 		fuzzcheck.BoundedBy(t, evidenceBound(len(doc)), func() { VerifyNitro(doc, opts) })
 	})
 }
@@ -47,6 +48,7 @@ func FuzzVerifyMAA(f *testing.F) {
 	opts := MAAOptions{Issuer: maaIssuer, Keys: ks, Now: now, ComplianceStatus: ComplianceACI,
 		HostData: []string{maaHostData}, RuntimeData: maaRuntime}
 	f.Fuzz(func(t *testing.T, tok string) {
+		fuzzcheck.Watch(t)
 		fuzzcheck.BoundedBy(t, evidenceBound(len(tok)), func() { VerifyMAA(tok, opts) })
 	})
 }
@@ -62,6 +64,7 @@ func FuzzVerifyConfidentialSpace(f *testing.F) {
 	opts := ConfidentialSpaceOptions{Keys: ks, Audience: "signer-runner-identity", Now: now,
 		ImageDigests: []string{csDigest}, Nonces: []string{"6e6f6e63652d74776f"}, MaxAge: 5 * time.Minute}
 	f.Fuzz(func(t *testing.T, tok string) {
+		fuzzcheck.Watch(t)
 		fuzzcheck.BoundedBy(t, evidenceBound(len(tok)), func() { VerifyConfidentialSpace(tok, opts) })
 	})
 }
@@ -70,6 +73,7 @@ func FuzzParseJWKS(f *testing.F) {
 	f.Add(testgen.JWKS(f, "kid", testgen.RSAKey(0), true))
 	f.Add(testgen.JWKS(f, "kid", testgen.RSAKey(1), false))
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		fuzzcheck.BoundedBy(t, evidenceBound(len(b)), func() { ParseJWKS(b) })
 	})
 }

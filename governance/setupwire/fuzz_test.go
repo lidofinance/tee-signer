@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/lidofinance/tee-signer/devkit/fuzzcheck"
 )
 
 // Seeds come from the golden vectors in testdata. Every target checks that
@@ -26,6 +28,7 @@ func addSeeds(f *testing.F, pattern string) {
 func FuzzDecodeSetup(f *testing.F) {
 	addSeeds(f, "setup-*.bin")
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		s, err := DecodeSetup(b)
 		if err != nil {
 			return
@@ -45,6 +48,7 @@ func FuzzDecodeUpdateBody(f *testing.F) {
 		}
 	}
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		u, err := DecodeUpdateBody(b)
 		if err != nil {
 			return
@@ -66,6 +70,7 @@ func FuzzDecodeUpdate(f *testing.F) {
 		f.Fatal(err)
 	}
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		u, err := DecodeUpdate(b)
 		if err != nil {
 			return
@@ -89,6 +94,7 @@ func FuzzCheckKey(f *testing.F) {
 	}
 	f.Add(must32(approverPub(1)))
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		if len(b) != 32 {
 			return
 		}

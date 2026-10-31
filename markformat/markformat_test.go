@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"testing"
 
+	"github.com/lidofinance/tee-signer/devkit/fuzzcheck"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
@@ -63,6 +64,7 @@ func FuzzWatermarkStorageRecord(f *testing.F) {
 	f.Add(EncodeWatermark(backend.Watermark{BlockSlot: ^uint64(0), SourceEpoch: 2, TargetEpoch: 1, HasAttestation: true}))
 	f.Add([]byte("SCW1"))
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		w, err := DecodeWatermark(b)
 		if err == nil && !bytes.Equal(EncodeWatermark(w), b) {
 			t.Fatalf("accepted record does not preserve its bytes: %x", b)

@@ -1,6 +1,7 @@
 // Package fuzzcheck holds the oracles the fuzz targets share: a decoder of
-// untrusted bytes must not panic, and must not allocate more than its
-// input justifies. Only tests import it.
+// untrusted bytes must not panic, must not allocate more than its input
+// justifies (Bounded), and must not take longer than the input limit on
+// one input (Watch). Only tests import it.
 package fuzzcheck
 
 import (

@@ -20,6 +20,7 @@ func FuzzParse(f *testing.F) {
 	r.Exits = nil
 	f.Add(r.Sign(key))
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		var r *Record
 		var err error
 		fuzzcheck.Bounded(t, len(b), func() { r, err = Parse(b) })

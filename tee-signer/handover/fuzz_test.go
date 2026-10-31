@@ -77,6 +77,7 @@ func FuzzDecodeCarry(f *testing.F) {
 		f.Add(mustEnc(c.Encode()))
 	}
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		var c *Carry
 		var err error
 		fuzzcheck.Bounded(t, len(b), func() { c, err = DecodeCarry(b) })
@@ -94,6 +95,7 @@ func FuzzDecodeImportRequest(f *testing.F) {
 	page.Carry.Exits = nil
 	f.Add(mustEnc((&ImportRequest{Order: []byte{'T'}, Page: page}).Encode()))
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		var q *ImportRequest
 		var err error
 		fuzzcheck.Bounded(t, len(b), func() { q, err = DecodeImportRequest(b) })
@@ -109,6 +111,7 @@ func FuzzDecodeImportResponse(f *testing.F) {
 	f.Add(mustEnc((&ImportResponse{Outcomes: []uint8{Stored, Held}, Held: 5, Total: 9, Imported: 3}).Encode()))
 	f.Add(mustEnc((&ImportResponse{Done: true}).Encode()))
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		var r *ImportResponse
 		var err error
 		fuzzcheck.Bounded(t, len(b), func() { r, err = DecodeImportResponse(b) })
@@ -123,6 +126,7 @@ func FuzzDecodeImportResponse(f *testing.F) {
 func FuzzDecodeRequest(f *testing.F) {
 	f.Add(mustEnc((&Request{Nonce: []byte("nonce-0123456789"), Identity: []byte{3, 1, 2}, Policy: []byte{1, 9}, Order: []byte{'T', 1}, Start: 512}).Encode()))
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		var q *Request
 		var err error
 		fuzzcheck.Bounded(t, len(b), func() { q, err = DecodeRequest(b) })
@@ -140,6 +144,7 @@ func FuzzDecodeResponse(f *testing.F) {
 	page.Carry.Exits = nil
 	f.Add(mustEnc(page.Encode()))
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		var r *Response
 		var err error
 		fuzzcheck.Bounded(t, len(b), func() { r, err = DecodeResponse(b) })
@@ -156,6 +161,7 @@ func FuzzDecodeShare(f *testing.F) {
 		f.Add(mustEnc(s.Encode()))
 	}
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		var s *Share
 		var err error
 		fuzzcheck.Bounded(t, len(b), func() { s, err = DecodeShare(b) })

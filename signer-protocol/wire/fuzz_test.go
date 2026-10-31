@@ -41,6 +41,7 @@ func FuzzReadFrame(f *testing.F) {
 	// A length of MaxFrame with no body (ATTEST-BUDGET-01).
 	f.Add([]byte{0, 0x10, 0, 0, 1, 1, 0, 0, 0, 1})
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		var fr Frame
 		var err error
 		// The body is allocated as its bytes arrive, not at the declared
@@ -84,6 +85,7 @@ func FuzzDecodeSign(f *testing.F) {
 		f.Add(append(append(make([]byte, 48), k), make([]byte, 40)...))
 	}
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		req, err := DecodeSign(b)
 		if err != nil {
 			return
@@ -103,6 +105,7 @@ func FuzzDecodeAttest(f *testing.F) {
 	f.Add(must(EncodeAttest(bytes.Repeat([]byte{7}, 32))))
 	f.Add(append([]byte{0, 32}, bytes.Repeat([]byte{7}, 32)...)) // no version byte
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		nonce, err := DecodeAttest(b)
 		if err != nil {
 			if errors.Is(err, ErrRequestVersion) && len(b) < 2 {
@@ -122,6 +125,7 @@ func FuzzDecodeAttestResponse(f *testing.F) {
 	var zero backend.SetupState
 	f.Add(must(EncodeAttestResponse(&zero, &backend.Attestation{})))
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		s, a, err := DecodeAttestResponse(b)
 		if err != nil {
 			return
@@ -137,6 +141,7 @@ func FuzzDecodeIdentity(f *testing.F) {
 	f.Add(must(EncodeIdentity(seedIdentity())))
 	f.Add(must(EncodeIdentity(&backend.Identity{Attestation: &backend.Attestation{}})))
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		id, err := DecodeIdentity(b)
 		if err != nil {
 			return
@@ -155,6 +160,7 @@ func FuzzDecodeResponse(f *testing.F) {
 	f.Add(EncodeError(backend.Refused(backend.StatusSlashTarget, "target 5 <= 6")))
 	f.Add(EncodeError(errors.New("boom")))
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		body, err := DecodeResponse(b)
 		if err == nil {
 			if again := EncodeOK(body); !bytes.Equal(again, b) {
@@ -180,6 +186,7 @@ func FuzzDecodeKeys(f *testing.F) {
 	f.Add(EncodeKeys(nil))
 	f.Add(binary.BigEndian.AppendUint32(nil, 0xffffffff))
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		keys, err := DecodeKeys(b)
 		if err != nil {
 			return
@@ -194,6 +201,7 @@ func FuzzDecodeAttestation(f *testing.F) {
 	f.Add(must(EncodeAttestation(seedAttestation())))
 	f.Add(must(EncodeAttestation(&backend.Attestation{})))
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		a, err := DecodeAttestation(b)
 		if err != nil {
 			return
@@ -211,6 +219,7 @@ func FuzzDecodeHealth(f *testing.F) {
 	f.Add(must(EncodeHealth(&backend.Health{Platform: "dev", Version: "0.1.0", Ready: true, Validators: 2, Setup: &st})))
 	f.Add([]byte(`{"platform":"nitro","ready":false}`))
 	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
 		h, err := DecodeHealth(b)
 		if err != nil {
 			return

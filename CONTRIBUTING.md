@@ -40,7 +40,8 @@ Every commit is signed (GPG or SSH, with a key on your GitHub account).
 - Keep modules independent, with their own build files, tests and README.
   Use public packages and local `go.mod` replacements between Go modules.
 - Keep test helpers and development-only code out of production builds.
-- Add fuzz tests for parsers of untrusted input.
+- Add fuzz tests for parsers of untrusted input. Each target calls
+  `fuzzcheck.Watch(t)` (devkit) first; `make fuzz` refuses one that does not.
 - Update dependency pins and checksums together.
 
 ## What never goes into the repo
