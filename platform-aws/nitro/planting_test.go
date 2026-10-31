@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -424,5 +425,38 @@ func TestPlantedBlobWithPlantedShareIsReportedStored(t *testing.T) {
 	fresh, _ := filestore.New(t.TempDir())
 	if _, stored, err := x.keys(setup).dataKey(ctx, fresh); err != nil || stored {
 		t.Fatalf("a key made at this start: stored %v, %v", stored, err)
+	}
+}
+
+// main.tf and target/main.tf can create the key with its final policy
+// (AWS-KMS-02): with key_policy_locked the admin gets no kms:PutKeyPolicy
+// and KMS is told to accept a policy nobody can change. The variable has
+// no default, so an existing key is never locked by a plan that did not
+// ask for it. The rest of the locked policy is the template's, which
+// TestPolicyTemplateWithoutPutKeyPolicyLocked runs through the lock check.
+func TestTerraformKeyCanBeCreatedLocked(t *testing.T) {
+	for _, name := range []string{"main.tf", filepath.Join("target", "main.tf")} {
+		b, err := os.ReadFile(filepath.Join("..", "deploy", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		tf := string(b)
+		for _, want := range []string{
+			`bypass_policy_lockout_safety_check = var.key_policy_locked`,
+			`var.key_policy_locked ? [] : ["kms:PutKeyPolicy"]`,
+		} {
+			if strings.Count(tf, want) != 1 {
+				t.Errorf("%s: want %s once", name, want)
+			}
+		}
+		if n := strings.Count(tf, `"kms:PutKeyPolicy"`); n != 1 {
+			t.Errorf("%s: kms:PutKeyPolicy appears %d times, want only the unlocked branch", name, n)
+		}
+		_, decl, ok := strings.Cut(tf, `variable "key_policy_locked" {`)
+		decl, _, _ = strings.Cut(decl, "\n}")
+		if !ok || !strings.Contains(decl, "type        = bool") || regexp.MustCompile(`
+\s*default\s*=`).MatchString(decl) {
+			t.Errorf("%s: key_policy_locked must be a bool without a default", name)
+		}
 	}
 }

@@ -57,6 +57,10 @@ variable "pcr1" { description = "PCR1 of the target EIF" }
 variable "pcr2" { description = "PCR2 of the target EIF" }
 variable "pcr3" { description = "PCR3 of the parent role, the running signer's value (the role does not change)" }
 variable "admin_role_arn" { description = "the role that administers the key and encrypts the record credentials" }
+variable "key_policy_locked" {
+  description = "true: create the key with its final policy, which no principal may change (no kms:PutKeyPolicy), so it never has a mutable phase (AWS-KMS-02, platform-aws/deploy/README.md). Required for a mainnet target. Terraform must run as admin_role_arn. false: the admin keeps kms:PutKeyPolicy (tests, devnets)."
+  type        = bool
+}
 variable "parent_role_name" { default = "signer-parent" }
 variable "security_group_name" { default = "signer-node" }
 variable "key_pair_name" {
@@ -81,6 +85,8 @@ locals {
 resource "aws_kms_key" "target" {
   description         = "signer-runner sealing key, enclave-only, ${var.name} (handover target)"
   enable_key_rotation = true
+  # As in ../main.tf: a locked policy needs the lockout check bypassed.
+  bypass_policy_lockout_safety_check = var.key_policy_locked
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -88,8 +94,8 @@ resource "aws_kms_key" "target" {
         Sid       = "KeyAdministration"
         Effect    = "Allow"
         Principal = { AWS = var.admin_role_arn }
-        Action = ["kms:Describe*", "kms:Get*", "kms:List*", "kms:PutKeyPolicy",
-        "kms:EnableKeyRotation", "kms:ScheduleKeyDeletion", "kms:CancelKeyDeletion"]
+        Action = concat(["kms:Describe*", "kms:Get*", "kms:List*"], var.key_policy_locked ? [] : ["kms:PutKeyPolicy"],
+        ["kms:EnableKeyRotation", "kms:ScheduleKeyDeletion", "kms:CancelKeyDeletion"])
         Resource = "*"
       },
       {
