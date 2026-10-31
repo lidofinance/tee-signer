@@ -99,9 +99,15 @@ SETUP=signer-2.bin platform-aws/deploy/parent-run.sh               # on the pare
   share listed at that start must unseal under the key, and at least one
   must be listed (`server.ProveSealingKey`). Otherwise the start stops
   and names the shares that did not open. A planted blob next to junk
-  under `shares/`, or next to the runner's own shares, fails this. Remove
-  what does not belong under `shares/`, and if no share opens, move the
-  blob aside as well, then restart. While the image check holds the
+  under `shares/`, or next to the runner's own shares, fails this. So
+  does a legitimate leftover: every object under `shares/` must open
+  under the current sealing key and the mark log's current log_id. A
+  share from an earlier life of the mark log (the log was made again
+  with a new log_id) or a share restored from another signer's backup by
+  mistake now stops the start, where before it was logged and skipped.
+  Remove what does not open from `shares/` on the parent (keep a copy
+  elsewhere if in doubt), and if no share opens, move the blob aside as
+  well, then restart. While the image check holds the
   shares sealed, the check cannot run, so the runner seals no share
   until a restart with the image allowed.
 - That check needs a share sealed under the planted key, and whoever
@@ -228,6 +234,14 @@ The Dirk fork connects to the forwarder over TCP and never sees vsock (see
 - Debug mode and `--attach-console` zero all PCRs
   ([AWS: set up attestation](https://docs.aws.amazon.com/enclaves/latest/user/set-up-attestation.html)),
   so the policy fails closed for debug enclaves.
+- What stops a start on Nitro, before any share loads: a stored sealing
+  blob that does not decrypt under this KMS key and setup_hash; on
+  mainnet, a key policy someone can still change (see "Setup"); and,
+  when the sealing key came from the stored blob, any object under
+  `shares/` that does not open under that key and the current log_id,
+  including shares left from an earlier log life or restored by mistake,
+  or an empty `shares/` listing (`server.ProveSealingKey`). The exit line
+  names the shares; remove them on the parent and restart.
 - A document of a running enclave carries PCR0 to PCR2 of the EIF, PCR3 of
   the parent role, PCR4 (the instance), PCR5 to PCR8 as zero, debug off,
   the enclave id as module id, and a leaf certificate with the subject

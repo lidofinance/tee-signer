@@ -58,7 +58,7 @@ variable "pcr2" { description = "PCR2 of the target EIF" }
 variable "pcr3" { description = "PCR3 of the parent role, the running signer's value (the role does not change)" }
 variable "admin_role_arn" { description = "the role that administers the key and encrypts the record credentials" }
 variable "key_policy_locked" {
-  description = "true: create the key with its final policy, which no principal may change (no kms:PutKeyPolicy), so it never has a mutable phase (AWS-KMS-02, platform-aws/deploy/README.md). Required for a mainnet target. Terraform must run as admin_role_arn. false: the admin keeps kms:PutKeyPolicy (tests, devnets)."
+  description = "true: create the key with its final policy, which no principal may change (no kms:PutKeyPolicy), so it never has a mutable phase (AWS-KMS-02, platform-aws/deploy/README.md). Required for a mainnet target. Once locked, the admin can never tag or untag the key, change its description or turn off its rotation, so any later Terraform change to aws_kms_key.target fails; only deletion stays possible. Terraform must run as admin_role_arn. false: the admin keeps kms:PutKeyPolicy (tests, devnets)."
   type        = bool
 }
 variable "parent_role_name" { default = "signer-parent" }
@@ -82,6 +82,8 @@ locals {
   hex96 = "^[0-9a-f]{96}$"
 }
 
+# Keep the statements in step with ../main.tf and
+# ../kms-key-policy.json.tmpl (the template is what the lock check tests).
 resource "aws_kms_key" "target" {
   description         = "signer-runner sealing key, enclave-only, ${var.name} (handover target)"
   enable_key_rotation = true

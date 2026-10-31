@@ -213,7 +213,12 @@ func (s *Server) LoadShares() (int, error) {
 // shares/ next to it. A share this runner sealed is the one thing in the
 // store that needs the key to make. A share that does not open means the
 // blob or the share is not this runner's, so the start stops rather than
-// seal new shares under a key someone else may know. On success
+// seal new shares under a key someone else may know. That includes a
+// share of this signer that does not open for another reason: one left
+// from an earlier life of the mark log (sealed under an older log_id) or
+// restored from another signer by mistake. LoadListedShares would log and
+// skip it; here it stops the start, the error names it, and the operator
+// removes it from shares/ before the restart. On success
 // SealingKeyUnproven is cleared. Call it before Serve, and only when the
 // image check lets the shares load.
 func (s *Server) ProveSealingKey(keys []string) error {

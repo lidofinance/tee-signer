@@ -399,17 +399,14 @@ func run() (err error) {
 			n, err = srv.LoadListedShares(claimed.shares)
 		}
 	} else if srv.SealingKeyUnproven {
-		keys, err := server.ListShares(plat.Store)
-		if err != nil {
+		var keys []string
+		if keys, err = server.ListShares(plat.Store); err != nil {
 			return err
 		}
-		if err := srv.ProveSealingKey(keys); err != nil {
+		if err = srv.ProveSealingKey(keys); err != nil {
 			return err
 		}
 		n, err = srv.LoadListedShares(keys)
-		if err != nil {
-			log.Error("some stored shares did not load", "err", err)
-		}
 	} else {
 		n, err = srv.LoadShares()
 	}
