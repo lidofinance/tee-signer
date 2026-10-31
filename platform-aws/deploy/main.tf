@@ -237,7 +237,11 @@ resource "aws_iam_role_policy" "parent_no_record_writes" {
 # compliance retention of slashing_log_min_lock_days (s3:PutObjectRetention,
 # needed for the x-amz-object-lock-* headers on PutObject). Compliance
 # retention can be extended, never shortened, so the permission cannot
-# unlock anything. No delete for anyone here. NoDeleteMarkers
+# unlock anything; a leaked writer key could only extend the retention of
+# objects under marks/ and config/, a cost, not a weakening. The state copy
+# has no prefix here: the Nitro platform does not restore one
+# (-state-store is restored on azure, gcp and dev only). No delete for
+# anyone here. NoDeleteMarkers
 # denies DeleteObject (which puts a delete marker on a versioned bucket)
 # and DeleteObjectVersion to every principal, the account's admins
 # included: a delete marker over a clone's record would let a second

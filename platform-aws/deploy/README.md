@@ -207,16 +207,23 @@ The lock check at start reads the bucket's default retention, but that
 default is a bucket setting: an admin with
 `s3:PutBucketObjectLockConfiguration` can lower or remove it at any time,
 and compliance mode protects only versions already written. So every PUT of
-the runner (records, config bodies, and the state copy when it shares the
-log's `mark_store`) names its own retention:
+the runner (records and config bodies) names its own retention:
 `x-amz-object-lock-mode: COMPLIANCE` and
 `x-amz-object-lock-retain-until-date` at least `slashing_log_min_lock_days`
 ahead (or the default the check read, if longer), plus an hour for the
 clock skew S3 allows on a signed request. That date replaces the default
 for the object and nobody can shorten it. A later change of the default
-then has no effect on the runner's objects. The route
-`B.s3.R.amazonaws.com:443` on vsock port 8004 follows from the setup, on
-both sides.
+then has no effect on the runner's objects. The date comes from the
+enclave's clock, which the host sets; it is the same clock that dates the
+signed request, and S3 refuses a request more than 15 minutes off.
+
+The Nitro platform restores no state copy (`-state-store` is restored on
+Azure, GCP and dev), so the bucket policy grants nothing under `state/`. A
+state copy in this bucket would need `state/*` with the same four actions
+as `marks/*`; it would then get the same per-object retention.
+
+The route `B.s3.R.amazonaws.com:443` on vsock port 8004 follows from the
+setup, on both sides.
 
 ## An overlay network on the parent
 

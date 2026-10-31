@@ -61,12 +61,19 @@ type Log struct {
 
 	// defaultDays is the compliance default retention Lock last read. A
 	// per-object date replaces the default, so Create keeps the longer one.
+	// defaultRead: Lock has answered once. A log nobody checked (the state
+	// copy) reads the default at its first retained Create.
 	defaultDays atomic.Int64
+	defaultRead atomic.Bool
 }
 
-// retainSlack is added to every retention date. S3 refuses a request whose
-// signed x-amz-date is more than 15 minutes from its own clock, so a date
-// taken from the runner's clock is at most that much short.
+// retainSlack is added to every retention date. The date and the signed
+// x-amz-date both come from l.now(), the host's clock in the enclave. S3
+// refuses a request whose x-amz-date is more than 15 minutes from its own
+// clock (RequestTimeTooSkewed), so a date S3 accepts is at most 15 minutes
+// short of real time, and the hour covers that. This holds only while both
+// come from the same clock: a change that signs with one clock and dates
+// the retention with another must bound the second some other way.
 const retainSlack = time.Hour
 
 // Open parses "bucket=B,region=R[,endpoint=URL]".
@@ -259,6 +266,11 @@ func (l *Log) Create(ctx context.Context, name string, data []byte) error {
 	hdr.Set("If-None-Match", "*")
 	hdr.Set("Content-MD5", base64.StdEncoding.EncodeToString(sum[:]))
 	hdr.Set("Content-Type", "application/octet-stream")
+	if l.RetainDays > 0 && !l.defaultRead.Load() {
+		if _, err := l.Lock(ctx); err != nil {
+			return fmt.Errorf("s3log: default retention before a retained write: %w", err)
+		}
+	}
 	if until, ok := l.retainUntil(); ok {
 		hdr.Set("x-amz-object-lock-mode", "COMPLIANCE")
 		hdr.Set("x-amz-object-lock-retain-until-date", until.Format(time.RFC3339))
@@ -442,6 +454,7 @@ func (l *Log) Lock(ctx context.Context) (markstore.Lock, error) {
 	if compliance {
 		l.defaultDays.Store(days)
 	}
+	l.defaultRead.Store(true)
 	return markstore.Lock{Kind: "s3 object lock", Mode: r.Mode, Compliance: compliance,
 		Retention: time.Duration(days) * 24 * time.Hour}, nil
 }

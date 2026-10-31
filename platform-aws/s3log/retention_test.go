@@ -95,6 +95,27 @@ func TestS3RetentionNotShorterThanTheDefault(t *testing.T) {
 	}
 }
 
+// A log whose lock nobody checked (the state copy in the log's bucket)
+// reads the default itself before its first retained write.
+func TestS3RetentionReadsTheDefaultWithoutALockCheck(t *testing.T) {
+	ctx := context.Background()
+	srv := wormfake.New(wormfake.S3, "signer-marks")
+	defer srv.Close()
+	srv.SetLock(wormfake.Lock{Compliance: true, Days: 400})
+	l := openRetained(t, srv, 30)
+	name := "state/s/00000000000000000001"
+	start := srv.Now()
+	if err := l.Create(ctx, name, []byte("commit")); err != nil {
+		t.Fatal(err)
+	}
+	if until := srv.RetainUntil(name); until.Before(start.Add(400 * day)) {
+		t.Fatalf("retained until %v, want at least 400 days", until)
+	}
+	if !l.defaultRead.Load() {
+		t.Fatal("the default was not read")
+	}
+}
+
 // The retention headers are signed (S3 refuses unsigned x-amz-* headers)
 // and name compliance mode with a date at least the minimum ahead.
 func TestS3RetentionHeaders(t *testing.T) {

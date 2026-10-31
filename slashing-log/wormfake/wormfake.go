@@ -147,7 +147,9 @@ func (s *Server) AdminDeleteExpired() int {
 		for _, v := range vs {
 			expired := now.Sub(v.at) >= keep
 			if s.Kind == S3 {
-				expired = !now.Before(v.until)
+				// A delete marker has no retention (until is zero), so the
+				// admin may delete it at any time, as on S3.
+				expired = v.marker || !now.Before(v.until)
 			}
 			if expired {
 				n++

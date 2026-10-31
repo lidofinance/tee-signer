@@ -390,6 +390,8 @@ holds its true mark.
   sets its own compliance retention. What stays open: the check reads the
   default once per start, so a bucket whose default was removed is noticed
   only at the next start. GCS and Azure lock the policy itself.
+- The flag path (`-mark-store` without a setup) runs no lock check and sets
+  no per-object retention. Only a setup gets either.
 - Real cloud stores: the tests use local fakes of the three APIs
   (`slashing-log/wormfake`). The lock reads
   are untested against the real APIs.
