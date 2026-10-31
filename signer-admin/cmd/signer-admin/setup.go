@@ -47,7 +47,9 @@ func keyOf(line string) string {
 }
 
 // splitSetupFile finds the sections. Line numbers stay those of the file.
-func splitSetupFile(lines []string) (shared int, secs []section, err error) {
+// tool names the command that draws cluster_id and the salts, for the
+// refusals.
+func splitSetupFile(lines []string, tool string) (shared int, secs []section, err error) {
 	shared = len(lines)
 	for i, l := range lines {
 		if m := sectionRE.FindStringSubmatch(l); m != nil {
@@ -64,12 +66,12 @@ func splitSetupFile(lines []string) (shared int, secs []section, err error) {
 		}
 		switch keyOf(l) {
 		case "cluster_id":
-			return 0, nil, fmt.Errorf("line %d: cluster_id: signer-admin setup draws it; leave it out", i+1)
+			return 0, nil, fmt.Errorf("line %d: cluster_id: %s draws it; leave it out", i+1, tool)
 		case "signer_name":
 			return 0, nil, fmt.Errorf("line %d: signer_name: the [signer NAME] header gives it", i+1)
 		}
 		if k := keyOf(l); strings.HasPrefix(k, "salt.") || k == "platform_salt" {
-			return 0, nil, fmt.Errorf("line %d: %s: signer-admin setup draws the salts; leave them out", i+1, k)
+			return 0, nil, fmt.Errorf("line %d: %s: %s draws the salts; leave them out", i+1, k, tool)
 		}
 	}
 	if len(secs) == 0 {
@@ -82,7 +84,7 @@ func splitSetupFile(lines []string) (shared int, secs []section, err error) {
 // with clusterID.
 func buildSetups(name string, data []byte, clusterID [32]byte) ([]*setupwire.Setup, error) {
 	lines := strings.Split(string(data), "\n")
-	shared, secs, err := splitSetupFile(lines)
+	shared, secs, err := splitSetupFile(lines, "signer-admin setup")
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}

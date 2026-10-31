@@ -93,6 +93,16 @@ func TestHandoverSetup(t *testing.T) {
 	wantIn(t, failTool(t, "handover-setup", "-cluster", fc.cluster, "-out", fc.path("t3"), other), "s9 is not a signer of")
 	pub := writeFile(t, fc.path("pub.conf"), "platform = dev\nmax_keys = 3\n[signer s1]\nslashing_log_store.dir = /x\n")
 	wantIn(t, failTool(t, "handover-setup", "-cluster", fc.cluster, "-out", fc.path("t4"), pub), `unknown key "max_keys"`)
+	wantIn(t, failTool(t, "handover-setup", "-cluster", fc.cluster, "-max-keys", "4294967296", "-out", fc.path("t6"), file), "32-bit")
+	salted := writeFile(t, fc.path("salted.conf"), "platform = dev\nsalt.max_keys = 0x01\n[signer s1]\nslashing_log_store.dir = /x\n")
+	wantIn(t, failTool(t, "handover-setup", "-cluster", fc.cluster, "-out", fc.path("t7"), salted), "signer-admin handover-setup draws the salts")
+	// The targets of a cluster made one at a time count the whole cluster
+	// for its rules.
+	one := targetFile(t, fc, "s2")
+	out = mustTool(t, "handover-setup", "-cluster", fc.cluster, "-signers", "s2", "-out", fc.path("t8"), one)
+	if len(setupHashes(out)) != 1 {
+		t.Fatalf("handover-setup -signers s2:\n%s", out)
+	}
 	// A longer lock is the target's choice.
 	out = mustTool(t, "handover-setup", "-cluster", fc.cluster, "-slashing-log-min-lock-days", "9", "-out", fc.path("t5"), file)
 	if s := readSetup(t, fc.path("t5/s2.setup")); s.SlashingLogMinLockDays != 9 {
