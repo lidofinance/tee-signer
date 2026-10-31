@@ -10,7 +10,7 @@ import hashlib
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import tarfile
@@ -77,6 +77,13 @@ def add_crate_notices(sections, lock, cargo_home):
             if hashlib.sha256(data).hexdigest() != checksum:
                 raise ValueError(f"Rust crate {name} {version}: {archive} differs from its sha256 in {lock.name}")
         with tempfile.TemporaryDirectory() as tmp, tarfile.open(fileobj=io.BytesIO(data)) as tar:
+            # Only plain files and folders below the crate's folder. Python
+            # before 3.12 has no extraction filter, so check every member.
+            for member in tar.getmembers():
+                if (member.name.startswith("/") or ".." in PurePosixPath(member.name).parts
+                        or not (member.isfile() or member.isdir())):
+                    raise ValueError(f"Rust crate {name} {version}: {archive} holds {member.name!r},"
+                                     " a link, a special file or a path outside the crate")
             if hasattr(tarfile, "data_filter"):
                 tar.extractall(tmp, filter="data")
             else:

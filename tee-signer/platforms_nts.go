@@ -9,8 +9,8 @@ package main
 // platform gets the NTS clock (runner/clock.NTS) in place of its own. The
 // cloud images set the flags in their measured command (the enclave image,
 // the CCE policy, the Confidential Space image), so the host cannot turn the
-// clock off; the variables are for local runs. A
-// flag that is set wins over its variable.
+// clock off; the variables are for local runs. A flag that is set wins
+// over its variable.
 //
 //	-nts-clock                 RUNNER_NTS_CLOCK=1            turn it on
 //	-nts-coarse-urls a,b,c     RUNNER_NTS_COARSE_URLS=a,b,c  HTTPS-date URLs of the coarse check (required, 3 or more);
@@ -22,11 +22,14 @@ package main
 //
 // The clock dials through the platform (platform.Platform.Dial): on Nitro,
 // NTS-KE goes through vsock-proxy routes and NTP through the parent's UDP
-// relay. With the NTS clock on, -clock must be platform (the default): the
-// runner refuses -clock https-date, which would replace the NTS clock.
+// relay.
 //
-// If no quorum forms in the wait the runner starts anyway and every signing
-// request is refused until one forms (the clock's Now fails).
+// If no quorum forms in the wait the start fails and the runner exits, as
+// for any other start failure: the supervisor (ACI and Confidential Space
+// restart on failure; on Nitro the operator or the parent's service
+// manager) starts it again. A runner that went on without a quorum would
+// load no share, since each share's restart floor reads the clock, and it
+// would not load them when the quorum formed later.
 
 import (
 	"context"
@@ -69,9 +72,6 @@ func ntsSwitch(f platformFunc) platformFunc {
 		if !ntsOn() {
 			return f(o)
 		}
-		if c := flag.Lookup("clock"); c != nil && c.Value.String() != "platform" {
-			return nil, fmt.Errorf("nts clock: -clock %s would replace it; leave -clock out (platform) with -nts-clock", c.Value.String())
-		}
 		return withNTSClock(f)(o)
 	}
 }
@@ -112,6 +112,11 @@ func withNTSClock(f platformFunc) platformFunc {
 		}
 		n, err := startNTSClock(context.Background(), p.HTTPClient, dial, o.Param("region", ""), log)
 		if err != nil {
+			// main never gets this platform, so it cannot report the
+			// error to the host (Nitro: the enclave has no console).
+			if p.ReportExit != nil {
+				p.ReportExit("runner: " + err.Error())
+			}
 			if p.Close != nil {
 				_ = p.Close()
 			}
@@ -139,9 +144,7 @@ func newNTSClock(client *http.Client, dial nts.DialFunc, region string, log *slo
 	// clock's local time, so the coarse check compares two times aged on
 	// the same counter. Go's monotonic clock (CLOCK_MONOTONIC) is slewed
 	// by timesyncd in WSL, 39,000 to 56,000 ppm slow: 15 to 40 s between
-	// readings put the coarse time up to 2.2 s behind. Only this coarse
-	// clock changes; -clock https-date in main.go stays as in the default
-	// build.
+	// readings put the coarse time up to 2.2 s behind.
 	coarse := &clock.Anchored{Src: q, Interval: clock.DefaultInterval, TrustedSrc: true, Local: rawLocal}
 	maxBound, err := ntsDuration(*ntsMaxBoundFlag, "RUNNER_NTS_MAX_BOUND", clock.NTSMaxBound)
 	if err != nil {
@@ -200,7 +203,8 @@ func publicNTSServers() ([]clock.NTSServer, error) {
 func rawLocal() time.Time { return time.Unix(0, nts.Monotonic()) }
 
 // startNTSClock takes the first coarse reading and the first quorum (up to
-// -nts-wait), then keeps both running and logs a status line.
+// -nts-wait), then keeps both running and logs a status line. No quorum in
+// the wait is an error: the runner does not start without the clock.
 func startNTSClock(ctx context.Context, client *http.Client, dial nts.DialFunc, region string, log *slog.Logger) (*clock.NTS, error) {
 	wait, err := ntsDuration(*ntsWaitFlag, "RUNNER_NTS_WAIT", 90*time.Second)
 	if err != nil {
@@ -220,7 +224,7 @@ func startNTSClock(ctx context.Context, client *http.Client, dial nts.DialFunc, 
 		rctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		err = coarse.Refresh(rctx)
 		cancel()
-		if err == nil || time.Now().After(deadline) {
+		if err == nil || time.Now().Add(2*time.Second).After(deadline) {
 			break
 		}
 		time.Sleep(2 * time.Second)
@@ -229,10 +233,12 @@ func startNTSClock(ctx context.Context, client *http.Client, dial nts.DialFunc, 
 		log.Error("nts: no coarse (HTTPS-date) reading at start", "err", err)
 	}
 	go coarse.Run(ctx)
-	for n.Refresh(ctx) != nil {
-		if time.Now().After(deadline) {
-			log.Error("nts: no quorum at start; signing is refused until one forms", "waited", wait, "status", statusLine(n.Status()))
+	for {
+		if err = n.Refresh(ctx); err == nil {
 			break
+		}
+		if time.Now().Add(5 * time.Second).After(deadline) {
+			return nil, fmt.Errorf("nts clock: no quorum after %v (peers %s): %w", wait, statusLine(n.Status()), err)
 		}
 		time.Sleep(5 * time.Second)
 	}

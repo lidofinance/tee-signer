@@ -605,38 +605,3 @@ func TestE2EClockSkewBreaksFloor(t *testing.T) {
 	}
 	t.Logf("restart with honest clock: signed a second, different vote for target %d -> slashable double vote", victim)
 }
-
-// TestE2EHTTPSDateIgnoresHostClock repeats the skew attack with the
-// anchored HTTPS-date clock: the host-set system clock is 1 hour ahead,
-// the runner ignores it, and a vote 4 epochs ahead is refused. Needs
-// network; runs only with E2E_NETWORK=1.
-func TestE2EHTTPSDateIgnoresHostClock(t *testing.T) {
-	if os.Getenv("E2E_NETWORK") != "1" {
-		t.Skip("set E2E_NETWORK=1 to run (needs HTTPS to public sites)")
-	}
-	c := newChain(t)
-	addr := fmt.Sprintf("tcp:127.0.0.1:%d", freePort(t))
-	r := newRunner(t, "runner-httpsdate", c, addr, "-platform-opt", "clock_offset=1h",
-		"-clock", "https-date", "-clock-urls", "https://www.cloudflare.com/,https://www.google.com/,https://github.com/",
-		"-clock-interval", "2s", "-clock-max-age", "20s")
-	r.start()
-	cl := client(t, addr)
-	h := waitReady(t, cl)
-	off := int64(h.ClockUnix) - time.Now().Unix()
-	if h.NTS != nil || h.ClockUnixMS/1000 != h.ClockUnix {
-		t.Fatalf("https-date clock: nts %+v, clock_unix_ms %d, clock_unix %d", h.NTS, h.ClockUnixMS, h.ClockUnix)
-	}
-	if off < -30 || off > 30 || !h.ClockTrusted {
-		t.Fatalf("clock %d s off system time (system clock is +1h for the runner's dev platform), trusted=%v", off, h.ClockTrusted)
-	}
-	t.Logf("runner clock %s: %+d s from real time although the dev platform clock is +1h", h.ClockSource, off)
-	sk, _ := software.NewSecret()
-	pk, _ := core.PubkeyOf(sk)
-	if _, err := adminOf(cl).ImportShare(ctx, backend.ImportShareRequest{Pubkey: pk, Secret: sk, Index: 7}); err != nil {
-		t.Fatal(err)
-	}
-	e := c.stableEpoch(t)
-	_, err := cl.Sign(ctx, c.req(pk, att(e+3, e+4, 1)))
-	rr := wantRefused(t, err, backend.StatusPolicyFuture)
-	t.Logf("vote 4 epochs ahead refused: %v", rr)
-}
