@@ -552,8 +552,10 @@ one under an approver-signed handover order (HANDOVER,
   not ask for `x-ms-attestation-type`: the example does not have it, and a
   claim missing from the token fails the release. The runner reads the
   policy back with Get Key and counts it as locked only if it has this
-  shape: one authority, `https://<maa_endpoint>` of the setup, and these
-  four claims with `equals` (vmpl may be left out). An immutable policy
+  shape: one authority, exactly `https://<maa_endpoint>` of the setup (no
+  trailing slash), and these four claims with `equals`. is-debuggable is a
+  boolean in the token; the template's string `"false"` released keys on a
+  live vault in October 2026, and the runner also takes a JSON `false`. An immutable policy
   with a second authority, another claim or another operator reports
   `key_lock: not_locked`, and a mainnet setup does not start on it. Edit
   the template only together with `checkReleasePolicy` in

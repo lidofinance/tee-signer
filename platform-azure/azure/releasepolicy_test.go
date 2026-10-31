@@ -56,6 +56,7 @@ func TestReleasePolicyContent(t *testing.T) {
 		claim("x-ms-compliance-status", "azure-compliant-uvm"),
 		claim("x-ms-sevsnpvm-hostdata", hd),
 		claim("x-ms-sevsnpvm-is-debuggable", "false"),
+		claim("x-ms-sevsnpvm-vmpl", "0"),
 	}
 	auth := func(host string, claims ...string) string {
 		return `{"authority":"https://` + host + `","allOf":[` + strings.Join(claims, ",") + `]}`
@@ -76,24 +77,30 @@ func TestReleasePolicyContent(t *testing.T) {
 		{"other authority", pol(auth("attacker.eus.attest.azure.net", base...)), "authority is"},
 		{"authority without scheme", strings.Replace(pol(good), "https://", "", 1), "authority is"},
 		{"version", strings.Replace(pol(good), "1.0.0", "1.0.1", 1), "version"},
-		{"no hostdata", pol(auth(maa, base[0], base[2])), "x-ms-sevsnpvm-hostdata"},
-		{"no compliance", pol(auth(maa, base[1], base[2])), "x-ms-compliance-status"},
-		{"no debuggable", pol(auth(maa, base[0], base[1])), "is-debuggable"},
-		{"debuggable", pol(auth(maa, base[0], base[1], claim("x-ms-sevsnpvm-is-debuggable", "true"))), "is-debuggable"},
-		{"not compliant", pol(auth(maa, claim("x-ms-compliance-status", "x"), base[1], base[2])), "compliance"},
-		{"vmpl 1", pol(auth(maa, with(claim("x-ms-sevsnpvm-vmpl", "1"))...)), "vmpl"},
+		{"authority with a trailing slash", pol(auth(maa+"/", base...)), "authority is"},
+		{"authority with a port", pol(auth(maa+":443", base...)), "authority is"},
+		{"no hostdata", pol(auth(maa, base[0], base[2], base[3])), "x-ms-sevsnpvm-hostdata"},
+		{"no compliance", pol(auth(maa, base[1], base[2], base[3])), "x-ms-compliance-status"},
+		{"no debuggable", pol(auth(maa, base[0], base[1], base[3])), "is-debuggable"},
+		{"no vmpl", pol(auth(maa, base[0], base[1], base[2])), "vmpl"},
+		{"debuggable", pol(auth(maa, base[0], base[1], claim("x-ms-sevsnpvm-is-debuggable", "true"), base[3])), "is-debuggable"},
+		{"debuggable, bool", pol(auth(maa, base[0], base[1], `{"claim":"x-ms-sevsnpvm-is-debuggable","equals":true}`, base[3])), "not a string"},
+		{"debuggable, False", pol(auth(maa, base[0], base[1], claim("x-ms-sevsnpvm-is-debuggable", "False"), base[3])), "is-debuggable"},
+		{"not compliant", pol(auth(maa, claim("x-ms-compliance-status", "x"), base[1], base[2], base[3])), "compliance"},
+		{"vmpl 1", pol(auth(maa, base[0], base[1], base[2], claim("x-ms-sevsnpvm-vmpl", "1"))), "vmpl"},
+		{"vmpl as a number", pol(auth(maa, base[0], base[1], base[2], `{"claim":"x-ms-sevsnpvm-vmpl","equals":0}`)), "not a string"},
 		{"unknown claim", pol(auth(maa, with(claim("x-ms-attestation-type", "sevsnpvm"))...)), "does not know"},
 		{"claim twice", pol(auth(maa, with(claim("x-ms-sevsnpvm-hostdata", strings.Repeat("6b", 32)))...)), "twice"},
-		{"short hostdata", pol(auth(maa, base[0], claim("x-ms-sevsnpvm-hostdata", "5a5a"), base[2])), "32 bytes"},
-		{"zero hostdata", pol(auth(maa, base[0], claim("x-ms-sevsnpvm-hostdata", strings.Repeat("00", 32)), base[2])), "all zero"},
-		{"empty hostdata", pol(auth(maa, base[0], claim("x-ms-sevsnpvm-hostdata", ""), base[2])), "32 bytes"},
-		{"other operator", pol(auth(maa, with(`{"claim":"x-ms-sevsnpvm-vmpl","notEquals":"1"}`)...)), "not allowed"},
-		{"bool value", pol(auth(maa, base[0], base[1], `{"claim":"x-ms-sevsnpvm-is-debuggable","equals":false}`)), "not a string"},
+		{"short hostdata", pol(auth(maa, base[0], claim("x-ms-sevsnpvm-hostdata", "5a5a"), base[2], base[3])), "32 bytes"},
+		{"zero hostdata", pol(auth(maa, base[0], claim("x-ms-sevsnpvm-hostdata", strings.Repeat("00", 32)), base[2], base[3])), "all zero"},
+		{"empty hostdata", pol(auth(maa, base[0], claim("x-ms-sevsnpvm-hostdata", ""), base[2], base[3])), "32 bytes"},
+		{"other operator", pol(auth(maa, with(`{"claim":"x-ms-attestation-type","notEquals":"x"}`)...)), "not allowed"},
+		{"bool value elsewhere", pol(auth(maa, `{"claim":"x-ms-compliance-status","equals":true}`, base[1], base[2], base[3])), "not a string"},
 		{"nested anyOf", pol(auth(maa, with(`{"anyOf":[`+claim("x-ms-sevsnpvm-vmpl", "0")+`]}`)...)), "not allowed"},
 		{"anyOf beside allOf", pol(`{"authority":"https://` + maa + `","allOf":[` + strings.Join(base, ",") + `],"anyOf":[]}`), "not allowed"},
 		{"top-level allOf", `{"version":"1.0.0","allOf":[` + good + `]}`, "not allowed"},
 		{"duplicate authority member", pol(`{"authority":"https://` + maa + `","authority":"https://attacker.eus.attest.azure.net","allOf":[` + strings.Join(base, ",") + `]}`), "twice"},
-		{"duplicate equals member", pol(auth(maa, base[0], `{"claim":"x-ms-sevsnpvm-hostdata","equals":"`+hd+`","equals":"`+strings.Repeat("6b", 32)+`"}`, base[2])), "twice"},
+		{"duplicate equals member", pol(auth(maa, base[0], `{"claim":"x-ms-sevsnpvm-hostdata","equals":"`+hd+`","equals":"`+strings.Repeat("6b", 32)+`"}`, base[2], base[3])), "twice"},
 		{"duplicate anyOf member", `{"version":"1.0.0","anyOf":[` + good + `],"anyOf":[]}`, "twice"},
 		{"data after the object", pol(good) + `{}`, "after"},
 		{"not an object", `[]`, "not a JSON object"},
@@ -104,12 +111,12 @@ func TestReleasePolicyContent(t *testing.T) {
 		}
 	}
 
-	// Locked variants: vmpl 0 present or absent, members in another order,
-	// the authority in upper case.
+	// Locked variants: is-debuggable as the string or the JSON false,
+	// members in another order, the authority in upper case.
 	for _, p := range []string{
 		pol(good),
-		pol(auth(maa, with(claim("x-ms-sevsnpvm-vmpl", "0"))...)),
-		pol(auth(maa, base[2], base[1], base[0])),
+		pol(auth(maa, base[0], base[1], `{"equals":false,"claim":"x-ms-sevsnpvm-is-debuggable"}`, base[3])),
+		pol(auth(maa, base[3], base[2], base[1], base[0])),
 		`{"anyOf":[{"allOf":[` + strings.Join(base, ",") + `],"authority":"HTTPS://SHAREDWEU.WEU.ATTEST.AZURE.NET"}],"version":"1.0.0"}`,
 	} {
 		if _, err := checkReleasePolicy([]byte(p), maa); err != nil {

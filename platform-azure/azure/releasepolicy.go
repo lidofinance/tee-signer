@@ -13,8 +13,8 @@ import (
 
 // releasePolicyClaims are the claims a release policy may test, with the
 // value each must equal; "" means any literal the check below accepts (the
-// hostdata). These are the claims of platform-azure/deploy/skr-policy.json.tmpl.
-// vmpl may be left out; the other three must be there.
+// hostdata). These are the claims of platform-azure/deploy/skr-policy.json.tmpl,
+// and all four must be there.
 var releasePolicyClaims = map[string]string{
 	"x-ms-compliance-status":      "azure-compliant-uvm",
 	"x-ms-sevsnpvm-hostdata":      "",
@@ -22,7 +22,7 @@ var releasePolicyClaims = map[string]string{
 	"x-ms-sevsnpvm-vmpl":          "0",
 }
 
-var requiredClaims = []string{"x-ms-compliance-status", "x-ms-sevsnpvm-hostdata", "x-ms-sevsnpvm-is-debuggable"}
+var requiredClaims = []string{"x-ms-compliance-status", "x-ms-sevsnpvm-hostdata", "x-ms-sevsnpvm-is-debuggable", "x-ms-sevsnpvm-vmpl"}
 
 // checkReleasePolicy checks that a Key Vault release policy releases the
 // key only to a token from the attestation provider maaHost for one
@@ -33,7 +33,12 @@ var requiredClaims = []string{"x-ms-compliance-status", "x-ms-sevsnpvm-hostdata"
 // The policy must have the shape of skr-policy.json.tmpl: version 1.0.0,
 // an anyOf with exactly one authority, https://<maaHost>, whose allOf
 // tests the claims of releasePolicyClaims with equals and string values,
-// each claim once. Any other member, operator, nested anyOf or allOf, a
+// each claim once. The token's is-debuggable claim is a boolean; Key Vault
+// released keys under the template's string "false" on a live vault, and
+// a JSON false is taken too. The authority is compared without case but
+// otherwise exactly: a trailing slash, a path or another port is refused,
+// since nothing shows how Key Vault matches such a value with the token's
+// iss. Any other member, operator, nested anyOf or allOf, a
 // second authority, a duplicate JSON member or an all-zero hostdata is
 // refused. Duplicate members are refused because JSON parsers differ on
 // which one wins, and Key Vault's parser is not the runner's.
@@ -84,7 +89,9 @@ func checkReleasePolicy(policy []byte, maaHost string) ([]byte, error) {
 		if err := strictString(c, "claim", &claim); err != nil {
 			return nil, fmt.Errorf("allOf[%d]: %w", i, err)
 		}
-		if err := strictString(c, "equals", &value); err != nil {
+		if claim == "x-ms-sevsnpvm-is-debuggable" && string(c["equals"]) == "false" {
+			value = "false"
+		} else if err := strictString(c, "equals", &value); err != nil {
 			return nil, fmt.Errorf("allOf[%d] (%s): %w", i, claim, err)
 		}
 		want, known := releasePolicyClaims[claim]
