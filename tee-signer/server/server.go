@@ -363,11 +363,14 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 func (s *Server) putShare(pk backend.Pubkey, blob []byte) error { return s.writeShare(pk, blob, false) }
 
 // replaceShare is putShare for a record this runner holds (a promotion).
-// It writes only while the stored record is still the one the runner
-// loaded or wrote, checked before the log record and again before the
-// store write. A record the host removed or changed meanwhile stays as it
-// is and the write fails, so a late promotion does not bring a removed
-// record back.
+// Best effort: it checks before the log record and again before the store
+// write that the stored record is still the one the runner loaded or
+// wrote, and fails if not, so a late promotion does not bring back a
+// record the host removed or changed before the last check. The store has
+// no conditional write: a change between that check and the write is
+// overwritten. That window is benign: the record written says the key has
+// history, which is true (its vote is in the log), and the log vouches
+// for it.
 func (s *Server) replaceShare(pk backend.Pubkey, blob []byte) error {
 	return s.writeShare(pk, blob, true)
 }
@@ -375,6 +378,26 @@ func (s *Server) replaceShare(pk backend.Pubkey, blob []byte) error {
 // errShareChanged: replaceShare found another stored record than the one
 // this runner holds, or none.
 var errShareChanged = errors.New("the stored share record is not the one this runner holds")
+
+// errNoLogRecord marks a failed share write that stopped before its mark
+// log record: it cost no record, so a promotion does not count it as a
+// try.
+var errNoLogRecord = errors.New("no mark log record written")
+
+// landed reports whether pk's stored record has hash h, reading it up to
+// three times: a store that just failed a write may fail a read as well.
+func (s *Server) landed(pk backend.Pubkey, h [32]byte) bool {
+	for try := range 3 {
+		if try > 0 {
+			time.Sleep(100 * time.Millisecond)
+		}
+		cur, err := s.Platform.Store.Get(shareKey(pk))
+		if err == nil {
+			return sha256.Sum256(cur) == h
+		}
+	}
+	return false
+}
 
 func (s *Server) writeShare(pk backend.Pubkey, blob []byte, replace bool) error {
 	_, committed := s.Hooks.ShareSet()
@@ -402,7 +425,7 @@ func (s *Server) writeShare(pk backend.Pubkey, blob []byte, replace bool) error 
 	s.shareSetMu.Lock()
 	defer s.shareSetMu.Unlock()
 	if err := held(); err != nil {
-		return err
+		return fmt.Errorf("%w: %w", errNoLogRecord, err)
 	}
 	next := make(map[backend.Pubkey][32]byte, len(s.shareHash)+1)
 	for k, v := range s.shareHash {
@@ -423,7 +446,7 @@ func (s *Server) writeShare(pk backend.Pubkey, blob []byte, replace bool) error 
 		// The write may have landed with its reply lost. Then the stored
 		// set is the one after: keep it, so the next write names the set
 		// the store holds and a start finds it vouched.
-		if cur, gerr := s.Platform.Store.Get(shareKey(pk)); gerr != nil || sha256.Sum256(cur) != next[pk] {
+		if !s.landed(pk, next[pk]) {
 			return err
 		}
 	}
@@ -917,11 +940,15 @@ func (s *Server) promote(pk backend.Pubkey, source uint64) {
 		s.promoteMu.Lock()
 		delete(s.promoting, pk)
 		n := 0
-		if err == nil {
+		switch {
+		case err == nil:
 			s.promoted[pk] = true
 			delete(s.promoteFailed, pk)
-		} else {
-			n = s.promoteFailed[pk].n + 1
+		default:
+			n = s.promoteFailed[pk].n
+			if !errors.Is(err, errNoLogRecord) {
+				n++ // only a try that wrote a log record counts
+			}
 			s.promoteFailed[pk] = promoteTry{epoch: epoch, n: n}
 		}
 		s.promoteMu.Unlock()
@@ -946,8 +973,9 @@ func (s *Server) promoteNow(pk backend.Pubkey, source uint64) error {
 		return nil
 	}
 	var floor uint64
-	wrote := false
+	wrote, reached := false, false
 	err := s.readShare(pk, func(rec *shareRecord, sec *[32]byte) error {
+		reached = true
 		if rec.History {
 			return nil
 		}
@@ -960,6 +988,9 @@ func (s *Server) promoteNow(pk backend.Pubkey, source uint64) error {
 		wrote = true
 		return s.replaceShare(pk, blob)
 	})
+	if err != nil && !reached {
+		err = fmt.Errorf("%w: %w", errNoLogRecord, err)
+	}
 	if err != nil {
 		return err
 	}
