@@ -12,8 +12,12 @@ type Lock struct {
 	Kind string // what was read: "s3 object lock", "gcs retention policy", "azure immutability policy"
 	Mode string // as the store names it: S3 COMPLIANCE or GOVERNANCE, GCS and Azure locked or unlocked
 	// Compliance: nobody can delete or overwrite a locked object before its
-	// retention ends, and nobody can shorten the retention (S3 compliance
-	// mode, a locked GCS retention policy, a locked Azure policy).
+	// retention ends, and nobody can shorten that object's retention (S3
+	// compliance mode, a locked GCS retention policy, a locked Azure
+	// policy). On S3 this is the bucket default for new objects, which the
+	// admin can still lower or remove later; the S3 client therefore sets
+	// each object's own retention (Env.RetainDays). GCS and Azure lock the
+	// policy itself.
 	Compliance bool
 	Retention  time.Duration // how long each object stays locked
 }
