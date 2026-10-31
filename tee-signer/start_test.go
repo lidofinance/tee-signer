@@ -69,7 +69,7 @@ func TestSetupBeforePlatform(t *testing.T) {
 	var opts platform.Options
 	ch := &fakeChannel{raw: sampleSetup(t, "nitro"), events: &events}
 	withChannel("nitro", ch, func() {
-		a := &startArgs{platformName: "nitro", setupSrc: "platform", given: map[string]string{"setup": "platform", "record": "none"},
+		a := &startArgs{platformName: "nitro", setupSrc: "platform", given: map[string]string{"setup": "platform"},
 			params: map[string]string{"clock": "nsm"}, stateDir: "/tmp/unused"}
 		s, plat, copyStore, err := startPlatform(context.Background(), a, recordingPlatform("nitro", &events, &opts), quietLog)
 		if err != nil {
@@ -94,7 +94,7 @@ func TestSetupBeforePlatform(t *testing.T) {
 			t.Fatalf("options %v", opts.Params)
 		}
 		if s.setup == nil || s.markSpec != "s3:bucket=signer-marks,region=eu-west-1" || s.signerID != "signer-1" ||
-			s.recordSpec != "none" || s.stateSpec != "" || s.maxValidators != 1024 || len(s.caPEM) == 0 ||
+			s.stateSpec != "" || s.maxValidators != 1024 || len(s.caPEM) == 0 ||
 			s.cfg.GenesisTime != 1_760_000_000 || s.stateCreate {
 			t.Fatalf("start values %+v", s)
 		}
@@ -123,7 +123,7 @@ func TestSetupRefusedBeforePlatform(t *testing.T) {
 		{name: "option the setup sets", raw: nitro, params: map[string]string{"kms_key_id": "arn:other"}, want: "-platform-opt kms_key_id"},
 		{name: "chain.json too", raw: nitro, given: map[string]string{"config": "/etc/signer/chain.json"}, want: "-config cannot be used with -setup"},
 		{name: "mark-create", raw: nitro, given: map[string]string{"mark-create": "true"}, want: "-mark-create cannot be used with -setup"},
-		{name: "DynamoDB record", raw: nitro, given: map[string]string{"record": "dynamodb:table=t,region=r"}, want: "-record dynamodb:table=t,region=r cannot be used"},
+		{name: "mark store", raw: nitro, given: map[string]string{"mark-store": "none"}, want: "-mark-store cannot be used with -setup"},
 	}
 	for _, c := range cases {
 		var events []string
@@ -233,7 +233,7 @@ func TestFlagPath(t *testing.T) {
 	var events []string
 	var opts platform.Options
 	a := &startArgs{platformName: "dev", params: map[string]string{"measurement": "m"}, markSpec: "file:/x", signerID: "s1",
-		recordSpec: "", maxValidators: 7}
+		maxValidators: 7}
 	s, _, _, err := startPlatform(context.Background(), a, recordingPlatform("dev", &events, &opts), quietLog)
 	if err != nil {
 		t.Fatal(err)
@@ -245,7 +245,7 @@ func TestFlagPath(t *testing.T) {
 
 func TestCheckSetupFlags(t *testing.T) {
 	ok := map[string]string{"setup": "platform", "listen": "tcp:0.0.0.0:7100", "state-dir": "/var/lib/signer",
-		"restart-floor": "true", "persist-watermarks": "false", "record": "none", "nts-clock": "true",
+		"restart-floor": "true", "persist-watermarks": "false", "nts-clock": "true",
 		"platform-opt": "map[]", "log-json": "true"}
 	if err := checkSetupFlags(ok); err != nil {
 		t.Fatal(err)
@@ -257,13 +257,29 @@ func TestCheckSetupFlags(t *testing.T) {
 		}
 	}
 	// The recovery flags that let a host weaken the signer are on the list.
-	for _, name := range []string{"mark-create", "state-create", "record-create"} {
+	for _, name := range []string{"mark-create", "state-create", "mark-store"} {
 		if _, ok := setupRefuses[name]; !ok {
 			t.Fatalf("-%s is not refused with -setup", name)
 		}
 	}
-	if err := checkSetupFlags(map[string]string{"record": "file:/tmp/r"}); err == nil {
-		t.Fatal("-record file: accepted")
+}
+
+// Off the dev platform a start names its mark store: the setup's, or
+// -mark-store on the flag path, where none is the explicit choice to run
+// without clone protection. On dev it may be left out.
+func TestMarkStoreChoice(t *testing.T) {
+	for _, c := range []struct {
+		platform, mark string
+		refused        bool
+	}{
+		{"dev", "", false}, {"dev", "none", false},
+		{"nitro", "", true}, {"azure", "", true}, {"gcp", "", true},
+		{"nitro", "none", false}, {"gcp", "gcs:bucket=b", false},
+	} {
+		err := checkFlags(c.platform, nil, true, c.mark)
+		if refused := err != nil && strings.Contains(err.Error(), "set -mark-store"); refused != c.refused {
+			t.Errorf("platform %s, -mark-store %q: %v, refused want %v", c.platform, c.mark, err, c.refused)
+		}
 	}
 }
 

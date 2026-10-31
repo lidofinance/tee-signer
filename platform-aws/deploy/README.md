@@ -13,10 +13,10 @@ setup ("Setup").
 | --- | --- |
 | `nitro-cli/Dockerfile` | builds nitro-cli v1.5.2 from source (Rust 1.94.1 image), applies `target-arch.patch`, and adds the kernel/init blobs |
 | `nitro-cli/target-arch.patch` | one change to `src/lib.rs` of nitro-cli: the kernel blob name follows `NITRO_CLI_TARGET_ARCH` when it is set, so an x86_64 machine can build an arm64 EIF |
-| `enclave/Dockerfile` | the generic enclave image: static runner and the flags that are the same for every operator (`-setup platform`, the NTS clock, `-record none`). Built into an EIF by `scripts/nitro-eif.sh`. The fixed vsock port map is in its comments |
+| `enclave/Dockerfile` | the generic enclave image: static runner and the flags that are the same for every operator (`-setup platform`, the NTS clock). Built into an EIF by `scripts/nitro-eif.sh`. The fixed vsock port map is in its comments |
 | `test-client-ca.pem` | public root certificate of a test PKI (`scripts/make-test-ca.sh`), for a test setup's `allowed_client_ca` (base64 of its DER). Its private key is not in the repo |
 | `kms-key-policy.json.tmpl` | key policy: `Decrypt`/`GenerateDataKey` only with `kms:RecipientAttestation:PCR0/1/2/3`; `Encrypt` for the key admin only with exactly the encryption context `purpose=record-creds` (the record credentials), so the admin cannot make a sealing key (`purpose=sealing`) or a mark log key (`signer-key`), which carry setup_hash (`platform-aws/nitro`, `slashing-log/docs/marklog.md`, "Record keys"); `DescribeKey` and `GetKeyPolicy` for the parent role, which the runner reads at start for key_release_hash (`platform-aws/nitro` ReleaseHash). `platform-aws/nitro/planting_test.go` evaluates these conditions. `scripts/kms-policy.sh` renders it per build to `build/nitro/kms-key-policy-<arch>.json` |
-| `main.tf` | KMS key (PCR0-3), parent role, enclave-enabled EC2 instance, the DynamoDB record table, its writer user, a deny on table writes for the parent role, and an optional inbound rule for the network entry (`entry_cidrs`). Optional `ssh_public_key` and `ssh_cidrs` give a key pair and an SSH rule for the operator. Variables `instance_type` (default `c6g.large`) and `region` (default `eu-central-1`) are the Graviton choice, see "Graviton (arm64)" |
+| `main.tf` | KMS key (PCR0-3), parent role, enclave-enabled EC2 instance, the record writer user (the mark log's S3 credentials), the mark bucket's policy (`mark_bucket`), and an optional inbound rule for the network entry (`entry_cidrs`). Optional `ssh_public_key` and `ssh_cidrs` give a key pair and an SSH rule for the operator. Variables `instance_type` (default `c6g.large`) and `region` (default `eu-central-1`) are the Graviton choice, see "Graviton (arm64)" |
 | `target/main.tf` | a second signer next to a running one, a handover target. Its own root module and state, so no plan of it can change the running signer. It reads the parent role, instance profile, security group and key pair by name. It makes a new KMS key that releases to the target EIF's PCR0..2 alone (the same PCR3, the parent role's read of the key and its policy, the admin's `record-creds` encrypt) and, with `instance = true`, a second `c6g.large` parent. The admin encrypts a second access key of the record writer under the new key. `scripts/tf-validate.sh` validates it |
 | `parent-run.sh` | parent setup: allocator, one vsock-proxy per route of the signer's setup (KMS, STS, the coarse-time host, the mark bucket, four NTS-KE), the host agent with the setup (`SETUP`), udprelay, `nitro-cli run-enclave`, the forwarder (network entry). Runs on x86_64 and arm64 parents (`SETUP`, `CPU_COUNT`, `MEMORY_MIB`) |
 | `../../platform-aws/cmd/forwarder` | the network entry: a plain TCP to vsock byte forwarder, no TLS. Built by `scripts/build-runner.sh`, started by `parent-run.sh` |
@@ -67,9 +67,9 @@ SETUP=signer-2.bin platform-aws/deploy/parent-run.sh               # on the pare
   `hostagent -setup FILE -proxy-routes` prints them; `parent-run.sh` starts
   one vsock-proxy per line and writes the allowlist. The coarse-time URLs
   name `{region}`; the runner fills in the setup's region.
-- The setup's mark log is the clone protection (see "Clone guard"). The S3
+- The setup's mark log is the clone protection (see "Clone protection"). The S3
   writer credentials stay at `record/writer-credentials.kms` on the parent.
-- `-mark-create`, `-state-create`, `-record-create` and the flags the setup
+- `-mark-create`, `-state-create` and the flags the setup
   replaces are refused with `-setup`, and the runner hands over to no one.
 - `scripts/nitro-eif.sh` refuses `CHAIN`, `CHAIN_JSON`, `CLIENT_CA`,
   `REGION`, `KMS_KEY_ARN` and `MARK_BUCKET`, and checks that the image holds
@@ -147,7 +147,7 @@ The signing client connects to the forwarder over TCP and never sees vsock (see
   the enclave id as module id, and a leaf certificate with the subject
   `<module id>.<region>.aws`. It has no public key.
 
-## Clone guard
+## Clone protection
 
 A parent can run up to four enclaves from one EIF and feed each the same
 sealed share blob. Each would unseal it and keep its own slashing state. The
@@ -158,11 +158,12 @@ record, and from then on it signs nothing new
 (`slashing-log/docs/marklog.md`).
 
 The log only helps if the parent cannot write it. The parent holds the
-instance role, so the role is denied every write, and the writer is an IAM
-user whose access key only the enclave can read:
+instance role, so the mark bucket's policy denies the role every write, and
+the writer is an IAM user whose access key only the enclave can read:
 
-1. `terraform apply` creates the user `signer-record-writer-<node>` and the
-   deny on the parent role.
+1. `terraform apply` creates the user `signer-record-writer-<node>` and,
+   with `mark_bucket` set, the bucket policy that lets the user write
+   records and denies the parent role.
 2. The key admin creates an access key for that user, writes
    `{"access_key_id": "...", "secret_access_key": "..."}`, encrypts it with
    `aws kms encrypt --key-id <enclave key> --encryption-context
@@ -183,12 +184,19 @@ no new trusted party. SigV4 signing uses the enclave's clock; a host that
 moves it can only make AWS refuse the request (the runner then refuses to
 sign).
 
-The runner also has a DynamoDB record store (`tee-signer/record`): a
-conditional `PutItem` on the item's version, with record values sealed with
-the KMS data key and bound to that version. `main.tf` creates its table
-`signer-records`, gives the writer user GetItem and PutItem on its own key
-only (`dynamodb:LeadingKeys`), and denies table writes to the parent role.
-The generic image runs `-record none` and does not use it.
+The runner had a second clone guard, a DynamoDB record per node
+(`-record dynamodb:...`). The mark log replaced it and the runner no longer
+has it. A deployment made with an older `main.tf` holds the table
+`signer-records` with deletion protection, so `terraform apply` of this
+file cannot delete it. Drop the table from the state first, then delete it
+by hand if it holds nothing you keep:
+
+    terraform state rm aws_dynamodb_table.records
+    aws dynamodb update-table --table-name signer-records --no-deletion-protection-enabled
+    aws dynamodb delete-table --table-name signer-records
+
+The apply then removes the writer user's DynamoDB policy and the parent
+role's deny on table writes.
 
 ## Mark log (S3 Object Lock)
 
@@ -606,7 +614,7 @@ The full order of a deploy, with the setup, is in
    `admin_role_arn`, `ami_id`, `subnet_id` and, if wanted, `mark_bucket`,
    `entry_cidrs`, `ssh_public_key` and `ssh_cidrs`. Terraform state stays
    outside the repo.
-3. The writer credentials (see "Clone guard", steps 2 and 3).
+3. The writer credentials (see "Clone protection", steps 2 and 3).
 4. Copy the EIF, the parent binaries and the files of
    `platform-aws/deploy/` to the instance, install the Nitro CLI, and run
    `SETUP=<setup> parent-run.sh` in a new session.

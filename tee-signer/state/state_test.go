@@ -18,7 +18,6 @@ import (
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
-	"github.com/lidofinance/tee-signer/tee-signer/record"
 	"github.com/lidofinance/tee-signer/trusted-time/clock"
 )
 
@@ -110,9 +109,6 @@ type node struct {
 	pk       backend.Pubkey
 	signer   *core.Signer
 	hooks    *Hooks
-	// rec, if set, is the node's external record (clone guard).
-	rec   record.Store
-	guard *record.Guard
 }
 
 func newNode(t testing.TB, mode Mode) *node {
@@ -136,17 +132,6 @@ func (n *node) start(t testing.TB) error {
 	h, err := New(n.cfg, n.mode, clk, n.store, dev.NewDevSealer(), quiet)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if n.rec != nil {
-		g, err := record.New(n.rec, "node-1", dev.NewDevSealer(), 0, quiet)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := g.Claim(context.Background(), false); err != nil {
-			return err
-		}
-		h.UseGuard(g)
-		n.guard = g
 	}
 	s, err := core.NewSigner(n.cfg, 1, 0, h)
 	if err != nil {
@@ -484,122 +469,6 @@ func TestFloorBrokenByClockRewindAtRestart(t *testing.T) {
 	n.clk.set(at(105, 5))
 	if err := n.attest(104, 105, 2); err != nil {
 		t.Fatalf("expected a double vote for target 105, got %v", err)
-	}
-}
-
-// The clone guard's record is a third floor that does not trust the clock:
-// the same rewind is refused when the node keeps an external record.
-func TestRecordFloorStopsClockRewind(t *testing.T) {
-	n := newNode(t, Mode{Floor: true, FloorMargin: 2})
-	n.rec = record.NewMemStore()
-	n.clk.set(at(100, 5))
-	if err := n.start(t); err != nil {
-		t.Fatal(err)
-	}
-	n.clk.set(at(105, 5))
-	if err := n.attest(104, 105, 1); err != nil { // record now covers 106
-		t.Fatal(err)
-	}
-	n.clk.set(at(102, 5))
-	if err := n.start(t); err != nil {
-		t.Fatal(err)
-	}
-	if f, _ := n.hooks.Floor(n.pk); f != 106 {
-		t.Fatalf("floor %d, want the record's 106 over the clock's 104", f)
-	}
-	n.clk.set(at(105, 5))
-	wantSlashing(t, n.attest(104, 105, 2))
-	n.clk.set(at(107, 5))
-	if err := n.attest(106, 107, 1); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// Two runners from one image share the sealed share and the record. They
-// run at the same time with the same honest clock, and the host sends each
-// a different vote for every target. Without the record both sign (double
-// votes); with it, at most one runner signs per target, and the one that
-// lost the record refuses everything new.
-func TestCloneGuardOnlyOneSigns(t *testing.T) {
-	run := func(withRecord bool) (doubles, aSigned, bSigned int, aErr error) {
-		a := newNode(t, Mode{Floor: true, FloorMargin: 2})
-		if withRecord {
-			a.rec = record.NewMemStore()
-		}
-		a.clk.set(at(200, 5))
-		if err := a.start(t); err != nil {
-			t.Fatal(err)
-		}
-		b := newNode(t, Mode{Floor: true, FloorMargin: 2})
-		b.sk, b.pk, b.clk, b.rec = a.sk, a.pk, a.clk, a.rec // same share, same record
-		b.store.restore(a.store.snapshot())                 // same sealed state
-		a.clk.set(at(203, 5))
-		if err := a.attest(202, 203, 0xa); err != nil { // a signs before the clone exists
-			t.Fatal(err)
-		}
-		aSigned++
-		if err := b.start(t); err != nil { // the clone starts and claims the record
-			t.Fatal(err)
-		}
-		for e := uint64(204); e < 212; e++ {
-			a.clk.set(at(e, 5))
-			var ea, eb error
-			if e%2 == 0 { // vary who is asked first
-				ea = a.attest(e-1, e, 0xa)
-				eb = b.attest(e-1, e, 0xb)
-			} else {
-				eb = b.attest(e-1, e, 0xb)
-				ea = a.attest(e-1, e, 0xa)
-			}
-			if ea == nil {
-				aSigned++
-			} else {
-				aErr = ea
-			}
-			if eb == nil {
-				bSigned++
-			}
-			if ea == nil && eb == nil {
-				doubles++
-			}
-		}
-		return
-	}
-	d, as, bs, _ := run(false)
-	t.Logf("without the record: a signed %d, b signed %d, double votes %d", as, bs, d)
-	if d == 0 {
-		t.Fatal("control: expected double votes without the record")
-	}
-	d, as, bs, aErr := run(true)
-	t.Logf("with the record: a signed %d, b signed %d, double votes %d; a's refusal: %v", as, bs, d, aErr)
-	if d != 0 || bs == 0 {
-		t.Fatalf("with the record: %d double votes, b signed %d", d, bs)
-	}
-	if aErr == nil || backend.StatusOf(aErr) != backend.StatusStorage {
-		t.Fatalf("a should be refused for the lost record, got %v", aErr)
-	}
-}
-
-// The runner refuses to sign when it cannot advance the record, and signs
-// again once the record is reachable.
-func TestCloneGuardRefusesWithoutRecord(t *testing.T) {
-	n := newNode(t, Mode{Floor: true, FloorMargin: 2})
-	rs := record.NewMemStore()
-	n.rec = rs
-	n.clk.set(at(300, 5))
-	if err := n.start(t); err != nil {
-		t.Fatal(err)
-	}
-	n.clk.set(at(303, 5))
-	rs.Fail = fmt.Errorf("table unreachable")
-	err := n.attest(302, 303, 1)
-	wantStatus(t, err, backend.StatusStorage)
-	if !strings.Contains(err.Error(), "cannot advance record") {
-		t.Fatal(err)
-	}
-	rs.Fail = nil
-	if err := n.attest(302, 303, 1); err != nil {
-		t.Fatal(err)
 	}
 }
 

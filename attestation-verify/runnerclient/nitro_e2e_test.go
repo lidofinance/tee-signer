@@ -140,7 +140,7 @@ func launchNitroRunner(t *testing.T, bin string, fake *fakeNSM, args ...string) 
 	t.Cleanup(func() { logFile.Close() })
 	base := []string{"-platform", "nitro", "-platform-opt", "test_nsm_url=" + fake.srv.URL,
 		"-config", "../../governance/chains/chain.testnet.json", "-state-dir", filepath.Join(dir, "state"),
-		"-listen", listen, "-record", "none"}
+		"-listen", listen, "-mark-store", "none"}
 	cmd := exec.Command(bin, append(base, args...)...)
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	if err := cmd.Start(); err != nil {

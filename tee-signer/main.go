@@ -4,10 +4,10 @@
 // serve mutual TLS (-tls-client-ca).
 //
 //	runner -platform dev -config chain.json -state-dir ./state -listen tcp:127.0.0.1:7100
-//	runner -platform azure -setup platform -state-dir /var/lib/signer -listen tcp:127.0.0.1:7100 -record none ...
+//	runner -platform azure -setup platform -state-dir /var/lib/signer -listen tcp:127.0.0.1:7100 ...
 //
 // See README.md for the flags that matter: the restart rule, the clock,
-// the clone guard, TLS and the platform options. With -setup the operator's
+// the mark log, TLS and the platform options. With -setup the operator's
 // values come from the signer's setup instead of flags (start.go).
 //
 // The platforms are build-time plugins, one runner binary per cloud
@@ -43,7 +43,6 @@ import (
 	"github.com/lidofinance/tee-signer/signer-protocol/transport"
 	"github.com/lidofinance/tee-signer/slashing-log"
 	"github.com/lidofinance/tee-signer/tee-signer/attls"
-	"github.com/lidofinance/tee-signer/tee-signer/record"
 	"github.com/lidofinance/tee-signer/tee-signer/server"
 	"github.com/lidofinance/tee-signer/tee-signer/state"
 	"github.com/lidofinance/tee-signer/trusted-time/clock"
@@ -72,7 +71,7 @@ func main() {
 // platform starts: no plaintext import outside dev (debug builds only have
 // it, see debugimport.go), mutual TLS on every network listener of the
 // cloud platforms (tcp on gcp and azure, vsock and tcp on nitro), no plain
-// vsock in release builds, and an explicit clone guard choice.
+// vsock in release builds, and an explicit mark log choice.
 //
 // On Nitro the parent instance forwards traffic into the enclave over vsock
 // and is not trusted, so a vsock listener is a network listener like a TCP
@@ -82,7 +81,7 @@ func main() {
 // with fake hardware (unixOffDevAllowed).
 //
 // haveCA: the client CA comes from -tls-client-ca or from the setup.
-func checkFlags(platformName string, listens []transport.Addr, haveCA bool, recordSpec, markSpec string) error {
+func checkFlags(platformName string, listens []transport.Addr, haveCA bool, markSpec string) error {
 	cloud := platformName != "dev"
 	if err := checkPlainImport(platformName); err != nil {
 		return err
@@ -104,12 +103,11 @@ func checkFlags(platformName string, listens []transport.Addr, haveCA bool, reco
 			}
 		}
 	}
-	markOn := markSpec != "" && markSpec != "none"
-	if markOn && recordSpec != "" && recordSpec != "none" {
-		return errors.New("-mark-store replaces -record: the mark log refuses a second instance itself (set -record none or leave it out)")
-	}
-	if cloud && recordSpec == "" && !markOn {
-		return fmt.Errorf("platform %s: set -mark-store (the locked mark log), or -record (dynamodb:..., or none to run without clone protection)", platformName)
+	// The mark log is the clone protection: a second instance's write
+	// conflicts. Off dev the choice is explicit; the setup path always has
+	// the setup's store.
+	if cloud && markSpec == "" {
+		return fmt.Errorf("platform %s: set -mark-store (the locked mark log, or none to run without clone protection)", platformName)
 	}
 	return nil
 }
@@ -139,12 +137,8 @@ func run() (err error) {
 		maxValidators = flag.Uint("max-validators", 1024, "capacity of the signer")
 		sealedImport  = flag.Bool("sealed-import", true, "accept IMPORT_SHARE_SEALED (shares encrypted to this boot's attested key)")
 		tlsCA         = flag.String("tls-client-ca", "", "PEM file of the CA certificate(s) that issue client certificates; enables mutual TLS on tcp and vsock listeners")
-		recordSpec    = flag.String("record", "", "clone guard record: none, file:DIR (tests), dynamodb:table=T,region=R[,endpoint=URL] (AWS build only); required off the dev platform")
-		recordKey     = flag.String("record-key", "", "this node's record key (same for every instance of one node's image)")
-		recordAhead   = flag.Uint64("record-ahead", 0, "epochs the record covers past the watermark (fewer writes, more refused epochs for a clone)")
-		recordCreate  = flag.Bool("record-create", false, "create a missing record even if shares are stored (after losing the record)")
-		markSpec      = flag.String("mark-store", "", "mark log (one device mark in a locked append-only log): none, file:DIR (tests), s3:bucket=B,region=R[,endpoint=URL] (AWS build), gcs:bucket=B[,endpoint=URL] (GCP build), azblob:account=A,container=C[,endpoint=URL][,subscription=S,resource_group=G] (Azure build; the lock check needs the last two)")
-		markSigner    = flag.String("mark-signer", "", "this signer's log ID in the mark store (default: -record-key)")
+		markSpec      = flag.String("mark-store", "", "mark log (one device mark in a locked append-only log): none, file:DIR (tests), s3:bucket=B,region=R[,endpoint=URL] (AWS build), gcs:bucket=B[,endpoint=URL] (GCP build), azblob:account=A,container=C[,endpoint=URL][,subscription=S,resource_group=G] (Azure build; the lock check needs the last two); required off the dev platform")
+		markSigner    = flag.String("mark-signer", "", "this signer's log ID in the mark store")
 		markCreate    = flag.Bool("mark-create", false, "start a mark log that has no valid record even if shares are stored or objects lie under record names (after losing the log, or a key release that no longer opens it)")
 		markRaiseSlot = flag.Int("mark-raise-slot", -1, "slot of each epoch at which the mark is raised for the next epoch; -1 = three quarters into the epoch (24 of 32)")
 		stateSpec     = flag.String("state-store", "", "durable copy of the sealed state (shares, wrapped sealing key, handover order bodies) in an object store, same syntax as -mark-store; restored at start on azure, gcp and dev (docs/durable-state.md)")
@@ -179,9 +173,6 @@ func run() (err error) {
 		return err
 	}
 	signerID := *markSigner
-	if signerID == "" {
-		signerID = *recordKey
-	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -192,7 +183,7 @@ func run() (err error) {
 	boot, plat, copyStore, err := startPlatform(ctx, &startArgs{
 		platformName: *platformName, setupSrc: *setupSrc, given: given, params: params,
 		listens: addrs, stateDir: *stateDir, clockCheck: *clockCheck,
-		tlsCA: *tlsCA, recordSpec: *recordSpec, markSpec: *markSpec, stateSpec: *stateSpec, signerID: signerID,
+		tlsCA: *tlsCA, markSpec: *markSpec, stateSpec: *stateSpec, signerID: signerID,
 		stateCreate: *stateCreate, maxValidators: uint32(*maxValidators),
 	}, newPlatform, log)
 	if err != nil {
@@ -293,14 +284,13 @@ func run() (err error) {
 	// (the setup path loads only those).
 	var claimed markClaim
 	if markOn {
-		// Mark log: claim it before any share loads; it replaces the clone
-		// guard. The state copy, if any, was restored in the platform.
+		// Mark log: claim it before any share loads. The state copy, if
+		// any, was restored in the platform.
 		if claimed, err = setupMarkLog(ctx, plat, hooks, *platformName, boot.markSpec, signerID, *markCreate, boot.setup, log); err != nil {
 			return err
 		}
-	} else if err := setupGuard(ctx, plat, hooks, *platformName, boot.recordSpec, *recordKey, *recordAhead, *recordCreate, log); err != nil {
-		// Clone guard: claim the node's record before any share loads.
-		return err
+	} else if *platformName != "dev" {
+		log.Warn("no mark log (-mark-store none): two instances of this image can sign conflicting messages")
 	}
 
 	// Config updates (setupstate.go): the core starts with the config in
@@ -406,7 +396,7 @@ func run() (err error) {
 		"setup", boot.setup != nil,
 		"restart_mode", mode.String(), "floor_margin", margin,
 		"clock", plat.Clock.Source(), "clock_trusted", plat.Clock.Trusted(),
-		"record", hooks.GuardStatus(), "state_copy", copyStore.status(), "shares_loaded", n, "plaintext_import", plainImportStatus(), "sealed_import", *sealedImport,
+		"record", hooks.MarkLogStatus(), "state_copy", copyStore.status(), "shares_loaded", n, "plaintext_import", plainImportStatus(), "sealed_import", *sealedImport,
 		"tls_key_sha256", fmt.Sprintf("%x", srv.TLSKeyHash), "image_check", imageState,
 		"max_conns", *maxConns, "max_handshakes", *maxHandshakes, "max_inflight_mib", *maxInflight, "idle_timeout", idleTimeout.String())
 	if !plat.Clock.Trusted() && mode.Floor && !mode.Persist {
@@ -439,45 +429,6 @@ func run() (err error) {
 	}
 	log.Info("runner stopped")
 	return errors.Join(errs...)
-}
-
-// setupGuard opens the record store, claims the node's record and adds the
-// guard to the hooks. -record none (or empty on dev) runs without it.
-func setupGuard(ctx context.Context, plat *platform.Platform, hooks *state.Hooks, platformName, spec, key string,
-	ahead uint64, create bool, log *slog.Logger) error {
-	env := record.Env{HTTP: plat.HTTPClient, Creds: plat.RecordCredentials}
-	if env.Creds == nil && platformName == "dev" {
-		env.Creds = record.EnvCredentials()
-	}
-	store, err := record.Open(spec, env)
-	if err != nil {
-		return err
-	}
-	if store == nil {
-		if platformName != "dev" {
-			log.Warn("no clone guard (-record none): two instances of this image can sign conflicting messages")
-		}
-		return nil
-	}
-	if key == "" {
-		return errors.New("-record needs -record-key")
-	}
-	g, err := record.New(store, key, plat.Sealer, ahead, log)
-	if err != nil {
-		return err
-	}
-	g.AllowCreate = create
-	stored, err := plat.Store.List("shares/")
-	if err != nil {
-		return err
-	}
-	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	if err := g.Claim(cctx, len(stored) > 0); err != nil {
-		return err
-	}
-	hooks.UseGuard(g)
-	return nil
 }
 
 // reportExit hands the line main prints for err to the platform's host,
@@ -531,7 +482,7 @@ func waitFirstReading(ctx context.Context, a *clock.Anchored, wait time.Duration
 func setupMarkLog(ctx context.Context, plat *platform.Platform, hooks *state.Hooks, platformName, spec, signerID string,
 	create bool, st *setup.Setup, log *slog.Logger) (markClaim, error) {
 	if signerID == "" {
-		return markClaim{}, errors.New("-mark-store needs -mark-signer (or -record-key)")
+		return markClaim{}, errors.New("-mark-store needs -mark-signer")
 	}
 	env := markstore.Env{HTTP: plat.HTTPClient, AWSCreds: plat.RecordCredentials}
 	if plat.StorageToken != nil {
@@ -543,7 +494,7 @@ func setupMarkLog(ctx context.Context, plat *platform.Platform, hooks *state.Hoo
 		env.ARMToken, env.ARMTokenRefused = c.Token, c.Invalidate
 	}
 	if platformName == "dev" && env.AWSCreds == nil {
-		env.AWSCreds = record.EnvCredentials()
+		env.AWSCreds = envCredentials()
 	}
 	if plat.Keys == nil {
 		return markClaim{}, fmt.Errorf("platform %s has no key release for the mark log", platformName)

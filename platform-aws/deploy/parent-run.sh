@@ -88,7 +88,7 @@ nohup "$HERE/udprelay" -listen vsock:any:7102 >/tmp/udprelay.log 2>&1 &
 # 3. Host agent: the setup, sealed blobs and instance role credentials over
 #    vsock 7101. record/writer-credentials.kms must be in the store before
 #    the first start: the mark bucket's S3 writer credentials, encrypted
-#    under the enclave's KMS key by the key admin (README.md, "Clone guard").
+#    under the enclave's KMS key by the key admin (README.md, "Clone protection").
 #    If the runner fails, it sends its error line to the agent before it
 #    exits (a refused setup too): see $STATE_DIR/last-exit.txt and
 #    /tmp/hostagent.log.

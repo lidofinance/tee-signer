@@ -805,8 +805,8 @@ tests use a fake provider and fakes for the runner's own calls
 
 ## Limits
 
-- The image runs `-record none`. The setup's mark log is the clone
-  protection.
+- The setup's mark log is the clone protection; the runner has no other
+  clone guard.
 - Logs: stdio of the containers is on by default (`STDIO=enable`), so
   `az container logs` works. `STDIO=disable` closes it. The policy hash
   differs between the two.

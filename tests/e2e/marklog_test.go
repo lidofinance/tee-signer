@@ -138,13 +138,6 @@ func TestE2EMarkLog(t *testing.T) {
 	if !waitExit(t, r2, 20*time.Second) {
 		t.Fatal("runner started with its mark store unreachable")
 	}
-
-	// -mark-store with -record: refused.
-	r3 := newRunner(t, "both", c, addr, "-mark-store", "file:"+t.TempDir(), "-mark-signer", "s3", "-record", "file:"+t.TempDir(), "-record-key", "n")
-	r3.start()
-	if !waitExit(t, r3, 20*time.Second) || !strings.Contains(r3.logText(), "-mark-store replaces -record") {
-		t.Fatal("runner took both -mark-store and -record")
-	}
 }
 
 // A clone from the same sealed state, on the same mark log: the second

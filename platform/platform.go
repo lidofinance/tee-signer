@@ -115,9 +115,10 @@ type Platform struct {
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
 	// Close releases platform resources (devices, sessions). May be nil.
 	Close func() error
-	// RecordCredentials, if set, signs requests to the clone guard's record
-	// store (DynamoDB on AWS). They must be credentials the host does not
-	// hold. May be nil.
+	// RecordCredentials, if set, signs requests to the mark log's and the
+	// state copy's object store (S3 on AWS): the record writer's
+	// credentials. They must be credentials the host does not hold. May be
+	// nil.
 	RecordCredentials func(ctx context.Context) (Credentials, error)
 	// StorageToken, if set, returns an OAuth bearer token for the platform's
 	// object store, for the mark log (runner/markstore): on GCP the

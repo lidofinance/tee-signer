@@ -47,7 +47,7 @@ must be the same.
 
 | Cloud | Image | What is fixed in it |
 | --- | --- | --- |
-| AWS | Nitro EIF for arm64 (Graviton `c6g.large`), `scripts/nitro-eif.sh aarch64` | runner with `platform_aws,nts`, `-setup platform`, NTS clock, `-record none`, the fixed vsock port map; no DynamoDB, no `-record-key` |
+| AWS | Nitro EIF for arm64 (Graviton `c6g.large`), `scripts/nitro-eif.sh aarch64` | runner with `platform_aws,nts`, `-setup platform`, NTS clock, the fixed vsock port map; no DynamoDB, no `-record` |
 | Azure | container with the operator's network entry (`NETWORK`), `platform-azure/deploy/build-image.sh`; CCE policy from `deploy.sh policy` with `STDIO=enable` | the whole command (the entry's start, if any, then the runner with `-setup platform`); `SIGNER_SETUP` and the entry's credential are wildcard rules |
 | GCP | Confidential Space workload with the operator's `NETWORK_ENTRY` (default `public`), `platform-gcp/deploy/build-image.sh` | entrypoint with `-setup platform`; `log_redirect` always |
 

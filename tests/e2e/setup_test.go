@@ -259,7 +259,6 @@ func TestE2ESetupRefused(t *testing.T) {
 		{"client CA file too", []string{"-setup", "file:" + goodFile, "-tls-client-ca", caFile}, nil, "-tls-client-ca cannot be used with -setup"},
 		{"mark-create", []string{"-setup", "file:" + goodFile, "-mark-create"}, nil, "-mark-create cannot be used with -setup"},
 		{"state-create", []string{"-setup", "file:" + goodFile, "-state-create"}, nil, "-state-create cannot be used with -setup"},
-		{"record-create", []string{"-setup", "file:" + goodFile, "-record-create"}, nil, "-record-create cannot be used with -setup"},
 		{"another mark store", []string{"-setup", "file:" + goodFile, "-mark-store", "file:/tmp/x"}, nil, "-mark-store cannot be used with -setup"},
 	}
 	for _, c := range cases {

@@ -296,7 +296,7 @@ has passed.
 | What the admin cannot do | delete or overwrite a locked version ("can't be overwritten or deleted by any user, including the root user") | delete or replace a retained object; reduce or remove the locked policy | modify or delete a locked blob ("not even by users with account administrative privileges") |
 | What the admin can do | add versions and delete markers (the reader lists every version) | create new names | create new names |
 | Client | `platform-aws/s3log`, SigV4 of our own, `platform_aws` | `platform-gcp/gcslog`, JSON API, `platform_gcp` | `platform-azure/azlog`, Blob REST, `platform_azure` |
-| Credentials | the enclave's record credentials (an IAM key the enclave holds, as for DynamoDB) | the workload's federated token (Confidential Space, WIF; the same as for KMS) | the container group's managed identity, resource `https://storage.azure.com/` |
+| Credentials | the enclave's record credentials (an IAM key only the enclave can decrypt) | the workload's federated token (Confidential Space, WIF; the same as for KMS) | the container group's managed identity, resource `https://storage.azure.com/` |
 | Lock check reads | `GET /?object-lock` (GetObjectLockConfiguration); needs `s3:GetBucketObjectLockConfiguration` | `GET /storage/v1/b/B?fields=retentionPolicy`; needs `storage.buckets.get` | the management plane's immutability policy of the container; needs a token for `https://management.azure.com/`, the subscription and the resource group, and read access to the policy |
 | `-mark-store` | `s3:bucket=B,region=R[,endpoint=URL]` | `gcs:bucket=B[,endpoint=URL]` | `azblob:account=A,container=C[,endpoint=URL][,subscription=S,resource_group=G[,arm_endpoint=URL]]` |
 

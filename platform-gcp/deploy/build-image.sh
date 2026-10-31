@@ -133,7 +133,7 @@ docker image inspect "$LOCAL_RUNNER_IMAGE" --format '{{json .Config.Labels}}' | 
 # them, and no recovery flag.
 grep -q -F -- "/runner -platform gcp -setup platform " "$OUT/runner.entrypoint" || die "the image entrypoint lacks -setup platform"
 for not in " -config " " -tls-client-ca " " -platform-opt " " -mark-store " " -state-store " " -mark-signer " \
-  " -mark-create" " -state-create" " -record-create" "service_account="; do
+  " -mark-create" " -state-create" " -record" "service_account="; do
   ! grep -q -F -- "$not" "$OUT/runner.entrypoint" || die "the image entrypoint has$not"
 done
 # The NTS clock, and no -clock flag that would replace it.

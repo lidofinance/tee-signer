@@ -21,7 +21,7 @@ the platforms of the tags it was built with:
 
 | Tag | `-platform` | What else the tag brings |
 | --- | --- | --- |
-| `platform_aws` | `nitro` | the AWS SDK (KMS, request signing), the NSM and CBOR code, vsock (`signer-protocol/transport/vsock.go`), the DynamoDB record store (`tee-signer/record/dynamodb.go`), the host agent client |
+| `platform_aws` | `nitro` | the AWS SDK (KMS, request signing), the NSM and CBOR code, vsock (`signer-protocol/transport/vsock.go`), the S3 client of the mark log (`platform-aws/s3log`), the host agent client |
 | `platform_azure` | `azure` | nothing outside the standard library |
 | `platform_gcp` | `gcp` | nothing outside the standard library |
 | `platform_dev` | `dev` | nothing outside the standard library |
@@ -128,9 +128,9 @@ make release-gate  # the release gate: self-test, tree check, every runner build
 
 ```sh
 runner -platform dev|nitro|gcp|azure -setup platform|file:PATH -listen tcp:...,unix:...,vsock:any:7100 \
-       -record none [-clock ...] [-state-dir DIR]
-runner -platform dev -config chain.json -listen ... [-tls-client-ca ca.pem] [-mark-store ...] \
-       [-record none|file:DIR|dynamodb:table=T,region=R -record-key NODE]
+       [-clock ...] [-state-dir DIR]
+runner -platform dev -config chain.json -listen ... [-tls-client-ca ca.pem] \
+       [-mark-store none|file:DIR|s3:...|gcs:...|azblob:... -mark-signer NAME]
 ```
 
 ### Setup
@@ -160,8 +160,7 @@ The setup format is in `attestation-verify/docs/attestation-statement.md`.
 - With `-setup` the runner refuses the flags the setup replaces (`-config`,
   `-tls-client-ca`, `-max-validators`, `-mark-store`, `-mark-signer`,
   `-state-store`, `-floor-margin`), the recovery flags (`-mark-create`,
-  `-state-create`, `-record-create`), the DynamoDB guard, and a
-  `-platform-opt` the setup sets.
+  `-state-create`), and a `-platform-opt` the setup sets.
 - A release build hands its shares over under an approver-signed handover
   order (HANDOVER_ORDER, HANDOVER) and takes them as a handover target
   (IMPORT_HANDOVER; `signer-protocol/docs/protocol.md`, "Handover"). A
@@ -199,7 +198,8 @@ Before the platform starts, the runner refuses: `-allow-import` on any
 platform but `dev` (debug build); a TCP listener without a client CA on
 `gcp` or `azure`; a TCP or vsock listener without one on `nitro`; a plain
 vsock listener in a release build; a CA file that holds a private key; no
-`-record` choice on a cloud platform (`none` must be explicit); a floor
+`-mark-store` on a cloud platform without a setup (`none`, no clone
+protection, must be explicit); a floor
 margin below `max_epochs_ahead + 1`; a platform the binary was not built
 with; and a binary built with no platform tag.
 
@@ -428,30 +428,18 @@ Cost per restart: votes for targets `E`, `E+1` and `E+2` and proposals in
 those epochs are refused. Non-slashable types are not affected by the
 floor.
 
-## Clone guard
+## Clone protection
 
-`tee-signer/record`, `-record` and `-record-key`. A host that starts two
-runners from one image and feeds both the same sealed share would get two
-independent slashing states. The guard is an external record per node
-that only moves forward through conditional writes on a version number:
+A host that starts two runners from one image and feeds both the same
+sealed share would get two independent slashing states. The mark log
+(next section) stops that: each runner claims the log at start, and once a
+second instance has claimed it, the first one's next write conflicts and it
+signs nothing new. A cloud start without a mark log is refused unless the
+flag path says `-mark-store none`.
 
-- At start the runner reads the record and writes `version+1` with a
-  random owner ID (claim). The epoch in the record is the highest epoch
-  the previous owner may have signed for; the runner refuses everything
-  at or below it.
-- Before the core raises a commit-ahead watermark past the epoch the
-  record covers, the runner writes `version+1` with the new epoch. If the
-  version moved, another instance has claimed the record, and this runner
-  refuses every new slashable signature (`SC_ERR_STORAGE`). If the store
-  is unreachable, the runner refuses to sign until it is back.
-- Values are sealed with the platform sealer and bound to key and
-  version. A missing record on a node that holds shares stops the start
-  (`-record-create` overrides).
-
-Stores: `file:DIR` (flock, for tests on one host) and
-`dynamodb:table=...,region=...` (conditional `PutItem`). The mark log does
-the clone guard's job, so the images run `-record none` (explicit; the
-runner refuses a cloud start without a choice).
+The runner had a second guard, an external record per node in DynamoDB
+or a file (`-record`, `-record-key`). The mark log replaced it, and the
+runner no longer has the flags.
 
 ## Mark log
 
@@ -565,8 +553,8 @@ approves an update that allows the image.
   measurement is not on the signer's `allowed_image_measurements` in force.
   Before a new image runs on a signer, that list must name it: a locked
   update, or a new setup that lists it and takes the shares by handover.
-- A cloud start needs an explicit `-record` choice; the images run
-  `-record none` with the mark log.
+- A cloud start needs a mark log: the setup's, or on the flag path
+  `-mark-store` (`none` must be explicit). The images take the setup's.
 - Release images have no plaintext import: shares go in sealed, by
   handover.
 - Keep the mark log bucket's retention lock; the runner refuses to start
