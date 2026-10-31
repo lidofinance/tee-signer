@@ -114,6 +114,20 @@ func checkFlags(platformName string, listens []transport.Addr, haveCA bool, reco
 	return nil
 }
 
+// checkClock is the clock rule of checkFlags. It runs once the platform is
+// built, because only then is the clock known. Off the dev platform the
+// clock must be one the host cannot move (the NTS clock of -nts-clock in
+// the images): the restart floor, the import floor, the certificate dates
+// and the mark log age check all read it. A cloud platform on the system
+// clock is refused. Debug builds, which no cloud image is, keep it for the
+// e2e tests with fake hardware (untrustedClockAllowed).
+func checkClock(platformName string, c platform.Clock) error {
+	if platformName == "dev" || c.Trusted() || untrustedClockAllowed() {
+		return nil
+	}
+	return fmt.Errorf("platform %s: clock %s is not trusted (the host can set it); run the NTS clock (-nts-clock)", platformName, c.Source())
+}
+
 func run() (err error) {
 	if len(platforms) == 0 {
 		return errNoPlatform
@@ -243,6 +257,11 @@ func run() (err error) {
 		plat.Clock = &clock.Anchored{Src: q, MaxAge: *clockMaxAge, MaxAdvance: *clockMaxAdv, Interval: *clockInterval, TrustedSrc: true}
 	} else if *clockKind != "platform" {
 		return fmt.Errorf("unknown -clock %q", *clockKind)
+	}
+	if !*clockCheck {
+		if err := checkClock(*platformName, plat.Clock); err != nil {
+			return err
+		}
 	}
 	if a, ok := plat.Clock.(*clock.Anchored); ok {
 		if err := waitFirstReading(ctx, a, *clockWait, log); err != nil {

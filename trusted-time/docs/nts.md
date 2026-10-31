@@ -339,9 +339,14 @@ cannot turn it off or point it elsewhere:
 | GCP | `platform-gcp/deploy/Dockerfile` entrypoint (image digest) | `cloudkms.googleapis.com`, `sts.googleapis.com`, `www.cloudflare.com` | the VM's external address, direct (implied allow-all egress) |
 
 The coarse URLs are the ones `-clock https-date` uses on that platform, so
-its egress already allows them. `-nts-max-bound` is not set: the default, 100 ms.
-The build scripts check the flags (`nitro-eif.sh`, `gcp/build-image.sh`,
-`azure/deploy.sh render`) and refuse a command that has `-clock`.
+its egress already allows them. Each command also sets `-nts-wait 90s` and
+`-nts-max-bound 100ms` (the defaults), so no environment variable of the
+host or the launcher can change them. The build scripts check the flags
+(`nitro-eif.sh`, `gcp/build-image.sh`, `azure/deploy.sh render`), refuse a
+command without `-nts-clock`, `-nts-wait` or `-nts-max-bound`, and refuse
+one that has `-clock`. The runner itself refuses to start on a cloud
+platform whose clock the host can set (`checkClock` in `tee-signer/main.go`).
+Only the dev platform and debug builds may run on the system clock.
 
 The UDP relay (`platform-aws/udprelay`, `platform-aws/deploy/README.md`, "NTS clock in the
 enclave"): one vsock connection per NTP query; frames of a u16 length and

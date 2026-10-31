@@ -34,6 +34,10 @@ func plainVsockAllowed(platformName string) bool { return platformName == "dev" 
 // No cloud image is a debug build.
 func unixOffDevAllowed() bool { return true }
 
+// untrustedClockAllowed: a debug build may run a cloud platform on the
+// system clock, for the e2e tests with fake hardware.
+func untrustedClockAllowed() bool { return true }
+
 func applyPlainImport(srv *server.Server) { srv.AllowImport = *allowImport }
 
 func plainImportStatus() string {

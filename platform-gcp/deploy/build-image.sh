@@ -136,8 +136,12 @@ for not in " -config " " -tls-client-ca " " -platform-opt " " -mark-store " " -s
   " -mark-create" " -state-create" " -record-create" "service_account="; do
   ! grep -q -F -- "$not" "$OUT/runner.entrypoint" || die "the image entrypoint has$not"
 done
-# The NTS clock, and no -clock flag that would replace it.
+# The NTS clock with its start wait and error bound, and no -clock flag
+# that would replace it.
 grep -q -F -- " -nts-clock -nts-coarse-urls " "$OUT/runner.entrypoint" || die "the image entrypoint lacks -nts-clock"
+for want in " -nts-wait " " -nts-max-bound "; do
+  grep -q -F -- "$want" "$OUT/runner.entrypoint" || die "the image entrypoint lacks$want"
+done
 ! grep -q -F -- " -clock " "$OUT/runner.entrypoint" || die "the image entrypoint has -clock, which would replace the NTS clock"
 devnet_hook gcp_image_check_entrypoint
 

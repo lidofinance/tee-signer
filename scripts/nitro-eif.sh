@@ -163,13 +163,14 @@ build_eif() { # build_eif <tag>
     [ "$gotmode" = "-rw-r--r--" ] || { docker rm -f "$cid" >/dev/null; die "/licenses/${notice##*/} has mode $gotmode, want -rw-r--r--"; }
   done
   docker rm -f "$cid" >/dev/null
-  # The command: the setup from the platform, the NTS clock, the mark log
+  # The command: the setup from the platform, the NTS clock with its start
+  # wait and error bound, the mark log
   # of the setup as the clone protection. No operator value, no option the
   # setup sets (the routes and the KMS key come from the setup), no
   # DynamoDB, no recovery flag.
   local ep
   ep="$(docker inspect --format '{{json .Config.Entrypoint}}' "$ENCLAVE_IMAGE")"
-  for want in '"-setup","platform"' '"-nts-clock"' '"-record","none"' 'https://kms.{region}.amazonaws.com/'; do
+  for want in '"-setup","platform"' '"-nts-clock"' '"-nts-wait"' '"-nts-max-bound"' '"-record","none"' 'https://kms.{region}.amazonaws.com/'; do
     grep -qF -- "$want" <<<"$ep" || die "the image's command lacks $want"
   done
   for not in '"-config"' '"-tls-client-ca"' '"-platform-opt"' '"-mark-store"' '"-mark-signer"' '"-record-key"' \

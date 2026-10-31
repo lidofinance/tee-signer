@@ -31,6 +31,8 @@
 # refuses them with -setup.
 #
 # Clock: the NTS clock (-nts-clock; runner-aws is built with the tag nts).
+# -nts-wait and -nts-max-bound are in the command, so no environment
+# variable sets them. The runner refuses a cloud start on any other clock.
 # The enclave has no network. Fixed vsock port map on the parent (CID 3):
 #
 #   7101  host agent (store, credentials, the setup)
@@ -65,4 +67,5 @@ ENTRYPOINT ["/runner", \
   "-record", "none", \
   "-nts-clock", \
   "-nts-coarse-urls", "https://kms.{region}.amazonaws.com/,https://sts.{region}.amazonaws.com/,https://www.cloudflare.com/", \
+  "-nts-wait", "90s", "-nts-max-bound", "100ms", \
   "-log-json"]

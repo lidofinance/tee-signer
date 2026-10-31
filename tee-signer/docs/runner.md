@@ -412,7 +412,9 @@ forward, collects a vote for a future target and restarts the runner with
 the right time gets a second vote (`TestE2EClockSkewBreaksFloor`). The
 system clock of none of the three TEEs is trusted time, so the cloud
 runners use the NTS clock, and the mark log covers the rollback cases the
-floor cannot.
+floor cannot. A release runner refuses to start on `nitro`, `azure` or
+`gcp` with a clock the host can set; only `dev` and debug builds run on
+the system clock.
 
 The anchored clocks (`-clock https-date`, and the platform clocks `nsm`,
 `maa-iat` and `token-iat`) read every 15 s (`-clock-interval`) and add the
