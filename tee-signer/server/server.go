@@ -88,6 +88,12 @@ type Server struct {
 	// setup: a request that signs, hands over or imports goes through only
 	// while it passes. nil: no check (the flag path, and tests).
 	Image *ImageGate
+	// SealingKeyUnproven: the platform's sealing key came from a stored
+	// blob (platform.Platform.SealingKeyStored) and no check of the stored
+	// shares has passed yet (ProveSealingKey). While it holds, the server
+	// seals no share. Set before Serve and changed only by
+	// ProveSealingKey, also before Serve.
+	SealingKeyUnproven bool
 
 	// handoverSrc serves HANDOVER_ORDER and HANDOVER as a source
 	// (handover_source.go, release builds with a setup and the mark log);
@@ -197,6 +203,63 @@ func (s *Server) LoadShares() (int, error) {
 		return 0, err
 	}
 	return s.LoadListedShares(keys)
+}
+
+// ProveSealingKey checks a sealing key that came from a stored blob
+// (platform.Platform.SealingKeyStored, AWS-KMS-02) against the stored
+// shares of names (from ListShares): it needs at least one, and every one
+// must unseal under the key. A key admin could have made the blob before
+// the key policy was locked, and the host can put any object under
+// shares/ next to it. A share this runner sealed is the one thing in the
+// store that needs the key to make. A share that does not open means the
+// blob or the share is not this runner's, so the start stops rather than
+// seal new shares under a key someone else may know. On success
+// SealingKeyUnproven is cleared. Call it before Serve, and only when the
+// image check lets the shares load.
+func (s *Server) ProveSealingKey(keys []string) error {
+	if err := s.checkLogID(); err != nil {
+		return err
+	}
+	if len(keys) == 0 {
+		return errors.New("the sealing key came from the store, but no share is listed now: " +
+			"restart, and the platform makes a new key for an empty store")
+	}
+	var bad []string
+	for _, k := range keys {
+		pk, err := sharePubkey(k)
+		if err != nil {
+			bad = append(bad, k)
+			continue
+		}
+		blob, err := s.Platform.Store.Get(k)
+		if err != nil {
+			return fmt.Errorf("%s: %w", k, err)
+		}
+		plain, err := s.Platform.Sealer.Unseal(blob, s.shareAAD(pk))
+		clear(plain)
+		if err != nil {
+			bad = append(bad, k)
+		}
+	}
+	if len(bad) > 0 {
+		return fmt.Errorf("the stored sealing key opens %d of %d stored shares; %s did not open. "+
+			"A sealing key that does not open every stored share may be one the key admin made before the key policy was locked (AWS-KMS-02), "+
+			"so this runner seals nothing under it. Remove what does not belong under shares/ on the host, or, if no share opens, "+
+			"move the sealing blob aside too, and restart", len(keys)-len(bad), len(keys), strings.Join(bad, ", "))
+	}
+	s.SealingKeyUnproven = false
+	return nil
+}
+
+// sharePubkey reads the public key from a share's store name.
+func sharePubkey(k string) (backend.Pubkey, error) {
+	var pk backend.Pubkey
+	b, err := hex.DecodeString(strings.TrimPrefix(k, "shares/"))
+	if !strings.HasPrefix(k, "shares/") || err != nil || len(b) != len(pk) {
+		return pk, fmt.Errorf("%s: not a share name", k)
+	}
+	copy(pk[:], b)
+	return pk, nil
 }
 
 // LoadListedShares unseals the shares of names (from ListShares) and loads
@@ -891,6 +954,10 @@ func (s *Server) sealShare(pk backend.Pubkey, secret *[32]byte, index uint64, ge
 
 // sealRecord seals a share record for the store.
 func (s *Server) sealRecord(rec shareRecord) ([]byte, error) {
+	if s.SealingKeyUnproven {
+		return nil, backend.Refused(backend.StatusPlatform,
+			"seal share: the sealing key came from the store and the stored shares were not checked at this start (the image check held them); restart once it passes")
+	}
 	plain, err := json.Marshal(rec)
 	if err != nil {
 		return nil, err

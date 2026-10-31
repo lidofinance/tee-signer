@@ -229,17 +229,17 @@ func TestAnotherSetupOpensNothing(t *testing.T) {
 	ctx := context.Background()
 	store, _ := filestore.New(t.TempDir())
 	one, other := [32]byte{1}, [32]byte{2}
-	k1, err := x.keys(one).dataKey(ctx, store)
+	k1, _, err := x.keys(one).dataKey(ctx, store)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// The first setup sealed a share: from now on the blob counts.
 	store.Put(sharePrefix+"aa01", []byte("sealed share"))
-	again, err := x.keys(one).dataKey(ctx, store)
+	again, _, err := x.keys(one).dataKey(ctx, store)
 	if err != nil || !bytes.Equal(again, k1) {
 		t.Fatalf("restart with the same setup: %v", err)
 	}
-	if _, err := x.keys(other).dataKey(ctx, store); err == nil || !strings.Contains(err.Error(), "does not decrypt") {
+	if _, _, err := x.keys(other).dataKey(ctx, store); err == nil || !strings.Contains(err.Error(), "does not decrypt") {
 		t.Fatalf("another setup on the same store: %v", err)
 	}
 	_, blob, err := x.keys(one).NewKey(ctx, []byte("mark key aad"))
@@ -251,7 +251,7 @@ func TestAnotherSetupOpensNothing(t *testing.T) {
 	}
 	// A key of platform.Keys does not pass for the sealing key either.
 	store.Put(dataKeyBlob, blob)
-	if _, err := x.keys(one).dataKey(ctx, store); err == nil {
+	if _, _, err := x.keys(one).dataKey(ctx, store); err == nil {
 		t.Fatal("a wrapped key passed for the sealing key")
 	}
 }
@@ -286,7 +286,7 @@ func TestPlantedSealingKeyRefused(t *testing.T) {
 	// With a share stored the runner takes the blob as its own: it does not
 	// decrypt, and the start stops.
 	store.Put(sharePrefix+"aa01", []byte("sealed share"))
-	if dek, err := x.keys(setup).dataKey(ctx, store); err == nil || !strings.Contains(err.Error(), "does not decrypt") {
+	if dek, _, err := x.keys(setup).dataKey(ctx, store); err == nil || !strings.Contains(err.Error(), "does not decrypt") {
 		t.Fatalf("planted sealing key: %x %v", dek, err)
 	}
 	if _, err := x.keys(setup).OpenKey(ctx, planted, []byte("mark key aad")); !errors.Is(err, platform.ErrNotAuthentic) {
@@ -314,14 +314,14 @@ func TestIgnoredSealingKeyKept(t *testing.T) {
 	ctx := context.Background()
 	setup := [32]byte{7}
 	store, _ := filestore.New(t.TempDir())
-	k1, err := x.keys(setup).dataKey(ctx, store)
+	k1, _, err := x.keys(setup).dataKey(ctx, store)
 	if err != nil {
 		t.Fatal(err)
 	}
 	original, _ := store.Get(dataKeyBlob)
 
 	// The shares are missing from the store at this start.
-	k2, err := x.keys(setup).dataKey(ctx, store)
+	k2, _, err := x.keys(setup).dataKey(ctx, store)
 	if err != nil || bytes.Equal(k2, k1) {
 		t.Fatalf("start without shares: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestIgnoredSealingKeyKept(t *testing.T) {
 	// The operator puts the old blob back next to the restored shares.
 	store.Put(dataKeyBlob, kept)
 	store.Put(sharePrefix+"aa01", []byte("sealed share"))
-	if k3, err := x.keys(setup).dataKey(ctx, store); err != nil || !bytes.Equal(k3, k1) {
+	if k3, _, err := x.keys(setup).dataKey(ctx, store); err != nil || !bytes.Equal(k3, k1) {
 		t.Fatalf("restored blob: %v", err)
 	}
 }
@@ -367,7 +367,7 @@ func TestSealingKeyPlantedBeforeLock(t *testing.T) {
 	store.Put("record/writer-credentials.kms", []byte("not a share"))
 	store.Put("wm/aa01", []byte("not a share either"))
 
-	dek, err := x.keys(setup).dataKey(ctx, store)
+	dek, _, err := x.keys(setup).dataKey(ctx, store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,8 +386,43 @@ func TestSealingKeyPlantedBeforeLock(t *testing.T) {
 
 	// The runner seals a share; the next start opens its own blob.
 	store.Put(sharePrefix+"aa01", []byte("sealed share"))
-	again, err := x.keys(setup).dataKey(ctx, store)
+	again, _, err := x.keys(setup).dataKey(ctx, store)
 	if err != nil || !bytes.Equal(again, dek) {
 		t.Fatalf("restart with a share stored: %v", err)
+	}
+}
+
+// AWS-KMS-02 with a planted share (external review): the key admin plants
+// a blob of a key it knows before the lock, and the host puts any object
+// under shares/. The platform cannot tell that blob from its own and takes
+// it, but it reports the key as stored, so the runner uses it only once
+// every stored share opens under it (tee-signer server.ProveSealingKey,
+// TestPlantedShareDoesNotProveTheSealingKey). A key made at this start is
+// not reported as stored.
+func TestPlantedBlobWithPlantedShareIsReportedStored(t *testing.T) {
+	x := newKMSFixture(t)
+	x.f.adminMay = func(map[string]string) bool { return true } // the policy before the lock
+	ctx := context.Background()
+	setup := [32]byte{7}
+	known := bytes.Repeat([]byte{0x42}, 32)
+	planted, err := x.encrypt(known, x.keys(setup).sealingContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, _ := filestore.New(t.TempDir())
+	store.Put(dataKeyBlob, planted)
+	store.Put(sharePrefix+"aa01", []byte("anything the admin wrote"))
+	x.f.adminMay = adminEncrypt(t) // the lock
+	dek, stored, err := x.keys(setup).dataKey(ctx, store)
+	if err != nil || !bytes.Equal(dek, known) {
+		t.Fatalf("planted blob with a share: %v", err)
+	}
+	if !stored {
+		t.Fatal("a key from the stored blob was not reported as stored")
+	}
+
+	fresh, _ := filestore.New(t.TempDir())
+	if _, stored, err := x.keys(setup).dataKey(ctx, fresh); err != nil || stored {
+		t.Fatalf("a key made at this start: stored %v, %v", stored, err)
 	}
 }

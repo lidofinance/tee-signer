@@ -377,6 +377,9 @@ func run() (err error) {
 		}
 		srv.ClientCAs = tlsCfg.ClientCAs
 	}
+	// A sealing key from a stored blob seals nothing until every stored
+	// share opens under it (AWS-KMS-02, server.ProveSealingKey).
+	srv.SealingKeyUnproven = plat.SealingKeyStored
 	var n int
 	imageState := "not_applicable"
 	if boot.setup != nil {
@@ -388,7 +391,24 @@ func run() (err error) {
 		h, _ := srv.Image.Status(updates)
 		imageState = h.State
 		if load {
+			if srv.SealingKeyUnproven {
+				if err := srv.ProveSealingKey(claimed.shares); err != nil {
+					return err
+				}
+			}
 			n, err = srv.LoadListedShares(claimed.shares)
+		}
+	} else if srv.SealingKeyUnproven {
+		keys, err := server.ListShares(plat.Store)
+		if err != nil {
+			return err
+		}
+		if err := srv.ProveSealingKey(keys); err != nil {
+			return err
+		}
+		n, err = srv.LoadListedShares(keys)
+		if err != nil {
+			log.Error("some stored shares did not load", "err", err)
 		}
 	} else {
 		n, err = srv.LoadShares()
