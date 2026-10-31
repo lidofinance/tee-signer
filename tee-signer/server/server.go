@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -199,7 +200,9 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 	}
 	loaded := 0
 	var errs []error
-	for _, k := range keys {
+	// In name order, as the file store lists them: with more shares stored
+	// than the core holds, every start loads the same ones.
+	for _, k := range slices.Sorted(slices.Values(keys)) {
 		if !strings.HasPrefix(k, "shares/") {
 			errs = append(errs, fmt.Errorf("%s: not a share name", k))
 			continue
@@ -716,8 +719,8 @@ func (s *Server) addShare(pk backend.Pubkey, secret *[32]byte, index uint64, int
 // stored record of the share that loaded (SSI-STORAGE-01).
 func (s *Server) addShareOf(pk backend.Pubkey, secret *[32]byte, index uint64, interchange *backend.Watermark, how string,
 	keys []backend.ValidatorKey) (backend.ValidatorKey, error) {
-	if !s.reserve(pk) {
-		return backend.ValidatorKey{}, &backend.RefusedError{Code: backend.StatusDuplicate, Detail: "another request is adding this validator"}
+	if err := s.reserve(pk); err != nil {
+		return backend.ValidatorKey{}, err
 	}
 	defer s.release(pk)
 	s.sharesMu.RLock()
@@ -762,18 +765,50 @@ func (s *Server) addShareOf(pk backend.Pubkey, secret *[32]byte, index uint64, i
 	return s.loadShare(pk, secret, index, interchange, how)
 }
 
-// reserve marks pk as being added; false if it is already.
-func (s *Server) reserve(pk backend.Pubkey) bool {
+// reserve marks pk as being added. Under a setup it also holds a max_keys
+// slot for pk until release: the validators stored, loaded and being
+// added stay within max_keys together, so two imports cannot both take
+// the last slot and every stored share loads at the next start (SIAC-01).
+// A stored share that failed to load keeps its slot.
+func (s *Server) reserve(pk backend.Pubkey) error {
 	s.admitMu.Lock()
 	defer s.admitMu.Unlock()
 	if s.admitting[pk] {
-		return false
+		return &backend.RefusedError{Code: backend.StatusDuplicate, Detail: "another request is adding this validator"}
+	}
+	if s.Updates != nil {
+		if err := s.checkSlots(pk); err != nil {
+			return err
+		}
 	}
 	if s.admitting == nil {
 		s.admitting = map[backend.Pubkey]bool{}
 	}
 	s.admitting[pk] = true
-	return true
+	return nil
+}
+
+// checkSlots refuses pk when the validators stored, loaded or being added,
+// with pk, are more than the setup's max_keys. The caller holds admitMu.
+func (s *Server) checkSlots(pk backend.Pubkey) error {
+	names, err := ListShares(s.Platform.Store)
+	if err != nil {
+		return backend.Refused(backend.StatusStorage, "stored shares: %v", err)
+	}
+	held := map[string]bool{shareKey(pk): true}
+	for _, n := range names {
+		held[n] = true
+	}
+	for _, k := range s.Signer.Keys() {
+		held[shareKey(k.Pubkey)] = true
+	}
+	for a := range s.admitting {
+		held[shareKey(a)] = true
+	}
+	if n := s.Updates.opt.Setup.MaxKeys; uint64(len(held)) > uint64(n) {
+		return backend.Refused(backend.StatusNoMem, "this runner stores, holds or is adding %d keys with this one, its setup's max_keys is %d", len(held), n)
+	}
+	return nil
 }
 
 func (s *Server) release(pk backend.Pubkey) {

@@ -141,7 +141,8 @@ func (e *tgtEnv) start() {
 		t.Fatal(err)
 	}
 	e.hooks.UseMarkLog(m, mark, found)
-	if e.signer, err = core.NewSigner(cfg, 2048, 0, e.hooks); err != nil {
+	// The core holds max_keys keys, as main sizes it (start.go).
+	if e.signer, err = core.NewSigner(cfg, e.setup.MaxKeys, 0, e.hooks); err != nil {
 		t.Fatal(err)
 	}
 	e.hooks.UseClock(e.signer.EpochAt)

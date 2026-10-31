@@ -1,7 +1,17 @@
 #include "markformat.h"
-#include <assert.h>
 #include <stdio.h>
 #include <string.h>
+
+/* CHECK runs in every build, -DNDEBUG included, unlike assert(). */
+static int g_failures;
+
+#define CHECK(cond)                                                          \
+    do {                                                                     \
+        if (!(cond)) {                                                       \
+            g_failures++;                                                    \
+            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+        }                                                                    \
+    } while (0)
 
 int main(void)
 {
@@ -15,34 +25,38 @@ int main(void)
                              UINT64_C(0x2827262524232221), 3}, out;
     uint8_t b[MARKFORMAT_ENCODED_LEN];
     markformat_encode(&w, b);
-    assert(memcmp(b, golden, sizeof b) == 0);
-    assert(markformat_decode(golden, sizeof golden, &out) == MARKFORMAT_OK);
-    assert(out.block_slot == w.block_slot && out.source_epoch == w.source_epoch &&
-           out.target_epoch == w.target_epoch && out.flags == w.flags);
+    CHECK(memcmp(b, golden, sizeof b) == 0);
+    CHECK(markformat_decode(golden, sizeof golden, &out) == MARKFORMAT_OK);
+    CHECK(out.block_slot == w.block_slot && out.source_epoch == w.source_epoch &&
+          out.target_epoch == w.target_epoch && out.flags == w.flags);
     for (unsigned flags = 0; flags < 4; flags++) {
         w.flags = flags;
         markformat_encode(&w, b);
-        assert(markformat_decode(b, sizeof b, &out) == MARKFORMAT_OK && out.flags == flags);
+        CHECK(markformat_decode(b, sizeof b, &out) == MARKFORMAT_OK && out.flags == flags);
     }
     w.flags = UINT32_MAX;
     markformat_encode(&w, b);
-    assert(b[4] == 3); /* Only the two defined flags are stored. */
+    CHECK(b[4] == 3); /* Only the two defined flags are stored. */
     for (size_t n = 0; n <= sizeof b + 1; n++) {
         if (n == sizeof b) continue;
-        assert(markformat_decode(b, n, &out) == MARKFORMAT_ERR_DECODE);
+        CHECK(markformat_decode(b, n, &out) == MARKFORMAT_ERR_DECODE);
     }
-    assert(markformat_decode(NULL, sizeof b, &out) == MARKFORMAT_ERR_DECODE);
-    assert(markformat_decode(b, sizeof b, NULL) == MARKFORMAT_ERR_DECODE);
+    CHECK(markformat_decode(NULL, sizeof b, &out) == MARKFORMAT_ERR_DECODE);
+    CHECK(markformat_decode(b, sizeof b, NULL) == MARKFORMAT_ERR_DECODE);
     for (size_t i = 0; i < 8; i++) {
         for (unsigned bit = 1; bit < 256; bit <<= 1) {
             if (i == 4 && bit <= 2) continue;
             memcpy(b, golden, sizeof b);
             b[i] ^= (uint8_t)bit;
             out = w;
-            assert(markformat_decode(b, sizeof b, &out) == MARKFORMAT_ERR_DECODE);
-            assert(out.block_slot == w.block_slot && out.source_epoch == w.source_epoch &&
-                   out.target_epoch == w.target_epoch && out.flags == w.flags);
+            CHECK(markformat_decode(b, sizeof b, &out) == MARKFORMAT_ERR_DECODE);
+            CHECK(out.block_slot == w.block_slot && out.source_epoch == w.source_epoch &&
+                  out.target_epoch == w.target_epoch && out.flags == w.flags);
         }
+    }
+    if (g_failures) {
+        fprintf(stderr, "markformat: %d checks failed\n", g_failures);
+        return 1;
     }
     puts("markformat: C storage format tests passed");
     return 0;

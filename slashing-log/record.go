@@ -478,25 +478,40 @@ func Parse(enc []byte) (*Record, error) {
 //	signer_len:u8 signer version:u64 prev_version:u64 prev_hash[32]
 //	log_id[32] owner[16] key_blob_len:u16 key_blob
 //
-// A later record format may change anything after the key blob, and must
-// keep this start and the magic's form.
+// and every record ends with a 64-byte Ed25519 signature, under the key
+// its key blob opens to, over the context signer-mark-v1 and every byte
+// before the signature. A later record format may change anything between
+// the key blob and the signature, and must keep this start, the magic's
+// form and the signed tail. The tail lets the reader tell a record that a
+// runner under its key release wrote from an object that copies a real
+// record's key blob, which is a public field.
 type Header struct {
 	Magic   string
 	Setup   [32]byte
 	Signer  string
 	Version uint64
 	KeyBlob []byte
+	Signed  []byte                      // the bytes before the signature
+	Sig     [ed25519.SignatureSize]byte // the last 64 bytes
+}
+
+// Verify reports whether h's signature holds under pub over the bytes
+// before it, as every record version signs them.
+func (h *Header) Verify(pub ed25519.PublicKey) bool {
+	return ed25519.Verify(pub, signedMessage(h.Signed), h.Sig[:])
 }
 
 // RecordHeader reads a record's Header; false when enc does not start
-// like a record of any version.
+// like a record of any version, or its start does not fit before the
+// signature.
 func RecordHeader(enc []byte) (*Header, bool) {
 	const magicLen = len(recordMagic)
-	if len(enc) > MaxRecord || len(enc) < magicLen || string(enc[:magicLen-1]) != recordMagic[:magicLen-1] ||
+	if len(enc) > MaxRecord || len(enc) < magicLen+ed25519.SignatureSize || string(enc[:magicLen-1]) != recordMagic[:magicLen-1] ||
 		enc[magicLen-1] < recordMagic[magicLen-1] || enc[magicLen-1] > '9' {
 		return nil, false
 	}
-	rd := &recReader{b: enc[magicLen:]}
+	signed := enc[:len(enc)-ed25519.SignatureSize]
+	rd := &recReader{b: signed[magicLen:]}
 	h := &Header{Magic: string(enc[:magicLen])}
 	rd.fixed(h.Setup[:])
 	h.Signer = string(rd.take(int(rd.u8())))
@@ -510,6 +525,8 @@ func RecordHeader(enc []byte) (*Header, bool) {
 	if rd.bad {
 		return nil, false
 	}
+	h.Signed = append([]byte(nil), signed...)
+	copy(h.Sig[:], enc[len(signed):])
 	return h, true
 }
 
