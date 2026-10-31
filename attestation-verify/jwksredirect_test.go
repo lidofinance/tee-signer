@@ -52,4 +52,20 @@ func TestJWKSRedirectToAnotherHostRefused(t *testing.T) {
 	if _, err := FetchJWKS(context.Background(), same, maaIssuer+"/keys"); err != nil {
 		t.Fatalf("same-host redirect: %v", err)
 	}
+	// The scheme's default port named or not is the same host.
+	for _, c := range []struct {
+		a, b string
+		same bool
+	}{
+		{"https://h.example/x", "https://H.example:443/y", true},
+		{"https://h.example:443/x", "https://h.example/y", true},
+		{"https://h.example/x", "https://h.example:8443/y", false},
+		{"https://h.example/x", "https://other.example/y", false},
+	} {
+		a, _ := url.Parse(c.a)
+		b, _ := url.Parse(c.b)
+		if (hostPort(a) == hostPort(b)) != c.same {
+			t.Errorf("%s and %s: same host %v, want %v", c.a, c.b, !c.same, c.same)
+		}
+	}
 }

@@ -147,6 +147,16 @@ const maxFetch = 1 << 20
 // defaultFetchTimeout bounds a fetch when the caller passes no client.
 const defaultFetchTimeout = 30 * time.Second
 
+// hostPort is u's host in lower case and its port, the scheme's default
+// when u names none, so host and host:443 compare equal for https.
+func hostPort(u *url.URL) string {
+	port := u.Port()
+	if port == "" {
+		port = map[string]string{"https": "443", "http": "80"}[u.Scheme]
+	}
+	return strings.ToLower(u.Hostname()) + ":" + port
+}
+
 func httpGet(ctx context.Context, client *http.Client, url string) ([]byte, error) {
 	if !strings.HasPrefix(url, "https://") {
 		return nil, fmt.Errorf("attest: refusing non-https URL %q", url)
@@ -161,7 +171,7 @@ func httpGet(ctx context.Context, client *http.Client, url string) ([]byte, erro
 	c := *client
 	c.CheckRedirect = func(r *http.Request, via []*http.Request) error {
 		first := via[0].URL
-		if r.URL.Scheme != first.Scheme || !strings.EqualFold(r.URL.Host, first.Host) {
+		if r.URL.Scheme != first.Scheme || hostPort(r.URL) != hostPort(first) {
 			return fmt.Errorf("attest: %s redirects to %s, another host", url, r.URL.Redacted())
 		}
 		if len(via) >= 10 {
