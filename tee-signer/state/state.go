@@ -13,10 +13,10 @@
 //     the last pre-restart reading (two time servers that disagree by a
 //     second across an epoch boundary). It needs no storage, but it is
 //     only as good as the clock (see README.md). With the device mark the
-//     core reads the mark once, at the first load: a validator imported
-//     later without history gets the same bounds from its import floor
-//     (ImportFloor; the server puts the block and target bounds into its
-//     own mark, SourceFloor gates the source).
+//     core reads the mark once, at the first load: a validator added later
+//     gets the same block and target bounds from the restart floor at its
+//     import (ImportFloor), which the core takes with the key; without vote
+//     history SourceFloor gates its source too.
 //
 // Mark log (Mode.MarkLog, package markstore): the core keeps one device
 // mark for every validator, and every raise of it is a record in a locked,
@@ -128,7 +128,10 @@ type Hooks struct {
 	// device mark, which every validator loaded at start takes.
 	deviceFloor    uint64
 	hasDeviceFloor bool
-	expect         map[backend.Pubkey]bool
+	// loadFloor is the floor epoch of a key added while the runner runs
+	// (NoteLoadFloor), whose bounds the server imports with the key.
+	loadFloor map[backend.Pubkey]uint64
+	expect    map[backend.Pubkey]bool
 	// The source gate (SourceFloor, decideGate): while on, a validator
 	// without vote history of its own (history) signs no vote with a source
 	// below gateFloor. decided: the gate was read from the log or set.
@@ -412,9 +415,8 @@ func (h *Hooks) ExpectRecord(pk backend.Pubkey) {
 }
 
 // Floor returns the floor epoch applied to pk's marks: its own restart
-// floor (per-validator marks), else the device mark's, and at least its
-// import floor (NoteImportFloor), whose block and target bounds the server
-// puts into pk's own mark.
+// floor (per-validator marks), else the device mark's, and at least the
+// floor it was added under while the runner ran (NoteLoadFloor).
 func (h *Hooks) Floor(pk backend.Pubkey) (uint64, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -422,9 +424,29 @@ func (h *Hooks) Floor(pk backend.Pubkey) (uint64, bool) {
 	if !ok && h.hasDeviceFloor {
 		f, ok = h.deviceFloor, true
 	}
-	if kf, has := h.keyFloor[pk]; has {
-		f, ok = max(f, kf), true
+	if lf, has := h.loadFloor[pk]; has {
+		f, ok = max(f, lf), true
 	}
+	return f, ok
+}
+
+// NoteLoadFloor records the floor epoch pk was added under while the
+// runner ran: the server imports its block and target bounds with the
+// key.
+func (h *Hooks) NoteLoadFloor(pk backend.Pubkey, floor uint64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.loadFloor == nil {
+		h.loadFloor = map[backend.Pubkey]uint64{}
+	}
+	h.loadFloor[pk] = max(h.loadFloor[pk], floor)
+}
+
+// LoadFloor is the floor epoch pk was added under while the runner ran.
+func (h *Hooks) LoadFloor(pk backend.Pubkey) (uint64, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	f, ok := h.loadFloor[pk]
 	return f, ok
 }
 
