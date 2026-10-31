@@ -3,6 +3,10 @@
 package server
 
 import (
+	"errors"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/lidofinance/tee-signer/signer-protocol"
@@ -101,30 +105,119 @@ func TestLateImportGetsAPTCFloor(t *testing.T) {
 	}
 }
 
-// A handover target refuses a block below a handed-over key's floor too:
-// the source's import raised its device mark, which the page carries, and
-// the target adds its own floor.
+// A handover target gives each key it takes the floor of its own import:
+// the target takes the first share, the clock moves on 20 epochs, then it
+// takes the second. The target's device mark loaded with the first share
+// and the page's mark hold only bounds from then; the second key's own
+// mark holds its later floor.
 func TestHandoverTargetGetsABlockFloor(t *testing.T) {
 	src := newSrcEnv(t, nil)
 	tgt := newTargetOf(t, src, nil, nil, nil)
-	start := tgt.floorOf() // the target's device mark starts from this floor
-	src.clock.add(20 * testEpoch)
-	sk, pk := newKey(t)
-	if err := src.importSealed(pk, sk, 6, nil); err != nil {
-		t.Fatal(err)
+	var pks []backend.Pubkey
+	for i := range 2 {
+		sk, pk := newKey(t)
+		if err := src.importSealed(pk, sk, uint64(6+i), nil); err != nil {
+			t.Fatal(err)
+		}
+		pks = append(pks, pk)
 	}
 	order, _ := srcOrder(t, src, tgt, []byte{1, 2}, nil)
 	if _, err := src.push(order); err != nil {
 		t.Fatal(err)
 	}
 	src.clock.add(srcDelay)
-	if _, imp := handOverAll(t, src, tgt, order); !imp.Done {
+	page, err := handOver(t, src, tgt, order, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, second := *page, *page
+	first.Shares, second.Shares = page.Shares[:1], page.Shares[1:]
+	tgt.mustImp(order, &first, 0)
+	start := tgt.floorOf()
+	src.clock.add(20 * testEpoch)
+	if imp := tgt.mustImp(order, &second, 0); !imp.Done {
 		t.Fatalf("import %+v", imp)
 	}
-	f, ok := tgt.hooks.Floor(pk)
-	if !ok || f <= start+5 {
-		t.Fatalf("the handed-over key's floor %d (%v), want above the target's start floor %d", f, ok, start)
+	late := second.Shares[0].Pubkey
+	if f, ok := tgt.hooks.Floor(late); !ok || f <= start+10 {
+		t.Fatalf("the second key's floor %d (%v), want above %d", f, ok, start+10)
 	}
-	wantSlashing(t, tgt.signMsg(pk, &backend.BeaconBlockHeader{Slot: (start+3)*8 + 3, ProposerIndex: 6, BodyRoot: backend.Root{0xb4}}),
-		"the target: a block above its start floor, below the import floor")
+	wantSlashing(t, tgt.signMsg(late, &backend.BeaconBlockHeader{Slot: (start+5)*8 + 3, ProposerIndex: second.Shares[0].Index, BodyRoot: backend.Root{0xb4}}),
+		"the target: a block above its earlier bounds, below the second key's import floor")
+}
+
+// A key imported with vote history while the runner runs gets the floor's
+// block bound too: it may have proposed elsewhere after its interchange
+// was exported.
+func TestLateImportWithHistoryGetsABlockFloor(t *testing.T) {
+	e := newTgtEnv(t, "dev", nil)
+	f0 := e.floorOf()
+	ska, pka := newKey(t)
+	if err := e.importSealed(pka, ska, 5, nil); err != nil {
+		t.Fatal(err)
+	}
+	e.clock.add(20 * testEpoch)
+	start := f0 - e.setup.Safety.MaxSignEpochsAheadOfClock - 1
+	hist := &backend.Watermark{HasAttestation: true, SourceEpoch: start - 3, TargetEpoch: start - 2, HasBlock: true, BlockSlot: (start - 2) * 8}
+	skb, pkb := newKey(t)
+	if err := e.importSealed(pkb, skb, 6, hist); err != nil {
+		t.Fatal(err)
+	}
+	wantSlashing(t, e.signMsg(pkb, &backend.BeaconBlockHeader{Slot: (f0+5)*8 + 3, ProposerIndex: 6, BodyRoot: backend.Root{0xb5}}),
+		"B (with history): a block below its import floor")
+	if _, on := e.hooks.SourceFloor(pkb); on {
+		t.Error("a key with history got a source floor")
+	}
+	err := e.signMsg(pkb, &backend.BeaconBlockHeader{Slot: (f0+5)*8 + 3, ProposerIndex: 6, BodyRoot: backend.Root{0xb6}})
+	var r *backend.RefusedError
+	if !errors.As(err, &r) || !strings.Contains(r.Detail, "import floor epoch") {
+		t.Errorf("refusal detail %v, want the import floor named", err)
+	}
+}
+
+// The floor is in the key's mark from the moment the key can sign: SIGN
+// requests for a block below the import floor, sent while the key is
+// being imported, are all refused (the core takes the floor with the key,
+// under one lock hold). A fresh runner each round: an import raises the
+// device mark, so only the first late import starts below the floor.
+func TestLateImportBlockFloorHasNoWindow(t *testing.T) {
+	for round := range 25 {
+		e := newTgtEnv(t, "dev", nil)
+		f0 := e.floorOf()
+		ska, pka := newKey(t)
+		if err := e.importSealed(pka, ska, 5, nil); err != nil {
+			t.Fatal(err)
+		}
+		e.clock.add(20 * testEpoch)
+		x := (f0+5)*8 + 3 // above the start floor, below the import floor
+		sk, pk := newKey(t)
+		var signed atomic.Int32
+		stop := make(chan struct{})
+		var wg sync.WaitGroup
+		for g := range 4 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for n := 0; ; n++ {
+					select {
+					case <-stop:
+						return
+					default:
+					}
+					m := &backend.BeaconBlockHeader{Slot: x, ProposerIndex: 6, BodyRoot: backend.Root{byte(g), byte(n), byte(n >> 8)}}
+					if e.signMsg(pk, m) == nil {
+						signed.Add(1)
+					}
+				}
+			}()
+		}
+		if err := e.importSealed(pk, sk, 6, nil); err != nil {
+			t.Fatal(err)
+		}
+		close(stop)
+		wg.Wait()
+		if n := signed.Load(); n > 0 {
+			t.Fatalf("round %d: %d blocks below the import floor signed while the key was being imported", round, n)
+		}
+	}
 }

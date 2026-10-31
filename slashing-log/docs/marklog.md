@@ -86,12 +86,13 @@ its import sets a source floor of its own: the restart floor epoch of the
 clock at the import (SLBOUND-01). The share record keeps it
 (`source_floor`), and a restart sets it again. The validator signs no
 vote with a source below the higher of the two floors, also after the
-log's gate has dropped. The validator may also have proposed elsewhere:
-the core starts it from the device mark, whose block bound holds only
-what keys here signed, so the runner puts the floor's block and target
-bounds into its own mark at the import. It signs no block or PTC vote up
-to the last slot of the floor epoch and no vote with a target up to it
-(a restart floors every key again).
+log's gate has dropped. Any validator added while the runner runs, with
+vote history or without, may also have proposed elsewhere: the core
+starts it from the device mark, whose block bound holds only what keys
+here signed. So the core takes the restart floor's block and target
+bounds with the key, in the same step that loads it. The key signs no
+block or PTC vote up to the last slot of the floor epoch and no vote
+with a target up to it (a restart floors every key again).
 
 A record is about 420 bytes on the dev platform, 60 more for each
 pending update, and 150 to 250 more with a cloud KMS ciphertext in the
