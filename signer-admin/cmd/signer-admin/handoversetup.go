@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,13 +40,16 @@ func cmdHandoverSetup(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("handover-setup", flag.ContinueOnError)
 	cf := addClusterFlags(fs)
 	dir := fs.String("out", "", "folder for the target setups, one NAME.setup per section")
-	maxKeys := fs.Uint("max-keys", 0, "the targets' max_keys (default: the sources')")
-	lockDays := fs.Uint("slashing-log-min-lock-days", 0, "the targets' slashing_log_min_lock_days, no lower than the sources' (default: the sources')")
+	maxKeys := fs.Uint64("max-keys", 0, "the targets' max_keys (default: the sources')")
+	lockDays := fs.Uint64("slashing-log-min-lock-days", 0, "the targets' slashing_log_min_lock_days, no lower than the sources' (default: the sources')")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *dir == "" || fs.NArg() != 1 {
 		return errors.New("usage: signer-admin handover-setup -cluster cluster.json [-max-keys N] [-slashing-log-min-lock-days N] -out DIR FILE")
+	}
+	if *maxKeys > math.MaxUint32 || *lockDays > math.MaxUint32 {
+		return errors.New("-max-keys and -slashing-log-min-lock-days are 32-bit values")
 	}
 	path := fs.Arg(0)
 	data, err := os.ReadFile(path)
@@ -53,11 +57,17 @@ func cmdHandoverSetup(args []string, out io.Writer) error {
 		return err
 	}
 	lines := strings.Split(string(data), "\n")
-	shared, secs, err := splitSetupFile(lines)
+	shared, secs, err := splitSetupFile(lines, "signer-admin handover-setup")
 	if err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
 	c, err := cf.load()
+	if err != nil {
+		return err
+	}
+	// The cluster rules count every signer of the cluster, also when
+	// -signers makes the targets of some of them only.
+	all, err := loadCluster(*cf.path, nil)
 	if err != nil {
 		return err
 	}
@@ -124,14 +134,14 @@ func cmdHandoverSetup(args []string, out io.Writer) error {
 			Chain: src.Chain, Safety: src.Safety, MaxKeys: src.MaxKeys, SlashingLogMinLockDays: src.SlashingLogMinLockDays,
 			Platform: *pl, Locked: *tg.locked, Open: *tg.open}
 		if *maxKeys != 0 {
-			s.MaxKeys = uint32(min(*maxKeys, 1<<32-1))
+			s.MaxKeys = uint32(*maxKeys)
 		}
 		if *lockDays != 0 {
-			if uint64(*lockDays) < uint64(src.SlashingLogMinLockDays) {
+			if *lockDays < uint64(src.SlashingLogMinLockDays) {
 				return fmt.Errorf("-slashing-log-min-lock-days %d is below the sources' %d: the target's mark log must stay locked at least as long",
 					*lockDays, src.SlashingLogMinLockDays)
 			}
-			s.SlashingLogMinLockDays = uint32(min(*lockDays, 1<<32-1))
+			s.SlashingLogMinLockDays = uint32(*lockDays)
 		}
 		if err := s.CheckValues(); err != nil {
 			return fmt.Errorf("signer %s: %w", sec.name, err)
@@ -162,7 +172,7 @@ func cmdHandoverSetup(args []string, out io.Writer) error {
 	for i, tg := range targets {
 		setups[i] = tg.setup
 	}
-	if err := checkNewSetups(out, setups, len(c.members)); err != nil {
+	if err := checkNewSetups(out, setups, len(all.members)); err != nil {
 		return err
 	}
 	salts, err := setupwire.NewPolicySalts(toolRand)

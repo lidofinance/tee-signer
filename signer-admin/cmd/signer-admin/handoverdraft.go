@@ -145,7 +145,7 @@ func loadHandoverActive(path string, b *handoverorder.Body) (*orderActive, error
 		}
 		a.locked, a.ref = u.Locked, ref{u.Version, uh}
 	}
-	a.open = &a.setup.Open
+	a.open, a.openV0 = &a.setup.Open, true
 	if f.Open != "" {
 		ob, err := hex.DecodeString(f.Open)
 		if err != nil {
@@ -158,7 +158,7 @@ func loadHandoverActive(path string, b *handoverorder.Body) (*orderActive, error
 		if u.Group != setupwire.GroupOpen || u.Matches(a.setup) != nil {
 			return nil, fmt.Errorf("%s: open: an update of another group or cluster", path)
 		}
-		a.open = u.Open
+		a.open, a.openV0 = u.Open, false
 	}
 	if f.Target != "" {
 		tb, err := hex.DecodeString(f.Target)
@@ -425,6 +425,11 @@ func showHandoverTarget(out io.Writer, a *orderActive) error {
 		return err
 	}
 	fprintf(out, "\n")
+	if a.openV0 {
+		// handover-draft writes the open body only when the source's open
+		// group is above version 0.
+		fprintf(out, "note: the active file has no open update: the check takes the source's open group at version 0\n")
+	}
 	if err := handoverorder.CheckTarget(a.setup, a.locked, a.open, p); err != nil {
 		fprintf(out, "WARNING target: %v; the source will refuse the handover\n", err)
 	} else {

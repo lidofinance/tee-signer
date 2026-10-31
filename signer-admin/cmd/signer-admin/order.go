@@ -16,8 +16,11 @@ type orderActive struct {
 	setup  *setupwire.Setup
 	locked *setupwire.Locked
 	ref    ref
-	// open and target: handover orders only (loadHandoverActive).
+	// open, openV0 and target: handover orders only (loadHandoverActive).
+	// openV0: the active file has no open update, so open is the setup's
+	// version 0.
 	open   *setupwire.Open
+	openV0 bool
 	target *setupwire.Published
 }
 
