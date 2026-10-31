@@ -94,6 +94,10 @@ type KeyVault struct {
 	Roots *x509.CertPool
 	// Now is the time for certificate checks. nil means time.Now.
 	Now func() time.Time
+	// MAAHost is the attestation provider the release policy must name as
+	// its only authority (the setup's maa_endpoint). Empty means no policy
+	// counts as locked.
+	MAAHost string
 }
 
 // Release asks Key Vault to release the key name to the holder of the key
@@ -161,7 +165,7 @@ func (kv *KeyVault) CheckKey(ctx context.Context, kid string) (platform.KeyRule,
 	if err != nil {
 		return platform.KeyRule{}, CheckedKey{}, fmt.Errorf("azure: Key Vault get key: %w", err)
 	}
-	r, k, err := keyRuleOf(resp)
+	r, k, err := keyRuleOf(resp, kv.MAAHost)
 	if err != nil {
 		return platform.KeyRule{}, CheckedKey{}, err
 	}
@@ -176,6 +180,10 @@ type CheckedKey struct {
 	Kid     string         // key.kid: https://<vault>/keys/<name>/<version>
 	Version string         // the version part of Kid
 	Pub     *rsa.PublicKey // key.n and key.e; nil if the answer has none
+	// HostData is the image the release policy names (its
+	// x-ms-sevsnpvm-hostdata literal), nil if the policy did not pass
+	// checkReleasePolicy.
+	HostData []byte
 }
 
 // Matches checks that a released key is this version: its public half is
@@ -218,10 +226,12 @@ func checkedVersion(kid, answered string) (string, error) {
 // with version (key.kid), attributes.exportable, release_policy.immutable,
 // release_policy.contentType and the policy bytes (release_policy.data,
 // base64url), in that order, flags as one byte. An absent flag counts as
-// false. The lock is release_policy.immutable: an immutable release policy
-// cannot change. The public key (key.n, key.e) is not in the hash; the
-// runner compares it with the released key.
-func keyRuleOf(resp []byte) (platform.KeyRule, CheckedKey, error) {
+// false. The policy is locked when release_policy.immutable is true, so
+// the policy cannot change, and the policy passes checkReleasePolicy for
+// maaHost, so it releases the key to one measured image only. The public
+// key (key.n, key.e) is not in the hash; the runner compares it with the
+// released key.
+func keyRuleOf(resp []byte, maaHost string) (platform.KeyRule, CheckedKey, error) {
 	var out struct {
 		Key struct {
 			Kid string `json:"kid"`
@@ -256,10 +266,18 @@ func keyRuleOf(resp []byte) (platform.KeyRule, CheckedKey, error) {
 	}
 	r := platform.KeyRule{Hash: backend.KeyReleaseHash(backend.KeyReleaseAzure, []byte(out.Key.Kid), flag(out.Attributes.Exportable),
 		flag(rp.Immutable), []byte(rp.ContentType), policy), Lock: backend.KeyLockLocked}
+	hostData, perr := checkReleasePolicy(policy, maaHost)
+	var why []string
 	if !rp.Immutable {
-		r.Lock, r.Why = backend.KeyLockNotLocked, "release_policy.immutable is false: the key's owner can change the release policy"
+		why = append(why, "release_policy.immutable is false: the key's owner can change the release policy")
 	}
-	k := CheckedKey{Kid: out.Key.Kid}
+	if perr != nil {
+		why = append(why, "the release policy may release the key to more than one measured image: "+perr.Error())
+	}
+	if len(why) > 0 {
+		r.Lock, r.Why = backend.KeyLockNotLocked, strings.Join(why, "; ")
+	}
+	k := CheckedKey{Kid: out.Key.Kid, HostData: hostData}
 	if out.Key.N != "" || out.Key.E != "" {
 		n, errN := decodeBase64(out.Key.N)
 		e, errE := decodeBase64(out.Key.E)
@@ -502,12 +520,15 @@ func tokenImage(tok string) (setupwire.Image, error) {
 }
 
 func (r *Releaser) ReleaseKey(ctx context.Context, name string) (*rsa.PrivateKey, error) {
-	key, _, err := r.releaseKid(ctx, name)
+	key, _, err := r.releaseKid(ctx, name, nil)
 	return key, err
 }
 
-// releaseKid is ReleaseKey plus the kid the answer names ("" if none).
-func (r *Releaser) releaseKid(ctx context.Context, name string) (*rsa.PrivateKey, string, error) {
+// releaseKid is ReleaseKey plus the kid the answer names ("" if none). If
+// policyImage is set (the hostdata the key's release policy names), a token
+// that states another hostdata stops the release before Key Vault sees it:
+// the policy is not for this runner's image.
+func (r *Releaser) releaseKid(ctx context.Context, name string, policyImage []byte) (*rsa.PrivateKey, string, error) {
 	wrap, err := rsa.GenerateKey(rand.Reader, wrapKeyBits)
 	if err != nil {
 		return nil, "", err
@@ -520,7 +541,11 @@ func (r *Releaser) releaseKid(ctx context.Context, name string) (*rsa.PrivateKey
 	if err != nil {
 		return nil, "", err
 	}
-	r.Seen.Record(tokenImage(target))
+	im, imErr := tokenImage(target)
+	r.Seen.Record(im, imErr)
+	if policyImage != nil && (imErr != nil || !bytes.Equal(im.Measurement, policyImage)) {
+		return nil, "", fmt.Errorf("azure: the key's release policy names image %x, this runner's MAA token states %x (%v)", policyImage, im.Measurement, imErr)
+	}
 	payload, err := r.KV.Release(ctx, name, target)
 	if err != nil {
 		return nil, "", err

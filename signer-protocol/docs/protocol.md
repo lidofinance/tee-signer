@@ -326,13 +326,20 @@ the rule:
 
 | Platform | Locked when |
 |---|---|
-| Azure | `release_policy.immutable` is true |
+| Azure | `release_policy.immutable` is true, and the policy (`release_policy.data`) has the shape of `platform-azure/deploy/skr-policy.json.tmpl`: version `1.0.0`, one `anyOf` entry whose `authority` is `https://` + the setup's `maa_endpoint` (any case, no trailing slash, path or port), and an `allOf` of `equals` tests with string values on `x-ms-compliance-status` (`azure-compliant-uvm`), `x-ms-sevsnpvm-hostdata` (64 hex digits, not all zero), `x-ms-sevsnpvm-is-debuggable` (`"false"` or JSON `false`) and `x-ms-sevsnpvm-vmpl` (`0`); a second authority, another claim or operator, a nested `anyOf` or a JSON member given twice is not locked |
 | AWS | origin `AWS_KMS`, not multi-Region, no Allow statement of the key policy grants `kms:PutKeyPolicy`, `kms:CreateGrant`, `kms:ImportKeyMaterial` or `kms:ReplicateKey` to any principal, by name, wildcard (`kms:*`, `*`, `kms:Put*`) or `NotAction` (conditions do not count), and every Allow of `kms:Decrypt`, `kms:GenerateDataKey`, `kms:GenerateDataKeyPair`, `kms:ReEncryptFrom` or `kms:ReEncryptTo` has a `StringEquals` or `StringEqualsIgnoreCase` test of a `kms:RecipientAttestation:*` key with non-empty values; any other Allow of `kms:Encrypt` has `StringEquals` on `kms:EncryptionContext:purpose` with the one value `record-creds`, so nobody outside the enclave plants a sealing or mark log key |
 | GCP, dev | no lock exists |
 
 On Azure the runner releases exactly the key version whose release
 policy it read (`<name>/<version>` of the Get Key answer) and checks that
-the released key's public half is that version's. A mainnet setup's `kid`
+the released key's public half is that version's. If the policy passed the
+content check, the runner also refuses to release when its own MAA token
+states another `x-ms-sevsnpvm-hostdata` than the policy names.
+
+The Azure content check exists because `immutable` only says the policy
+cannot change, not what it allows. Before setting it, the key's owner can
+add a second `anyOf` entry for another attestation provider, or one that
+any SEV-SNP VM meets, and keep a way to the key after the lock. A mainnet setup's `kid`
 names the version.
 
 On mainnet (the setup's `genesis_fork_version` is mainnet's,

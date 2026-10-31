@@ -550,11 +550,21 @@ one under an approver-signed handover order (HANDOVER,
   azure-compliant-uvm`, `x-ms-sevsnpvm-hostdata` = policy hash,
   `x-ms-sevsnpvm-is-debuggable = false`, `x-ms-sevsnpvm-vmpl = 0`. It does
   not ask for `x-ms-attestation-type`: the example does not have it, and a
-  claim missing from the token fails the release.
+  claim missing from the token fails the release. The runner reads the
+  policy back with Get Key and counts it as locked only if it has this
+  shape: one authority, exactly `https://<maa_endpoint>` of the setup (no
+  trailing slash), and these four claims with `equals`. is-debuggable is a
+  boolean in the token; the template's string `"false"` released keys on a
+  live vault in October 2026, and the runner also takes a JSON `false`. An immutable policy
+  with a second authority, another claim or another operator reports
+  `key_lock: not_locked`, and a mainnet setup does not start on it. Edit
+  the template only together with `checkReleasePolicy` in
+  `platform-azure/azure/releasepolicy.go`.
 - `KEY_IMMUTABLE` defaults to `false`. An immutable release policy cannot be
   corrected, and every change of the image changes the hash. Set
   `KEY_IMMUTABLE=true` for anything beyond tests. A runner whose setup is on
-  mainnet refuses to start with a key that is not immutable
+  mainnet refuses to start with a key that is not immutable, or whose
+  policy is not the template's shape
   (`signer-protocol/docs/protocol.md`, "Key rule lock"). Keys are RSA-HSM,
   2048 bit by default (`KEY_SIZE`), enough to wrap one data key in a test.
   Use 3072 in production.
