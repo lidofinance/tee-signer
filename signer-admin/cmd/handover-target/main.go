@@ -140,7 +140,7 @@ func hexHash(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString
 func identityCmd(args []string) error {
 	fs := flag.NewFlagSet("identity", flag.ExitOnError)
 	connPath := fs.String("conn", "", "Connection (JSON) of the target, its setup_sha256 pinned")
-	setupPath := fs.String("setup", "", "the target's setup file (signer-config setup -handover-from)")
+	setupPath := fs.String("setup", "", "the target's setup file (signer-admin handover-setup)")
 	orderPath := fs.String("order", "", "the signed handover order: the target reserves itself for it first")
 	out := fs.String("out", "", "the identity file to write")
 	fs.Parse(args)

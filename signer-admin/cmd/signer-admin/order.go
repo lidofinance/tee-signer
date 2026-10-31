@@ -16,6 +16,9 @@ type orderActive struct {
 	setup  *setupwire.Setup
 	locked *setupwire.Locked
 	ref    ref
+	// open and target: handover orders only (loadHandoverActive).
+	open   *setupwire.Open
+	target *setupwire.Published
 }
 
 // parseNotAfter reads -not-after: an RFC 3339 time, or a duration from now

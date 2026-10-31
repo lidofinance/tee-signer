@@ -356,9 +356,10 @@ under an approver-signed handover order (`signer-protocol/docs/protocol.md`,
 A runner with a setup takes the sealed pages as a target, in a release
 build: IMPORT_HANDOVER (0x33, `tee-signer/handover`
 import.go, `tee-signer/server` handover_import.go). Its setup comes from
-`signer-config setup -handover-from`: the source's cluster_id, chain and
-safety, handover_generation 2, version 0 of both groups equal to the
-source's config in force. So its first mark log record, the claim of a
+`signer-admin handover-setup`: the source's cluster_id, chain and
+safety, handover_generation one higher, version 0 of both groups equal to
+the source's config in force, and a slashing_log_min_lock_days no lower
+than the source's. So its first mark log record, the claim of a
 fresh log, carries that config as version 0 of both groups.
 
 - Each request carries the signed order and a page, or part of one. The

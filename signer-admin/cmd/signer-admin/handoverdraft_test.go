@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -48,7 +49,8 @@ func TestHandoverOrderOffline(t *testing.T) {
 
 	out := mustTool(t, "show", body)
 	wantIn(t, out, "source.name = s1", "source.setup_sha256 = 0x"+hashes["s1"], "target.name = s1b", "target.verifier = dev",
-		"order_sha256 "+fullHex(handoverorder.Hash(enc)), "image: the target's image is on the allowed list", "wait: 2 s")
+		"order_sha256 "+fullHex(handoverorder.Hash(enc)), "image: the target's image is on the allowed list", "wait: 2 s",
+		"WARNING target: the active file has no target setup")
 	var sigs []string
 	for _, i := range []int{0, 2} {
 		out := mustTool(t, "sign", "-key", keys[i].file, body)
@@ -152,22 +154,29 @@ func TestHandoverFlowDevRunner(t *testing.T) {
 	}
 	step("pin", "pin", "-cluster", cl)
 
-	// The target's cloud.json, as the target's build pins it: a runner this
-	// test never connects to.
-	var th [32]byte
-	rand.Read(th[:])
+	// The target's setup (handover-setup) and its cloud.json, as the
+	// target's build pins it: a runner this test never connects to.
+	tconf := writeFile(t, filepath.Join(dir, "targets.conf"), fmt.Sprintf("platform = dev\nallowed_client_ca = %s\n[signer s1]\nslashing_log_store.dir = %s\n",
+		base64.StdEncoding.EncodeToString(ca), filepath.Join(dir, "s1b", "marks")))
+	tsetup := filepath.Join(dir, "targets", "s1.setup")
+	thex := setupHashes(step("handover-setup", "handover-setup", "-cluster", cl, "-signers", "s1", "-out", filepath.Join(dir, "targets"), tconf))["s1"]
+	th := [32]byte(mustKey(t, thex))
 	tcloud := writeJSONFile(t, filepath.Join(dir, "s1b", "cloud.json"), map[string]any{
 		"address": "tcp:127.0.0.1:1", "client_cert": cert, "client_key": key, "identity_version": 3,
-		"attestation": map[string]any{"verifier": "dev", "setup_sha256": hex.EncodeToString(th[:])},
+		"attestation": map[string]any{"verifier": "dev", "setup_sha256": thex},
 	})
-	out := failTool(t, "handover-draft", "-cluster", cl, "-signer", "s1", "-target-cloud", tcloud, "-not-after", "1s",
+	out := failTool(t, "handover-draft", "-cluster", cl, "-signer", "s1", "-target-cloud", tcloud, "-target-setup", tsetup, "-not-after", "1s",
 		"-out", filepath.Join(dir, "short.bin"))
 	wantIn(t, out, "before the source would act")
-	out = failTool(t, "handover-draft", "-cluster", cl, "-signer", "s1", "-target-cloud", tcloud, "-target-setup-sha256", strings.Repeat("ab", 32))
+	other := writeJSONFile(t, filepath.Join(dir, "s1x", "cloud.json"), map[string]any{
+		"address": "tcp:127.0.0.1:1", "client_cert": cert, "client_key": key,
+		"attestation": map[string]any{"verifier": "dev", "setup_sha256": strings.Repeat("ab", 32)},
+	})
+	out = failTool(t, "handover-draft", "-cluster", cl, "-signer", "s1", "-target-cloud", other, "-target-setup", tsetup)
 	wantIn(t, out, "is not the setup_sha256")
 
 	body := filepath.Join(dir, "handover.bin")
-	out = step("handover-draft", "handover-draft", "-cluster", cl, "-signer", "s1", "-target-cloud", tcloud, "-out", body)
+	out = step("handover-draft", "handover-draft", "-cluster", cl, "-signer", "s1", "-target-cloud", tcloud, "-target-setup", tsetup, "-out", body)
 	wantIn(t, out, "handover order: s1 (setup ", "to s1b (setup "+hex.EncodeToString(th[:4])+", dev)", "a dev signer: the time lock")
 	b, _, _, err := readHandover(body)
 	if err != nil {
@@ -176,7 +185,7 @@ func TestHandoverFlowDevRunner(t *testing.T) {
 	if b.NotAfter < uint64(time.Now().Unix())+12*3600-60 {
 		t.Fatalf("not_after %d is not 12 hours out", b.NotAfter)
 	}
-	step("show", "show", body)
+	wantIn(t, step("show", "show", body), "target: the source accepts the target's public values")
 	var sigs []string
 	for _, i := range []int{1, 2} {
 		mustTool(t, "sign", "-key", keys[i].file, body)
@@ -201,7 +210,7 @@ func TestHandoverFlowDevRunner(t *testing.T) {
 	}
 	// A second order while this one is pending: the runner refuses it.
 	body2 := filepath.Join(dir, "handover2.bin")
-	step("second draft", "handover-draft", "-cluster", cl, "-signer", "s1", "-target-cloud", tcloud, "-not-after", "13h", "-out", body2)
+	step("second draft", "handover-draft", "-cluster", cl, "-signer", "s1", "-target-cloud", tcloud, "-target-setup", tsetup, "-not-after", "13h", "-out", body2)
 	for _, i := range []int{0, 1} {
 		mustTool(t, "sign", "-key", keys[i].file, body2)
 	}
@@ -219,6 +228,6 @@ func TestHandoverFlowDevRunner(t *testing.T) {
 			"nitro_pcrs": map[string]string{"0": strings.Repeat("11", 48), "1": strings.Repeat("12", 48), "2": strings.Repeat("13", 48),
 				"3": strings.Repeat("33", 48)}},
 	})
-	out = failTool(t, "handover-draft", "-cluster", cl, "-signer", "s1", "-target-cloud", ncloud, "-out", filepath.Join(dir, "n.bin"))
+	out = failTool(t, "handover-draft", "-cluster", cl, "-signer", "s1", "-target-cloud", ncloud, "-target-setup", tsetup, "-out", filepath.Join(dir, "n.bin"))
 	wantIn(t, out, "not on the allowed-images list")
 }
