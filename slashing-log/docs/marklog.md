@@ -118,9 +118,12 @@ target, has a source below the mark's, so none can surround those votes.
 A handover then sends the key with history, and the target sets no floor
 for it. A failed write, or a record the host rolls back, leaves the key
 without history: it waits for its floor again after a handover, which
-costs liveness, not safety. The write goes only over the record the
-runner holds: a record the host removed or changed after the vote stays
-as it is. After a failed write the runner tries again
+costs liveness, not safety. The write is meant only for the record the
+runner holds: it checks the stored record before the log record and
+again before the store write, and fails if the host removed or changed
+it. This is best effort, as the store has no conditional write. A change
+between the last check and the write is overwritten with a record whose
+history is true of the key and which the log vouches for. After a failed write the runner tries again
 in a later epoch, at most 3 times per process, since each try writes a
 log record. The promotion fixes the clock reading taken
 at the import for the key's whole life: without it, each handover target

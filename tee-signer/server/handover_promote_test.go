@@ -348,3 +348,48 @@ func TestPromotionDoesNotRecreateARemovedRecord(t *testing.T) {
 		t.Fatalf("a write over the held record: %v", err)
 	}
 }
+
+// A promotion that fails before its mark log record (the stored record is
+// not the one the runner holds) costs no record and is not counted as a
+// try: once the record is back, a vote promotes the key, also after more
+// such failures than the try limit.
+func TestPromoteFailureWithoutLogRecordIsNoTry(t *testing.T) {
+	e := newTgtEnv(t, "dev", nil)
+	floor := e.floorOf()
+	sk, pk := newKey(t)
+	if err := e.importSealed(pk, sk, 5, nil); err != nil {
+		t.Fatal(err)
+	}
+	held, err := e.store.Get(shareKey(pk))
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := append([]byte(nil), held...)
+	changed[len(changed)-1] ^= 1
+	e.putRaw(pk, changed)
+	e.clock.add((floor + 1 - e.signer.EpochAt(e.now())) * testEpoch)
+	before := len(e.records())
+	for range maxPromotionTries + 1 {
+		e.clock.add(testEpoch)
+		en := e.signer.EpochAt(e.now())
+		if err := e.signMsg(pk, vote(floor, en)); err != nil {
+			t.Fatal(err)
+		}
+		e.srv.promotions.Wait()
+	}
+	for _, r := range e.records()[before:] {
+		if r.Shares != nil && r.Shares.Pending != nil {
+			t.Fatal("a promotion over a changed record wrote a share set record")
+		}
+	}
+	e.putRaw(pk, held)
+	e.clock.add(testEpoch)
+	en := e.signer.EpochAt(e.now())
+	if err := e.signMsg(pk, vote(floor, en)); err != nil {
+		t.Fatal(err)
+	}
+	e.srv.promotions.Wait()
+	if !e.recordOf(pk).History {
+		t.Fatal("no promotion once the record was back: the failures before the log record counted as tries")
+	}
+}
