@@ -1,11 +1,14 @@
 package main
 
 import (
+	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/lidofinance/tee-signer/governance/setupwire"
 	cloud "github.com/lidofinance/tee-signer/signer-protocol"
 )
 
@@ -44,5 +47,53 @@ func TestInterchange(t *testing.T) {
 	}
 	if _, err := loadInterchange(file(`{"pubkey":"` + pk1 + `","signed_blocks":[],"signed_attestations":[{"source_epoch":"6","target_epoch":"5"}]}`)); err == nil {
 		t.Fatal("a source above its target")
+	}
+}
+
+// import refuses an interchange file of another chain: its maxima would
+// lift the runner's floor for votes of the wrong chain. With -conn the
+// chain comes from -genesis-validators-root.
+func TestImportRefusesInterchangeOfAnotherChain(t *testing.T) {
+	fc := newFakeCluster(t)
+	cl := fc.cluster
+	mustTool(t, "pin", "-cluster", cl)
+	pk, shares, _ := split(t, fc.dir, 3, 4, []string{"s1", "s2", "s3", "s4"})
+	sharesFile := fc.path("shares.txt")
+	if err := os.WriteFile(sharesFile, fmt.Appendf(nil, "%s 7 0x%x\n", pk, shares[0].Secret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	setup, err := setupwire.DecodeSetup(mustRead(t, fc.path("setups/s1.setup")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ours := hex.EncodeToString(setup.Chain.GenesisValidatorsRoot[:])
+	other := strings.Repeat("11", 32)
+	if ours == other {
+		t.Fatal("test setup uses the other root")
+	}
+	icFile := func(root string) string {
+		p := filepath.Join(t.TempDir(), "ic.json")
+		body := `{"metadata":{"interchange_format_version":"5","genesis_validators_root":"0x` + root + `"},"data":[{"pubkey":"` + pk.String() +
+			`","signed_blocks":[],"signed_attestations":[{"source_epoch":"3","target_epoch":"4"}]}]}`
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	byCluster := func(ic string) []string {
+		return []string{"import", "-cluster", cl, "-signer", "s1", "-shares", sharesFile, "-interchange", ic}
+	}
+	wantIn(t, failTool(t, byCluster(icFile(other))...), "is not the runner's chain")
+	if out, _ := tool(t, byCluster(icFile(ours))...); strings.Contains(out, "is not the runner's chain") {
+		t.Fatalf("the setup's own chain refused:\n%s", out)
+	}
+	conn := fc.path("s1/cloud.json")
+	byConn := func(ic string, extra ...string) []string {
+		return append([]string{"import", "-conn", conn, "-shares", sharesFile, "-interchange", ic}, extra...)
+	}
+	wantIn(t, failTool(t, byConn(icFile(ours))...), "needs -genesis-validators-root")
+	wantIn(t, failTool(t, byConn(icFile(other), "-genesis-validators-root", "0x"+ours)...), "is not the runner's chain")
+	if out, _ := tool(t, byConn(icFile(ours), "-genesis-validators-root", "0x"+ours)...); strings.Contains(out, "is not the runner's chain") {
+		t.Fatalf("-conn with the right root refused:\n%s", out)
 	}
 }

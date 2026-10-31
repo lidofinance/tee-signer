@@ -477,19 +477,22 @@ func cmdImport(args []string, out io.Writer) error {
 	commPath := fs.String("commitments", "", "with -order: the split file of import-draft, for each validator's commitments")
 	skip := fs.Bool("skip-loaded", false, "leave out the shares whose validator the runner holds already")
 	icPath := fs.String("interchange", "", "EIP-3076 slashing protection file (format 5): each share goes in with its validator's maxima, so the runner refuses everything at or below them")
+	gvrHex := fs.String("genesis-validators-root", "", "with -conn and -interchange: the genesis_validators_root of the runner's chain (0x and 64 hex digits); with -cluster it comes from the setup")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	byCluster := *cf.path != "" || *target != ""
 	if fs.NArg() != 0 || *sharesPath == "" || byCluster == (*connPath != "") || byCluster && (*cf.path == "" || *target == "") ||
-		(*orderPath == "") != (*commPath == "") {
-		return errors.New("usage: signer-admin import (-cluster cluster.json -signer NAME | -conn cloud.json) [-order import.signed -commitments FILE] -shares FILE [-interchange FILE] [-skip-loaded]")
+		(*orderPath == "") != (*commPath == "") || *gvrHex != "" && (byCluster || *icPath == "") {
+		return errors.New("usage: signer-admin import (-cluster cluster.json -signer NAME | -conn cloud.json [-genesis-validators-root 0x..]) " +
+			"[-order import.signed -commitments FILE] -shares FILE [-interchange FILE] [-skip-loaded]")
 	}
 	var (
 		name  string
 		setup *[32]byte
 		dial  func() (*runnerclient.Client, error)
 		clID  [32]byte
+		gvr   cloud.Root // the runner's chain, for -interchange
 	)
 	if byCluster {
 		*cf.only = *target
@@ -498,7 +501,7 @@ func cmdImport(args []string, out io.Writer) error {
 			return err
 		}
 		m := c.members[0]
-		name, setup, clID = m.name, &m.setupHash, m.setup.ClusterID
+		name, setup, clID, gvr = m.name, &m.setupHash, m.setup.ClusterID, cloud.Root(m.setup.Chain.GenesisValidatorsRoot)
 		dial = func() (*runnerclient.Client, error) { return connectAdmin(m, *cf.timeout) }
 	} else {
 		conn, err := loadConn(*connPath)
@@ -506,6 +509,13 @@ func cmdImport(args []string, out io.Writer) error {
 			return err
 		}
 		name = conn.Address
+		if *icPath != "" {
+			g, err := decodeHexN(*gvrHex, 32)
+			if err != nil {
+				return fmt.Errorf("-conn with -interchange needs -genesis-validators-root of the runner's chain: %w", err)
+			}
+			gvr = cloud.Root(g)
+		}
 		dial = func() (*runnerclient.Client, error) { return conn.New(runnerclient.WithTimeout(*cf.timeout)) }
 	}
 	var (
@@ -537,6 +547,11 @@ func cmdImport(args []string, out io.Writer) error {
 			return err
 		}
 		fprintf(out, "interchange %s: %d validators, genesis_validators_root %s\n", *icPath, len(ic.marks), ic.gvr)
+		// History of another chain says nothing about this one, and its
+		// maxima would set the runner's floor for this chain.
+		if ic.gvr != gvr {
+			return fmt.Errorf("%s: genesis_validators_root %s is not the runner's chain %s (refusing)", *icPath, ic.gvr, gvr)
+		}
 	}
 	shares, err := readShares(*sharesPath)
 	if err != nil {
