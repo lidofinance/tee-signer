@@ -153,13 +153,11 @@ func cmdSetup(args []string, out io.Writer) error {
 			return fmt.Errorf("signer %s: %w", s.SignerName, err)
 		}
 	}
-	// -allow-gcp-unsafe-single-key is for a one-signer GCP cluster, the
-	// only cluster whose every split is 1 of 1: it writes the acceptance
-	// into that signer's setup, as the key
-	// sealing_key_release.unsafe_single_key_accepted in its section would.
-	// With more signers, or with one signer that is not on GCP, the flag
-	// is refused: the acceptance is one signer's decision, so there the key
-	// in that signer's section says it.
+	// -allow-gcp-unsafe-single-key is for a single-mode GCP file, which
+	// has one signer: it writes the acceptance into that signer's setup,
+	// as the key sealing_key_release.unsafe_single_key_accepted in its
+	// section would. A threshold file, or a signer that is not on GCP,
+	// refuses the flag.
 	// signing_mode is a public value, the same for every signer (buildSetups
 	// compares them). A single-mode cluster is one signer that holds whole
 	// keys; a threshold-mode cluster of one signer could hold no key.
@@ -170,9 +168,6 @@ func cmdSetup(args []string, out io.Writer) error {
 		if s := setups[0]; s.SigningMode != setupwire.SigningModeSingle {
 			return fmt.Errorf("-allow-gcp-unsafe-single-key: the file says signing_mode = %s; the acceptance is for a single-mode setup (signing_mode = single)", s.SigningMode)
 		}
-		if len(setups) != 1 {
-			return fmt.Errorf("-allow-gcp-unsafe-single-key: the file has %d signers; it is for a one-signer GCP cluster (put sealing_key_release.unsafe_single_key_accepted = true in a signer's section to accept it there)", len(setups))
-		}
 		if s := setups[0]; s.Platform.Platform != setupwire.PlatformGCP {
 			return fmt.Errorf("-allow-gcp-unsafe-single-key: signer %s is on %s, not on GCP; only a GCP signer needs the acceptance to hold keys alone", s.SignerName, s.Platform.Platform)
 		}
@@ -181,7 +176,8 @@ func cmdSetup(args []string, out io.Writer) error {
 	// Every split of the cluster's keys has at most as many shares as the
 	// file has signers. t = n is the split the threshold rule refuses
 	// last, so a cluster that fails it can hold no key at all: one GCP
-	// signer without the acceptance. The runners refuse such an order;
+	// signer without the acceptance, or a threshold file with one signer
+	// (CheckMembers above refuses that one first). The runners refuse such an order;
 	// this refuses the setup, with the reason and the way to accept. On
 	// mainnet a GCP runner starts only with the other acceptance,
 	// sealing_key_release.no_lock_accepted (platform.Options.CheckNoLock),

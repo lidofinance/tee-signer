@@ -22,10 +22,10 @@
 //	    -allow-gcp-unsafe-single-key: the single-mode setup of a one-signer GCP
 //	    cluster accepts that its signer holds keys alone (1 of 1), which is
 //	    unsafe there (setupwire.UnsafeSingleKeyWarning); without it a file
-//	    with one GCP signer is refused. The flag is refused for a file with
-//	    more signers or whose one signer is not on GCP (the key
-//	    sealing_key_release.unsafe_single_key_accepted in a signer's
-//	    section accepts it there). A setup with an acceptance gets a
+//	    with one GCP signer is refused. The key
+//	    sealing_key_release.unsafe_single_key_accepted in the signer's
+//	    section does the same. The flag is refused for a threshold file
+//	    and for a signer that is not on GCP. A setup with an acceptance gets a
 //	    WARNING line; on mainnet one with unsafe_single_key_accepted also
 //	    needs sealing_key_release.no_lock_accepted, or its runner does not
 //	    start, so it is refused without it.

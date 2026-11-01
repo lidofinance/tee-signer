@@ -399,7 +399,7 @@ same change yields one share; with 1 of 1 it yields the key. The
 protection is the project's IAM governance and the watchdog, not the TEE.
 `signer-admin setup -allow-gcp-unsafe-single-key` writes the acceptance
 into the setup of a one-signer GCP cluster (the key in the signer's
-section does the same, and is the way for a file with more signers),
+section does the same; a threshold setup refuses both),
 refuses a file with one GCP signer without it, and prints a WARNING line
 for every setup that carries it; on mainnet such a setup also needs
 `no_lock_accepted`, or its runner would not start, so `signer-admin

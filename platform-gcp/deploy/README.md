@@ -35,8 +35,8 @@ in a threshold cluster, `setup-gcp-single.conf` of a single-node signer).
 > `sealing_key_release.unsafe_single_key_accepted = true` in the signer's
 > setup file (with `signer-admin setup`, the flag
 > `-allow-gcp-unsafe-single-key` sets it for a one-signer GCP cluster; a
-> file with more signers, or whose one signer is not on GCP, refuses the
-> flag and takes the key in the signer's section). On mainnet the same
+> threshold file, or a signer that is not on GCP, refuses the flag). On
+> mainnet the same
 > setup also needs `sealing_key_release.no_lock_accepted = true`, the
 > separate acceptance without which a GCP runner does not start there;
 > `signer-admin setup` refuses a mainnet setup that has the one without
