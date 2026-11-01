@@ -259,3 +259,23 @@ func TestImportDegenerateSplit(t *testing.T) {
 		})
 	}
 }
+
+// checkWholeKeyOf refuses every key under a signing_mode it does not
+// know, whole key or share. Setup.Check refuses such a setup, so this
+// only guards a later mode added without a rule here.
+func TestUnknownSigningModeRefusesEveryKey(t *testing.T) {
+	e := newShareTgtEnv(t, "dev", nil)
+	e.srv.Updates.opt.Setup.SigningMode = 7
+	sk, pk := newKey(t)
+	_, other := newKey(t)
+	for _, c := range []struct {
+		name string
+		pk   backend.Pubkey
+	}{{"whole key", pk}, {"share", other}} {
+		_, err := e.srv.addShare(c.pk, &sk, 1, nil, "sealed")
+		var r *backend.RefusedError
+		if !errors.As(err, &r) || r.Code != backend.StatusBadKey || !strings.Contains(err.Error(), "signing_mode 7") {
+			t.Errorf("%s: %v, want a BAD_KEY refusal naming signing_mode 7", c.name, err)
+		}
+	}
+}

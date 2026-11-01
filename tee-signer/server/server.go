@@ -838,7 +838,8 @@ func (s *Server) checkMaximaAhead(wm *backend.Watermark, window uint64) error {
 
 // checkShare refuses a share that cannot be stored: no log_id yet, a
 // validator already loaded (keys is the signer's list), a runner at its
-// setup's max_keys or a bad secret.
+// setup's max_keys, a bad secret or a key that does not fit the setup's
+// signing_mode (checkWholeKeyOf).
 func (s *Server) checkShare(pk backend.Pubkey, secret *[32]byte, keys []backend.ValidatorKey) error {
 	if err := s.checkLogID(); err != nil {
 		return backend.Refused(backend.StatusStorage, "%v", err)
@@ -880,18 +881,25 @@ func (s *Server) checkWholeKey(pk backend.Pubkey, secret *[32]byte) error {
 }
 
 // checkWholeKeyOf is checkWholeKey for a key whose public key got is
-// known already.
+// known already. It refuses every key under a signing_mode it does not
+// know.
 func (s *Server) checkWholeKeyOf(pk, got backend.Pubkey) error {
 	if s.Updates == nil {
 		return nil
 	}
-	switch single := s.Updates.SetupWire().SigningMode == setupwire.SigningModeSingle; {
-	case single && got != pk:
-		return backend.Refused(backend.StatusBadKey, "the setup says signing_mode = single, so this signer holds whole keys only: the key is not the validator key %s",
-			pk.String()[:18])
-	case !single && got == pk:
-		return backend.Refused(backend.StatusBadKey, "the setup says signing_mode = threshold, so this signer holds shares of splits only: the key is the whole validator key %s",
-			pk.String()[:18])
+	switch mode := s.Updates.SetupWire().SigningMode; mode {
+	case setupwire.SigningModeSingle:
+		if got != pk {
+			return backend.Refused(backend.StatusBadKey, "the setup says signing_mode = single, so this signer holds whole keys only: the key is not the validator key %s",
+				pk.String()[:18])
+		}
+	case setupwire.SigningModeThreshold:
+		if got == pk {
+			return backend.Refused(backend.StatusBadKey, "the setup says signing_mode = threshold, so this signer holds shares of splits only: the key is the whole validator key %s",
+				pk.String()[:18])
+		}
+	default:
+		return backend.Refused(backend.StatusBadKey, "signing_mode %d: unknown, this signer takes no key", mode)
 	}
 	return nil
 }
