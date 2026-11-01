@@ -36,7 +36,9 @@
 //   - every share opens with this boot's import key under its header and,
 //     the hash of the page's carry (the mark, the origin, the key set and
 //     the day's exits are in the associated data), and is the share of its
-//     share_pubkey.
+//     share_pubkey;
+//   - every share fits this runner's signing_mode: a whole key under
+//     single, a share that is not the validator key under threshold.
 //
 // Each new share then goes through the sealed import's path: the mark log
 // is raised to the mark first (its interchange maxima; a log that never
@@ -439,6 +441,11 @@ func (im *importer) importShares(ctx context.Context, payload []byte) ([]byte, e
 		clear(sec[:])
 		if sp, err := core.PubkeyOf(secrets[i]); err != nil || sp != sh.SharePubkey {
 			return nil, backend.Refused(backend.StatusBadKey, "handover import: share %d (%s): the share is not its share_pubkey's", i, sh.Pubkey.String()[:18])
+		}
+		// The mode check runs again where the share is added; here it
+		// refuses before the order slot is written.
+		if err := s.checkWholeKeyOf(sh.Pubkey, sh.SharePubkey); err != nil {
+			return nil, err
 		}
 	}
 	// The carry, and with it the page's total and key set, is the source's

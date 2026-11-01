@@ -747,3 +747,40 @@ func TestHandoverImportMidway(t *testing.T) {
 		t.Fatalf("%+v", r)
 	}
 }
+
+// A page whose keys do not fit the target's signing_mode is refused
+// before the import starts: a threshold target refuses whole keys, a
+// single target refuses shares, and neither writes the order slot, so
+// the target is not held in an import it can never finish.
+func TestHandoverImportRefusesKeysOfTheOtherMode(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		env   func(t *testing.T) *tgtEnv
+		whole bool
+		want  string
+	}{
+		{"threshold target, whole keys", func(t *testing.T) *tgtEnv { return newShareTgtEnv(t, "dev", nil) }, true, "signing_mode = threshold"},
+		{"single target, shares", func(t *testing.T) *tgtEnv { return newTgtEnv(t, "dev", nil) }, false, "signing_mode = single"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := c.env(t)
+			src := newSource(t, 2, testMark)
+			if c.whole {
+				for i := range src.shares {
+					src.shares[i].pk = src.shares[i].share
+				}
+				slices.SortFunc(src.shares, func(a, b srcShare) int { return bytes.Compare(a.pk[:], b.pk[:]) })
+			}
+			order, hash := e.order([]byte{1, 2}, nil)
+			_, err := e.imp(order, src.pages(e.sealTo(), hash, 8)[0], 0)
+			refusedImport(t, err, backend.StatusBadKey, c.want)
+			if n := len(e.signer.Keys()); n != 0 || e.srv.importing() != nil {
+				t.Fatalf("refused, but %d keys are in, slot %+v", n, e.srv.importing())
+			}
+			e.restart()
+			if e.srv.importing() != nil {
+				t.Fatalf("after a restart the slot is %+v", e.srv.importing())
+			}
+		})
+	}
+}
