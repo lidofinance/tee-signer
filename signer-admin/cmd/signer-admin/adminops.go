@@ -467,6 +467,29 @@ func readShares(path string) ([]share, error) {
 	return out, sc.Err()
 }
 
+// chainOf reads a runner's setup file, or the -config file of a runner
+// without a setup, and returns its genesis_validators_root and the
+// setup_hash such a runner reports: the setup's hash, or the SHA-256 of the
+// -config file.
+func chainOf(path string) (cloud.Root, [32]byte, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return cloud.Root{}, [32]byte{}, err
+	}
+	if s, err := setupwire.DecodeSetup(raw); err == nil {
+		h, err := setupwire.SetupHash(raw)
+		if err != nil {
+			return cloud.Root{}, [32]byte{}, fmt.Errorf("%s: %w", path, err)
+		}
+		return cloud.Root(s.Chain.GenesisValidatorsRoot), h, nil
+	}
+	cfg, _, err := core.LoadConfig(path)
+	if err != nil {
+		return cloud.Root{}, [32]byte{}, fmt.Errorf("%s: neither a setup file nor a signer config: %w", path, err)
+	}
+	return cfg.GenesisValidatorsRoot, sha256.Sum256(raw), nil
+}
+
 func cmdImport(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("import", flag.ContinueOnError)
 	cf := addClusterFlags(fs)
@@ -477,14 +500,15 @@ func cmdImport(args []string, out io.Writer) error {
 	commPath := fs.String("commitments", "", "with -order: the split file of import-draft, for each validator's commitments")
 	skip := fs.Bool("skip-loaded", false, "leave out the shares whose validator the runner holds already")
 	icPath := fs.String("interchange", "", "EIP-3076 slashing protection file (format 5): each share goes in with its validator's maxima, so the runner refuses everything at or below them")
-	gvrHex := fs.String("genesis-validators-root", "", "with -conn and -interchange: the genesis_validators_root of the runner's chain (0x and 64 hex digits); with -cluster it comes from the setup")
+	chainPath := fs.String("setup", "", "with -conn and -interchange: the runner's setup file, or the -config file of a runner without a setup; "+
+		"the runner must report its hash, and the file's genesis_validators_root must be the interchange file's (with -cluster it is the member's setup)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	byCluster := *cf.path != "" || *target != ""
 	if fs.NArg() != 0 || *sharesPath == "" || byCluster == (*connPath != "") || byCluster && (*cf.path == "" || *target == "") ||
-		(*orderPath == "") != (*commPath == "") || *gvrHex != "" && (byCluster || *icPath == "") {
-		return errors.New("usage: signer-admin import (-cluster cluster.json -signer NAME | -conn cloud.json [-genesis-validators-root 0x..]) " +
+		(*orderPath == "") != (*commPath == "") || *chainPath != "" && (byCluster || *icPath == "") {
+		return errors.New("usage: signer-admin import (-cluster cluster.json -signer NAME | -conn cloud.json [-setup FILE]) " +
 			"[-order import.signed -commitments FILE] -shares FILE [-interchange FILE] [-skip-loaded]")
 	}
 	var (
@@ -492,7 +516,10 @@ func cmdImport(args []string, out io.Writer) error {
 		setup *[32]byte
 		dial  func() (*runnerclient.Client, error)
 		clID  [32]byte
-		gvr   cloud.Root // the runner's chain, for -interchange
+		// For -interchange: the runner's chain and the setup_hash the runner
+		// must report for it.
+		gvr       cloud.Root
+		gvrOfHash [32]byte
 	)
 	if byCluster {
 		*cf.only = *target
@@ -501,7 +528,8 @@ func cmdImport(args []string, out io.Writer) error {
 			return err
 		}
 		m := c.members[0]
-		name, setup, clID, gvr = m.name, &m.setupHash, m.setup.ClusterID, cloud.Root(m.setup.Chain.GenesisValidatorsRoot)
+		name, setup, clID = m.name, &m.setupHash, m.setup.ClusterID
+		gvr, gvrOfHash = cloud.Root(m.setup.Chain.GenesisValidatorsRoot), m.setupHash
 		dial = func() (*runnerclient.Client, error) { return connectAdmin(m, *cf.timeout) }
 	} else {
 		conn, err := loadConn(*connPath)
@@ -510,11 +538,12 @@ func cmdImport(args []string, out io.Writer) error {
 		}
 		name = conn.Address
 		if *icPath != "" {
-			g, err := decodeHexN(*gvrHex, 32)
-			if err != nil {
-				return fmt.Errorf("-conn with -interchange needs -genesis-validators-root of the runner's chain: %w", err)
+			if *chainPath == "" {
+				return errors.New("-conn with -interchange needs -setup: the runner's setup file, or its -config file if it runs without a setup")
 			}
-			gvr = cloud.Root(g)
+			if gvr, gvrOfHash, err = chainOf(*chainPath); err != nil {
+				return err
+			}
 		}
 		dial = func() (*runnerclient.Client, error) { return conn.New(runnerclient.WithTimeout(*cf.timeout)) }
 	}
@@ -578,6 +607,20 @@ func cmdImport(args []string, out io.Writer) error {
 	}
 	if !r.OK() {
 		return fmt.Errorf("%s: %s", name, r)
+	}
+	if ic != nil {
+		// The chain compared above is the runner's only if the runner runs
+		// the setup or -config file it came from.
+		ctx, cancel := context.WithTimeout(context.Background(), *cf.timeout)
+		st, err := cl.SetupState(ctx, cl.Verify)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("%s: setup state: %w", name, err)
+		}
+		if st.SetupHash != gvrOfHash {
+			return fmt.Errorf("%s: the runner reports setup %s, the chain of the interchange check is that of %s (refusing)",
+				name, fullHex(st.SetupHash), fullHex(gvrOfHash))
+		}
 	}
 	held := map[cloud.Pubkey]bool{}
 	if *skip {
