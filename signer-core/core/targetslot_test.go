@@ -3,6 +3,7 @@ package core_test
 import (
 	"testing"
 
+	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
@@ -90,9 +91,9 @@ func TestAttestationFutureSlot(t *testing.T) {
 	}
 	// Within SC_SLOT_MARGIN_SECONDS of slot 672's start it signs.
 	start672 := uint64(genesis + 672*12)
-	h.Clock = func() (uint64, error) { return start672 - 3, nil }
+	h.Clock = func() (uint64, error) { return start672 - core.SlotMarginSeconds - 1, nil }
 	wantStatus(t, sign(future), backend.StatusPolicyFuture)
-	h.Clock = func() (uint64, error) { return start672 - 2, nil }
+	h.Clock = func() (uint64, error) { return start672 - core.SlotMarginSeconds, nil }
 	if err := sign(future); err != nil {
 		t.Fatalf("the honest vote for slot 672: %v", err)
 	}

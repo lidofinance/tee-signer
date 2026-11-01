@@ -37,7 +37,7 @@ import (
 // a double vote, a surround and a second block at a slot, across all
 // runners, the pre-history and the imported votes. It also refuses any
 // signed vote or block whose slot has not started (the core's slot rule,
-// 2 s margin), and an honest vote for the clock's epoch refused when no
+// core.SlotMarginSeconds), and an honest vote for the clock's epoch refused when no
 // vote, import, restart floor, cover write or commit-ahead window of that
 // key explains it (liveness: a hostile caller must not be able to block
 // the validator's own votes).
@@ -148,7 +148,7 @@ type modelVote struct {
 	source, target uint64
 	root           byte
 	who            string
-	// at is the epoch of the clock + 2 s when a runner signed the vote (0
+	// at is the epoch of the clock + core.SlotMarginSeconds when a runner signed the vote (0
 	// for pre-history and imports): a target above it was signed for a slot
 	// that had not started.
 	at uint64
@@ -245,8 +245,8 @@ func runModel(t *testing.T, ops []byte) (signed int) {
 	// started fails on a signed message whose slot has not started.
 	started := func(r *modelRunner, what string, slot uint64) {
 		t.Helper()
-		if lim := r.e.signer.SlotAt(r.e.now() + 2); slot > lim {
-			fail("%s at slot %d signed before it started (clock slot + 2 s: %d)", what, slot, lim)
+		if lim := r.e.signer.SlotAt(r.e.now() + core.SlotMarginSeconds); slot > lim {
+			fail("%s at slot %d signed before it started (clock slot + margin: %d)", what, slot, lim)
 		}
 	}
 	// excused reports whether a slashing refusal of the honest vote (s, tg)
@@ -335,7 +335,7 @@ func runModel(t *testing.T, ops []byte) (signed int) {
 			if skew {
 				m.Slot += spe
 			}
-			at := r.e.signer.EpochAt(r.e.now() + 2)
+			at := r.e.signer.EpochAt(r.e.now() + core.SlotMarginSeconds)
 			err := r.e.signMsg(k.pk, m)
 			lost := op == 16
 			trace = append(trace, fmt.Sprintf("runner %d epoch %d: vote key %d (%d, %d) slot %d root %d lost=%v: %v", active, epoch, k.index, s, tg, m.Slot, root, lost, err))
