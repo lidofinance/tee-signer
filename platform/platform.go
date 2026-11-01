@@ -161,7 +161,9 @@ type Platform struct {
 // runner read it inside the TEE: on AWS the KMS key policy and key
 // metadata, on Azure the Key Vault key's release policy and flags.
 type KeyRule struct {
-	// Hash is key_release_hash (backend.KeyReleaseHash); zero when unread or none.
+	// Hash is key_release_hash (backend.KeyReleaseHash); zero when unread
+	// or none. The runner also reports zero for a rule that is not locked
+	// (tee-signer keyRule).
 	Hash [32]byte
 	Lock backend.KeyLock
 	// Why says what keeps the rule open, or why it was not read.
@@ -191,6 +193,9 @@ func (o Options) ReadKeyRule(ctx context.Context, read func(context.Context) (Ke
 	r, err := read(ctx)
 	if err != nil {
 		r = KeyRule{Lock: backend.KeyLockUnread, Why: err.Error()}
+	}
+	if r.Lock == backend.KeyLockUnread {
+		r.Hash = [32]byte{}
 	}
 	if err := o.CheckKeyRule(&r); err != nil {
 		return nil, err

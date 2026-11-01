@@ -20,9 +20,11 @@ import (
 
 // The runner takes the key rule its platform read. On a test network every
 // rule passes, and a platform that read nothing gives unread and a zero
-// hash, as before. On mainnet a rule that is not locked or not read stops
-// the start; a locked rule and a platform without a lock (GCP) pass. The
-// flag path reads nothing.
+// hash, as before. Only a locked rule keeps its hash: a rule that is not
+// locked or not read gives a zero key_release_hash, which no pin matches.
+// On mainnet a rule that is not locked or not read stops the start; a
+// locked rule and a platform without a lock (GCP) pass. The flag path
+// reads nothing.
 func TestKeyRuleAtStart(t *testing.T) {
 	locked := &platform.KeyRule{Hash: [32]byte{0x77}, Lock: backend.KeyLockLocked}
 	open := &platform.KeyRule{Hash: [32]byte{0x78}, Lock: backend.KeyLockNotLocked, Why: "release_policy.immutable is false"}
@@ -39,8 +41,10 @@ func TestKeyRuleAtStart(t *testing.T) {
 		refuse  bool
 	}{
 		{"testnet locked", false, false, locked, *locked, false},
-		{"testnet not locked", false, false, open, *open, false},
+		{"testnet not locked", false, false, open, platform.KeyRule{Lock: backend.KeyLockNotLocked, Why: open.Why}, false},
 		{"testnet unread", false, false, unread, *unread, false},
+		{"testnet unread with a hash", false, false, &platform.KeyRule{Hash: [32]byte{0x79}, Lock: backend.KeyLockUnread, Why: "ListGrants: denied"},
+			platform.KeyRule{Lock: backend.KeyLockUnread, Why: "ListGrants: denied"}, false},
 		{"testnet nothing read", false, false, nil, platform.KeyRule{Lock: backend.KeyLockUnread, Why: "the platform read no key rule"}, false},
 		{"testnet gcp", false, false, none, *none, false},
 		{"mainnet locked", true, false, locked, *locked, false},

@@ -50,6 +50,7 @@ func TestReadKeyRule(t *testing.T) {
 		{"testnet no lock possible", false, false, none, nil, backend.KeyLockNone, ""},
 		{"testnet not locked", false, false, open, nil, backend.KeyLockNotLocked, ""},
 		{"testnet unread", false, false, KeyRule{Hash: [32]byte{9}}, denied, backend.KeyLockUnread, ""},
+		{"testnet unread with a hash", false, false, KeyRule{Hash: [32]byte{9}, Lock: backend.KeyLockUnread, Why: "ListGrants"}, nil, backend.KeyLockUnread, ""},
 	} {
 		o := Options{SetupHash: setup, Mainnet: c.mainnet, NoLockAccepted: c.accept}
 		got, err := o.ReadKeyRule(context.Background(), read(c.r, c.err))
@@ -65,6 +66,9 @@ func TestReadKeyRule(t *testing.T) {
 		}
 		if c.err != nil && (got.Hash != [32]byte{} || got.Why != c.err.Error()) {
 			t.Errorf("%s: a failed read gave %+v", c.name, got)
+		}
+		if c.want == backend.KeyLockUnread && got.Hash != ([32]byte{}) {
+			t.Errorf("%s: an unread rule kept the hash %x", c.name, got.Hash)
 		}
 	}
 	calls := 0

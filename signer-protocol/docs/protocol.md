@@ -346,8 +346,9 @@ then says that the setup accepts it. The dev platform has no key release
 service and no real attestation, so it never starts on mainnet: the start error begins `mainnet: the dev
 platform has no real attestation`, and on other chains HEALTH's
 `key_lock_why` says the dev platform is refused on mainnet. On other
-chains the runner starts; a failed read leaves
-`key_release_hash` zero and logs a warning.
+chains the runner starts; a failed read, or a rule that is not locked,
+leaves `key_release_hash` zero and logs a warning, so no
+`key_release_sha256` pin matches the runner.
 
 A GCP signer holds a key alone only with a second, separate acceptance:
 an import order with t = n = 1 is refused on GCP on every chain, with or
@@ -400,7 +401,7 @@ sits in the private part of the setup, which a verifier sees only as
 IDENTITY it verified and pushes it along with the proof; the watchdog shows "key rule
 locked: yes, no, not possible (GCP) or unread" per signer and warns on no
 or unread for a mainnet cluster. A zero `key_release_hash` in the proof
-counts as unread whatever HEALTH says.
+counts as unread or not locked whatever HEALTH says.
 
 ### Image check
 
