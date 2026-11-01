@@ -45,7 +45,7 @@ nts: ## the Rust NTS library (trusted-time/rust) for both arches: crates fetched
 build: ## static runners (one per cloud), host tools; runs the release gate and the dependency check on each
 	bash $(ROOT)/scripts/build-runner.sh
 
-test-modules: core nts ## gofmt, vet and unit tests of every Go module, each on its own go.mod
+test-modules: core nts ## gofmt, vet and unit tests of every Go module (or those of CI_MODULES), each on its own go.mod
 	bash $(ROOT)/scripts/test-modules.sh
 
 race: test-modules ## same as test-modules (the race detector is on unless RACE=)

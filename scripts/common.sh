@@ -19,7 +19,7 @@ export GOWORK=off
 
 # FUZZ_MODULES names the Go modules scripts/fuzz.sh fuzzes, separated by
 # spaces: unset or ALL for all of them, none for no module. On a pull
-# request CI sets it from scripts/affected.sh, which prints ALL for any
+# request CI sets it from scripts/ci-scope.sh, which gives ALL for any
 # change to the C code or a shared input. fuzz_everything: FUZZ_MODULES is
 # unset or ALL, so every Go module and the C fuzz targets (signer-core,
 # markformat) run.

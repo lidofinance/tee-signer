@@ -3,10 +3,15 @@
 # enabled on a protected branch.
 name: ci
 
+# A pull request tests only what its change needs (scripts/ci-scope.sh);
+# a push to main and a manual run test everything. Every job runs and
+# reports on every pull request, as the branch rules require; a job with
+# nothing to test says why and passes.
 on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -39,17 +44,31 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
+      # The history, for the diff against the base branch.
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          fetch-depth: 0
+      # Sets CI_MODULES, FUZZ_MODULES, CI_CORE, CI_E2E and CI_TESTS.
+      - name: scope
+        run: bash scripts/ci-scope.sh | tee -a "$GITHUB_ENV"
+      - name: no tests
+        if: env.CI_MODULES == 'none'
+        run: echo "Only docs changed, no module to test."
       - uses: actions/setup-go@v5
+        if: env.CI_MODULES != 'none'
         with:
           go-version: "1.26.x"
           cache: false
-      - run: bash scripts/deps.sh
-      - run: make core
-      - run: make nts
-      - run: make test-modules
+      - if: env.CI_MODULES != 'none'
+        run: bash scripts/deps.sh
+      - if: env.CI_MODULES != 'none'
+        run: make core
+      - if: env.CI_MODULES != 'none'
+        run: make nts
+      # Tests the modules of CI_MODULES.
+      - if: env.CI_MODULES != 'none'
+        run: make test-modules
       # Show every failing test with its output, not only the log's tail.
       - if: failure()
         run: |
@@ -64,47 +83,56 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
+      # The history, for the diff against the base branch.
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-          # The history, for the diff against the base branch.
           fetch-depth: 0
-      # A pull request fuzzes only the modules it changes and the modules
-      # that depend on them (scripts/affected.sh); a push to main fuzzes all.
-      - name: fuzz scope
-        if: github.event_name == 'pull_request'
-        run: |
-          m="$(bash scripts/affected.sh "origin/$GITHUB_BASE_REF")"
-          echo "FUZZ_MODULES=${m:-none}" >>"$GITHUB_ENV"
-      - run: sudo apt-get install -y -qq clang
+      # Sets CI_MODULES, FUZZ_MODULES, CI_CORE, CI_E2E and CI_TESTS.
+      - name: scope
+        run: bash scripts/ci-scope.sh | tee -a "$GITHUB_ENV"
+      - name: no tests
+        if: env.CI_CORE != '1'
+        run: echo "signer-core, markformat and the shared inputs did not change, nothing to test."
+      - if: env.CI_CORE == '1'
+        run: sudo apt-get install -y -qq clang
       # The vectors come from their pinned releases (sha256 checked).
-      - run: bash signer-core/scripts/fetch.sh
-      - run: make test-core
-      - run: make fuzz-core
+      - if: env.CI_CORE == '1'
+        run: bash signer-core/scripts/fetch.sh
+      - if: env.CI_CORE == '1'
+        run: make test-core
+      - if: env.CI_CORE == '1'
+        run: make fuzz-core
 
   full:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
+      # The history, for the diff against the base branch.
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
           fetch-depth: 0
-      # A pull request fuzzes only the modules it changes and the modules
-      # that depend on them (scripts/affected.sh); a push to main fuzzes all.
-      - name: fuzz scope
-        if: github.event_name == 'pull_request'
-        run: |
-          m="$(bash scripts/affected.sh "origin/$GITHUB_BASE_REF")"
-          echo "FUZZ_MODULES=${m:-none}" >>"$GITHUB_ENV"
+      # Sets CI_MODULES, FUZZ_MODULES, CI_CORE, CI_E2E and CI_TESTS.
+      - name: scope
+        run: bash scripts/ci-scope.sh | tee -a "$GITHUB_ENV"
+      - name: no tests
+        if: env.CI_TESTS != '1'
+        run: echo "Only docs changed, nothing to test."
       - uses: actions/setup-go@v5
+        if: env.CI_TESTS == '1'
         with:
           go-version: "1.26.x"
           cache: false
-      - run: bash scripts/deps.sh
-      - run: bash signer-core/scripts/fetch.sh
-      - run: make test
-      - run: make model
+      - if: env.CI_TESTS == '1'
+        run: bash scripts/deps.sh
+      - if: env.CI_TESTS == '1'
+        run: bash signer-core/scripts/fetch.sh
+      # Runs the parts CI_MODULES, CI_E2E and CI_CORE call for.
+      - if: env.CI_TESTS == '1'
+        run: make test
+      - if: env.CI_E2E == '1'
+        run: make model
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

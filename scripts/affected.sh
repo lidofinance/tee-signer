@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Prints the Go modules that a change needs fuzzed, for scripts/fuzz.sh
-# (FUZZ_MODULES). The change is git diff BASE...HEAD, the commits of HEAD
+# Prints the Go modules that a change needs tested and fuzzed, for
+# scripts/ci-scope.sh and scripts/fuzz.sh (FUZZ_MODULES). The change is git diff BASE...HEAD, the commits of HEAD
 # since it left BASE.
 #
 #   scripts/affected.sh [BASE]   default origin/$GITHUB_BASE_REF, else origin/main
@@ -14,7 +14,8 @@
 #   ALL        a shared input changed: Makefile, scripts/, devkit/,
 #              .github/, go.work*, signer-core/, markformat/, the Rust code
 #              of trusted-time, any C or Rust file, or a file in no module.
-#              Also when the diff cannot be made, and when FUZZ_ALL=1.
+#              Also when the diff cannot be made, and when CI_ALL=1 or
+#              FUZZ_ALL=1.
 # The reason goes to stderr. The C fuzz targets run only on ALL.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
@@ -25,6 +26,7 @@ all() {
   exit 0
 }
 
+[ "${CI_ALL:-0}" != 1 ] || all "CI_ALL=1"
 [ "${FUZZ_ALL:-0}" != 1 ] || all "FUZZ_ALL=1"
 if [ -n "${1:-}" ]; then
   base="$1"
