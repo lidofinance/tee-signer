@@ -261,8 +261,8 @@ signing root equals the last one the runner signed for that validator
 gets the same signature again, so a validator client's retry works. The
 C core decides (`sc_repeat_roots`): the checks before it still run (the
 proposer index of a block, source not above target and the target epoch
-equal to the slot's epoch for an attestation, the clock and the epoch
-horizon), then the core signs the same root
+equal to the slot's epoch for an attestation, the clock, the slot rule
+and the epoch horizon), then the core signs the same root
 again (BLS is deterministic, so the signature is the same) without the
 slashing check and without a watermark or record write. Anything else at that target or
 slot is refused by the slashing rules, and so is a repeat of an older

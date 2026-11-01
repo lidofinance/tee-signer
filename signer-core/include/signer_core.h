@@ -783,18 +783,19 @@ void sc_signer_get_slot_times(const sc_signer *s, sc_slot_times *out);
  * The slot rule. A block, attestation, PTC vote or payload envelope signs
  * only if its slot has started: slot <= the slot at now +
  * SC_SLOT_MARGIN_SECONDS under the slot time changes in force
- * (SC_ERR_POLICY_FUTURE otherwise). Each of these moves a mark or a slot
- * rule, so one signed for a future slot would refuse the validator's real
- * message for that slot or epoch later (SC_ERR_SLASH_TARGET,
- * SC_ERR_SLASH_BLOCK, SC_ERR_EQUIVOCATION), long after the caller lost
- * access. The epoch horizon (max_epochs_ahead) alone allows whole epochs
+ * (SC_ERR_POLICY_FUTURE otherwise). Slot 0 starts at genesis, so before
+ * genesis - SC_SLOT_MARGIN_SECONDS every slot is refused. Each of these
+ * moves a mark or a slot rule, so one signed for a future slot would
+ * refuse the validator's real message for that slot or epoch later
+ * (SC_ERR_SLASH_TARGET, SC_ERR_SLASH_BLOCK, SC_ERR_EQUIVOCATION), long
+ * after the caller lost access. The epoch horizon (max_epochs_ahead) alone allows whole epochs
  * ahead.
  *
- * The margin covers clock error, not early signing: the now callback gives
- * whole seconds, so now can lag real time by up to 1 s; the NTS clock fails
- * closed past 100 ms of disagreement; and gossip accepts messages up to
- * MAXIMUM_GOSSIP_CLOCK_DISPARITY (500 ms) early. It is a constant, not a
- * config field, so the setup format does not change.
+ * The margin covers clock error, not early signing: the NTS clock fails
+ * closed past 100 ms of disagreement, and gossip accepts messages up to
+ * MAXIMUM_GOSSIP_CLOCK_DISPARITY (500 ms) early. The whole-second now
+ * callback costs none of it, since slot starts are whole seconds too. It
+ * is a constant, not a config field, so the setup format does not change.
  */
 #define SC_SLOT_MARGIN_SECONDS 2
 
