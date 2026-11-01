@@ -211,7 +211,10 @@ func TestHandoverFlowDevRunner(t *testing.T) {
 	if err == nil || count(out, `^s1 refused: .*one order at a time`) != 1 {
 		t.Fatalf("a second order: %v\n%s", err, out)
 	}
-	// A nitro target is on another cloud than the dev source: refused.
+	// A nitro target is on another cloud than the dev source: refused at
+	// the same-cloud check. That check comes first, so this flow no longer
+	// reaches the allowed-images refusal; only CheckImage's unit test in
+	// governance/handoverorder covers it.
 	ncloud := nitroTargetCloud(t, filepath.Join(dir, "s1c"), cert, key, th)
 	out = failTool(t, "handover-draft", "-cluster", cl, "-signer", "s1", "-target-cloud", ncloud, "-out", filepath.Join(dir, "n.bin"))
 	wantIn(t, out, "only between runners on the same cloud")

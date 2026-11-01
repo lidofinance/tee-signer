@@ -138,7 +138,8 @@ build with a setup and the mark log serves all three. Other
 runners answer `UNSUPPORTED`.
 
 Type numbers: 0x01 to 0x09 are taken, the next free one is 0x0a. The
-handover takes 0x31 to 0x33. A response
+handover takes 0x31 to 0x33. 0x20 to 0x28 belonged to the removed key
+generation and are not reused (TestRoleTable keeps them refused). A response
 type is the request type with 0x80 set, so request types stay below 0x80.
 
 After a handover the runner answers HEALTH, PUBLIC_KEYS, ATTEST, IDENTITY

@@ -122,7 +122,8 @@ type Server struct {
 	blockedMu sync.Mutex
 	blocked   map[backend.Pubkey]bool
 	// admitting holds the validators whose share addShareOf is adding now:
-	// one share per validator at a time (SSI-STORAGE-01).
+	// one share per validator at a time (SSI-STORAGE-01). Each also holds a
+	// max_keys slot until its import ends (SIAC-01, checkSlots).
 	admitMu   sync.Mutex
 	admitting map[backend.Pubkey]bool
 	// attestLimit counts the fresh attestations of attest-only clients

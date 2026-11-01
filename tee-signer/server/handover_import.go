@@ -271,7 +271,7 @@ func (im *importer) start(ctx context.Context, hash [32]byte, total uint32) erro
 	if names, err := ListShares(s.Platform.Store); err != nil {
 		return backend.Refused(backend.StatusStorage, "handover import: stored shares: %v", err)
 	} else if len(names) > 0 {
-		return im.refuse("this runner stores %d shares; an import starts on a runner with none stored", len(names))
+		return im.refuse("this runner has %d stored share records; an import starts on a runner with none stored", len(names))
 	}
 	if err := s.Updates.setImportOrder(ctx, &markstore.Order{Kind: markstore.OrderHandover, Hash: hash, ActAt: unix(t)}); err != nil {
 		return err

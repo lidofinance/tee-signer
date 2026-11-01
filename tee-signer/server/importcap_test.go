@@ -48,8 +48,8 @@ type testKey struct {
 // lastSlotRace loads one validator on a runner with max_keys 2, then sends
 // two imports of other validators at once for the last slot. The loaded
 // validator sorts after the other two, so a surplus record lists before
-// it at the next start. It returns the loaded validator and how many of
-// the two imports succeeded.
+// it at the next start. It returns the loaded validator and the two
+// imports' errors.
 func lastSlotRace(t *testing.T) (*tgtEnv, testKey, []error) {
 	t.Helper()
 	e := newTgtEnv(t, "dev", func(s *setupwire.Setup) { s.MaxKeys = 2 })
