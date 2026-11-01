@@ -226,10 +226,12 @@ func knownRecipientKey(name string) bool {
 // SourceArn) never name the recipient's attestation, so a grant of
 // Decrypt or GenerateDataKey hands the key to a principal outside the
 // enclave, and a grant of Encrypt lets one plant a sealing key. A locked
-// key therefore has no grants at all. KMS grants are eventually
-// consistent: a grant made just before the lock may not show in
-// ListGrants for a few minutes. The code cannot close that; the deploy
-// rule waits (platform-aws/deploy/README.md).
+// key therefore has no grant listed. KMS grants are eventually
+// consistent, with no documented bound: a grant made shortly before the
+// read may not be listed yet, and the runner cannot tell it from none.
+// The deploy rule closes that for mainnet: the key is created with its
+// final, locked policy, so no principal could ever call CreateGrant
+// (platform-aws/deploy/README.md).
 func grantLock(grants []types.GrantListEntry) (backend.KeyLock, string) {
 	if len(grants) == 0 {
 		return backend.KeyLockLocked, ""

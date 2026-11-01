@@ -103,11 +103,15 @@ SETUP=signer-2.bin platform-aws/deploy/parent-run.sh               # on the pare
   `purpose=record-creds`, and every `PutKeyPolicy` reviewed. CloudTrail
   must have logged KMS management events in the key's region for the
   whole mutable phase, or the history proves nothing.
-- KMS grants are eventually consistent: a grant can take up to about five
-  minutes to show in `ListGrants`. Start the runner at least five minutes
-  after the last `CreateGrant` in CloudTrail, or run `aws kms list-grants`
-  after that wait and check it is empty. The runner cannot tell a grant
-  that is not listed yet from none.
+- KMS grants are eventually consistent: a grant can take some minutes to
+  show in `ListGrants`, and AWS gives no upper bound. The runner reads the
+  grants once at start and cannot tell a grant that is not listed yet
+  from none, so its lock check cannot rule out such a grant. For mainnet,
+  create the key with its final, locked policy (below): then no principal
+  ever held `kms:CreateGrant` and the key has no grants at all. A key
+  with a mutable phase needs the CloudTrail check above, and the runner
+  started well after the last `CreateGrant`, with `aws kms list-grants`
+  empty at that time; that narrows the gap but does not close it.
 - To create the key locked, `aws kms create-key --policy` needs
   `--bypass-policy-lockout-safety-check`: without it KMS refuses a
   policy that does not let the caller change it later, which is the
