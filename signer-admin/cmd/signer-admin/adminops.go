@@ -113,9 +113,9 @@ func cmdProbe(args []string, out io.Writer) error {
 //	  ]
 //	}
 //
-// shares maps each signer name to its share index; each validator has its
-// t public commitments (Feldman), commitment 0 first, which is the
-// validator key. It holds no secret.
+// shares maps each signer name to its share index, one signer per index;
+// each validator has its t public commitments (Feldman), commitment 0
+// first, which is the validator key. It holds no secret.
 type splitFile struct {
 	T          uint8            `json:"t"`
 	N          uint8            `json:"n"`
@@ -133,6 +133,9 @@ func readSplit(path string) (*splitFile, error) {
 	}
 	if s.T == 0 || s.N < s.T || len(s.Validators) == 0 {
 		return nil, fmt.Errorf("%s: want t, n with 1 <= t <= n and at least one validator", path)
+	}
+	if err := setupwire.CheckShareIndices(int(s.N), s.Shares); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	for i, v := range s.Validators {
 		if len(v.Commitments) != int(s.T) {

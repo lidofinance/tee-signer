@@ -368,7 +368,14 @@ in the store, the key is not loaded, the start goes on and logs "some
 stored shares did not load" with the key's name and a request to remove
 the record; a handover from this runner refuses until it is removed,
 because the stored and loaded key sets differ. Single mode is allowed
-on every chain, mainnet included, on AWS and Azure. A handover keeps the
+on every chain, mainnet included, on AWS and Azure. One key is held by
+one runner: a single-mode cluster has one signer, and each share index
+of a split belongs to one signer. A runner sees only its own setup, so
+the tools apply this rule (`setupwire.CheckMembers`,
+`setupwire.CheckShareIndices`): `signer-admin setup` and every tool that
+reads `cluster.json` refuse a single-mode cluster of more than one
+signer, and `import-draft` refuses a split file that gives one index to
+two signers. The approvers check it for each import order they sign. A handover keeps the
 mode: the source refuses a target whose published `signing_mode` differs
 from its own, as it refuses any other public value that differs.
 
@@ -404,14 +411,16 @@ with `-allow-gcp-unsafe-single-key` and prints the WARNING line, and
 single-node signer is not a split, so the mainnet overlap rule
 (2t - n >= 2) does not apply to it; it applies to every real split.
 Tests: TestThresholdOn, TestSigningMode, TestSigningModeAcceptance,
-TestSampleSigningModes, TestUnsafeSingleKeyAccepted (setupwire),
+TestSampleSigningModes, TestUnsafeSingleKeyAccepted, TestCheckMembers,
+TestCheckShareIndices (setupwire), TestLoad (signer-admin/cluster),
 TestImportSigningMode, TestImportSampleSigningModes,
 TestSingleModeRefusesAnotherKey, TestThresholdModeRefusesAWholeKey,
 TestImportDegenerateSplit, TestHealthSingleKey,
 TestHandoverKeepsSigningMode (tee-signer/server),
 TestImportDraftSigningMode,
 TestSetupSingleSignerOnEveryPlatform, TestSetupAllowGCPSingleFlagScope,
-TestSetupMainnetGCPSingleNeedsNoLockAccepted, TestImportDraftSingleGCP
+TestSetupMainnetGCPSingleNeedsNoLockAccepted, TestImportDraftSingleGCP,
+TestTwoSingleModeSignersRefused, TestImportDraftRepeatedShareIndex
 (signer-admin).
 
 HEALTH reports the result as `key_lock`: `locked`, `not_locked`, `none`

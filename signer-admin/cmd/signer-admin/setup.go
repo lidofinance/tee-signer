@@ -163,8 +163,8 @@ func cmdSetup(args []string, out io.Writer) error {
 	// signing_mode is a public value, the same for every signer (buildSetups
 	// compares them). A single-mode cluster is one signer that holds whole
 	// keys; a threshold-mode cluster of one signer could hold no key.
-	if m := setups[0].SigningMode; m == setupwire.SigningModeSingle && len(setups) != 1 {
-		return fmt.Errorf("signing_mode = single: the file has %d signers; a single-mode setup is for one signer that holds whole keys (use signing_mode = threshold for a split)", len(setups))
+	if err := setupwire.CheckMembers(setups[0].SigningMode, len(setups)); err != nil {
+		return fmt.Errorf("%s: %w", fs.Arg(0), err)
 	}
 	if *allowGCPSingle {
 		if s := setups[0]; s.SigningMode != setupwire.SigningModeSingle {

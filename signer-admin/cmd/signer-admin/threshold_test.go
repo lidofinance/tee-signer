@@ -128,7 +128,7 @@ func TestSetupAllowGCPSingleFlagScope(t *testing.T) {
 	threeSingle := writeFile(t, filepath.Join(dir, "three-single.conf"), full)
 	for _, extra := range [][]string{nil, {"-allow-gcp-unsafe-single-key"}} {
 		wantIn(t, failTool(t, append(append([]string{"setup"}, extra...), "-out", filepath.Join(dir, "three-single"), threeSingle)...),
-			"signing_mode = single: the file has 3 signers", "signing_mode = threshold for a split")
+			"signing_mode = single with 3 signers", "signing_mode = threshold for a split")
 	}
 	for _, name := range []string{"gsigner-1", "gsigner-2"} {
 		shared, section := signerSection(t, full, name)

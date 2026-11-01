@@ -68,6 +68,16 @@ func TestLoad(t *testing.T) {
 	if _, err := Load(path, nil); err == nil || !strings.Contains(err.Error(), "different signing_mode (threshold, single)") {
 		t.Fatalf("a threshold and a single signer: %v", err)
 	}
+	// One key, one runner: two single-mode signers would each hold the
+	// whole key.
+	writeJSON(t, path, map[string]any{"signers": []any{signer("s", "single.setup"), signer("t", "single.setup")}})
+	if _, err := Load(path, []string{"s"}); err == nil || !strings.Contains(err.Error(), "signing_mode = single with 2 signers") {
+		t.Fatalf("two single-mode signers: %v", err)
+	}
+	writeJSON(t, path, map[string]any{"signers": []any{signer("s", "single.setup")}})
+	if _, err := Load(path, nil); err != nil {
+		t.Fatalf("one single-mode signer: %v", err)
+	}
 	writeJSON(t, path, map[string]any{"signers": []any{signer("a", "a.setup"), signer("a", "b.setup")}})
 	if _, err := Load(path, nil); err == nil || !strings.Contains(err.Error(), "listed twice") {
 		t.Fatalf("a name twice: %v", err)

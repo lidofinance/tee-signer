@@ -81,3 +81,46 @@ func TestThresholdOn(t *testing.T) {
 		}
 	}
 }
+
+// One key is held by one runner: a single-mode cluster has one signer.
+func TestCheckMembers(t *testing.T) {
+	for _, c := range []struct {
+		mode    SigningMode
+		members int
+		refuse  string
+	}{
+		{SigningModeSingle, 1, ""},
+		{SigningModeSingle, 2, "signing_mode = single with 2 signers"},
+		{SigningModeSingle, 0, "no signer"},
+		{SigningModeThreshold, 1, ""},
+		{SigningModeThreshold, 3, ""},
+		{0, 1, "signing_mode 0"},
+	} {
+		err := CheckMembers(c.mode, c.members)
+		if (c.refuse == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), c.refuse)) {
+			t.Errorf("%s, %d signers: %v, want %q", c.mode, c.members, err, c.refuse)
+		}
+	}
+}
+
+// Each signer of a split has its own share index, from 1 to n.
+func TestCheckShareIndices(t *testing.T) {
+	for _, c := range []struct {
+		n      int
+		shares map[string]uint8
+		refuse string
+	}{
+		{1, map[string]uint8{"a": 1}, ""},
+		{3, map[string]uint8{"a": 1, "b": 2, "c": 3}, ""},
+		{3, map[string]uint8{"a": 3, "b": 1}, ""},
+		{1, map[string]uint8{"a": 1, "b": 1}, "share index 1 is given to a and b"},
+		{3, map[string]uint8{"a": 2, "b": 1, "c": 2}, "share index 2 is given to a and c"},
+		{3, map[string]uint8{"a": 1, "b": 4}, "b: share index 4, want 1 to 3"},
+		{3, map[string]uint8{"a": 0}, "a: share index 0, want 1 to 3"},
+	} {
+		err := CheckShareIndices(c.n, c.shares)
+		if (c.refuse == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), c.refuse)) {
+			t.Errorf("n %d, %v: %v, want %q", c.n, c.shares, err, c.refuse)
+		}
+	}
+}
