@@ -4,6 +4,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -450,4 +451,73 @@ func TestResetLogWriteFailsLoadsNoKey(t *testing.T) {
 	if e.store.putsOf(shareKey(pka)) != puts {
 		t.Fatal("a record was rewritten before the log vouched for it")
 	}
+}
+
+// After the tombstone the host puts back a record of B that has history,
+// from before B was imported again without it. A restart that stops
+// loading early (no clock for the reset floor) must not serve that
+// record in a handover page.
+func TestHandoverAfterLoadStoppedEarly(t *testing.T) {
+	src := newSrcEnv(t, nil)
+	src.looseLoad = true
+	tgt := newTargetOf(t, src, nil, nil, nil)
+	_, pkb, floor := promotedPair(t, src)
+	old, _ := src.store.Get(shareKey(pkb))
+	skb := src.secretOf(pkb)
+	src.deleteShare(pkb)
+	src.restart()
+	src.clock.add(20 * testEpoch) // B votes elsewhere
+	if err := src.importSealed(pkb, skb, 6, nil); err != nil {
+		t.Fatal(err)
+	}
+	order, _ := srcOrder(t, src, tgt, []byte{1, 2}, nil)
+	if _, err := src.push(order); err != nil {
+		t.Fatal(err)
+	}
+	src.clock.add(srcDelay)
+	if _, err := handOver(t, src, tgt, order, 0); err != nil {
+		t.Fatal(err)
+	}
+	src.putRaw(pkb, old)
+	src.beforeLoad = func() { src.clock.set(func(c *fakeClock) { c.err = errors.New("no clock") }) }
+	src.afterLoad = func() { src.clock.set(func(c *fakeClock) { c.err = nil }) }
+	src.restart()
+	src.beforeLoad, src.afterLoad = nil, nil
+	src.srv.ReadHandover()
+	if page, err := handOver(t, src, tgt, order, 0); err == nil {
+		for _, sh := range page.Shares {
+			if sh.Pubkey == pkb {
+				t.Fatalf("handover page after a load that stopped early: B history %t floor %d (vote floor %d)", sh.History, sh.SourceFloor, floor)
+			}
+		}
+		t.Fatal("handover page after a load that stopped early")
+	}
+}
+
+// After the tombstone and a restart the host hides a record: the handover
+// is refused rather than leaving that key behind unnamed.
+func TestHandoverAfterRestartHiddenRecord(t *testing.T) {
+	src := newSrcEnv(t, nil)
+	pks := src.addKeys(2, nil)
+	tgt := newTargetOf(t, src, nil, nil, nil)
+	order, _ := srcOrder(t, src, tgt, []byte{1, 2}, nil)
+	if _, err := src.push(order); err != nil {
+		t.Fatal(err)
+	}
+	src.clock.add(srcDelay)
+	if _, err := handOver(t, src, tgt, order, 0); err != nil {
+		t.Fatal(err)
+	}
+	src.restart()
+	src.srv.ReadHandover()
+	src.deleteShare(pks[1])
+	if page, err := handOver(t, src, tgt, order, 0); err == nil {
+		t.Fatalf("handover after a hidden record: %d of 2 shares served", page.Total)
+	}
+}
+
+// secretOf is pk's secret share from its stored record.
+func (e *tgtEnv) secretOf(pk backend.Pubkey) (sk [32]byte) {
+	copy(sk[:], e.rawRecordOf(pk).Secret)
+	return sk
 }

@@ -126,7 +126,8 @@ type Server struct {
 	admitMu   sync.Mutex
 	admitting map[backend.Pubkey]bool
 	// shareHash is the sha256 of each stored share record this runner
-	// loaded or wrote, nil without a mark log (putShare, checkShareBlob);
+	// loaded or wrote, nil without a mark log and empty while a start's
+	// load has not set it (putShare, checkShareBlob);
 	// shareSetMu orders share writes. shareHeld is the share set's Held:
 	// the most records the mark log vouched for on this signer.
 	shareSetMu sync.Mutex
@@ -232,6 +233,14 @@ func (s *Server) LoadShares() (int, error) {
 func (s *Server) LoadListedShares(keys []string) (int, error) {
 	if err := s.checkLogID(); err != nil {
 		return 0, err
+	}
+	if _, committed := s.Hooks.ShareSet(); committed {
+		// No stored record counts as loaded until the share set is known:
+		// a load that stops early leaves the runner reading none of them
+		// (checkShareBlob).
+		s.shareSetMu.Lock()
+		s.shareHash = map[backend.Pubkey][32]byte{}
+		s.shareSetMu.Unlock()
 	}
 	var errs []error
 	// The records that unseal and parse, and their blobs: the share set is
@@ -499,6 +508,22 @@ func (s *Server) writeShare(pk backend.Pubkey, blob []byte, replace bool) error 
 	}
 	s.shareHash = next
 	s.Hooks.SetShareSet(&markstore.ShareSet{Current: pending, Held: s.shareHeld})
+	return nil
+}
+
+// checkShareSet refuses unless the n records just read, each passed by
+// checkShareBlob, are every record this runner loaded or wrote and the
+// mark log vouches for that set. No-op without a mark log.
+func (s *Server) checkShareSet(n int) error {
+	set, committed := s.Hooks.ShareSet()
+	if !committed {
+		return nil
+	}
+	s.shareSetMu.Lock()
+	defer s.shareSetMu.Unlock()
+	if n != len(s.shareHash) || !set.Vouches(markstore.ShareSetRoot(s.shareHash)) {
+		return fmt.Errorf("%d share records stored are not the set the mark log vouches for: a record was hidden, replaced or not written back", n)
+	}
 	return nil
 }
 

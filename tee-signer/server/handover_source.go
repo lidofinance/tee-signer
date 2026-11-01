@@ -839,14 +839,21 @@ func (h *sourceHandover) readShares(check bool, leftBehind [][48]byte) ([]handed
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i].pk[:], out[j].pk[:]) < 0 })
+	fail := func(err error) ([]handedShare, error) {
+		for i := range out {
+			clear(out[i].secret[:])
+		}
+		return nil, err
+	}
+	if !check {
+		// After the tombstone: the records must still be the set the log
+		// vouches for, none hidden or replaced since the start.
+		if err := s.checkShareSet(len(out)); err != nil {
+			return fail(err)
+		}
+	}
 	if check {
 		loaded := s.Signer.Keys()
-		fail := func(err error) ([]handedShare, error) {
-			for i := range out {
-				clear(out[i].secret[:])
-			}
-			return nil, err
-		}
 		if len(loaded) != len(out) {
 			return fail(fmt.Errorf("%d shares stored, %d loaded: refusing to hand over a different set", len(out), len(loaded)))
 		}
