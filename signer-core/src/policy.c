@@ -127,8 +127,12 @@ int sc_policy_check_epoch(const sc_config *cfg, const sc_slot_times *times, uint
 int sc_policy_check_slot(const sc_config *cfg, const sc_slot_times *times, uint64_t now,
                          uint64_t slot)
 {
-    uint64_t limit = sc_slot_at(cfg, times, sc_sat_add(now, SC_SLOT_MARGIN_SECONDS));
-    return slot > limit ? SC_ERR_POLICY_FUTURE : SC_OK;
+    uint64_t at = sc_sat_add(now, SC_SLOT_MARGIN_SECONDS);
+    /* sc_slot_at gives 0 for any time before genesis, but slot 0 starts at
+     * genesis_time. */
+    if (at < cfg->genesis_time)
+        return SC_ERR_POLICY_FUTURE;
+    return slot > sc_slot_at(cfg, times, at) ? SC_ERR_POLICY_FUTURE : SC_OK;
 }
 
 int sc_policy_check_exit(const sc_config *cfg, const sc_voluntary_exit *exit,

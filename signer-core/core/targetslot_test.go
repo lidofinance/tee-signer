@@ -103,3 +103,33 @@ func TestAttestationFutureSlot(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Slot 0 starts at genesis. Before genesis the slot rule refuses a slot-0
+// vote or block until the clock is within core.SlotMarginSeconds of
+// genesis, so a caller cannot take the validator's first epoch early.
+func TestSlotZeroBeforeGenesis(t *testing.T) {
+	h := software.NewMemHooks()
+	h.Clock = func() (uint64, error) { return genesis - 86400, nil }
+	s, pk, _ := newTestSigner(t, h)
+	sign := func(m backend.Message) error {
+		_, err := s.Sign(signReq(s, pk, m))
+		return err
+	}
+	vote := withSlot(att(0, 0), 0)
+	block := &backend.BeaconBlockHeader{Slot: 0, ProposerIndex: 7}
+	for _, now := range []uint64{genesis - 86400, genesis - core.SlotMarginSeconds - 1} {
+		h.Clock = func() (uint64, error) { return now, nil }
+		wantStatus(t, sign(vote), backend.StatusPolicyFuture)
+		wantStatus(t, sign(block), backend.StatusPolicyFuture)
+	}
+	if st, err := s.State(pk); err != nil || st.RAM.HasAttestation || st.RAM.HasBlock {
+		t.Fatalf("the refusals moved state: %+v, %v", st.RAM, err)
+	}
+	h.Clock = func() (uint64, error) { return genesis - core.SlotMarginSeconds, nil }
+	if err := sign(vote); err != nil {
+		t.Fatalf("slot-0 vote within the margin of genesis: %v", err)
+	}
+	if err := sign(block); err != nil {
+		t.Fatalf("slot-0 block within the margin of genesis: %v", err)
+	}
+}

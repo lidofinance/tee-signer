@@ -465,13 +465,28 @@ static void test_slot_rule(void)
     set_slot(&h, first + 11, 0);
     CHECK_RC(sc_sign_block(s, k.pk, &b, sig), SC_OK);
 
-    /* Before genesis only slot 0 passes the slot rule. */
+    /* Before genesis no slot has started: slot 0 starts at genesis, so it
+     * is refused until now + margin reaches genesis, and slot 1 later. */
     host_t h0 = {0};
-    h0.now = GENESIS_TIME - 100;
+    h0.now = GENESIS_TIME - 86400;
     sc_signer *s0 = new_signer(&h0, &cfg, 1, 0);
     vkeys k0 = add_validator(s0, 2, SC_INDEX_UNKNOWN);
+    sc_attestation_data g = att(0, 0, 4);
+    g.slot = 0;
+    b.slot = 0;
+    CHECK_RC(sc_sign_attestation(s0, k0.pk, &g, sig), SC_ERR_POLICY_FUTURE);
+    CHECK_RC(sc_sign_block(s0, k0.pk, &b, sig), SC_ERR_POLICY_FUTURE);
+    h0.now = GENESIS_TIME - SC_SLOT_MARGIN_SECONDS - 1;
+    CHECK_RC(sc_sign_attestation(s0, k0.pk, &g, sig), SC_ERR_POLICY_FUTURE);
+    CHECK_RC(sc_sign_block(s0, k0.pk, &b, sig), SC_ERR_POLICY_FUTURE);
+    CHECK_RC(sc_signer_get_state(s0, k0.pk, &st), SC_OK);
+    CHECK(!(st.ram.flags & SC_WM_HAS_BLOCK));
     b.slot = 1;
     CHECK_RC(sc_sign_block(s0, k0.pk, &b, sig), SC_ERR_POLICY_FUTURE);
+    h0.now = GENESIS_TIME - SC_SLOT_MARGIN_SECONDS;
+    CHECK_RC(sc_sign_attestation(s0, k0.pk, &g, sig), SC_OK);
+    b.slot = 0;
+    CHECK_RC(sc_sign_block(s0, k0.pk, &b, sig), SC_OK);
 }
 
 /* sc_sign_root: the six domain types that need no slashing protection sign
