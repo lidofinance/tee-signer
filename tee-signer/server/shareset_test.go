@@ -344,6 +344,47 @@ func TestRewriteAlwaysFailsKeepsResetting(t *testing.T) {
 	}
 }
 
+// A share write that did not reach the store leaves its set out of the
+// commitment the next log record carries. The host kept the blob and
+// stores it after that record: the start finds a set the log does not
+// vouch for and resets, so B loses its history.
+func TestShareWriteNotLandedNotVouched(t *testing.T) {
+	e := newTgtEnv(t, "dev", nil)
+	_, pkb, _ := promotedPair(t, e)
+	skc, pkc := newKey(t)
+	e.store.mu.Lock()
+	e.store.failPut = func(k string) bool { return k == shareKey(pkc) }
+	e.store.mu.Unlock()
+	if err := e.importSealed(pkc, skc, 7, nil); err == nil {
+		t.Fatal("an import whose store write failed succeeded")
+	}
+	e.store.mu.Lock()
+	e.store.failPut = nil
+	blob := e.store.dropped[shareKey(pkc)]
+	e.store.mu.Unlock()
+	if blob == nil {
+		t.Fatal("the test store kept no blob")
+	}
+	n := len(e.records())
+	e.clock.add(4 * testEpoch)
+	en := e.signer.EpochAt(e.now())
+	if err := e.signMsg(pkb, vote(en-1, en)); err != nil {
+		t.Fatal(err)
+	}
+	recs := e.records()
+	if len(recs) == n {
+		t.Fatal("the vote wrote no log record")
+	}
+	if sh := recs[len(recs)-1].Shares; sh == nil || sh.Pending != nil {
+		t.Fatalf("the log record after a failed write carries share set %+v, want no pending root", sh)
+	}
+	e.putRaw(pkc, blob)
+	e.restart()
+	if e.recordOf(pkb).History {
+		t.Fatal("B kept its history: the log vouched for the set with the record that was never written")
+	}
+}
+
 // A share write whose store reply was lost but which landed: the runner
 // reads it back and keeps the set after, so the import stands and the
 // next start finds the stored set vouched, with no reset.

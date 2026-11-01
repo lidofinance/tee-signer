@@ -25,6 +25,9 @@ type shareStore struct {
 	// failPut, if set, fails each write it returns true for, without
 	// storing it. The store calls it outside its lock, so it may block.
 	failPut func(k string) bool
+	// dropped holds the last write failPut failed, per name: the host
+	// keeps the blob and may store it later.
+	dropped map[string][]byte
 	// landPut, if set, stores each write it returns true for and then
 	// fails it, as a write whose reply was lost.
 	landPut func(k string) bool
@@ -50,6 +53,12 @@ func (s *shareStore) Put(k string, v []byte) error {
 	fail := s.failPut
 	s.mu.Unlock()
 	if fail != nil && fail(k) {
+		s.mu.Lock()
+		if s.dropped == nil {
+			s.dropped = map[string][]byte{}
+		}
+		s.dropped[k] = append([]byte(nil), v...)
+		s.mu.Unlock()
 		return errors.New("test store: write failed")
 	}
 	s.mu.Lock()
