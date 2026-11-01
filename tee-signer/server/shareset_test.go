@@ -414,3 +414,40 @@ func TestHiddenRecordBlocksHandover(t *testing.T) {
 		}
 	}
 }
+
+// setMarksMode sets the mode of the mark log's directories; 0o500 makes
+// every log write fail.
+func (e *tgtEnv) setMarksMode(m os.FileMode) {
+	filepath.WalkDir(filepath.Join(e.dir, "marks"), func(p string, d fs.DirEntry, err error) error { //nolint:errcheck // test helper
+		if err == nil && d.IsDir() {
+			os.Chmod(p, m) //nolint:errcheck // checked by the test
+		}
+		return nil
+	})
+}
+
+// A start that resets but cannot write the log record that vouches for
+// the rewritten records loads no key and rewrites nothing: the log still
+// vouches for the old set, so a key that loaded now could later load
+// again from a replayed old record, with its history and no floor.
+func TestResetLogWriteFailsLoadsNoKey(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("the test makes the mark log unwritable with a directory mode, which root ignores")
+	}
+	e := newTgtEnv(t, "dev", nil)
+	e.looseLoad = true
+	pka, pkb, _ := promotedPair(t, e)
+	e.deleteShare(pkb) // the start resets
+	puts := e.store.putsOf(shareKey(pka))
+	e.beforeLoad = func() { e.setMarksMode(0o500) }
+	e.afterLoad = func() { e.setMarksMode(0o700) }
+	t.Cleanup(func() { e.setMarksMode(0o700) })
+	e.restart()
+	e.beforeLoad, e.afterLoad = nil, nil
+	if n := len(e.signer.Keys()); n != 0 || e.loadErr == nil {
+		t.Fatalf("a reset whose log record failed: %d keys loaded, err %v", n, e.loadErr)
+	}
+	if e.store.putsOf(shareKey(pka)) != puts {
+		t.Fatal("a record was rewritten before the log vouched for it")
+	}
+}

@@ -226,8 +226,9 @@ func (s *Server) LoadShares() (int, error) {
 // changed a record, or a write was cut, and the runner cannot tell which
 // record: it loads every key without history and with a source floor of
 // at least the restart floor epoch now, the bounds of an import without
-// history, rewrites the records so and has the log vouch for them. A
-// replayed record never gives a key history.
+// history, has the log vouch for the rewritten records, then writes them.
+// If that log record fails, no key loads. A replayed record never gives a
+// key history.
 func (s *Server) LoadListedShares(keys []string) (int, error) {
 	if err := s.checkLogID(); err != nil {
 		return 0, err
@@ -300,22 +301,61 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 				"an earlier reset; a record the store keeps refusing is named below): every key loads without history, with a fresh source floor",
 				"records", len(recs), "floor_epoch", resetFloor)
 		}
-		// The log vouches only for records rewritten below. One the reset
-		// could not rewrite stays out, so the next start resets again.
+		// The log vouches only for the rewritten records. One the reset
+		// could not seal stays out, so the next start resets again.
 		hashes = map[backend.Pubkey][32]byte{}
+	}
+	blobs := map[backend.Pubkey][]byte{}
+	if reset {
+		for _, pk := range pks {
+			rec := recs[pk]
+			rec.History, rec.SourceFloor = false, max(rec.SourceFloor, resetFloor)
+			blob, err := s.sealRecord(*rec)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("%s: %w", shareKey(pk), err))
+				continue
+			}
+			blobs[pk], hashes[pk] = blob, sha256.Sum256(blob)
+		}
+	}
+	if committed {
+		// Held never goes down: a record the host hides at this start
+		// still counts, so a handover waits until it is back.
+		held := uint32(0)
+		if set != nil {
+			held = set.Held
+		}
+		if uint64(len(pks)) < uint64(held) {
+			s.Log.Warn("fewer share records stored than the mark log vouched for: a handover is refused until the missing ones are back",
+				"records", len(pks), "vouched", held)
+		}
+		held = heldOf(held, len(pks))
+		cur := &markstore.ShareSet{Current: markstore.ShareSetRoot(hashes), Held: held}
+		if reset {
+			// Before the rewrites: if this record fails, the log still
+			// vouches for the old set, so no key loads, and a start cut
+			// after it finds records the log does not vouch for and
+			// resets again.
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			err := s.Hooks.RecordShareSet(ctx, cur)
+			cancel()
+			if err != nil {
+				return 0, errors.Join(append(errs, fmt.Errorf("the mark log does not vouch for the reset share records, no key loaded: %w", err))...)
+			}
+		} else {
+			s.Hooks.SetShareSet(cur)
+		}
+		s.shareSetMu.Lock()
+		s.shareHash, s.shareHeld = hashes, held
+		s.shareSetMu.Unlock()
 	}
 	loaded := 0
 	for _, pk := range pks {
 		k, rec := shareKey(pk), recs[pk]
-		if reset {
-			rec.History, rec.SourceFloor = false, max(rec.SourceFloor, resetFloor)
-			if blob, err := s.sealRecord(*rec); err != nil {
-				errs = append(errs, fmt.Errorf("%s: %w", k, err))
-			} else if err := s.Platform.Store.Put(k, blob); err != nil {
+		if blob, ok := blobs[pk]; ok {
+			if err := s.Platform.Store.Put(k, blob); err != nil {
 				s.Log.Warn("share record not written back: the key loads with the fresh floor, and every start resets until the store takes this record",
 					"pubkey", pk.String()[:18], "err", err)
-			} else {
-				hashes[pk] = sha256.Sum256(blob)
 			}
 		}
 		var sec [32]byte
@@ -334,34 +374,6 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 			s.Hooks.NoteHistory(pk)
 		}
 		loaded++
-	}
-	if committed {
-		// Held never goes down: a record the host hides at this start
-		// still counts, so a handover waits until it is back.
-		held := uint32(0)
-		if set != nil {
-			held = set.Held
-		}
-		if uint64(len(pks)) < uint64(held) {
-			s.Log.Warn("fewer share records stored than the mark log vouched for: a handover is refused until the missing ones are back",
-				"records", len(pks), "vouched", held)
-		}
-		held = heldOf(held, len(pks))
-		s.shareSetMu.Lock()
-		s.shareHash, s.shareHeld = hashes, held
-		s.shareSetMu.Unlock()
-		cur := &markstore.ShareSet{Current: markstore.ShareSetRoot(hashes), Held: held}
-		if reset {
-			// After the rewrites: a start cut before this record resets again.
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			err := s.Hooks.RecordShareSet(ctx, cur)
-			cancel()
-			if err != nil {
-				s.Log.Warn("the mark log does not vouch for the rewritten share records yet; the next start resets again", "err", err)
-			}
-		} else {
-			s.Hooks.SetShareSet(cur)
-		}
 	}
 	return loaded, errors.Join(errs...)
 }
