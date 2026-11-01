@@ -98,9 +98,9 @@ func TestKeyRuleHash(t *testing.T) {
 	srv := httptest.NewServer(f)
 	defer srv.Close()
 	keys := Keys{Client: kms.New(kms.Options{Region: "eu-west-1", BaseEndpoint: aws.String(srv.URL), Credentials: staticCreds,
-		HTTPClient: srv.Client(), RetryMaxAttempts: 1}), KeyID: "k1"}
+		HTTPClient: srv.Client(), RetryMaxAttempts: 1}), KeyID: f.arn}
 	ctx := context.Background()
-	r, err := keys.KeyRule(ctx)
+	r, _, err := keys.KeyRule(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,13 +115,13 @@ func TestKeyRuleHash(t *testing.T) {
 	} {
 		saved := *f
 		change()
-		if got, err := keys.KeyRule(ctx); err != nil || got.Hash == r.Hash {
+		if got, _, err := keys.KeyRule(ctx); err != nil || got.Hash == r.Hash {
 			t.Errorf("%s: %x %v, want another hash", name, got.Hash, err)
 		}
 		*f = saved
 	}
 	f.denyPolicy = true
-	if _, err := keys.KeyRule(ctx); err == nil || !strings.Contains(err.Error(), "GetKeyPolicy") {
+	if _, _, err := keys.KeyRule(ctx); err == nil || !strings.Contains(err.Error(), "GetKeyPolicy") {
 		t.Fatalf("refused read: %v", err)
 	}
 }

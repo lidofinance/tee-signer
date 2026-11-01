@@ -2,6 +2,7 @@ package nitro
 
 import (
 	"context"
+	"errors"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/kms/types"
 
+	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
@@ -112,13 +114,13 @@ func TestKeyRuleLock(t *testing.T) {
 	srv := httptest.NewServer(f)
 	defer srv.Close()
 	keys := Keys{Client: kms.New(kms.Options{Region: "eu-west-1", BaseEndpoint: aws.String(srv.URL), Credentials: staticCreds,
-		HTTPClient: srv.Client(), RetryMaxAttempts: 1}), KeyID: "k1"}
-	r, err := keys.KeyRule(context.Background())
+		HTTPClient: srv.Client(), RetryMaxAttempts: 1}), KeyID: f.arn}
+	r, _, err := keys.KeyRule(context.Background())
 	if err != nil || r.Lock != backend.KeyLockLocked || r.Hash == ([32]byte{}) {
 		t.Fatalf("locked policy: %+v %v", r, err)
 	}
 	f.policy = strings.Replace(lockedPolicy, `"kms:ScheduleKeyDeletion"`, `"kms:ScheduleKeyDeletion", "kms:PutKeyPolicy"`, 1)
-	if r, err = keys.KeyRule(context.Background()); err != nil || r.Lock != backend.KeyLockNotLocked || !strings.Contains(r.Why, "AdminReads allows kms:PutKeyPolicy") {
+	if r, _, err = keys.KeyRule(context.Background()); err != nil || r.Lock != backend.KeyLockNotLocked || !strings.Contains(r.Why, "AdminReads allows kms:PutKeyPolicy") {
 		t.Fatalf("policy with PutKeyPolicy: %+v %v", r, err)
 	}
 }
@@ -289,9 +291,9 @@ func TestKeyRuleGrants(t *testing.T) {
 	srv := httptest.NewServer(f)
 	defer srv.Close()
 	keys := Keys{Client: kms.New(kms.Options{Region: "eu-west-1", BaseEndpoint: aws.String(srv.URL), Credentials: staticCreds,
-		HTTPClient: srv.Client(), RetryMaxAttempts: 1}), KeyID: "k1"}
+		HTTPClient: srv.Client(), RetryMaxAttempts: 1}), KeyID: f.arn}
 	ctx := context.Background()
-	clean, err := keys.KeyRule(ctx)
+	clean, _, err := keys.KeyRule(ctx)
 	if err != nil || clean.Lock != backend.KeyLockLocked {
 		t.Fatalf("no grants: %+v %v", clean, err)
 	}
@@ -299,23 +301,24 @@ func TestKeyRuleGrants(t *testing.T) {
 		t.Fatal("KeyRule did not call ListGrants")
 	}
 
-	// A setup may name the key by alias. GetKeyPolicy and ListGrants take
-	// no alias, so both get the ARN DescribeKey answered, and so does
-	// every later call: KeyRule leaves the ARN in KeyID.
+	// A setup may name the key by alias ARN. GetKeyPolicy and ListGrants
+	// take no alias, so both get the ARN DescribeKey answered, and so does
+	// every later call: KeyRule returns that ARN.
 	f.grantKeyIDs, f.policyKeyIDs = nil, nil
 	byAlias := keys
-	byAlias.KeyID = "alias/signer"
-	if r, err := byAlias.KeyRule(ctx); err != nil || r.Lock != backend.KeyLockLocked || r.Hash != clean.Hash {
+	byAlias.KeyID = "arn:aws:kms:eu-west-1:111122223333:alias/signer"
+	r, arn, err := byAlias.KeyRule(ctx)
+	if err != nil || r.Lock != backend.KeyLockLocked || r.Hash != clean.Hash {
 		t.Fatalf("key by alias: %+v %v", r, err)
 	}
-	if len(f.policyKeyIDs) != 1 || f.policyKeyIDs[0] != f.arn || len(f.grantKeyIDs) != 1 || f.grantKeyIDs[0] != f.arn || byAlias.KeyID != f.arn {
-		t.Fatalf("key by alias: GetKeyPolicy on %q, ListGrants on %q, KeyID %q after", f.policyKeyIDs, f.grantKeyIDs, byAlias.KeyID)
+	if len(f.policyKeyIDs) != 1 || f.policyKeyIDs[0] != f.arn || len(f.grantKeyIDs) != 1 || f.grantKeyIDs[0] != f.arn || arn != f.arn {
+		t.Fatalf("key by alias: GetKeyPolicy on %q, ListGrants on %q, ARN %q", f.policyKeyIDs, f.grantKeyIDs, arn)
 	}
 
 	adminDecrypt := map[string]any{"GrantId": "g-admin", "GranteePrincipal": "arn:aws:iam::111122223333:role/admin",
 		"Operations": []string{"Decrypt", "GenerateDataKey"}}
 	f.grants = []map[string]any{adminDecrypt}
-	r, err := keys.KeyRule(ctx)
+	r, _, err = keys.KeyRule(ctx)
 	if err != nil || r.Lock != backend.KeyLockNotLocked || !strings.Contains(r.Why, "1 grant(s), for example g-admin to arn:aws:iam::111122223333:role/admin for Decrypt,GenerateDataKey") {
 		t.Fatalf("admin Decrypt grant: %+v %v", r, err)
 	}
@@ -328,27 +331,29 @@ func TestKeyRuleGrants(t *testing.T) {
 	}
 	f.pageSize = 1
 	f.grantCalls = 0
-	if r, err = keys.KeyRule(ctx); err != nil || r.Lock != backend.KeyLockNotLocked || !strings.Contains(r.Why, "3 grant(s)") || f.grantCalls != 3 {
+	if r, _, err = keys.KeyRule(ctx); err != nil || r.Lock != backend.KeyLockNotLocked || !strings.Contains(r.Why, "3 grant(s)") || f.grantCalls != 3 {
 		t.Fatalf("paged grants: %+v %v, %d ListGrants calls", r, err, f.grantCalls)
 	}
 
 	// A truncated page without NextMarker is not the end of the list.
 	f.dropMarker = true
-	if r, err = keys.KeyRule(ctx); err != nil || r.Lock != backend.KeyLockUnread || !strings.Contains(r.Why, "no new NextMarker") {
+	if r, _, err = keys.KeyRule(ctx); err != nil || r.Lock != backend.KeyLockUnread || !strings.Contains(r.Why, "no new NextMarker") {
 		t.Fatalf("truncated without marker: %+v %v", r, err)
 	}
 	f.dropMarker = false
 
 	f.grants, f.denyGrants = nil, true
-	r, err = keys.KeyRule(ctx)
-	if err != nil || r.Lock != backend.KeyLockUnread || !strings.Contains(r.Why, "ListGrants") || r.Hash != clean.Hash {
+	r, _, err = keys.KeyRule(ctx)
+	// The hash leaves the grants out, so with the grants unknown it must
+	// not match a pin of the locked policy: unread gives a zero hash.
+	if err != nil || r.Lock != backend.KeyLockUnread || !strings.Contains(r.Why, "ListGrants") || r.Hash != ([32]byte{}) {
 		t.Fatalf("ListGrants refused: %+v %v", r, err)
 	}
 
 	// A policy that is not locked says why; the grants are not read.
 	f.grantCalls = 0
 	f.policy = strings.Replace(lockedPolicy, `"kms:ScheduleKeyDeletion"`, `"kms:ScheduleKeyDeletion", "kms:PutKeyPolicy"`, 1)
-	if r, err = keys.KeyRule(ctx); err != nil || r.Lock != backend.KeyLockNotLocked || !strings.Contains(r.Why, "PutKeyPolicy") || f.grantCalls != 0 {
+	if r, _, err = keys.KeyRule(ctx); err != nil || r.Lock != backend.KeyLockNotLocked || !strings.Contains(r.Why, "PutKeyPolicy") || f.grantCalls != 0 {
 		t.Fatalf("open policy: %+v %v, %d ListGrants calls", r, err, f.grantCalls)
 	}
 }
@@ -401,3 +406,63 @@ func TestPolicyLockEncrypt(t *testing.T) {
 		}
 	}
 }
+
+// kms_key_id must be a key or alias ARN of the client's region, and the
+// key DescribeKey answers must be in that ARN's account and region: a bare
+// alias or key ID resolves in the account of the parent's credentials. A
+// wrong key stops the start on every chain, not only on mainnet.
+func TestKeyRuleKeyID(t *testing.T) {
+	const keyARN = "arn:aws:kms:eu-west-1:111122223333:key/k1"
+	f := &keyPolicyKMS{arn: keyARN, origin: "AWS_KMS", policy: lockedPolicy}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	keys := Keys{Client: kms.New(kms.Options{Region: "eu-west-1", BaseEndpoint: aws.String(srv.URL), Credentials: staticCreds,
+		HTTPClient: srv.Client(), RetryMaxAttempts: 1})}
+	ctx := context.Background()
+	for _, c := range []struct{ name, id, answer, why string }{
+		{"bare alias", "alias/signer", keyARN, "not a KMS key or alias ARN"},
+		{"bare key ID", "k1", keyARN, "not a KMS key or alias ARN"},
+		{"another region", "arn:aws:kms:eu-central-1:111122223333:key/k1", keyARN, "region eu-central-1, not eu-west-1"},
+		{"alias in another account", "arn:aws:kms:eu-west-1:111122223333:alias/signer",
+			"arn:aws:kms:eu-west-1:123456789012:key/k9", "outside account 111122223333"},
+		{"alias in another region", "arn:aws:kms:eu-west-1:111122223333:alias/signer",
+			"arn:aws:kms:us-east-1:111122223333:key/k9", "outside account 111122223333 in eu-west-1"},
+		{"another key", keyARN, "arn:aws:kms:eu-west-1:111122223333:key/k2", "answered arn:aws:kms:eu-west-1:111122223333:key/k2"},
+		{"answer not a key ARN", "arn:aws:kms:eu-west-1:111122223333:alias/signer",
+			"arn:aws:kms:eu-west-1:111122223333:alias/other", "not a key ARN"},
+	} {
+		f.arn = c.answer
+		k := keys
+		k.KeyID = c.id
+		r, arn, err := k.KeyRule(ctx)
+		if !errors.Is(err, errWrongKey) || !strings.Contains(err.Error(), c.why) || arn != "" || r != (platform.KeyRule{}) {
+			t.Errorf("%s: %+v %q %v, want a refusal with %q", c.name, r, arn, err, c.why)
+		}
+		_, _, err = readKeyRule(ctx, platform.Options{SetupHash: [32]byte{7}}, k)
+		if !errors.Is(err, errWrongKey) {
+			t.Errorf("%s: off mainnet the start goes on: %v", c.name, err)
+		}
+	}
+
+	// An alias ARN in the setup's account: every later call names the key
+	// by the ARN DescribeKey answered.
+	f.arn = keyARN
+	k := keys
+	k.KeyID = "arn:aws:kms:eu-west-1:111122223333:alias/signer"
+	rule, id, err := readKeyRule(ctx, platform.Options{SetupHash: [32]byte{7}, Mainnet: true}, k)
+	if err != nil || rule.Lock != backend.KeyLockLocked || id != keyARN {
+		t.Fatalf("alias ARN: %+v %q %v", rule, id, err)
+	}
+	// A failed read off mainnet keeps the configured ARN.
+	f.denyPolicy = true
+	if rule, id, err = readKeyRule(ctx, platform.Options{SetupHash: [32]byte{7}}, k); err != nil || rule.Lock != backend.KeyLockUnread || id != keyARN {
+		t.Fatalf("GetKeyPolicy refused: %+v %q %v", rule, id, err)
+	}
+	f.denyPolicy = false
+	// The flag path reads nothing and keeps kms_key_id as given.
+	k.KeyID = "alias/signer"
+	if rule, id, err = readKeyRule(ctx, platform.Options{}, k); err != nil || rule != nil || id != "alias/signer" {
+		t.Fatalf("flag path: %+v %q %v", rule, id, err)
+	}
+}
+

@@ -44,6 +44,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -248,62 +249,143 @@ func (k Keys) setupHex() string { return hex.EncodeToString(k.Setup[:]) }
 // in order: Arn, Origin, KeyManager, MultiRegion (one byte) and the policy
 // text as KMS returns it. The lock is policyLock of the same answers, and
 // then grantLock of the key's grants (ListGrants, every page): a key with
-// any grant is not locked, so the hash of a locked key, which leaves the
-// grants out, still describes everything that releases it. A ListGrants
-// that fails leaves a locked policy at KeyLockUnread. The key policy
-// grants the parent role these three reads
+// a listed grant is not locked, so the hash of a locked key, which leaves
+// the grants out, describes everything that releases it as far as
+// ListGrants shows (grantLock: a grant made shortly before the read may
+// not be listed yet). A ListGrants that fails gives KeyLockUnread and a
+// zero hash, as every other failed read does. The key policy grants the
+// parent role these three reads
 // (platform-aws/deploy/kms-key-policy.json.tmpl). The answers come over TLS from KMS,
 // so the parent cannot change them. UNTESTED against KMS: the code ran
 // against a fake.
 //
-// After DescribeKey, KeyRule sets k.KeyID to the key's ARN, so every later
-// call (GetKeyPolicy, ListGrants, Decrypt, GenerateDataKey) names the key
-// it checked. GetKeyPolicy and ListGrants take no alias, and an alias can
-// be pointed at another key after the check.
-func (k *Keys) KeyRule(ctx context.Context) (platform.KeyRule, error) {
+// k.KeyID must be a key ARN or an alias ARN in the client's region
+// (checkKeyID): a bare key ID or alias resolves in the account of the
+// credentials, which the parent supplies. The key DescribeKey answers must
+// be in the account and region of that ARN, and be that key for a key ARN;
+// otherwise KeyRule returns an error that wraps errWrongKey. KeyRule also
+// returns the key's ARN. Every later call (GetKeyPolicy, ListGrants,
+// Decrypt, GenerateDataKey) must name the key by it: GetKeyPolicy and
+// ListGrants take no alias, and an alias can be pointed at another key
+// after the check (readKeyRule).
+func (k Keys) KeyRule(ctx context.Context) (platform.KeyRule, string, error) {
+	want, err := checkKeyID(k.KeyID, k.Client.Options().Region)
+	if err != nil {
+		return platform.KeyRule{}, "", err
+	}
 	d, err := k.Client.DescribeKey(ctx, &kms.DescribeKeyInput{KeyId: aws.String(k.KeyID)})
 	if err != nil {
-		return platform.KeyRule{}, fmt.Errorf("nitro: DescribeKey: %w", err)
+		return platform.KeyRule{}, "", fmt.Errorf("nitro: DescribeKey: %w", err)
 	}
 	m := d.KeyMetadata
 	if m == nil || m.Arn == nil || m.MultiRegion == nil || m.Origin == "" || m.KeyManager == "" {
-		return platform.KeyRule{}, errors.New("nitro: DescribeKey answer lacks Arn, Origin, KeyManager or MultiRegion")
+		return platform.KeyRule{}, "", errors.New("nitro: DescribeKey answer lacks Arn, Origin, KeyManager or MultiRegion")
 	}
-	k.KeyID = *m.Arn
-	p, err := k.Client.GetKeyPolicy(ctx, &kms.GetKeyPolicyInput{KeyId: aws.String(k.KeyID), PolicyName: aws.String("default")})
+	arn := *m.Arn
+	got, err := parseKeyARN(arn)
+	switch {
+	case err != nil || got.resource != "key":
+		return platform.KeyRule{}, "", fmt.Errorf("%w: DescribeKey of %s answered %q, not a key ARN", errWrongKey, k.KeyID, arn)
+	case got.partition != want.partition || got.region != want.region || got.account != want.account:
+		return platform.KeyRule{}, "", fmt.Errorf("%w: %s resolves to %s, outside account %s in %s", errWrongKey, k.KeyID, arn, want.account, want.region)
+	case want.resource == "key" && arn != k.KeyID:
+		return platform.KeyRule{}, "", fmt.Errorf("%w: DescribeKey of %s answered %s", errWrongKey, k.KeyID, arn)
+	}
+	p, err := k.Client.GetKeyPolicy(ctx, &kms.GetKeyPolicyInput{KeyId: aws.String(arn), PolicyName: aws.String("default")})
 	if err != nil {
-		return platform.KeyRule{}, fmt.Errorf("nitro: GetKeyPolicy: %w", err)
+		return platform.KeyRule{}, arn, fmt.Errorf("nitro: GetKeyPolicy: %w", err)
 	}
 	if p.Policy == nil || *p.Policy == "" {
-		return platform.KeyRule{}, errors.New("nitro: GetKeyPolicy answer has no policy")
+		return platform.KeyRule{}, arn, errors.New("nitro: GetKeyPolicy answer has no policy")
 	}
 	multi := byte(0)
 	if *m.MultiRegion {
 		multi = 1
 	}
-	r := platform.KeyRule{Hash: backend.KeyReleaseHash(backend.KeyReleaseNitro, []byte(*m.Arn), []byte(m.Origin), []byte(m.KeyManager),
+	r := platform.KeyRule{Hash: backend.KeyReleaseHash(backend.KeyReleaseNitro, []byte(arn), []byte(m.Origin), []byte(m.KeyManager),
 		[]byte{multi}, []byte(*p.Policy))}
 	r.Lock, r.Why = policyLock(*p.Policy, string(m.Origin), *m.MultiRegion)
 	if r.Lock != backend.KeyLockLocked {
-		return r, nil
+		return r, arn, nil
 	}
-	grants, err := k.listGrants(ctx)
+	grants, err := listGrants(ctx, k.Client, arn)
 	if err != nil {
-		r.Lock, r.Why = backend.KeyLockUnread, fmt.Sprintf("nitro: ListGrants: %v", err)
-		return r, nil
+		// The hash leaves the grants out, so it must not stand for a rule
+		// whose grants are unknown.
+		return platform.KeyRule{Lock: backend.KeyLockUnread, Why: fmt.Sprintf("nitro: ListGrants: %v", err)}, arn, nil
 	}
 	r.Lock, r.Why = grantLock(grants)
-	return r, nil
+	return r, arn, nil
 }
 
-// listGrants reads every grant of the key, all pages of ListGrants. A
+// errWrongKey marks a kms_key_id that is not a key or alias ARN of the
+// client's region, or one that resolves to a key outside the account and
+// region of that ARN. readKeyRule stops the start on it on every chain:
+// unlike a missing read grant, it points the runner at a key the setup
+// does not name.
+var errWrongKey = errors.New("nitro: kms_key_id")
+
+// keyARN is a KMS key or alias ARN: arn:PARTITION:kms:REGION:ACCOUNT:key/ID
+// or :alias/NAME.
+type keyARN struct{ partition, region, account, resource string }
+
+var keyARNRE = regexp.MustCompile(`^arn:(aws|aws-cn|aws-us-gov):kms:([a-z0-9-]+):([0-9]{12}):(key|alias)/[A-Za-z0-9/_-]+$`)
+
+func parseKeyARN(s string) (keyARN, error) {
+	m := keyARNRE.FindStringSubmatch(s)
+	if m == nil {
+		return keyARN{}, fmt.Errorf("%q is not a KMS key or alias ARN", s)
+	}
+	return keyARN{partition: m[1], region: m[2], account: m[3], resource: m[4]}, nil
+}
+
+// checkKeyID parses kms_key_id as a key or alias ARN in region.
+func checkKeyID(id, region string) (keyARN, error) {
+	a, err := parseKeyARN(id)
+	if err != nil {
+		return keyARN{}, fmt.Errorf("%w: %v; a bare key ID or alias resolves in the account of the parent's credentials", errWrongKey, err)
+	}
+	if a.region != region {
+		return keyARN{}, fmt.Errorf("%w: %s is in region %s, not %s", errWrongKey, id, a.region, region)
+	}
+	return a, nil
+}
+
+// readKeyRule reads the key rule under the mainnet rule of o
+// (platform.Options.ReadKeyRule) and returns it with the key ID every
+// later call uses: the ARN DescribeKey answered, or keys.KeyID when the
+// read did not get that far or did not run (the flag path). A kms_key_id
+// that errWrongKey refuses stops the start on every chain.
+func readKeyRule(ctx context.Context, o platform.Options, keys Keys) (*platform.KeyRule, string, error) {
+	id := keys.KeyID
+	var wrong error
+	rule, err := o.ReadKeyRule(ctx, func(ctx context.Context) (platform.KeyRule, error) {
+		r, arn, err := keys.KeyRule(ctx)
+		if errors.Is(err, errWrongKey) {
+			wrong = err
+		}
+		if arn != "" {
+			id = arn
+		}
+		return r, err
+	})
+	if wrong != nil {
+		return nil, "", wrong
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	return rule, id, nil
+}
+
+// listGrants reads every grant of the key arn, all pages of ListGrants. A
 // page that says Truncated without a new NextMarker is an error, not the
 // end of the list.
-func (k Keys) listGrants(ctx context.Context) ([]types.GrantListEntry, error) {
+func listGrants(ctx context.Context, c *kms.Client, arn string) ([]types.GrantListEntry, error) {
 	var all []types.GrantListEntry
-	in := &kms.ListGrantsInput{KeyId: aws.String(k.KeyID)}
+	in := &kms.ListGrantsInput{KeyId: aws.String(arn)}
 	for {
-		page, err := k.Client.ListGrants(ctx, in)
+		page, err := c.ListGrants(ctx, in)
 		if err != nil {
 			return nil, err
 		}
@@ -535,11 +617,12 @@ func New(o platform.Options) (*platform.Platform, error) {
 
 	// key_release_hash and the lock, read before the sealing key is made or
 	// opened. On mainnet a key policy someone can still change stops the
-	// start here.
-	rule, err := o.ReadKeyRule(context.Background(), keys.KeyRule)
+	// start here. Every later call names the key by the ARN read here.
+	rule, keyARN, err := readKeyRule(context.Background(), o, *keys)
 	if err != nil {
 		return fail(err)
 	}
+	keys.KeyID = keyARN
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	key, err := keys.dataKey(ctx, agent)

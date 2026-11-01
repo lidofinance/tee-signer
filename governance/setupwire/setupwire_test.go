@@ -270,6 +270,12 @@ func setupRefusals(t testing.TB) []setupRefusal {
 		{"azure resource group long", "setup-azure", func(s *Setup) { s.Platform.SlashingLogStore.ResourceGroup = strings.Repeat("g", 91) }, "slashing_log_store.resource_group", ""},
 		{"azure field on gcp", "setup-gcp", func(s *Setup) { s.Platform.SlashingLogStore.Subscription = "0b2c3d4e-5f60-4718-9a2b-3c4d5e6f7a8b" }, "slashing_log_store.subscription does not apply to gcp", "skip"},
 		{"kms key id with #", "", func(s *Setup) { s.Platform.SealingKeyRelease.KMSKeyID = "key#1" }, "kms_key_id", ""},
+		{"kms key id bare alias", "", func(s *Setup) { s.Platform.SealingKeyRelease.KMSKeyID = "alias/signer" }, "kms_key_id", ""},
+		{"kms key id bare key id", "", func(s *Setup) { s.Platform.SealingKeyRelease.KMSKeyID = "1234abcd-12ab-34cd-56ef-1234567890ab" }, "kms_key_id", ""},
+		{"kms alias ARN without account", "", func(s *Setup) { s.Platform.SealingKeyRelease.KMSKeyID = "arn:aws:kms:eu-west-1::alias/signer" }, "kms_key_id", ""},
+		{"kms key in another region", "", func(s *Setup) {
+			s.Platform.SealingKeyRelease.KMSKeyID = "arn:aws:kms:eu-central-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab"
+		}, "kms_key_id: the key is in region eu-central-1", ""},
 		{"maa endpoint with scheme", "setup-azure", func(s *Setup) { s.Platform.SealingKeyRelease.MAAEndpoint = "https://maa.example" }, "maa_endpoint", ""},
 		{"kid with path", "setup-azure", func(s *Setup) { s.Platform.SealingKeyRelease.KID = "keys/signer" }, "sealing_key_release.kid", ""},
 		{"gcp field on azure", "setup-azure", func(s *Setup) { s.Platform.SealingKeyRelease.KMSKey = "k" }, "sealing_key_release.kms_key does not apply to azure", "skip"},
