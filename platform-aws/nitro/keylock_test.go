@@ -466,3 +466,36 @@ func TestKeyRuleKeyID(t *testing.T) {
 	}
 }
 
+// ForAllValues and ForAnyValue on the PCR keys do not bind a statement to
+// an image: KMS reads them as set tests, which a request without the key,
+// or with any one matching value, passes.
+func TestPolicyLockSetOperators(t *testing.T) {
+	for _, op := range []string{"ForAllValues:StringEquals", "ForAnyValue:StringEquals", "ForAllValues:StringEqualsIgnoreCase"} {
+		cond := `{"` + op + `": {"kms:RecipientAttestation:PCR0": "` + pcrA + `", "kms:RecipientAttestation:PCR1": "` + pcrB +
+			`", "kms:RecipientAttestation:PCR2": "` + pcrC + `"}}`
+		p := strings.Replace(lockedPolicy, `{"Sid": "NoOneElse"`, `{"Sid": "SetTest", "Effect": "Allow",
+     "Principal": {"AWS": "arn:aws:iam::111122223333:role/admin"}, "Action": "kms:Decrypt", "Resource": "*", "Condition": `+cond+`},
+    {"Sid": "NoOneElse"`, 1)
+		if got, why := policyLock(p, "AWS_KMS", false); got != backend.KeyLockNotLocked || !strings.Contains(why, "statement SetTest allows kms:Decrypt") {
+			t.Errorf("%s: %s %q", op, got, why)
+		}
+	}
+}
+
+// A Deny statement only takes away, but one that does not parse makes the
+// whole policy not locked: policyLock does not guess what KMS reads.
+func TestPolicyLockMalformedDeny(t *testing.T) {
+	for name, deny := range map[string]string{
+		"Action a number":       `{"Sid": "Bad", "Effect": "Deny", "Principal": "*", "Action": 5, "Resource": "*"}`,
+		"NotAction an object":   `{"Sid": "Bad", "Effect": "Deny", "Principal": "*", "NotAction": {"a": 1}, "Resource": "*"}`,
+		"Condition a string":    `{"Sid": "Bad", "Effect": "Deny", "Principal": "*", "Action": "kms:*", "Condition": "x"}`,
+		"Condition values flat": `{"Sid": "Bad", "Effect": "Deny", "Principal": "*", "Action": "kms:*", "Condition": {"Bool": true}}`,
+		"Effect a list":         `{"Sid": "Bad", "Effect": ["Deny"], "Principal": "*", "Action": "kms:*"}`,
+	} {
+		p := strings.Replace(lockedPolicy, `{"Sid": "NoOneElse"`, deny+`,
+    {"Sid": "NoOneElse"`, 1)
+		if got, why := policyLock(p, "AWS_KMS", false); got != backend.KeyLockNotLocked || !strings.Contains(why, "does not parse") {
+			t.Errorf("%s: %s %q", name, got, why)
+		}
+	}
+}
