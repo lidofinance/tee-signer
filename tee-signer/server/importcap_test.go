@@ -50,7 +50,7 @@ type testKey struct {
 // validator sorts after the other two, so a surplus record lists before
 // it at the next start. It returns the loaded validator and how many of
 // the two imports succeeded.
-func lastSlotRace(t *testing.T) (*tgtEnv, testKey, int) {
+func lastSlotRace(t *testing.T) (*tgtEnv, testKey, []error) {
 	t.Helper()
 	e := newTgtEnv(t, "dev", func(s *setupwire.Setup) { s.MaxKeys = 2 })
 	var ks []testKey
@@ -73,13 +73,7 @@ func lastSlotRace(t *testing.T) (*tgtEnv, testKey, int) {
 		}()
 	}
 	wg.Wait()
-	ok := 0
-	for _, err := range errs {
-		if err == nil {
-			ok++
-		}
-	}
-	return e, ks[2], ok
+	return e, ks[2], errs
 }
 
 // SIAC-01: the max_keys check counted only loaded keys, so two imports at
@@ -88,13 +82,22 @@ func lastSlotRace(t *testing.T) (*tgtEnv, testKey, int) {
 // max_keys: one import takes the slot, the other is refused before it
 // stores anything.
 func TestSIAC01ConcurrentImportsAtLastSlot(t *testing.T) {
-	e, _, ok := lastSlotRace(t)
+	e, _, errs := lastSlotRace(t)
 	stored, err := ListShares(e.store)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(stored) > 2 {
 		t.Errorf("%d shares stored with max_keys 2", len(stored))
+	}
+	ok := 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			ok++
+		case backend.StatusOf(err) != backend.StatusNoMem || !strings.Contains(err.Error(), "its setup's max_keys is 2"):
+			t.Errorf("the refused import: %v, want %v for max_keys", err, backend.StatusNoMem)
+		}
 	}
 	if ok != 1 || len(e.signer.Keys()) != 2 {
 		t.Errorf("%d imports succeeded, %d keys loaded; want 1 and 2", ok, len(e.signer.Keys()))
@@ -130,6 +133,13 @@ func plantUnloaded(t *testing.T, e *tgtEnv) {
 	}
 }
 
+// refusedStoredShare reports the HTC-01 refusal, so a test does not pass on
+// some other refusal.
+func refusedStoredShare(err error) bool {
+	return backend.StatusOf(err) == backend.StatusBadRequest &&
+		strings.Contains(err.Error(), "an import starts on a runner with none stored")
+}
+
 // HTC-01: a handover target counted only its loaded keys as empty, so a
 // stored share that failed to load let the import start. After a restart
 // that share loaded beside the handed-over ones and the import never
@@ -145,8 +155,8 @@ func TestHTC01ReserveRefusesStoredShare(t *testing.T) {
 		t.Fatal(err)
 	}
 	src.clock.add(srcDelay)
-	if _, err := tgt.push(order); err == nil {
-		t.Fatal("a target with a stored share reserved itself")
+	if _, err := tgt.push(order); !refusedStoredShare(err) {
+		t.Fatalf("a target with a stored share: %v, want a refusal for its stored share", err)
 	}
 	if o := tgt.srv.importing(); o != nil {
 		t.Fatalf("the slot holds order %x", o.Hash[:8])
@@ -161,8 +171,8 @@ func TestHTC01FirstPageRefusesStoredShare(t *testing.T) {
 	src := newSource(t, 2, testMark)
 	order, hash := e.order([]byte{1, 2}, nil)
 	pages := src.pages(e.sealTo(), hash, 1)
-	if _, err := e.imp(order, pages[0], 0); err == nil {
-		t.Fatal("a runner with a stored share started a handover import")
+	if _, err := e.imp(order, pages[0], 0); !refusedStoredShare(err) {
+		t.Fatalf("a runner with a stored share: %v, want a refusal for its stored share", err)
 	}
 	if o := e.srv.importing(); o != nil {
 		t.Fatalf("the slot holds order %x", o.Hash[:8])
