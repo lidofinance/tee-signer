@@ -407,9 +407,9 @@ func (s *Server) SharesHeld() uint32 {
 // under the share set commitment: first a log record that vouches for the
 // set before the write and the set after it (current and pending root),
 // then the store write. A start after a cut between the two finds one of
-// the two sets and loads it; the set before holds the key's earlier
-// record or none, never more history than the set after. Share writes go
-// one at a time.
+// the two sets and loads it; the set before holds no record of the key,
+// so nothing with more history than the set after. Share writes go one at
+// a time.
 func (s *Server) putShare(pk backend.Pubkey, blob []byte) error { return s.writeShare(pk, blob, false) }
 
 // replaceShare is putShare for a record this runner holds (a promotion).
@@ -477,8 +477,19 @@ func (s *Server) writeShare(pk backend.Pubkey, blob []byte, replace bool) error 
 	if err := held(); err != nil {
 		return fmt.Errorf("%w: %w", errNoLogRecord, err)
 	}
-	next := make(map[backend.Pubkey][32]byte, len(s.shareHash)+1)
+	// The set before. A new record of a key this runner did not load
+	// leaves out the key's old record, which may say it has history: a
+	// write that fails then leaves no set the log vouches for, and the
+	// next start resets.
+	prev := make(map[backend.Pubkey][32]byte, len(s.shareHash))
 	for k, v := range s.shareHash {
+		prev[k] = v
+	}
+	if !replace {
+		delete(prev, pk)
+	}
+	next := make(map[backend.Pubkey][32]byte, len(prev)+1)
+	for k, v := range prev {
 		next[k] = v
 	}
 	next[pk] = sha256.Sum256(blob)
@@ -489,13 +500,21 @@ func (s *Server) writeShare(pk backend.Pubkey, blob []byte, replace bool) error 
 	// this record leaves the count one above the stored set until that
 	// key is imported again.
 	count := heldOf(s.shareHeld, len(next))
-	err := s.Hooks.RecordShareSet(ctx, &markstore.ShareSet{Current: markstore.ShareSetRoot(s.shareHash), Pending: &pending, Held: count})
+	before := markstore.ShareSetRoot(prev)
+	err := s.Hooks.RecordShareSet(ctx, &markstore.ShareSet{Current: before, Pending: &pending, Held: count})
 	cancel()
 	if err != nil {
 		return fmt.Errorf("mark log share set: %w", err)
 	}
 	s.shareHeld = count
+	// notWritten drops the set after from the commitment the next log
+	// record carries: the host keeps the blob and could store it later.
+	notWritten := func() {
+		s.shareHash = prev
+		s.Hooks.SetShareSet(&markstore.ShareSet{Current: before, Held: s.shareHeld})
+	}
 	if err := held(); err != nil {
+		notWritten()
 		return err
 	}
 	if err := s.Platform.Store.Put(shareKey(pk), blob); err != nil {
@@ -503,6 +522,7 @@ func (s *Server) writeShare(pk backend.Pubkey, blob []byte, replace bool) error 
 		// set is the one after: keep it, so the next write names the set
 		// the store holds and a start finds it vouched.
 		if !s.landed(pk, next[pk]) {
+			notWritten()
 			return err
 		}
 	}

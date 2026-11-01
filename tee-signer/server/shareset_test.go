@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -514,6 +515,39 @@ func TestHandoverAfterRestartHiddenRecord(t *testing.T) {
 	if page, err := handOver(t, src, tgt, order, 0); err == nil {
 		t.Fatalf("handover after a hidden record: %d of 2 shares served", page.Total)
 	}
+}
+
+// B's record (with history) is stored and vouched for but fails to load
+// at a start. B is imported again without history and that store write
+// fails: the next start must not load the old record with its history.
+func TestFailedReimportDoesNotVouchOldRecord(t *testing.T) {
+	e := newTgtEnv(t, "dev", nil)
+	e.looseLoad = true
+	_, pkb, floor := promotedPair(t, e)
+	skb := e.secretOf(pkb)
+	e.beforeLoad = func() { e.clock.set(func(c *fakeClock) { c.err = errors.New("no clock") }) }
+	e.afterLoad = func() { e.clock.set(func(c *fakeClock) { c.err = nil }) }
+	e.restart()
+	e.beforeLoad, e.afterLoad = nil, nil
+	if n := len(e.signer.Keys()); n != 0 {
+		t.Fatalf("%d keys loaded with no clock", n)
+	}
+	e.clock.add(20 * testEpoch) // B votes elsewhere
+	f2 := e.floorOf()
+	e.store.mu.Lock()
+	e.store.failPut = func(k string) bool { return k == shareKey(pkb) }
+	e.store.mu.Unlock()
+	if err := e.importSealed(pkb, skb, 6, nil); err == nil {
+		t.Fatal("an import whose store write failed succeeded")
+	}
+	e.store.mu.Lock()
+	e.store.failPut = nil
+	e.store.mu.Unlock()
+	e.restart()
+	f := e.floorOf()
+	e.clock.add((f + 1 - e.signer.EpochAt(e.now())) * testEpoch)
+	en := e.signer.EpochAt(e.now())
+	wantSlashSource(t, e.signMsg(pkb, vote(floor+1, en+1)), "B below its import floor "+strconv.FormatUint(f2, 10))
 }
 
 // secretOf is pk's secret share from its stored record.
