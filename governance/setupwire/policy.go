@@ -29,7 +29,7 @@ import (
 
 // Leaf counts of the three groups.
 const (
-	NumPublicLeaves = 16
+	NumPublicLeaves = 17
 	NumLockedLeaves = 19
 	NumOpenLeaves   = 2
 )

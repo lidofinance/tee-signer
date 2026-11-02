@@ -133,7 +133,7 @@ func newEnv(t *testing.T, lock *uint64) *env {
 // newEnvWith is newEnv with change applied to the setup first.
 func newEnvWith(t *testing.T, lock *uint64, change func(s *setupwire.Setup)) *env {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "..", "governance", "setupwire", "testdata", "setup-dev.bin"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "governance", "setupwire", "testdata", "setup-dev-single.bin"))
 	if err != nil {
 		t.Fatal(err)
 	}

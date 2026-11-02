@@ -183,9 +183,10 @@ Set these once per shell, from the deploy settings of each cloud.
    (`allowed_fee_recipients`, the builder gas limits,
    `builder_registration_max_future_seconds`, `exit_allowed_validators`,
    `allow_unverified_nonslashable_signing`) and the `open` `fork_schedule`.
-5. The cluster file `setup.conf` (setup format 1).
+5. The cluster file `setup.conf` (setup format 2).
    Before the first section, the lines all signers share:
-   `setup_format_version = 1`, `handover_generation = 1`, the chain lines
+   `setup_format_version = 2`, `signing_mode = threshold` (three signers
+   hold shares; a one-signer file says `single`), `handover_generation = 1`, the chain lines
    (set `allow_unverified_nonslashable_signing` as the test's signing paths need),
    `allowed_client_ca` (the client CA, base64 DER), `max_keys`,
    `slashing_log_min_lock_days = 1`, and the rest of `locked`: approvers 1
@@ -226,8 +227,8 @@ Set these once per shell, from the deploy settings of each cloud.
    sealing_key_release.attest_audience = signer-runner-identity
    ```
 
-   A file with one GCP signer and nothing else is refused: that signer
-   would hold keys alone (1 of 1), and on GCP the key release rests on IAM
+   A one-signer file says `signing_mode = single`. With one GCP signer and
+   nothing else it is refused: that signer would hold keys alone (1 of 1), and on GCP the key release rests on IAM
    bindings that anyone with IAM or KMS admin rights on the project, the
    pool or the key (folder and organization admins included) can change
    at any time, with no image to run: a changed binding lets any

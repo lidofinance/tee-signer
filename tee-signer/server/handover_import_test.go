@@ -73,14 +73,29 @@ type tgtEnv struct {
 	srv      *Server
 }
 
-// newTgtEnv starts a target with the dev sample setup at handover
-// generation 2: approvers 1 to 3, k = 2, max_keys 1024, changed by change.
+// newTgtEnv starts a target with the single-mode dev sample setup
+// (setup-dev-single: it takes whole keys, 1 of 1) at handover generation
+// 2: approvers 1 to 3, k = 2, max_keys 1024, changed by change.
 func newTgtEnv(t *testing.T, platName string, change func(s *setupwire.Setup)) *tgtEnv {
+	t.Helper()
+	return newTgtEnvOf(t, "setup-dev-single", platName, change)
+}
+
+// newShareTgtEnv is newTgtEnv with the threshold dev sample setup
+// (setup-dev-threshold), for a runner that holds shares of splits, as a
+// handover source or target in these tests does.
+func newShareTgtEnv(t *testing.T, platName string, change func(s *setupwire.Setup)) *tgtEnv {
+	t.Helper()
+	return newTgtEnvOf(t, "setup-dev-threshold", platName, change)
+}
+
+// newTgtEnvOf is newTgtEnv with the dev sample setup of that name.
+func newTgtEnvOf(t *testing.T, sample, platName string, change func(s *setupwire.Setup)) *tgtEnv {
 	t.Helper()
 	if !runnerclient.Available(runnerclient.VerifierDev) {
 		t.Skip("the made-up source has a dev document: build with platform_dev and verifierselect, or without verifierselect")
 	}
-	raw, err := os.ReadFile(filepath.Join("..", "..", "governance", "setupwire", "testdata", "setup-dev.bin"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "governance", "setupwire", "testdata", sample+".bin"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +382,7 @@ var testMark = backend.Watermark{HasAttestation: true, SourceEpoch: startEpoch +
 // counts as imported, and the target signs again above the mark once
 // the last share is in. Sending the pages again stores nothing.
 func TestHandoverImport(t *testing.T) {
-	e := newTgtEnv(t, "dev", nil)
+	e := newShareTgtEnv(t, "dev", nil)
 	src := newSource(t, 300, testMark)
 	order, hash := e.order([]byte{1, 2}, nil)
 
@@ -461,7 +476,7 @@ func TestHandoverImport(t *testing.T) {
 // sealed for the old boot do not open; sealed again for the new import key,
 // the import goes on, skips what is in and ends.
 func TestHandoverImportRestart(t *testing.T) {
-	e := newTgtEnv(t, "dev", nil)
+	e := newShareTgtEnv(t, "dev", nil)
 	src := newSource(t, 20, testMark)
 	order, hash := e.order([]byte{2, 3}, nil)
 	pages := src.pages(e.sealTo(), hash, 8)
@@ -494,7 +509,7 @@ func TestHandoverImportRestart(t *testing.T) {
 // A few requests at once, as the tool sends them: each share is stored
 // once, the import ends once.
 func TestHandoverImportParallel(t *testing.T) {
-	e := newTgtEnv(t, "dev", nil)
+	e := newShareTgtEnv(t, "dev", nil)
 	src := newSource(t, 64, testMark)
 	order, hash := e.order([]byte{1, 3}, nil)
 	pages := src.pages(e.sealTo(), hash, 4)
@@ -529,7 +544,7 @@ func TestHandoverImportParallel(t *testing.T) {
 
 // What breaks the contract is refused, and nothing is stored.
 func TestHandoverImportRefusals(t *testing.T) {
-	e := newTgtEnv(t, "dev", nil)
+	e := newShareTgtEnv(t, "dev", nil)
 	src := newSource(t, 5, testMark)
 	order, hash := e.order([]byte{1, 2}, nil)
 	page := src.pages(e.sealTo(), hash, 8)[0]
@@ -624,20 +639,19 @@ func TestHandoverImportRefusals(t *testing.T) {
 func TestHandoverImportNeedsAnEmptyTarget(t *testing.T) {
 	src := newSource(t, 2, testMark)
 
-	gen1 := newTgtEnv(t, "dev", func(s *setupwire.Setup) { s.HandoverGeneration = 1 })
+	gen1 := newShareTgtEnv(t, "dev", func(s *setupwire.Setup) { s.HandoverGeneration = 1 })
 	order, hash := gen1.order([]byte{1, 2}, nil)
 	_, err := gen1.imp(order, src.pages(gen1.sealTo(), hash, 8)[0], 0)
 	refusedImport(t, err, backend.StatusBadRequest, "handover_generation 1")
 
-	small := newTgtEnv(t, "dev", func(s *setupwire.Setup) { s.MaxKeys = 1 })
+	small := newShareTgtEnv(t, "dev", func(s *setupwire.Setup) { s.MaxKeys = 1 })
 	order, hash = small.order([]byte{1, 2}, nil)
 	_, err = small.imp(order, src.pages(small.sealTo(), hash, 8)[0], 0)
 	refusedImport(t, err, backend.StatusBadRequest, "max_keys is 1")
 
 	// A key imported before.
-	e := newTgtEnv(t, "dev", nil)
-	sk, _ := software.NewSecret()
-	pk, _ := core.PubkeyOf(sk)
+	e := newShareTgtEnv(t, "dev", nil)
+	sk, pk := newSecret(t), newPubkey(t) // a share of the validator pk
 	if _, err := e.srv.addShare(pk, &sk, 1, nil, "sealed"); err != nil {
 		t.Fatal(err)
 	}
@@ -646,7 +660,7 @@ func TestHandoverImportNeedsAnEmptyTarget(t *testing.T) {
 	refusedImport(t, err, backend.StatusBadRequest, "empty runner only")
 
 	// A config update pending.
-	p := newTgtEnv(t, "dev", func(s *setupwire.Setup) { s.Locked.ChangeDelaySeconds = u64(600) })
+	p := newShareTgtEnv(t, "dev", func(s *setupwire.Setup) { s.Locked.ChangeDelaySeconds = u64(600) })
 	lh, _ := p.setup.GroupHash(locked)
 	b := &setupwire.UpdateBody{ClusterID: p.setup.ClusterID, ChainHash: p.setup.Chain.Hash(), Group: locked, Version: 1, PrevHash: lh,
 		ActivateAt: p.now(), Locked: &setupwire.Locked{}}
@@ -665,7 +679,7 @@ func TestHandoverImportNeedsAnEmptyTarget(t *testing.T) {
 // Off the dev platform the dev source's proof is refused; the operator can
 // skip the origin checks instead.
 func TestHandoverImportAsImported(t *testing.T) {
-	e := newTgtEnv(t, "nitro", nil)
+	e := newShareTgtEnv(t, "nitro", nil)
 	src := newSource(t, 5, testMark)
 	order, hash := e.order([]byte{1, 2}, nil)
 	page := src.pages(e.sealTo(), hash, 8)[0]
@@ -680,7 +694,7 @@ func TestHandoverImportAsImported(t *testing.T) {
 // A source that never signed hands over an empty mark: its shares carry no
 // maxima and the target's log is not raised.
 func TestHandoverImportEmptyMark(t *testing.T) {
-	e := newTgtEnv(t, "dev", nil)
+	e := newShareTgtEnv(t, "dev", nil)
 	src := newSource(t, 3, backend.Watermark{})
 	order, hash := e.order([]byte{1, 2}, nil)
 	page := src.pages(e.sealTo(), hash, 8)[0]
@@ -700,7 +714,7 @@ func TestHandoverImportEmptyMark(t *testing.T) {
 // Mid-import the runner takes the shares of its import only: no other
 // order, no other mark, no plain sealed import.
 func TestHandoverImportMidway(t *testing.T) {
-	e := newTgtEnv(t, "dev", nil)
+	e := newShareTgtEnv(t, "dev", nil)
 	src := newSource(t, 8, testMark)
 	order, hash := e.order([]byte{1, 2}, nil)
 	pages := src.pages(e.sealTo(), hash, 4)
@@ -732,5 +746,42 @@ func TestHandoverImportMidway(t *testing.T) {
 
 	if r := e.mustImp(order, pages[1], 0); !r.Done || r.Held != 8 {
 		t.Fatalf("%+v", r)
+	}
+}
+
+// A page whose keys do not fit the target's signing_mode is refused
+// before the import starts: a threshold target refuses whole keys, a
+// single target refuses shares, and neither writes the order slot, so
+// the target is not held in an import it can never finish.
+func TestHandoverImportRefusesKeysOfTheOtherMode(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		env   func(t *testing.T) *tgtEnv
+		whole bool
+		want  string
+	}{
+		{"threshold target, whole keys", func(t *testing.T) *tgtEnv { return newShareTgtEnv(t, "dev", nil) }, true, "signing_mode = threshold"},
+		{"single target, shares", func(t *testing.T) *tgtEnv { return newTgtEnv(t, "dev", nil) }, false, "signing_mode = single"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := c.env(t)
+			src := newSource(t, 2, testMark)
+			if c.whole {
+				for i := range src.shares {
+					src.shares[i].pk = src.shares[i].share
+				}
+				slices.SortFunc(src.shares, func(a, b srcShare) int { return bytes.Compare(a.pk[:], b.pk[:]) })
+			}
+			order, hash := e.order([]byte{1, 2}, nil)
+			_, err := e.imp(order, src.pages(e.sealTo(), hash, 8)[0], 0)
+			refusedImport(t, err, backend.StatusBadKey, c.want)
+			if n := len(e.signer.Keys()); n != 0 || e.srv.importing() != nil {
+				t.Fatalf("refused, but %d keys are in, slot %+v", n, e.srv.importing())
+			}
+			e.restart()
+			if e.srv.importing() != nil {
+				t.Fatalf("after a restart the slot is %+v", e.srv.importing())
+			}
+		})
 	}
 }

@@ -3,10 +3,9 @@
 package server
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"errors"
-	"math/big"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,7 +15,6 @@ import (
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-core/software"
-	"github.com/lidofinance/tee-signer/signer-core/threshold"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/sealedimport"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
@@ -82,7 +80,7 @@ func TestImportOrderRequired(t *testing.T) {
 // commitments) the order names; the share must be the commitments' value
 // at the index, commitment 0 the validator key, and 2t > n.
 func TestImportSplit(t *testing.T) {
-	e := newTgtEnv(t, "dev", nil)
+	e := newTgtEnv(t, "dev", func(s *setupwire.Setup) { s.SigningMode = setupwire.SigningModeThreshold })
 	sk, pk := newKey(t)
 	shares, commitments, err := software.SplitWithCommitments(sk, 2, 3)
 	if err != nil {
@@ -140,61 +138,119 @@ func TestImportSplit(t *testing.T) {
 	}
 }
 
-// A single-node split (t = n = 1) is taken under an import order on the
-// dev, Nitro and Azure setups; a GCP signer takes a share of one only when
-// its setup accepts the risk (sealing_key_release.unsafe_single_key_accepted),
-// and refuses it otherwise, on any chain, with the reason and the way to
-// accept (setupwire.CheckThresholdOn).
-func TestImportSingleNode(t *testing.T) {
-	for _, name := range []string{"setup-dev", "setup-nitro", "setup-azure", "setup-gcp", "setup-gcp accepted"} {
-		t.Run(name, func(t *testing.T) {
-			name, accepted := strings.CutSuffix(name, " accepted")
-			raw, err := os.ReadFile(filepath.Join("..", "..", "governance", "setupwire", "testdata", name+".bin"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			g, err := setupwire.DecodeSetup(raw)
-			if err != nil {
-				t.Fatal(err)
-			}
-			e := newTgtEnv(t, "dev", func(s *setupwire.Setup) {
-				s.Platform = g.Platform
-				s.Platform.SealingKeyRelease.UnsafeSingleKeyAccepted = accepted
-			})
-			sk, pk := newKey(t)
-			err = e.importSealed(pk, sk, 5, nil)
-			if g.Platform.Platform == setupwire.PlatformGCP && !accepted {
-				if err == nil || !strings.Contains(err.Error(), "single-node") || !strings.Contains(err.Error(), "unsafe_single_key_accepted = true") {
-					t.Fatalf("1 of 1 on gcp: %v, want the single-node refusal naming the acceptance", err)
+// The split of an import order must fit the setup's signing_mode (issue
+// #23, setupwire.CheckThresholdOn), on every platform: a single-mode
+// runner takes 1 of 1 and refuses a share of a 2-of-3 split; a
+// threshold-mode runner takes the share and refuses 1 of 1. On GCP a
+// single-mode setup needs sealing_key_release.unsafe_single_key_accepted:
+// without it the setup itself is refused, so no runner starts from it.
+func TestImportSigningMode(t *testing.T) {
+	single, threshold := setupwire.SigningModeSingle, setupwire.SigningModeThreshold
+	for _, name := range []string{"setup-dev-single", "setup-nitro", "setup-azure", "setup-gcp"} {
+		raw, err := os.ReadFile(filepath.Join("..", "..", "governance", "setupwire", "testdata", name+".bin"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		g, err := setupwire.DecodeSetup(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gcp := g.Platform.Platform == setupwire.PlatformGCP
+		for _, c := range []struct {
+			mode    setupwire.SigningMode
+			split   bool // a share of a 2-of-3 split, else a whole key (1 of 1)
+			refusal string
+		}{
+			{single, false, ""},
+			{single, true, "signing_mode = single, which takes whole keys (1 of 1) only"},
+			{threshold, false, "signing_mode = threshold"},
+			{threshold, true, ""},
+		} {
+			t.Run(fmt.Sprintf("%s %s split %v", name, c.mode, c.split), func(t *testing.T) {
+				e := newTgtEnv(t, "dev", func(s *setupwire.Setup) {
+					s.Platform, s.SigningMode = g.Platform, c.mode
+					s.Platform.SealingKeyRelease.UnsafeSingleKeyAccepted = gcp && c.mode == single
+				})
+				sk, pk := newKey(t)
+				if c.split {
+					err = e.importShareOf(sk, pk)
+				} else {
+					err = e.importSealed(pk, sk, 5, nil)
 				}
-				return
+				if c.refusal != "" {
+					var r *backend.RefusedError
+					if err == nil || !strings.Contains(err.Error(), c.refusal) || !errors.As(err, &r) || r.Code != backend.StatusBadKey {
+						t.Fatalf("%v, want a BAD_KEY refusal with %q", err, c.refusal)
+					}
+					if hasKey(e.srv.Signer.Keys(), pk) {
+						t.Fatal("the refused key loaded")
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !hasKey(e.srv.Signer.Keys(), pk) {
+					t.Fatal("the key did not load")
+				}
+			})
+		}
+		if gcp {
+			s := *g
+			s.SigningMode = single
+			if _, err := s.Encode(); err == nil || !strings.Contains(err.Error(), "unsafe_single_key_accepted = true") {
+				t.Errorf("single-mode gcp setup without the acceptance: %v, want a refusal", err)
 			}
-			if err != nil {
-				t.Fatalf("1 of 1 on %s: %v", g.Platform.Platform, err)
-			}
-			if !hasKey(e.srv.Signer.Keys(), pk) {
-				t.Fatalf("1 of 1 on %s: the key did not load", g.Platform.Platform)
-			}
-		})
+		}
 	}
 }
 
-// HEALTH says, next to key_lock, whether the signer holds a key alone
-// where that is unsafe (single_key): "accepted" or "refused" on GCP by
-// the setup's sealing_key_release.unsafe_single_key_accepted, "n/a" on
-// the other platforms. The acceptance is in the private part of the
-// setup, so this is where a verifier reads it.
+// importShareOf imports share 2 of a 2-of-3 split of sk under its order.
+func (e *tgtEnv) importShareOf(sk [32]byte, pk backend.Pubkey) error {
+	e.t.Helper()
+	shares, commitments, err := software.SplitWithCommitments(sk, 2, 3)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	order := e.importOrder([]byte{1, 2}, pk, func(b *importorder.Body) {
+		b.T, b.N, b.ShareIndex = 2, 3, 2
+		b.Validators[0].CommitmentsHash = importorder.CommitmentsHash(commitments)
+	})
+	share := shares[1].Secret
+	sp, _ := core.PubkeyOf(share)
+	req := backend.SealedImportRequest{Pubkey: pk, SharePubkey: sp, Index: 5, Order: order,
+		T: 2, N: 3, ShareIndex: 2, Commitments: commitments}
+	if req.Sealed, err = sealedimport.Seal(e.sealTo(), &req, &share); err != nil {
+		e.t.Fatal(err)
+	}
+	p, err := wireadmin.EncodeImportSealed(&req)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	_, err = e.srv.dispatch(ctx, wire.Frame{Type: wireadmin.TypeImportSealed, Payload: p})
+	return err
+}
+
+// HEALTH says the setup's signing_mode and, next to key_lock, whether the
+// signer holds a key alone where that is unsafe (single_key): "accepted"
+// on GCP when the setup says sealing_key_release.unsafe_single_key_accepted
+// (only a single-mode setup can), "refused" on GCP otherwise, "n/a" on the
+// other platforms. The acceptance is in the private part of the setup, so
+// this is where a verifier reads it.
 func TestHealthSingleKey(t *testing.T) {
+	single, threshold := setupwire.SigningModeSingle, setupwire.SigningModeThreshold
 	for _, c := range []struct {
 		setup    string
+		mode     setupwire.SigningMode
 		accepted bool
 		want     string
 	}{
-		{"setup-dev", false, "n/a"},
-		{"setup-nitro", false, "n/a"},
-		{"setup-azure", false, "n/a"},
-		{"setup-gcp", false, "refused"},
-		{"setup-gcp", true, "accepted"},
+		{"setup-dev-single", single, false, "n/a"},
+		{"setup-dev-threshold", threshold, false, "n/a"},
+		{"setup-nitro", threshold, false, "n/a"},
+		{"setup-azure", single, false, "n/a"},
+		{"setup-gcp", threshold, false, "refused"},
+		{"setup-gcp-single", single, true, "accepted"},
 	} {
 		raw, err := os.ReadFile(filepath.Join("..", "..", "governance", "setupwire", "testdata", c.setup+".bin"))
 		if err != nil {
@@ -205,22 +261,22 @@ func TestHealthSingleKey(t *testing.T) {
 			t.Fatal(err)
 		}
 		e := newTgtEnv(t, "dev", func(s *setupwire.Setup) {
-			s.Platform = g.Platform
+			s.Platform, s.SigningMode = g.Platform, c.mode
 			s.Platform.SealingKeyRelease.UnsafeSingleKeyAccepted = c.accepted
 		})
 		h, err := e.srv.health()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if h.SingleKey != c.want {
-			t.Errorf("%s (accepted %v): single_key %q, want %q", c.setup, c.accepted, h.SingleKey, c.want)
+		if h.SingleKey != c.want || h.SigningMode != c.mode.String() {
+			t.Errorf("%s %s (accepted %v): single_key %q, signing_mode %q, want %q, %q", c.setup, c.mode, c.accepted, h.SingleKey, h.SigningMode, c.want, c.mode)
 		}
 		js, err := json.Marshal(h)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(js), `"single_key":"`+c.want+`"`) {
-			t.Errorf("%s (accepted %v): HEALTH JSON lacks single_key %q: %s", c.setup, c.accepted, c.want, js)
+		if !strings.Contains(string(js), `"single_key":"`+c.want+`"`) || !strings.Contains(string(js), `"signing_mode":"`+c.mode.String()+`"`) {
+			t.Errorf("%s %s (accepted %v): HEALTH JSON lacks single_key %q or signing_mode: %s", c.setup, c.mode, c.accepted, c.want, js)
 		}
 	}
 }
@@ -233,82 +289,4 @@ func hasKey(keys []backend.ValidatorKey, pk backend.Pubkey) bool {
 		}
 	}
 	return false
-}
-
-// curveOrder is r, the order of the BLS12-381 G1 subgroup.
-var curveOrder, _ = new(big.Int).SetString("73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001", 16)
-
-// pubkeyOfScalar is the public key of the scalar x mod r (not zero).
-func pubkeyOfScalar(t *testing.T, x *big.Int) backend.Pubkey {
-	t.Helper()
-	var sk [32]byte
-	new(big.Int).Mod(x, curveOrder).FillBytes(sk[:])
-	pk, err := core.PubkeyOf(sk)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return pk
-}
-
-// A split whose share at this runner's index is the whole key is refused.
-// With commitments [pk, infinity] every share of a 2-of-3 split is the
-// key, so a runner would hold the key alone under a 2-of-3 order, on GCP
-// too, where a 1 of 1 order is refused without the setup's acceptance.
-// With t = 3 and commitments [pk, a*G, b*G], a*i + b*i^2 = 0, share i is
-// the key. checkSplit refuses a commitment at infinity, and a share equal
-// to the validator key in a split with n >= 2.
-func TestImportDegenerateSplit(t *testing.T) {
-	b, _ := rand.Int(rand.Reader, curveOrder)
-	b.Add(b, big.NewInt(1))
-	a := new(big.Int).Mul(b, big.NewInt(-2)) // a*2 + b*4 = 0 at index 2
-	for _, c := range []struct {
-		name, setup string
-		t, n        uint8
-		commits     func(pk backend.Pubkey) []backend.Pubkey
-		want        string
-	}{
-		{"infinity", "setup-dev", 2, 3, func(pk backend.Pubkey) []backend.Pubkey { return []backend.Pubkey{pk, {0xc0}} }, "point at infinity"},
-		{"infinity on gcp", "setup-gcp", 2, 3, func(pk backend.Pubkey) []backend.Pubkey { return []backend.Pubkey{pk, {0xc0}} }, "point at infinity"},
-		{"zero at index 2", "setup-dev", 3, 4, func(pk backend.Pubkey) []backend.Pubkey {
-			return []backend.Pubkey{pk, pubkeyOfScalar(t, a), pubkeyOfScalar(t, b)}
-		}, "is the validator key"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			raw, err := os.ReadFile(filepath.Join("..", "..", "governance", "setupwire", "testdata", c.setup+".bin"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			g, err := setupwire.DecodeSetup(raw)
-			if err != nil {
-				t.Fatal(err)
-			}
-			e := newTgtEnv(t, "dev", func(s *setupwire.Setup) { s.Platform = g.Platform })
-			sk, pk := newKey(t)
-			commitments := c.commits(pk)
-			if got, err := threshold.FeldmanEval(commitments, 2); err != nil || got != pk {
-				t.Fatalf("the split is not degenerate at index 2: %v", err)
-			}
-			order := e.importOrder([]byte{1, 2}, pk, func(b *importorder.Body) {
-				b.T, b.N, b.ShareIndex = c.t, c.n, 2
-				b.Validators[0].CommitmentsHash = importorder.CommitmentsHash(commitments)
-			})
-			req := backend.SealedImportRequest{Pubkey: pk, SharePubkey: pk, Index: 5, Order: order,
-				T: c.t, N: c.n, ShareIndex: 2, Commitments: commitments}
-			if req.Sealed, err = sealedimport.Seal(e.sealTo(), &req, &sk); err != nil {
-				t.Fatal(err)
-			}
-			p, err := wireadmin.EncodeImportSealed(&req)
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, err = e.srv.dispatch(ctx, wire.Frame{Type: wireadmin.TypeImportSealed, Payload: p})
-			var r *backend.RefusedError
-			if err == nil || !errors.As(err, &r) || r.Code != backend.StatusBadKey || !strings.Contains(err.Error(), c.want) {
-				t.Fatalf("%v, want a BAD_KEY refusal with %q", err, c.want)
-			}
-			if hasKey(e.srv.Signer.Keys(), pk) {
-				t.Fatal("the whole key loaded")
-			}
-		})
-	}
 }

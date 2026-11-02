@@ -170,8 +170,13 @@ func openText(forkEpochs ...uint64) string {
 // each signer's stores are below dir/NAME.
 func setupText(dir string, ca []byte, genesis int64, locked string, names ...string) string {
 	var b strings.Builder
+	mode := "threshold"
+	if len(names) == 1 {
+		mode = "single"
+	}
 	fmt.Fprintf(&b, `# a test cluster
-setup_format_version = 1
+setup_format_version = 2
+signing_mode = %s
 handover_generation = 1
 genesis_validators_root = 0x4b36000000000000000000000000000000000000000000000000000000000000
 genesis_fork_version = 0x00000010
@@ -188,7 +193,7 @@ platform = dev
 allowed_client_ca = %s
 max_keys = 16
 slashing_log_min_lock_days = 7
-`, genesis, secondsPerSlot, slotsPerEpoch, base64.StdEncoding.EncodeToString(ca))
+`, mode, genesis, secondsPerSlot, slotsPerEpoch, base64.StdEncoding.EncodeToString(ca))
 	b.WriteString(locked)
 	b.WriteString(openText())
 	for _, n := range names {

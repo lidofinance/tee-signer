@@ -82,6 +82,8 @@ func ReadStrictJSON(path string, v any) error {
 // Load reads cluster.json and the setup of each signer. It refuses a
 // cluster whose setups name more than one cluster_id or chain, or start
 // from different config groups: one signed update must fit every signer.
+// It refuses a single-mode cluster of more than one signer
+// (setupwire.CheckMembers).
 // only, if not empty, keeps the signers of these names, in that order.
 func Load(path string, only []string) (*Cluster, error) {
 	var cf File
@@ -133,6 +135,10 @@ func Load(path string, only []string) (*Cluster, error) {
 		}
 		c.Members = append(c.Members, m)
 	}
+	// Over every signer of the file, before -signers picks some.
+	if err := setupwire.CheckMembers(c.Members[0].Setup.SigningMode, len(c.Members)); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
 	if len(only) > 0 {
 		var keep []*Member
 		for _, name := range only {
@@ -160,6 +166,8 @@ func SameCluster(a, b *Member) error {
 		return fmt.Errorf("signers %s and %s have different chains", a.Name, b.Name)
 	case sa.Safety != sb.Safety || sa.HandoverGeneration != sb.HandoverGeneration:
 		return fmt.Errorf("signers %s and %s have different safety settings or handover generations", a.Name, b.Name)
+	case sa.SigningMode != sb.SigningMode:
+		return fmt.Errorf("signers %s and %s have different signing_mode (%s, %s)", a.Name, b.Name, sa.SigningMode, sb.SigningMode)
 	}
 	la, err1 := sa.Locked.Encode()
 	lb, err2 := sb.Locked.Encode()

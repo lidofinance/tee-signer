@@ -77,14 +77,14 @@ func writeClientPair(t *testing.T, dir string, cfg *tls.Config) (string, string)
 // waits it out (a cloud runner waits the images minimum, a week).
 const orderTimeLock = 2
 
-// orderSetupFor is a dev setup of signer name in cluster for chain c: the
-// chain and safety values of c, the CA of caFile, the stores in dir, the
-// config approvers 1 to 3 with k = 2, the time lock timeLock (nil: none
-// named, the image default), compounding credentials to withdrawal and
-// 32 ETH deposits.
+// orderSetupFor is a single-mode dev setup (setup-dev-single) of signer
+// name in cluster for chain c: the chain and safety values of c, the CA of
+// caFile, the stores in dir, the config approvers 1 to 3 with k = 2, the
+// time lock timeLock (nil: none named, the image default), compounding
+// credentials to withdrawal and 32 ETH deposits.
 func orderSetupFor(t *testing.T, c chain, dir, caFile, name string, cluster [32]byte, timeLock *uint64) []byte {
 	t.Helper()
-	sample, err := os.ReadFile(filepath.Join("..", "..", "governance", "setupwire", "testdata", "setup-dev.bin"))
+	sample, err := os.ReadFile(filepath.Join("..", "..", "governance", "setupwire", "testdata", "setup-dev-single.bin"))
 	if err != nil {
 		t.Fatal(err)
 	}

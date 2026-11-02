@@ -11,8 +11,6 @@ import (
 
 	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
-	"github.com/lidofinance/tee-signer/signer-core/core"
-	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	wireadmin "github.com/lidofinance/tee-signer/signer-protocol/wire/admin"
 	"github.com/lidofinance/tee-signer/slashing-log"
@@ -60,7 +58,7 @@ func (e *tgtEnv) importUpdates() map[string][]byte {
 // the slot and version 0 hold and nothing is signed. Once the import ends
 // the same rotation is taken.
 func TestHandoverImportRefusesConfigUpdates(t *testing.T) {
-	e := newTgtEnv(t, "dev", nil)
+	e := newShareTgtEnv(t, "dev", nil)
 	src := newSource(t, 24, testMark)
 	order, hash := e.order([]byte{1, 2}, nil)
 	pages := src.pages(e.sealTo(), hash, 8)
@@ -120,7 +118,7 @@ func TestHandoverImportRefusesConfigUpdates(t *testing.T) {
 // slot: nothing is signed, also after a restart, and the import goes on
 // under its order, which the old set signed, to its end.
 func TestHandoverImportSlotOutlivesRotation(t *testing.T) {
-	e := newTgtEnv(t, "dev", nil)
+	e := newShareTgtEnv(t, "dev", nil)
 	src := newSource(t, 16, testMark)
 	order, hash := e.order([]byte{1, 2}, nil)
 	pages := src.pages(e.sealTo(), hash, 8)
@@ -187,7 +185,7 @@ func TestHandoverImportStartChecks(t *testing.T) {
 		"in force": {func(e *tgtEnv) uint64 { return 0 }, "came into force"},
 		"pending":  {func(e *tgtEnv) uint64 { return e.now() + 600 }, "pending"},
 	} {
-		e := newTgtEnv(t, "dev", nil)
+		e := newShareTgtEnv(t, "dev", nil)
 		ce := e.cfg()
 		op := ce.body(open, 1, ce.groupHash(open), c.at(e))
 		op.Open.ForkSchedule = append(op.Open.ForkSchedule, setupwire.Fork{Epoch: 1 << 20, Version: v6})
@@ -199,9 +197,8 @@ func TestHandoverImportStartChecks(t *testing.T) {
 		}
 	}
 	// A share stored since.
-	e := newTgtEnv(t, "dev", nil)
-	sk, _ := software.NewSecret()
-	pk, _ := core.PubkeyOf(sk)
+	e := newShareTgtEnv(t, "dev", nil)
+	sk, pk := newSecret(t), newPubkey(t) // a share of the validator pk
 	if _, err := e.srv.addShare(pk, &sk, 1, nil, "sealed"); err != nil {
 		t.Fatal(err)
 	}
@@ -212,12 +209,11 @@ func TestHandoverImportStartChecks(t *testing.T) {
 	}
 
 	// After the start.
-	e = newTgtEnv(t, "dev", nil)
+	e = newShareTgtEnv(t, "dev", nil)
 	src := newSource(t, 8, testMark)
 	order, hash := e.order([]byte{1, 2}, nil)
 	e.mustImp(order, src.pages(e.sealTo(), hash, 4)[0], 0)
-	sk, _ = software.NewSecret()
-	pk, _ = core.PubkeyOf(sk)
+	sk, pk = newSecret(t), newPubkey(t)
 	_, err := e.srv.addShare(pk, &sk, 1, nil, "sealed")
 	refusedImport(t, err, backend.StatusNotReady, "handover import")
 }

@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-protocol"
@@ -243,6 +244,11 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 		var sec [32]byte
 		copy(sec[:], rec.Secret)
 		clear(rec.Secret)
+		if err := s.checkWholeKey(pk, &sec); err != nil {
+			clear(sec[:])
+			errs = append(errs, fmt.Errorf("%s: %w; the record stays in the store and is not loaded: remove it (a handover from this runner refuses until then)", k, err))
+			continue
+		}
 		s.Hooks.ExpectRecord(pk)
 		if rec.SourceFloor != 0 && !rec.History {
 			s.Hooks.NoteImportFloor(pk, rec.SourceFloor)
@@ -909,7 +915,8 @@ func (s *Server) checkMaximaAhead(wm *backend.Watermark, window uint64) error {
 
 // checkShare refuses a share that cannot be stored: no log_id yet, a
 // validator already loaded (keys is the signer's list), a runner at its
-// setup's max_keys or a bad secret.
+// setup's max_keys, a bad secret or a key that does not fit the setup's
+// signing_mode (checkWholeKeyOf).
 func (s *Server) checkShare(pk backend.Pubkey, secret *[32]byte, keys []backend.ValidatorKey) error {
 	if err := s.checkLogID(); err != nil {
 		return backend.Refused(backend.StatusStorage, "%v", err)
@@ -924,8 +931,52 @@ func (s *Server) checkShare(pk backend.Pubkey, secret *[32]byte, keys []backend.
 			return &backend.RefusedError{Code: backend.StatusDuplicate, Detail: "validator already loaded"}
 		}
 	}
-	if _, err := core.PubkeyOf(*secret); err != nil {
+	got, err := core.PubkeyOf(*secret)
+	if err != nil {
 		return &backend.RefusedError{Code: backend.StatusBadKey, Detail: "share secret"}
+	}
+	return s.checkWholeKeyOf(pk, got)
+}
+
+// checkWholeKey checks a key against the setup's signing_mode. Under
+// signing_mode = single it refuses a key whose public key is not the
+// validator key pk: such a signer holds whole keys only. Under
+// signing_mode = threshold it refuses a key whose public key is pk: such
+// a signer holds shares of splits only, and a share equal to the whole
+// key comes from a degenerate split (for an honest one the chance is
+// about 1 in r). It runs wherever a key is stored or loaded: the sealed
+// import, the handover import, the debug plain import and a restart.
+func (s *Server) checkWholeKey(pk backend.Pubkey, secret *[32]byte) error {
+	if s.Updates == nil {
+		return nil
+	}
+	got, err := core.PubkeyOf(*secret)
+	if err != nil {
+		return backend.Refused(backend.StatusBadKey, "share secret")
+	}
+	return s.checkWholeKeyOf(pk, got)
+}
+
+// checkWholeKeyOf is checkWholeKey for a key whose public key got is
+// known already. It refuses every key under a signing_mode it does not
+// know.
+func (s *Server) checkWholeKeyOf(pk, got backend.Pubkey) error {
+	if s.Updates == nil {
+		return nil
+	}
+	switch mode := s.Updates.SetupWire().SigningMode; mode {
+	case setupwire.SigningModeSingle:
+		if got != pk {
+			return backend.Refused(backend.StatusBadKey, "the setup says signing_mode = single, so this signer holds whole keys only: the key is not the validator key %s",
+				pk.String()[:18])
+		}
+	case setupwire.SigningModeThreshold:
+		if got == pk {
+			return backend.Refused(backend.StatusBadKey, "the setup says signing_mode = threshold, so this signer holds shares of splits only: the key is the whole validator key %s",
+				pk.String()[:18])
+		}
+	default:
+		return backend.Refused(backend.StatusBadKey, "signing_mode %d: unknown, this signer takes no key", mode)
 	}
 	return nil
 }
@@ -1031,7 +1082,8 @@ func (s *Server) health() (*backend.Health, error) {
 		h.KeyLock, h.KeyLockWhy = s.KeyLock.String(), s.KeyLockWhy
 	}
 	if s.Updates != nil {
-		h.SingleKey = singleKey(&s.Updates.SetupWire().Platform)
+		w := s.Updates.SetupWire()
+		h.SingleKey, h.SigningMode = singleKey(&w.Platform), w.SigningMode.String()
 	}
 	st := s.Signer.Stats()
 	h.Stats = &backend.SignerStats{
