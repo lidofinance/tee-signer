@@ -350,7 +350,7 @@ func TestChainConfig(t *testing.T) {
 		c.GloasForkEpoch == nil || *c.GloasForkEpoch != 20 || c.GloasForkEpoch == s.Open.GloasForkEpoch {
 		t.Fatalf("forks: %+v", c.Forks)
 	}
-	if !slices.Equal(c.ExitAllowlist, []uint64{5, 126}) || len(c.FeeRecipients) != 2 || c.GasLimitMin != 30_000_000 ||
+	if len(c.FeeRecipients) != 2 || c.GasLimitMin != 30_000_000 ||
 		c.GasLimitMax != 60_000_000 || c.RegistrationMaxFutureSeconds != 3600 || c.AllowUnverifiedNonslashable ||
 		len(c.BuilderRequestAuthRoots) != 2 || c.BuilderRequestAuthRoots[1] != s.Locked.AllowedBuilderRequestAuthDataRoots[1] {
 		t.Fatalf("locked values: %+v", c)

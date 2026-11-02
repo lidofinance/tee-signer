@@ -31,11 +31,9 @@ func (l *gateLog) HandedOver() (backend.Watermark, bool) { return backend.Waterm
 func (l *gateLog) HandOverTo(context.Context, [32]byte) (backend.Watermark, error) {
 	return backend.Watermark{}, nil
 }
-func (l *gateLog) HandedOverTo() ([32]byte, bool)                        { return [32]byte{}, false }
-func (l *gateLog) Exits() *markstore.ExitDay                             { return nil }
-func (l *gateLog) RecordExits(context.Context, *markstore.ExitDay) error { return nil }
-func (l *gateLog) Lost() error                                           { return nil }
-func (l *gateLog) Status() string                                        { return "gate log" }
+func (l *gateLog) HandedOverTo() ([32]byte, bool) { return [32]byte{}, false }
+func (l *gateLog) Lost() error                    { return nil }
+func (l *gateLog) Status() string                 { return "gate log" }
 func (l *gateLog) SourceGate() (uint64, bool) {
 	if l.gate == nil {
 		return 0, false

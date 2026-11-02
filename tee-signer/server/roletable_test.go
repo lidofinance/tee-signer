@@ -30,8 +30,9 @@ func pipeCall(t *testing.T, c net.Conn, id uint32, typ wire.MsgType, payload []b
 // Every message type of wire and wire/admin, and some unknown ones,
 // against each client role: FORBIDDEN exactly where the role table of
 // docs/protocol.md says no. The unknown ones include 0x20 to 0x28, the
-// message numbers of the removed key generation, and 0x31 to 0x33, those
-// of the handover: they stay refused for every role.
+// message numbers of the removed key generation, 0x09, that of the exit
+// approvals, and 0x31 to 0x33, those of the handover: they stay refused
+// for every role.
 func TestRoleTable(t *testing.T) {
 	admin := []asn1.ObjectIdentifier{backend.AdminClientOID}
 	root := newTestCA(t, nil, nil, nil)
@@ -41,7 +42,7 @@ func TestRoleTable(t *testing.T) {
 
 	types := []wire.MsgType{
 		wire.TypeHealth, wire.TypePublicKeys, wire.TypeSign, wire.TypeAttest, wireadmin.TypeImportShare, wire.TypeIdentity,
-		wireadmin.TypeImportSealed, wireadmin.TypeConfigUpdate, wireadmin.TypeApproveExit,
+		wireadmin.TypeImportSealed, wireadmin.TypeConfigUpdate, 0x09,
 		0x00, 0x0a, 0x1f, 0x29, 0x30, 0x31, 0x32, 0x33, 0x34, 0x7f,
 	}
 	for typ := wire.MsgType(0x20); typ <= 0x28; typ++ {
@@ -52,7 +53,7 @@ func TestRoleTable(t *testing.T) {
 	attest := map[wire.MsgType]bool{wire.TypeHealth: true, wire.TypePublicKeys: true, wire.TypeAttest: true, wire.TypeIdentity: true}
 	adminOK := map[wire.MsgType]bool{}
 	for _, typ := range types {
-		adminOK[typ] = typ != wire.TypeSign && typ < 0x0a && typ != 0
+		adminOK[typ] = typ != wire.TypeSign && typ < 0x09 && typ != 0
 	}
 
 	// An admin leaf straight under the root: admin rights in a testnet build

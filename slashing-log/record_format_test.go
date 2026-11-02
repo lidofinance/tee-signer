@@ -11,17 +11,14 @@ import (
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
-// A record round-trips with its exits, source gate and share set, and
+// A record round-trips with its source gate and share set, and
 // Parse refuses trailing bytes, a presence byte of 2 and any magic but
 // SMARK1 and SMARK2.
 func TestRecordFormatRoundTrip(t *testing.T) {
 	gate := uint64(1002)
 	r := Record{Setup: [32]byte{0x5e, 1}, Signer: "signer-1", Version: 3, PrevVersion: 2, PrevHash: [32]byte{2}, LogID: [32]byte{1},
 		Mark: mark(20), Time: 1_800_000_000, State: testSetup("signer-1").First.Clone(), SourceGate: &gate,
-		Shares: &ShareSet{Current: [32]byte{0xc1}, Pending: &[32]byte{0xc2}},
-		Exits: &ExitDay{Day: 20833, Stake: 64e9, Exits: []ExitEntry{
-			{Pubkey: backend.Pubkey{0xa1}, ValidatorIndex: 7, ExitEpoch: 100, Stake: 32e9, Nonce: [32]byte{1}},
-			{Pubkey: backend.Pubkey{0xa2}, ValidatorIndex: 7, ExitEpoch: 100, Stake: 32e9, Nonce: [32]byte{2}}}}}
+		Shares: &ShareSet{Current: [32]byte{0xc1}, Pending: &[32]byte{0xc2}}}
 	enc := signed(t, testKey(1), r)
 	if string(enc[:6]) != "SMARK2" {
 		t.Fatalf("magic %q", enc[:6])
@@ -30,19 +27,19 @@ func TestRecordFormatRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.SourceGate == nil || *got.SourceGate != gate || !exitsEqual(got.Exits, r.Exits) || !sameShares(got.Shares, r.Shares) {
-		t.Fatalf("read back: gate %v, exits %+v, shares %+v", got.SourceGate, got.Exits, got.Shares)
+	if got.SourceGate == nil || *got.SourceGate != gate || !sameShares(got.Shares, r.Shares) {
+		t.Fatalf("read back: gate %v, shares %+v", got.SourceGate, got.Shares)
 	}
 	r.Shares.Pending = nil
 	got, err = decode(signed(t, testKey(1), r), testKey(1), r.Setup, r.Signer, 3)
 	if err != nil || !sameShares(got.Shares, r.Shares) {
 		t.Fatalf("share set without a pending root: %+v, %v", got.Shares, err)
 	}
-	// Without exits, gate and share set: the presence bytes 0.
-	r.Exits, r.SourceGate, r.Shares = nil, nil, nil
+	// Without gate and share set: the presence bytes 0.
+	r.SourceGate, r.Shares = nil, nil
 	got, err = decode(signed(t, testKey(1), r), testKey(1), r.Setup, r.Signer, 3)
-	if err != nil || got.Exits != nil || got.SourceGate != nil || got.Shares != nil {
-		t.Fatalf("no exits, no gate, no share set: %+v, %v", got, err)
+	if err != nil || got.SourceGate != nil || got.Shares != nil {
+		t.Fatalf("no gate, no share set: %+v, %v", got, err)
 	}
 	// An SMARK1 record (no share set field) reads, with no share set.
 	got, err = decode(signedV1(t, testKey(1), r), testKey(1), r.Setup, r.Signer, 3)

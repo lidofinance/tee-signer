@@ -44,12 +44,7 @@ func TestConfigRecoveryForgedNewSetIsNoRotation(t *testing.T) {
 	e := newEnv(t, u64(3600))
 	t0 := e.now()
 	keep := e.body(locked, 1, e.groupHash(locked), t0)
-	ev := keep.Locked.ExitAllowedValidators
-	next := uint64(7)
-	if len(ev) > 0 {
-		next = ev[len(ev)-1] + 1
-	}
-	keep.Locked.ExitAllowedValidators = append(ev, next)
+	keep.Locked.BuilderGasLimitMax++
 	e.mustSend(signed(t, keep, first2, nil), wireadmin.ConfigAccepted)
 	op := e.body(open, 1, e.groupHash(open), t0+3700)
 	op.Open.ForkSchedule = append(op.Open.ForkSchedule, setupwire.Fork{Epoch: 1100, Version: v6})

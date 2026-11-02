@@ -141,7 +141,7 @@ const (
 
 // adminTypes are the message types only the admin role may send.
 var adminTypes = []wire.MsgType{
-	wireadmin.TypeImportShare, wireadmin.TypeImportSealed, wireadmin.TypeConfigUpdate, wireadmin.TypeApproveExit,
+	wireadmin.TypeImportShare, wireadmin.TypeImportSealed, wireadmin.TypeConfigUpdate,
 }
 
 // allows is the role table. A role or a type missing here is denied.

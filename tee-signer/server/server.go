@@ -129,8 +129,6 @@ type Server struct {
 	// (limit.go); limitNow, if set, is its clock (tests).
 	attestLimit attestLimit
 	limitNow    func() time.Time
-	// exits holds exit approvals and the day's exits (exits.go).
-	exits exitState
 
 	// Limits bounds connections, handshakes and large frame bytes
 	// (limits.go); the zero value has the defaults.
@@ -693,8 +691,6 @@ func (s *Server) dispatch(ctx context.Context, f wire.Frame) ([]byte, error) {
 		return wire.AppendKey(nil, k), nil
 	case wireadmin.TypeConfigUpdate:
 		return s.configUpdate(ctx, f.Payload)
-	case wireadmin.TypeApproveExit:
-		return s.approveExit(f.Payload)
 	}
 	// IMPORT_SHARE is served only by debug builds (plainimport.go); a
 	// release build answers it as an unknown type (noplainimport.go).
@@ -788,14 +784,6 @@ func (s *Server) sign(req backend.SignRequest) (backend.Signature, error) {
 			return backend.Signature{}, err
 		}
 	}
-	if _, ok := req.Message.(*backend.VoluntaryExit); ok && s.Updates == nil && s.Platform.Name != "dev" {
-		// The approval and daily cap gate below needs a setup. Without one,
-		// a signing client could exit any validator on the allowlist.
-		err := backend.Refused(backend.StatusPolicyExit,
-			"this runner has no setup, so it has no exit approvals and no daily stake cap: it signs no voluntary exit off the dev platform")
-		s.Log.Info("refused", "kind", kind, "pubkey", req.Pubkey.String()[:18], "msg", describe(req.Message), "err", err)
-		return backend.Signature{}, err
-	}
 	var (
 		sig    backend.Signature
 		repeat bool
@@ -812,12 +800,6 @@ func (s *Server) sign(req backend.SignRequest) (backend.Signature, error) {
 		if gerr != nil {
 			s.Log.Warn("refused", "kind", kind, "pubkey", req.Pubkey.String()[:18], "err", gerr)
 			return backend.Signature{}, gerr
-		}
-		if e, ok := req.Message.(*backend.VoluntaryExit); ok {
-			if err := s.exitAllowed(req.Pubkey, e); err != nil {
-				s.Log.Info("refused", "kind", kind, "pubkey", req.Pubkey.String()[:18], "msg", describe(req.Message), "err", err)
-				return backend.Signature{}, err
-			}
 		}
 		sig, repeat, err = s.Signer.SignGuarded(req, g)
 		if !errors.Is(err, core.ErrConfigMoved) {

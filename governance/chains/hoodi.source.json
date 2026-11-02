@@ -44,7 +44,6 @@
   "policy_note": "Not chain data: the signer policy that chain.sh build puts into hoodi.json unless the environment overrides it. gas_limit_max covers the GAS_LIMIT_SCHEDULE of the config (200000000 from epoch 132352). The fee recipient is a burn address until the operator picks one.",
   "policy": {
     "max_epochs_ahead": 2,
-    "exit_allowlist": [],
     "fee_recipients": ["0x000000000000000000000000000000000000dEaD"],
     "gas_limit_min": 30000000,
     "gas_limit_max": 200000000,

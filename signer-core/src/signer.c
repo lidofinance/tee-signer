@@ -417,8 +417,6 @@ int sc_signer_set_policy(sc_signer *s, const sc_config *policy)
     if (!s || !policy)
         return SC_ERR_ARG;
     merged = s->cfg;
-    memcpy(merged.exit_allowlist, policy->exit_allowlist, sizeof merged.exit_allowlist);
-    merged.exit_allowlist_count = policy->exit_allowlist_count;
     memcpy(merged.fee_recipients, policy->fee_recipients, sizeof merged.fee_recipients);
     merged.fee_recipient_count = policy->fee_recipient_count;
     merged.gas_limit_min = policy->gas_limit_min;

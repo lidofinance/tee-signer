@@ -1,14 +1,13 @@
 package main
 
-// The commands signer-config did not have: probe, import-draft, import, exit-draft, and the import
-// order and exit approval paths of show, sign, assemble and push.
+// The commands signer-config did not have: probe, import-draft, import, and the import
+// order paths of show, sign and assemble.
 
 import (
 	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -22,7 +21,6 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
-	"github.com/lidofinance/tee-signer/governance/exitapproval"
 	"github.com/lidofinance/tee-signer/governance/importorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	adminapprover "github.com/lidofinance/tee-signer/signer-admin/approver"
@@ -31,11 +29,6 @@ import (
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	cloud "github.com/lidofinance/tee-signer/signer-protocol"
 )
-
-// maxExitsPerPush is the runner's maxPendingExits (runner/server/exits.go):
-// a runner holds at most 8 exit approvals at once, so push sends at most 8
-// per signer per run.
-const maxExitsPerPush = 8
 
 // ---- probe ----
 
@@ -157,7 +150,7 @@ func (s *splitFile) commitmentsOf(pk cloud.Pubkey) ([]cloud.Pubkey, bool) {
 	return nil, false
 }
 
-// ---- active files of import orders and exit approvals ----
+// ---- active files of import orders ----
 
 // lockedInForce reads the attested state of m and its locked group in
 // force: the body from the archive of push, or the setup's version 0.
@@ -202,7 +195,7 @@ func writeActive(path string, setupRaw, lockedRaw []byte) error {
 }
 
 // loadSetupActive reads an active file of a setup and its locked group in
-// force, as import-draft and exit-draft write it.
+// force, as import-draft writes it.
 func loadSetupActive(path string) (*orderActive, error) {
 	var f activeFile
 	if err := readStrictJSON(path, &f); err != nil {
@@ -699,167 +692,16 @@ func cmdImport(args []string, out io.Writer) error {
 	return nil
 }
 
-// ---- exit-draft ----
+// ---- sign and assemble of import orders ----
 
-// isExitFile reports whether raw is an exit approval (152 bytes) or a
-// signed one: it starts with the TA's magic.
-func isExitFile(raw []byte) bool {
-	return len(raw) >= exitapproval.Len && binary.LittleEndian.Uint64(raw) == exitapproval.Magic
-}
-
-// readExit reads an exit approval, signed or not.
-func readExit(raw []byte) (*exitapproval.Approval, *exitapproval.Signed, error) {
-	if len(raw) == exitapproval.Len {
-		a, err := decodeApproval(raw)
-		return a, nil, err
-	}
-	s, err := exitapproval.Decode(raw)
-	if err != nil {
-		return nil, nil, err
-	}
-	return &s.Approval, s, nil
-}
-
-// decodeApproval reads the 152-byte approval alone.
-func decodeApproval(raw []byte) (*exitapproval.Approval, error) {
-	if len(raw) != exitapproval.Len || binary.LittleEndian.Uint64(raw) != exitapproval.Magic {
-		return nil, errors.New("exit approval: not 152 bytes with the TA's magic")
-	}
-	a := &exitapproval.Approval{}
-	copy(a.GenesisValidatorsRoot[:], raw[8:40])
-	copy(a.Pubkey[:], raw[40:88])
-	a.ValidatorIndex = binary.LittleEndian.Uint64(raw[88:])
-	a.ExitEpoch = binary.LittleEndian.Uint64(raw[96:])
-	a.EffectiveBalance = binary.LittleEndian.Uint64(raw[104:])
-	a.NotAfter = binary.LittleEndian.Uint64(raw[112:])
-	copy(a.Nonce[:], raw[120:152])
-	if !bytes.Equal(a.Encode(), raw) {
-		return nil, errors.New("exit approval: does not encode back")
-	}
-	return a, nil
-}
-
-// exitHash names an exit approval in signature files: SHA-256 over
-// CtxTAExitApproval and the approval.
-func exitHash(a *exitapproval.Approval) [32]byte { return setupwire.CtxTAExitApproval.Hash(a.Encode()) }
-
-func cmdExitDraft(args []string, out io.Writer) error {
-	fs := flag.NewFlagSet("exit-draft", flag.ContinueOnError)
-	cf := addClusterFlags(fs)
-	pubkey := fs.String("pubkey", "", "the validator key (0x...)")
-	index := fs.Int64("index", -1, "the validator index on the chain")
-	epoch := fs.Int64("epoch", -1, "the exit epoch of the voluntary exit")
-	balance := fs.Uint64("balance", 0, "the validator's effective balance in Gwei, as the chain shows it")
-	notAfter := fs.String("not-after", "24h", "the runners drop the approval from then on: RFC 3339 time, or a duration from now (at most 7 days)")
-	outPath := fs.String("out", "exit.bin", "the approval to sign; the setup and locked values in force go to the same name with .active")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 || *pubkey == "" || *index < 0 || *epoch < 0 || *balance == 0 {
-		return errors.New("usage: signer-admin exit-draft -cluster cluster.json -pubkey 0x.. -index N -epoch E -balance GWEI [-not-after 24h] [-out exit.bin]")
-	}
-	a := &exitapproval.Approval{ValidatorIndex: uint64(*index), ExitEpoch: uint64(*epoch), EffectiveBalance: *balance}
-	if err := a.Pubkey.UnmarshalText([]byte(*pubkey)); err != nil {
-		return fmt.Errorf("-pubkey: %w", err)
-	}
-	t := now()
-	var err error
-	if a.NotAfter, err = parseNotAfter(*notAfter, t); err != nil {
-		return fmt.Errorf("-not-after: %w", err)
-	}
-	if n := uint64(max(t.Unix(), 0)); a.NotAfter <= n || a.NotAfter-n > exitapproval.MaxLifetime {
-		return fmt.Errorf("-not-after %s: want a time in the next %d days, the runners refuse a longer one", when(a.NotAfter), exitapproval.MaxLifetime/86400)
-	}
-	if _, err := io.ReadFull(toolRand, a.Nonce[:]); err != nil {
-		return err
-	}
-	c, err := cf.load()
-	if err != nil {
-		return err
-	}
-	m := c.members[0]
-	a.GenesisValidatorsRoot = m.setup.Chain.GenesisValidatorsRoot
-	locked, lockedRaw, r, err := lockedInForce(c, m, *cf.timeout)
-	if err != nil {
-		return err
-	}
-	raw := a.Encode()
-	if err := os.WriteFile(*outPath, raw, 0o644); err != nil {
-		return err
-	}
-	if err := writeActive(*outPath, m.setupRaw, lockedRaw); err != nil {
-		return err
-	}
-	fprintf(out, "exit approval for validator %d, %s, exit epoch %d, effective balance %d Gwei, not after %s\n", a.ValidatorIndex, a.Pubkey,
-		a.ExitEpoch, a.EffectiveBalance, when(a.NotAfter))
-	fprintf(out, "  %d approvers of locked version %d (%s) sign it; push sends it to all %d signers\n", locked.ExitApprovalsNeeded, r.version, m.name,
-		len(c.members))
-	fprintf(out, "approval_sha256 %s\nwrote %s and %s\n", fullHex(exitHash(a)), *outPath, *outPath+".active")
-	return nil
-}
-
-func showExit(out io.Writer, path string, raw []byte, activePath string) error {
-	a, signed, err := readExit(raw)
+// signKind signs an import order body.
+func signKind(out io.Writer, path string, raw []byte, key adminapprover.Signer, hashed bool, outPath string) error {
+	b, err := importorder.DecodeBody(raw)
 	if err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
-	fprintf(out, "exit approval\ngenesis_validators_root = 0x%x\npubkey = %s\nvalidator_index = %d\nexit_epoch = %d\neffective_balance = %d Gwei\nnot_after = %s\nnonce = 0x%x\n",
-		a.GenesisValidatorsRoot, a.Pubkey, a.ValidatorIndex, a.ExitEpoch, a.EffectiveBalance, when(a.NotAfter), a.Nonce)
-	fprintf(out, "\napproval_sha256 %s\n", fullHex(exitHash(a)))
-	fprintf(out, "before you sign, check on the beacon chain with genesis_validators_root above: validator %d has pubkey %s, "+
-		"its effective balance is %d Gwei, it is active and not exiting, and the exit you want names epoch %d\n",
-		a.ValidatorIndex, a.Pubkey, a.EffectiveBalance, a.ExitEpoch)
-	act, err := optionalSetupActive(path, activePath)
-	if err != nil {
-		return err
-	}
-	if act != nil {
-		if act.setup.Chain.GenesisValidatorsRoot != a.GenesisValidatorsRoot {
-			fprintf(out, "chain: the active values are of another chain\n")
-		}
-		fprintf(out, "approvers: %d of the set %s in force (locked version %d, exit_approvals_needed)\n", act.locked.ExitApprovalsNeeded,
-			hex8(act.locked.Approvers.Hash()), act.ref.version)
-	}
-	if signed != nil {
-		for _, ap := range signed.Approvals {
-			fprintf(out, "approver_signature position %d\n", ap.Position)
-		}
-		if act != nil {
-			if err := signed.Verify(&act.locked.Approvers, act.locked.ExitApprovalsNeeded); err != nil {
-				return fmt.Errorf("signatures: %w", err)
-			}
-			fprintf(out, "signatures: complete and valid against the approver set %s in force\n", hex8(act.locked.Approvers.Hash()))
-		}
-	}
-	return nil
-}
-
-// ---- sign and assemble of import orders and exit approvals ----
-
-// signKind signs an import order body or an exit approval.
-func signKind(out io.Writer, path string, raw []byte, key adminapprover.Signer, hashed bool, outPath string) error {
-	var (
-		ctx  setupwire.Context
-		hash [32]byte
-		what string
-	)
-	switch {
-	case isExitFile(raw):
-		a, err := decodeApproval(raw)
-		if err != nil {
-			return fmt.Errorf("%s: %w (sign the 152-byte approval exit-draft wrote)", path, err)
-		}
-		ctx, hash = setupwire.CtxTAExitApproval, exitHash(a)
-		what = fmt.Sprintf("exit approval of validator %d, epoch %d", a.ValidatorIndex, a.ExitEpoch)
-		raw = a.Encode()
-	default:
-		b, err := importorder.DecodeBody(raw)
-		if err != nil {
-			return fmt.Errorf("%s: %w", path, err)
-		}
-		ctx, hash = setupwire.CtxImportOrder, importorder.Hash(raw)
-		what = fmt.Sprintf("import order of %d validators for setup %s", len(b.Validators), hex8(b.Target))
-	}
+	ctx, hash := setupwire.CtxImportOrder, importorder.Hash(raw)
+	what := fmt.Sprintf("import order of %d validators for setup %s", len(b.Validators), hex8(b.Target))
 	sig, err := adminapprover.Sign(key, ctx, hashed, raw)
 	if err != nil {
 		return err
@@ -911,34 +753,6 @@ func assembleKind(out io.Writer, path string, raw []byte, activePath string, sig
 		return err
 	}
 	set := &a.locked.Approvers
-	if isExitFile(raw) {
-		ap, err := decodeApproval(raw)
-		if err != nil {
-			return fmt.Errorf("%s: %w", path, err)
-		}
-		approvals, err := collect(sigs, exitHash(ap), set, setupwire.CtxTAExitApproval, raw)
-		if err != nil {
-			return err
-		}
-		need := a.locked.ExitApprovalsNeeded
-		if len(approvals) < int(need) {
-			return fmt.Errorf("%d of the approvers in force signed, exit_approvals_needed is %d: %d more needed", len(approvals), need, int(need)-len(approvals))
-		}
-		s := &exitapproval.Signed{Approval: *ap, Approvals: approvals}
-		if err := s.Verify(set, need); err != nil {
-			return err
-		}
-		enc, err := s.Encode()
-		if err != nil {
-			return err
-		}
-		outPath = cmpOr(outPath, "exit.signed")
-		if err := os.WriteFile(outPath, enc, 0o644); err != nil {
-			return err
-		}
-		fprintf(out, "exit approval of validator %d: %d approvers (exit_approvals_needed %d)\nwrote %s\n", ap.ValidatorIndex, len(approvals), need, outPath)
-		return nil
-	}
 	b, err := importorder.DecodeBody(raw)
 	if err != nil {
 		return fmt.Errorf("%s: %w", path, err)
@@ -970,60 +784,6 @@ func assembleKind(out io.Writer, path string, raw []byte, activePath string, sig
 	return nil
 }
 
-// ---- push of exit approvals ----
-
-// pushExits sends signed exit approvals to every signer of the cluster:
-// each signer must hold the approval before it signs its part of the exit.
-func pushExits(out io.Writer, c *cluster, paths []string, timeout time.Duration) error {
-	if len(paths) > maxExitsPerPush {
-		return fmt.Errorf("%d exit approvals in one push: a runner holds at most %d at once (maxPendingExits); push them in batches of %d",
-			len(paths), maxExitsPerPush, maxExitsPerPush)
-	}
-	var raws [][]byte
-	for _, p := range paths {
-		raw, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		s, err := exitapproval.Decode(raw)
-		if err != nil {
-			return fmt.Errorf("%s: %w", p, err)
-		}
-		for _, m := range c.members {
-			if s.Approval.GenesisValidatorsRoot != m.setup.Chain.GenesisValidatorsRoot {
-				return fmt.Errorf("%s is an exit approval for another chain than %s's", p, m.name)
-			}
-		}
-		raws = append(raws, raw)
-	}
-	failed := false
-	for _, m := range c.members {
-		cl, err := connectAdmin(m, timeout)
-		if err != nil {
-			failed = true
-			fprintf(out, "%s failed: %v\n", m.name, err)
-			continue
-		}
-		ac := remoteadmin.Wrap(cl.Client)
-		for i, raw := range raws {
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
-			err := ac.ApproveExit(ctx, raw)
-			cancel()
-			if err != nil {
-				failed = true
-				fprintf(out, "%s refused %s: %v\n", m.name, paths[i], err)
-				continue
-			}
-			fprintf(out, "%s holds %s\n", m.name, paths[i])
-		}
-		cl.Close()
-	}
-	if failed {
-		return errReported
-	}
-	return nil
-}
-
 // ---- the signing messages, for show ----
 
 // printSigning names both messages an approver may sign for raw, so an
@@ -1049,10 +809,6 @@ func signingInput(raw []byte) (setupwire.Context, []byte, bool) {
 		return setupwire.Context{}, nil, false
 	}
 	switch {
-	case isExitFile(raw):
-		if a, _, err := readExit(raw); err == nil {
-			return setupwire.CtxTAExitApproval, a.Encode(), true
-		}
 	case isImportFile(raw):
 		if _, body, _, err := readImport(raw); err == nil {
 			return setupwire.CtxImportOrder, body, true

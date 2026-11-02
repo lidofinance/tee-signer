@@ -194,7 +194,6 @@ type MarkLog struct {
 	logID   [32]byte
 	written time.Time // time of the newest record
 	mark    backend.Watermark
-	exits   *ExitDay // the day's exits the newest record carries
 	// gate is the source gate the next record carries (SetSourceGate); at
 	// Claim the newest record's.
 	gate *uint64
@@ -544,7 +543,7 @@ func (m *MarkLog) Claim(ctx context.Context, expect bool) (backend.Watermark, bo
 	if r != nil {
 		m.version, m.hash, m.mark = r.Version, h, r.Mark
 		m.logID, m.written = logIDOf(r, enc), time.Unix(int64(r.Time), 0)
-		m.state, m.exits = r.State.Clone(), r.Exits.Clone()
+		m.state = r.State.Clone()
 		m.gate = cloneGate(r.SourceGate)
 		m.shares = r.Shares.Clone()
 		m.found = r.Mark.HasAttestation || r.Mark.HasBlock
@@ -770,7 +769,7 @@ func (m *MarkLog) appendLocked(ctx context.Context, wm backend.Watermark) error 
 		}
 		rec := Record{Setup: m.setup, Signer: m.signer, Version: v, PrevVersion: prevV, PrevHash: prevH, LogID: logID,
 			Owner: m.owner, KeyBlob: m.blob, Mark: wm, Time: uint64(now.Unix()), State: m.state.Clone(),
-			Copies: m.copiesLocked(), Exits: m.exits.Clone(), SourceGate: cloneGate(m.gate),
+			Copies: m.copiesLocked(), SourceGate: cloneGate(m.gate),
 			Shares: m.shares.Clone()}
 		if err := rec.check(); err != nil {
 			return fmt.Errorf("markstore: record not written: %w", err)
@@ -833,7 +832,7 @@ func (m *MarkLog) appendLocked(ctx context.Context, wm backend.Watermark) error 
 				m.writes++
 				m.writeHint()
 				m.opt.Log.Warn("mark log: found this runner's own record of an attempt whose reply was lost", "version", v)
-				if Merge(r.Mark, wm) == r.Mark && r.State.Equal(m.state) && exitsEqual(r.Exits, m.exits) &&
+				if Merge(r.Mark, wm) == r.Mark && r.State.Equal(m.state) &&
 					sameGate(r.SourceGate, m.gate) && sameShares(r.Shares, m.shares) {
 					return nil
 				}
@@ -940,43 +939,6 @@ func (m *MarkLog) RecordShareSet(ctx context.Context, s *ShareSet) error {
 	m.shares = s.Clone()
 	if err := m.appendLocked(ctx, m.mark); err != nil {
 		m.shares = old
-		return err
-	}
-	return nil
-}
-
-// Exits returns the day's exits the newest record carries (nil: none).
-func (m *MarkLog) Exits() *ExitDay {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.exits.Clone()
-}
-
-// RecordExits writes a record that carries d as the day's exits, with the
-// mark unchanged. It returns only once the record is durable: the runner
-// signs the exit after it. A log that cannot be written, or that another
-// instance wrote, refuses (ErrLost latches as for a mark).
-func (m *MarkLog) RecordExits(ctx context.Context, d *ExitDay) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if !m.claimed {
-		return errors.New("markstore: not claimed")
-	}
-	if m.lost != nil {
-		return m.lost
-	}
-	if d == nil || len(d.Exits) == 0 || len(d.Exits) > MaxExitsPerDay {
-		return errors.New("markstore: exits: none or too many")
-	}
-	if m.exits != nil && d.Day < m.exits.Day {
-		// The day never goes back (SHH-02): that would free the later
-		// day's cap and nonces.
-		return fmt.Errorf("markstore: exits of day %d under a log at day %d", d.Day, m.exits.Day)
-	}
-	old := m.exits
-	m.exits = d.Clone()
-	if err := m.appendLocked(ctx, m.mark); err != nil {
-		m.exits = old
 		return err
 	}
 	return nil

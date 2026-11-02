@@ -96,9 +96,6 @@ func sampleLocked() Locked {
 		BuilderGasLimitMin:                  30_000_000,
 		BuilderGasLimitMax:                  60_000_000,
 		BuilderRegistrationMaxFutureSeconds: 3600,
-		ExitAllowedValidators:               []uint64{5, 126},
-		ExitStakeCapPerDay:                  4096 * eth,
-		ExitApprovalsNeeded:                 2,
 		MinActivationBalance:                32 * eth,
 		MaxEffectiveBalance:                 2048 * eth,
 		WithdrawalCredentials:               credentials(0x02, 0x42),
@@ -183,7 +180,6 @@ func samples(t testing.TB) map[string]*Setup {
 				KMSKey: "projects/p/locations/global/keyRings/signer/cryptoKeys/seal", AttestAudience: "signer-runner-identity"}})
 		g.Locked.AllowedImageMeasurements = nil
 		g.Locked.AllowedFeeRecipients = nil
-		g.Locked.ExitAllowedValidators = nil
 		g.Locked.AllowedDepositAmounts = nil
 		g.Locked.BareRootDomains = 0
 		g.Locked.AllowedBuilderRequestAuthDataRoots = nil

@@ -9,7 +9,6 @@
   "seconds_per_slot": 12,
   "slots_per_epoch": 32,
   "max_epochs_ahead": 1,
-  "exit_allowlist": [7],
   "fee_recipients": ["0x1111111111111111111111111111111111111111"],
   "gas_limit_min": 30000000,
   "gas_limit_max": 60000000,

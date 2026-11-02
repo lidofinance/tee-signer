@@ -38,7 +38,7 @@ enough.
 | open group | 53, or 113 with a pending update | see below |
 | pending order | 1, or 42 | presence byte, then kind (1 handover, the only kind; a reader refuses any other), hash, act time; only an image with a handover writes it, and this image does not start on a state that holds one |
 | target | 1, or 33 | presence byte, then the `setup_hash` a tombstone hands over to; only an image with a handover writes it |
-| exits | 1, or 19 + 104 per exit | presence byte, then the day (8), the stake counted that day in Gwei (8), the number of exits (2, up to 200), and per exit the validator key (48), index (8), exit epoch (8), stake (8) and the approval's nonce (32) |
+| exits | 1 | presence byte, always 0. An image with exit approvals wrote the day's exits here; this image refuses a record that holds them |
 | source gate | 1, or 9 | presence byte, then the source floor epoch (see "Source gate") |
 | share set | 1, 34 or 66 | presence byte, then the current root (32), a presence byte and the pending root (32) (see "Share set") |
 | signature | 64 | Ed25519 over the context `signer-mark-v1` and the fields above |
@@ -67,8 +67,7 @@ context `signer-mark-v1`, over every byte before them. Then a runner
 under this key release signed it, most likely a newer image with a field
 this one does not know (a digit above 1), and the runner refuses to start
 (`markstore.ErrUnreadable`). Skipping it would fall back to the mark below
-it, and the runner could sign votes around the newer image's marks or
-miss the day's exits it counted. Every later record format keeps that
+it, and the runner could sign votes around the newer image's marks. Every later record format keeps that
 start, the magic's form and the signed tail. A digit of 0 is no record.
 
 The key blob alone proves nothing: it is a public field, and anyone who
