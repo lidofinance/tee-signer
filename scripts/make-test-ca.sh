@@ -35,7 +35,8 @@
 #                         ADMIN_OID) followed by admin-ca.pem
 #   admin-client-key.pem  its private key
 #   root-admin-client.pem a client certificate with clientAuth and ADMIN_OID
-#                         straight under the root: not admin (negative case)
+#                         straight under the root: no role on a default
+#                         build (negative case)
 #   root-admin-client-key.pem its private key
 #   root-ca-key.pem, intermediate-key.pem, admin-ca-key.pem
 #

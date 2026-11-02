@@ -329,8 +329,13 @@ func hasEKU(c *x509.Certificate, oid asn1.ObjectIdentifier) bool {
 //     (ATTEST-ROLES-02).
 //  3. Testnet builds only (buildflavor.AdminRootDirect): admin-root-direct
 //     if, in some verified chain, the leaf lists backend.AdminClientOID and
-//     its issuer is the chain's root. Default builds skip this rule.
-//  4. Otherwise signing.
+//     its issuer is the chain's self-signed root (not an intermediate of
+//     the CA file). Default builds skip this rule.
+//  4. RoleNone if the leaf lists backend.AdminClientOID: an admin
+//     certificate that fails rules 2 and 3 gets no rights, never the
+//     signing role. A CA file that also pins the admin intermediate
+//     gives such a leaf a two-certificate chain to that intermediate.
+//  5. Otherwise signing.
 //
 // No peer certificate or no verified chain: RoleNone. Every certificate of
 // the chain must still allow clientAuth (or list no extended key usage),
@@ -356,10 +361,13 @@ func RoleOf(cs *tls.ConnectionState) Role {
 	}
 	if buildflavor.AdminRootDirect {
 		for _, chain := range cs.VerifiedChains {
-			if len(chain) == 2 && chain[0].Equal(cs.PeerCertificates[0]) && hasEKU(chain[0], backend.AdminClientOID) {
+			if len(chain) == 2 && chain[0].Equal(cs.PeerCertificates[0]) && hasEKU(chain[0], backend.AdminClientOID) && selfSigned(chain[1]) {
 				return RoleAdminRootDirect
 			}
 		}
+	}
+	if hasEKU(cs.PeerCertificates[0], backend.AdminClientOID) {
+		return RoleNone
 	}
 	return RoleSigning
 }
