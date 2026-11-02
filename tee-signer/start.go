@@ -34,8 +34,8 @@ import (
 // lock checked outside dev) and loads only the shares listed before the
 // claim, sealed under setup_hash and the log's log_id. IDENTITY, ATTEST and
 // HEALTH then carry setup_hash and the mark log's config state
-// (setupstate.go). The flag path (no -setup) stays for the tests and the
-// stack's local runners until they move.
+// (setupstate.go). The flag path (no -setup) is for the tests: a release
+// build refuses it off the dev platform (checkFlagPath).
 
 // setupWait bounds step 1: the host agent or the metadata server may not
 // answer at once.
@@ -184,6 +184,19 @@ func fromSetup(ctx context.Context, a *startArgs, log *slog.Logger) (_ *start, e
 		maxValidators: st.MaxKeys()}, nil
 }
 
+// checkFlagPath is the setup rule of checkFlags. The flag path has no
+// setup, so the checks that need one do not run: the mark store's lock
+// check, the key rule read and its mainnet rule, and the mark log's age
+// check and refresh. A release runner refuses it on nitro, azure and gcp. dev
+// keeps it, and so do debug builds, which no cloud image is (the e2e tests
+// with fake hardware need it). -clock-check is not affected.
+func checkFlagPath(platformName string) error {
+	if platformName == "dev" || flagPathAllowed() {
+		return nil
+	}
+	return fmt.Errorf("platform %s: no -setup; a release build takes its values from the signer's setup only (-setup platform)", platformName)
+}
+
 // fromFlags is the flag path: the values as the flags give them.
 func fromFlags(a *startArgs) (*start, error) {
 	if err := runStartHooks(nil, nil); err != nil {
@@ -211,6 +224,11 @@ func startPlatform(ctx context.Context, a *startArgs, newPlatform platformFunc, 
 	if !a.clockCheck {
 		if err := checkFlags(a.platformName, a.listens, a.tlsCA != "" || s.caPEM != nil, s.markSpec); err != nil {
 			return nil, nil, nil, err
+		}
+		if s.setup == nil {
+			if err := checkFlagPath(a.platformName); err != nil {
+				return nil, nil, nil, err
+			}
 		}
 	}
 	opts := platform.Options{StateDir: a.stateDir, Params: s.params, Mainnet: s.mainnet, NoLockAccepted: s.noLockAccepted}

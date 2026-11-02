@@ -19,7 +19,6 @@ concurrency:
 env:
   GOWORK: "off"
   GOTOOLCHAIN: local
-  NO_NETWORK: "1"
   FUZZ_ALL: "1"
 
 jobs:

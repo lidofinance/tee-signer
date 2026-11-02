@@ -17,6 +17,14 @@ func plainVsockAllowed(string) bool { return false }
 // listener without TLS, whose client would be a local admin.
 func unixOffDevAllowed() bool { return false }
 
+// untrustedClockAllowed is false in a release build: off the dev platform
+// the clock must be one the host cannot set (checkClock).
+func untrustedClockAllowed() bool { return false }
+
 func applyPlainImport(*server.Server) {}
 
 func plainImportStatus() string { return "not built in" }
+
+// flagPathAllowed is false in a release build: off the dev platform the
+// values come from the signer's setup (checkFlagPath).
+func flagPathAllowed() bool { return false }

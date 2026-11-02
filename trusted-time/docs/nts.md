@@ -117,30 +117,61 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
 - `trusted-time/nts`: the cgo binding; `KeyExchange` (TLS 1.3 only, ALPN
   `ntske/1`, the ALPN check Go leaves to the caller, `ExportKeyingMaterial`
   with the label and contexts from Rust, certificate validity checked against
-  a clock the caller passes); `Association.Query` over a connected UDP socket
+  a clock the caller passes, not the system clock: a zero time from that
+  clock stops the exchange before the dial, and during the handshake
+  becomes `nts.NoTrustedTime` (1970), which no certificate covers. Go's
+  `crypto/x509` would read a zero time as `time.Now()`); `Association.Query` over a connected UDP socket
   (refused packets do not end the wait: they may be forgeries); pinned roots
   per operator in `roots/` with their source in `roots.go`.
-- `runner/clock.NTS`: polls each server every 32 s (at least 16 s apart,
-  RFC 5905 MINPOLL), doubles a server's interval on RATE up to 1024 s, drops
-  a server on DENY or RSTR, runs NTS-KE again on NTSN, feeds the latest
-  sample of each server (at most 4 intervals old) to the Rust quorum, ages
-  the bound by rho, and fails `Now` over 100 ms. Local time is
+- `runner/clock.NTS`: polls each server every 16 s (RFC 5905 MINPOLL),
+  doubles a server's interval on RATE up to 1024 s, stops asking a server
+  for 1024 s on DENY or RSTR (a Kiss-o'-Death is not authenticated, so a
+  forged one must not stop it for good), runs NTS-KE again on NTSN, feeds
+  the latest sample of each server (at most 60 s old) to the Rust quorum, ages
+  the bound by rho, and fails `Now` over 100 ms. `Now` also fails once the
+  oldest sample of the quorum in force is over 60 s old on the local
+  clock. The host sets that clock's rate: if it blocks the servers and runs
+  the clock fast, the bound ages too slowly, and only this limit keeps the
+  time served within 60 s of real time. A healthy server answers every 16 s,
+  so one lost answer still leaves its sample under 60 s; a quorum needs 3
+  of the 4 operators. If every server is out of reach, signing stops within
+  60 s and resumes with the next quorum: within about one interval after a
+  short outage, later after a long one, when the cookies ran out and NTS-KE
+  backs off (up to 1024 s). HEALTH reports `sample_age_ms`, `max_sample_age_ms` and, while the
+  clock refuses, the reason in `refused`. Local time is
   `CLOCK_MONOTONIC_RAW` (`nts.Monotonic`), not Go's `CLOCK_MONOTONIC`, which
   an NTP daemon in the kernel slews. Each
   quorum is checked against the last one and against a baseline quorum
-  about 17 minutes older: if the offset moved more than the two bounds and
+  about 17 minutes (64 intervals) older: if the offset moved more than the two bounds and
   rho allow, the local clock broke rho and `Now` fails until the next
   quorum agrees. The status line's `drift_ppm` is the rate over that
   baseline, `drift_err_ppm` what the bounds leave open; a quorum is refused
   exactly when |drift_ppm| > 500 + drift_err_ppm. The HTTPS-date quorum is
   the coarse check (NTS time outside -30 s to +31 s of it is refused: 30 s
   plus the Date header's 1 s resolution), the certificate clock of NTS-KE
-  and the NTP era. Its `Anchored` clock ages on `CLOCK_MONOTONIC_RAW` too.
+  (no reading: NTS-KE is refused) and the NTP era. Its `Anchored` clock ages on `CLOCK_MONOTONIC_RAW` too.
   There is no fallback to it.
+
+  Residual: the HTTPS-date sources' own TLS checks their certificates
+  against the system clock, because the platform HTTP clients set no
+  `Time` (`httpsdate.go`). A host that sets the system clock and holds
+  leaked certificates for a majority of the coarse hosts can answer their
+  `Date` headers itself, move the coarse clock, and with it the time NTS-KE
+  checks certificates at. Without such certificates, setting the system
+  clock moves neither. HTTPS-date is no longer a signing clock, but it
+  is still the coarse check, so this residual stays.
 - `tee-signer/platforms_nts.go`: `-nts-clock` (or `RUNNER_NTS_CLOCK=1`) gives a
   tagged runner the NTS clock, with `-nts-coarse-urls`, `-nts-wait` and
-  `-nts-max-bound` (or their variables; a set flag wins). `-clock https-date`
-  next to it is refused, since main would replace the NTS clock with it.
+  `-nts-max-bound` (or their variables; a set flag wins). The runner
+  refuses a max bound over 250 ms: a sample's bound is about half its round
+  trip, so that leaves room for servers about 400 ms away. With no quorum
+  within `-nts-wait` (90 s by default) the start fails and the runner exits
+  with the peers' status in its error line, which goes to the host on
+  Nitro. The supervisor starts it again: `restartPolicy` `OnFailure` on
+  ACI, `tee-restart-policy=OnFailure` on Confidential Space, the operator
+  or the parent's service manager on Nitro. A runner that went on without
+  a quorum would load no share (each share's restart floor reads the
+  clock) and would not load them once the quorum formed.
   The clock dials through the platform (`platform.Platform.Dial`; nil is
   the default dialer). `runner -nts-clock-check`
   queries the servers once and prints the result. A debug build (tag debugimport) can name
@@ -181,6 +212,7 @@ trusted-time/toolchain/toolchain.Dockerfile     the toolchain image
 scripts/fetch-nts.sh          checks the lock, fetches the crates into build/nts/cargo-home,
                               checks the archives
 scripts/nts-verify-crates.sh  checks the crate archives against the sha256 in Cargo.lock
+scripts/nts-verify-crates-test.sh  its self-test on a fixture cache (make check)
 scripts/build-nts.sh          builds libsigner_nts.a for both architectures, runs
                               the Rust tests and the no_std checks of the core
 scripts/nts-container.sh      the part of build-nts.sh that runs in the container
@@ -226,6 +258,10 @@ bash scripts/test-nts.sh       # also the runners with the tag nts and the Go te
 bash scripts/nts-interop.sh    # network: NTS-KE and 3 queries per public operator
 ```
 
+Run the Rust tests through `make nts` or `make test-rust`, not bare `cargo`
+in `trusted-time/rust`: bare cargo uses `~/.cargo` and the network, and it
+does not check archives already in that cache.
+
 `make nts` and the scripts write to `build/nts/`. They do not touch
 `build/<arch>/bin`. The image builds take their runners from there, built by
 `scripts/build-runner.sh`, which builds the library into `build/nts/`
@@ -245,7 +281,13 @@ as the calling user, with `--network none`. It stops if the compiler is not
 the commit named in `scripts/common.sh`. The image is built locally and its
 layer holds files with the date of the build, so a rebuild is not expected to
 have the same digest. The pins that count are the base image digest, the
-commit of rustc and the rust-std hash from the release manifest.
+commit of rustc and the sums of each target's standard library
+(`NTS_STD_SHA256_x86_64` and `NTS_STD_SHA256_aarch64` in
+`scripts/common.sh`: the sha256 of the sorted file sums under
+`lib/rustlib/<target>`). rustup checks the aarch64 rust-std only against
+the release manifest it downloads from the same server, so the pin is what
+keeps a changed download out of the build. A Rust update changes all
+three.
 
 ## Crates and where they live
 
@@ -262,15 +304,17 @@ and it takes dependency features from the registry index files, which the
 lock does not cover. So nothing in the cache is trusted:
 
 - `fetch-nts.sh` runs `scripts/nts-verify-crates.sh` first: each archive in
-  the cache against its sha256 in the lock. All there and matching: no
-  fetch. Some missing: `cargo fetch`, then the same check again. One that
+  the cache against its sha256 in the lock. Each archive must be in at least
+  one registry folder of the cache, and every copy of it must match. All
+  there and matching: no fetch. Some missing: `cargo fetch`, then the same check again. One that
   differs (changed, cut short): the script stops and says to remove the
   cache. It also deletes the extracted sources (`registry/src`).
 - `build-nts.sh` mounts the cache read-only at `/crates` in each build
   container. `nts-container.sh` copies only the lock's archives out of it,
   checks the copies with `nts-verify-crates.sh`, and unpacks them into
   `/tmp/vendor`, a cargo directory source whose `.cargo-checksum.json` per
-  crate names the lock's sha256. cargo builds with crates.io replaced by
+  crate names the lock's sha256 and the sha256 of each unpacked file, which
+  cargo checks before it builds. cargo builds with crates.io replaced by
   that directory. The registry index, the extracted sources and every other
   file of the cache are never read in the build, so features come from the
   crates' own `Cargo.toml`. A changed archive stops the build.
@@ -338,10 +382,15 @@ cannot turn it off or point it elsewhere:
 | Azure | `platform-azure/deploy/aci-template.json` command (CCE policy hash) | `login.microsoftonline.com`, `management.azure.com`, `www.cloudflare.com` | ACI's default outbound access, direct |
 | GCP | `platform-gcp/deploy/Dockerfile` entrypoint (image digest) | `cloudkms.googleapis.com`, `sts.googleapis.com`, `www.cloudflare.com` | the VM's external address, direct (implied allow-all egress) |
 
-The coarse URLs are the ones `-clock https-date` uses on that platform, so
-its egress already allows them. `-nts-max-bound` is not set: the default, 100 ms.
-The build scripts check the flags (`nitro-eif.sh`, `gcp/build-image.sh`,
-`azure/deploy.sh render`) and refuse a command that has `-clock`.
+The coarse URLs are hosts the platform's egress already allows. Each
+command also sets `-nts-wait 90s` and `-nts-max-bound 100ms` (the
+defaults), so no environment variable of the host or the launcher can
+change them. The build scripts check the flags (`nitro-eif.sh`,
+`gcp/build-image.sh`, `azure/deploy.sh render`), refuse a command without
+`-nts-clock`, `-nts-wait` or `-nts-max-bound`, and refuse one that has
+`-clock`. The runner itself refuses to start on a cloud platform whose
+clock the host can set (`checkClock` in `tee-signer/main.go`). Only the
+dev platform and debug builds may run on the system clock.
 
 The UDP relay (`platform-aws/udprelay`, `platform-aws/deploy/README.md`, "NTS clock in the
 enclave"): one vsock connection per NTP query; frames of a u16 length and

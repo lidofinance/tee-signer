@@ -35,12 +35,19 @@ func TestHealthCarriesTheSetupState(t *testing.T) {
 // state has it: the system clock does not satisfy clock.NTSReporter.
 func TestHealthNTS(t *testing.T) {
 	got := healthNTS(clock.NTSSummary{Quorum: true, BoundNow: 12345 * time.Microsecond, MaxBound: 100 * time.Millisecond,
-		OffsetFromHost: -2500 * time.Millisecond, Members: []string{"a", "b", "c"}, AgeOfQuorum: 4 * time.Second, Refusals: 3,
+		OffsetFromHost: -2500 * time.Millisecond, Members: []string{"a", "b", "c"}, AgeOfQuorum: 4 * time.Second,
+		SampleAge: 20 * time.Second, MaxSampleAge: time.Minute, Refusals: 3,
 		DriftPPM: 2.5, DriftErrPPM: 41, DriftBaseline: 16 * time.Minute, RhoViolations: 1, CoarseDiff: 420 * time.Millisecond})
 	want := &backend.ClockNTS{Quorum: true, BoundNowMS: 12.345, MaxBoundMS: 100, OffsetFromHostMS: -2500, Members: []string{"a", "b", "c"},
-		QuorumAgeMS: 4000, Refusals: 3, DriftPPM: 2.5, DriftErrPPM: 41, DriftBaselineS: 960, RhoViolations: 1, CoarseDiffMS: 420}
+		QuorumAgeMS: 4000, SampleAgeMS: 20000, MaxSampleAgeMS: 60000, Refusals: 3, DriftPPM: 2.5, DriftErrPPM: 41, DriftBaselineS: 960,
+		RhoViolations: 1, CoarseDiffMS: 420}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	// A refused clock says why.
+	why := "samples of the last quorum 1m1s old, over 1m0s (no fresh quorum)"
+	if got := healthNTS(clock.NTSSummary{Refused: why}); got.Quorum || got.Refused != why {
+		t.Fatalf("refused: %+v", got)
 	}
 	var c any = clock.System{}
 	if _, ok := c.(clock.NTSReporter); ok {

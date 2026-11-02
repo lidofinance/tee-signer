@@ -112,6 +112,20 @@ func checkFlags(platformName string, listens []transport.Addr, haveCA bool, mark
 	return nil
 }
 
+// checkClock is the clock rule of checkFlags. It runs once the platform is
+// built, because only then is the clock known. Off the dev platform the
+// clock must be one the host cannot move (the NTS clock of -nts-clock in
+// the images): the restart floor, the import floor, the certificate dates
+// and the mark log age check all read it. A cloud platform on the system
+// clock is refused. Debug builds, which no cloud image is, keep it for the
+// e2e tests with fake hardware (untrustedClockAllowed).
+func checkClock(platformName string, c platform.Clock) error {
+	if platformName == "dev" || c.Trusted() || untrustedClockAllowed() {
+		return nil
+	}
+	return fmt.Errorf("platform %s: clock %s is not trusted (the host can set it); run the NTS clock (-nts-clock)", platformName, c.Source())
+}
+
 func run() (err error) {
 	if len(platforms) == 0 {
 		return errNoPlatform
@@ -120,18 +134,12 @@ func run() (err error) {
 	var (
 		listen        = flag.String("listen", "tcp:127.0.0.1:7100", "comma-separated addresses: tcp:HOST:PORT, unix:PATH, vsock:CID|any:PORT (vsock in the AWS build only)")
 		platformName  = flag.String("platform", defaultPlatform(), "platform of this build: "+strings.Join(builtPlatforms(), ", "))
-		setupSrc      = flag.String("setup", "", "where the signer's setup comes from: platform (the platform's channel: the host agent on nitro, SIGNER_SETUP on azure and dev, the metadata attribute signer-setup on gcp) or file:PATH (dev); empty: the values come from flags (-config, -tls-client-ca, -platform-opt, ...)")
+		setupSrc      = flag.String("setup", "", "where the signer's setup comes from: platform (the platform's channel: the host agent on nitro, SIGNER_SETUP on azure and dev, the metadata attribute signer-setup on gcp) or file:PATH (dev); empty: the values come from flags (-config, -tls-client-ca, -platform-opt, ...), on dev or in a debug build only")
 		configPath    = flag.String("config", "", "chain and policy config (JSON, see core.Config); not with -setup")
 		stateDir      = flag.String("state-dir", "state", "directory for sealed shares and watermarks (dev, or a host volume)")
 		floor         = flag.Bool("restart-floor", true, "on load, refuse everything at or below clock epoch + floor margin")
 		floorMargin   = flag.Int64("floor-margin", -1, "epochs added to the clock epoch for the floor, at least max_epochs_ahead + 1; -1 = max_epochs_ahead + 1")
 		persist       = flag.Bool("persist-watermarks", false, "persist commit-ahead watermarks (safe only on rollback-proof storage)")
-		clockKind     = flag.String("clock", "platform", "platform (the platform's default) or https-date")
-		clockURLs     = flag.String("clock-urls", "", "comma-separated https URLs for -clock https-date")
-		clockMin      = flag.Int("clock-min", 0, "answers needed for -clock https-date; 0 = majority")
-		clockInterval = flag.Duration("clock-interval", clock.DefaultInterval, "refresh interval of anchored clocks")
-		clockMaxAge   = flag.Duration("clock-max-age", 0, "an anchored clock whose last reading is this old makes signing fail; 0 = 5 x -clock-interval (four missed readings are tolerated)")
-		clockMaxAdv   = flag.Duration("clock-max-advance", 0, "how far an anchored clock runs ahead of its last reading on the local clock; 0 = 5 x -clock-interval")
 		clockWait     = flag.Duration("clock-wait", time.Minute, "how long to wait for the first clock reading at start")
 		clockCheck    = flag.Bool("clock-check", false, "print clock readings and exit")
 		maxValidators = flag.Uint("max-validators", 1024, "capacity of the signer")
@@ -216,24 +224,10 @@ func run() (err error) {
 	if *maxConns <= 0 || *maxHandshakes <= 0 || *maxInflight <= 0 || *idleTimeout < 0 {
 		return errors.New("-max-conns, -max-handshakes and -max-inflight-mib must be positive, -idle-timeout zero or positive")
 	}
-	if *clockInterval <= 0 || *clockMaxAge < 0 || *clockMaxAdv < 0 {
-		return errors.New("-clock-interval must be positive, -clock-max-age and -clock-max-advance zero or positive")
-	}
-	if *clockKind == "https-date" {
-		urls := strings.Split(*clockURLs, ",")
-		if *clockURLs == "" {
-			return errors.New("-clock https-date needs -clock-urls")
+	if !*clockCheck {
+		if err := checkClock(*platformName, plat.Clock); err != nil {
+			return err
 		}
-		q := &clock.Quorum{Min: *clockMin}
-		for _, u := range urls {
-			q.Sources = append(q.Sources, &clock.HTTPSDate{URL: strings.TrimSpace(u), Client: plat.HTTPClient})
-		}
-		if q.Min == 0 {
-			q.Min = len(urls)/2 + 1
-		}
-		plat.Clock = &clock.Anchored{Src: q, MaxAge: *clockMaxAge, MaxAdvance: *clockMaxAdv, Interval: *clockInterval, TrustedSrc: true}
-	} else if *clockKind != "platform" {
-		return fmt.Errorf("unknown -clock %q", *clockKind)
 	}
 	if a, ok := plat.Clock.(*clock.Anchored); ok {
 		if err := waitFirstReading(ctx, a, *clockWait, log); err != nil {
@@ -349,8 +343,8 @@ func run() (err error) {
 	}
 	// One TLS configuration, and so one key made at this start, for every
 	// tcp and vsock listener. The client certificate's validity dates are
-	// checked against the platform's clock, which on Nitro is the trusted
-	// one (-clock https-date), not the host-set system clock.
+	// checked against the platform's clock, which on the cloud images is the
+	// NTS clock (-nts-clock), not the host-set system clock.
 	caPEM := boot.caPEM
 	if boot.setup == nil && *tlsCA != "" {
 		if caPEM, err = os.ReadFile(*tlsCA); err != nil {
