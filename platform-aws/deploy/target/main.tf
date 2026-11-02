@@ -124,7 +124,7 @@ resource "aws_kms_key" "target" {
         Sid       = "EnclaveReadsItsKeyPolicy"
         Effect    = "Allow"
         Principal = { AWS = data.aws_iam_role.parent.arn }
-        Action    = ["kms:DescribeKey", "kms:GetKeyPolicy"]
+        Action    = ["kms:DescribeKey", "kms:GetKeyPolicy", "kms:ListGrants"]
         Resource  = "*"
       }
     ]

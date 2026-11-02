@@ -330,7 +330,7 @@ the rule:
 | Platform | Locked when |
 |---|---|
 | Azure | `release_policy.immutable` is true |
-| AWS | origin `AWS_KMS`, not multi-Region, no Allow statement of the key policy grants `kms:PutKeyPolicy`, `kms:CreateGrant`, `kms:ImportKeyMaterial` or `kms:ReplicateKey` to any principal, by name, wildcard (`kms:*`, `*`, `kms:Put*`) or `NotAction` (conditions do not count), and every Allow of `kms:Decrypt`, `kms:GenerateDataKey`, `kms:GenerateDataKeyPair`, `kms:ReEncryptFrom` or `kms:ReEncryptTo` has a `StringEquals` or `StringEqualsIgnoreCase` test of a `kms:RecipientAttestation:*` key with non-empty values; any other Allow of `kms:Encrypt` has `StringEquals` on `kms:EncryptionContext:purpose` with the one value `record-creds`, so nobody outside the enclave plants a sealing or mark log key |
+| AWS | origin `AWS_KMS`, not multi-Region, no Allow statement of the key policy grants `kms:PutKeyPolicy`, `kms:CreateGrant`, `kms:ImportKeyMaterial`, `kms:ReplicateKey`, `kms:CreateAlias`, `kms:UpdateAlias` or `kms:DeleteAlias` to any principal, by name, wildcard (`kms:*`, `*`, `kms:Put*`) or `NotAction` (conditions do not count), every Allow of `kms:Decrypt`, `kms:GenerateDataKey`, `kms:GenerateDataKeyPair`, `kms:ReEncryptFrom` or `kms:ReEncryptTo` has `StringEquals` or `StringEqualsIgnoreCase` tests of `kms:RecipientAttestation:PCR0`, `PCR1` and `PCR2`, so it names one image (PCR3 or PCR8 alone does not); every `kms:RecipientAttestation:*` condition of an Allow, under any operator, has a key `PCR0` to `PCR31` or `ImageSha384` and only literal values of 96 hex digits (a policy variable such as `${aws:PrincipalTag/x}` fails), and no all-zero `PCR0`, `PCR1`, `PCR2` or `ImageSha384`, the values of a debug-mode enclave; any other Allow of `kms:Encrypt` has `StringEquals` on `kms:EncryptionContext:purpose` with the one value `record-creds`, so nobody outside the enclave plants a sealing or mark log key; and `ListGrants` (every page) lists no grant: a grant is outside the key policy, stays in force after the lock, and cannot require the enclave as recipient. Grants that AWS services make count too, so the key serves no other service. KMS grants are eventually consistent, so a grant made shortly before the read may not be listed yet, and the runner cannot tell it from none; a mainnet key is therefore created with its final, locked policy, so no grant can ever exist (platform-aws/deploy/README.md). A policy that passes but whose grants the runner cannot read is `unread`, with a zero `key_release_hash`. `kms_key_id` is a key or alias ARN with the account (a bare alias or key ID resolves in the account of the parent's credentials), `DescribeKey` must answer a key in that account and region (that very key for a key ARN), and a `kms_key_id` that fails this stops the start on every chain. After `DescribeKey` the runner names the key by its key ARN in every call, so an alias ARN is resolved once per start |
 | GCP, dev | no lock exists |
 
 On Azure the runner releases exactly the key version whose release
@@ -349,8 +349,9 @@ then says that the setup accepts it. The dev platform has no key release
 service and no real attestation, so it never starts on mainnet: the start error begins `mainnet: the dev
 platform has no real attestation`, and on other chains HEALTH's
 `key_lock_why` says the dev platform is refused on mainnet. On other
-chains the runner starts; a failed read leaves
-`key_release_hash` zero and logs a warning.
+chains the runner starts; a failed read, or a rule that is not locked,
+leaves `key_release_hash` zero and logs a warning, so no
+`key_release_sha256` pin matches the runner.
 
 A GCP signer holds a key alone only with a second, separate acceptance:
 an import order with t = n = 1 is refused on GCP on every chain, with or
@@ -403,7 +404,7 @@ sits in the private part of the setup, which a verifier sees only as
 IDENTITY it verified and pushes it along with the proof; the watchdog shows "key rule
 locked: yes, no, not possible (GCP) or unread" per signer and warns on no
 or unread for a mainnet cluster. A zero `key_release_hash` in the proof
-counts as unread whatever HEALTH says.
+counts as unread or not locked whatever HEALTH says.
 
 ### Image check
 

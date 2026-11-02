@@ -55,8 +55,8 @@ type Server struct {
 	LogID     [32]byte
 	// KeyReleaseHash is the key_release_hash the platform read at start
 	// (platform.Platform.KeyRule). The setup state of a runner with a
-	// setup carries it; zero when the platform has no self-check or the
-	// read failed.
+	// setup carries it; zero when the platform has no self-check, the
+	// read failed or the rule is not locked (keyRule).
 	KeyReleaseHash [32]byte
 	// KeyLock is the lock of the same key rule. HEALTH of a runner with a
 	// setup carries it; the setup state does not, its layout is the

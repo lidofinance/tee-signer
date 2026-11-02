@@ -39,10 +39,13 @@ func newConfigUpdates(st *setup.Setup, l server.UpdateLog, clk platform.Clock, p
 // a rule that is not locked or not readable. AWS and Azure read the key's
 // policy; GCP and dev have no lock (KeyLockNone, zero hash), and on
 // mainnet GCP passes only with the setup's no_lock_accepted. Off mainnet a
-// failed read gives a zero key_release_hash, which no verifier's pin
-// matches, and KeyLockUnread; the log says why and the runner still
+// failed read gives KeyLockUnread; the log says why and the runner still
 // starts, so a key policy without the read grant does not stop a test
-// signer. The mainnet rule runs here once more for a platform that read
+// signer. key_release_hash stays zero unless the rule is locked: a pin is
+// the hash of a reviewed rule, and the hash of a rule that is not locked
+// or not read must not match it (the Nitro hash leaves the key's grants
+// out, so a key with a grant has the hash of the same key without). No
+// verifier's pin is zero. The mainnet rule runs here once more for a platform that read
 // nothing (nil KeyRule), so no image starts on mainnet without the check.
 // The flag path (no setup) reads nothing and gives the zero rule.
 func keyRule(hasSetup, mainnet, noLockAccepted bool, plat *platform.Platform, log *slog.Logger) (platform.KeyRule, error) {
@@ -65,7 +68,7 @@ func keyRule(hasSetup, mainnet, noLockAccepted bool, plat *platform.Platform, lo
 	case backend.KeyLockUnread:
 		log.Warn("key release self-check failed: key_release_hash stays zero", "key_lock", r.Lock.String(), "err", r.Why)
 	case backend.KeyLockNotLocked:
-		log.Warn("key release self-check: the key rule is not locked", "key_release_sha256", hex.EncodeToString(r.Hash[:]),
+		log.Warn("key release self-check: the key rule is not locked, key_release_hash stays zero", "rule_sha256", hex.EncodeToString(r.Hash[:]),
 			"key_lock", r.Lock.String(), "why", r.Why)
 	case backend.KeyLockNone:
 		log.Warn("key release self-check: the platform has no key-rule lock", "key_lock", r.Lock.String(), "why", r.Why,
@@ -74,7 +77,11 @@ func keyRule(hasSetup, mainnet, noLockAccepted bool, plat *platform.Platform, lo
 		log.Info("key release self-check", "key_release_sha256", hex.EncodeToString(r.Hash[:]), "key_lock", r.Lock.String(),
 			"mainnet", mainnet)
 	}
-	return *r, nil
+	out := *r
+	if out.Lock != backend.KeyLockLocked {
+		out.Hash = [32]byte{}
+	}
+	return out, nil
 }
 
 // flagState is the setup state of a runner without a setup (the flag

@@ -1028,6 +1028,10 @@ var (
 	// Key Vault key name with an optional version.
 	hostRE = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?$`)
 	kidRE  = regexp.MustCompile(`^[A-Za-z0-9-]{1,127}(/[0-9a-f]{32})?$`)
+	// A KMS key or alias ARN, with the account: a bare key ID or alias
+	// resolves in the account of the parent's credentials. As
+	// platform-aws/nitro checkKeyID.
+	kmsKeyARNRE = regexp.MustCompile(`^arn:(aws|aws-cn|aws-us-gov):kms:([a-z0-9-]+):[0-9]{12}:(key|alias)/[A-Za-z0-9/_-]+$`)
 	// A peer attestation host: a lower-case host name and a port, the form
 	// the runner's HTTP client dials (host:port of the URL, port 443 for
 	// https).
@@ -1284,7 +1288,7 @@ func (k *KeyRelease) check(p Platform) error {
 	switch p {
 	case PlatformNitro:
 		only("region", "kms_key_id")
-		errs = append(errs, checkRE("sealing_key_release.region", k.Region, regionRE), checkText("sealing_key_release.kms_key_id", k.KMSKeyID))
+		errs = append(errs, checkRE("sealing_key_release.region", k.Region, regionRE), checkKMSKeyID(k.KMSKeyID, k.Region))
 	case PlatformAzure:
 		only("maa_endpoint", "akv_endpoint", "kid")
 		errs = append(errs, checkRE("sealing_key_release.maa_endpoint", k.MAAEndpoint, hostRE),
@@ -1303,6 +1307,19 @@ func (k *KeyRelease) check(p Platform) error {
 		errs = append(errs, fmt.Errorf("sealing_key_release.unsafe_single_key_accepted does not apply to %s: only GCP has a key rule without a lock", p))
 	}
 	return firstErr("platform", errs)
+}
+
+// checkKMSKeyID is the rule for sealing_key_release.kms_key_id: a key or
+// alias ARN in region.
+func checkKMSKeyID(id, region string) error {
+	const key = "sealing_key_release.kms_key_id"
+	if err := checkRE(key, id, kmsKeyARNRE); err != nil {
+		return fmt.Errorf("%w (a key or alias ARN with the account)", err)
+	}
+	if r := kmsKeyARNRE.FindStringSubmatch(id)[2]; r != region {
+		return fmt.Errorf("%s: the key is in region %s, not sealing_key_release.region %s", key, r, region)
+	}
+	return nil
 }
 
 // checkDir is the rule for a dev store: an absolute, clean path, so the
