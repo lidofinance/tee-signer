@@ -54,6 +54,13 @@ mutant exit-allowlist-ignored src/policy.c 's/return SC_ERR_POLICY_EXIT;/return 
   test_unit "$CORE_DIR/tests/data"
 mutant repeat-any-root src/signer.c 's/memcmp(last, root, SC_ROOT_LEN) == 0/memcmp(last, root, 0) == 0/' \
   test_unit "$CORE_DIR/tests/data"
+# An import that keeps the repeat roots: a resend of a vote or block that
+# the imported history covers would skip the marks.
+mutant import-keeps-repeat-roots src/signer.c 's/memset(&v->repeat, 0, sizeof v->repeat);/(void)v;/' \
+  test_unit "$CORE_DIR/tests/data"
+# The same for the Gloas roots: a resend of a PTC vote or an envelope.
+mutant import-keeps-gloas-roots src/signer.c 's/v->gloas \&= ~(G_PTC_ROOT | G_ENVELOPE_ROOT);//' \
+  test_unit "$CORE_DIR/tests/data"
 mutant device-window-source-too-low src/slashing.c 's/s_hi = source;/s_hi = source ? source - 1 : 0;/' \
   test_unit "$CORE_DIR/tests/data"
 # The two ways the device mark's source bound rose above the signed source

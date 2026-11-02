@@ -37,6 +37,32 @@ run unit '^(UNIT|memory|registration_go|gloas|commit-ahead|write counts|repeat a
   "$BUILD/test_unit" "$CORE_DIR/tests/data"
 run ssz_static '^SSZ_STATIC' "$BUILD/test_ssz_static" "$CST_SSZ_DIR"
 run bls_sign '^BLS_SIGN' "$BUILD/test_bls_sign" "$CST_BLS_DIR"
+# The converter must refuse a malformed vector: tests/data/eip3076-bad holds
+# one vector per fault (a signed number, a number with a space, one above
+# u64, an unknown field, a missing field, a bool given as a string). A
+# refusal counts only with the converter's own message (its fail() prefix),
+# so a traceback or a missing file is a failure, and so is any count of
+# files other than 6.
+res=PASS nbad=0
+shopt -s nullglob
+for f in "$CORE_DIR"/tests/data/eip3076-bad/*.json; do
+  nbad=$((nbad + 1))
+  if err="$(python3 -I "$CORE_DIR/tests/eip3076_convert.py" "$f" 2>&1 >/dev/null)"; then
+    echo "  converter accepted $(basename "$f")"
+    res=FAIL
+  elif [[ "$err" != eip3076_convert:* ]]; then
+    echo "  converter failed on $(basename "$f") without its refusal message"
+    res=FAIL
+  fi
+  printf '%s\n' "$err" >>"$LOGS/eip3076_convert.log"
+done
+shopt -u nullglob
+if [ "$nbad" -ne 6 ]; then
+  echo "  found $nbad malformed vectors in tests/data/eip3076-bad, want 6"
+  res=FAIL
+fi
+[ "$res" = PASS ] || status=1
+echo "$res eip3076_convert (refuses $nbad malformed vectors)"
 run eip3076 '^EIP3076' "$BUILD/test_eip3076" "$BUILD/eip3076.txt"
 
 # The core must not call into the OS. Its objects may only reference blst,
