@@ -9,6 +9,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/lidofinance/tee-signer/attestation-verify"
@@ -47,7 +49,7 @@ func (p *pcrFlag) String() string {
 		return ""
 	}
 	parts := make([]string, 0, len(p.NitroPCRs))
-	for _, k := range sortedKeys(p.NitroPCRs) {
+	for _, k := range slices.Sorted(maps.Keys(p.NitroPCRs)) {
 		parts = append(parts, k+"="+p.NitroPCRs[k])
 	}
 	return strings.Join(parts, ",")

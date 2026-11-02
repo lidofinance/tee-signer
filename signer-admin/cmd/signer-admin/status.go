@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
+	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/verify"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	cloud "github.com/lidofinance/tee-signer/signer-protocol"
 )
@@ -129,7 +129,7 @@ func describe(st *signerState) string {
 		}
 	}
 	if o := s.Order; o.Kind != 0 {
-		fmt.Fprintf(&b, " order=%s:%s@%s(%s)", runnerclient.OrderKind(o.Kind), hex.EncodeToString(o.Hash[:4]), when(o.ActAt), left(o.ActAt, t))
+		fmt.Fprintf(&b, " order=%s:%s@%s(%s)", verify.OrderKind(o.Kind), hex.EncodeToString(o.Hash[:4]), when(o.ActAt), left(o.ActAt, t))
 	}
 	if h := st.health; h != nil {
 		trust := "untrusted"
@@ -159,7 +159,7 @@ func facets(st *signerState) map[string]string {
 	// A handover order names one source, so the others never hold it and
 	// it is no difference; no other order kind exists today.
 	o := "none"
-	if s.Order.Kind != 0 && runnerclient.OrderKind(s.Order.Kind) != "handover" {
+	if s.Order.Kind != 0 && verify.OrderKind(s.Order.Kind) != "handover" {
 		o = hex8(s.Order.Hash)
 	}
 	f["order"] = o

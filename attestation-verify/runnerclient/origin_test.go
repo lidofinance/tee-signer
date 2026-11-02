@@ -14,6 +14,7 @@ import (
 
 	"github.com/lidofinance/tee-signer/attestation-verify"
 	"github.com/lidofinance/tee-signer/attestation-verify/internal/testgen"
+	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/verify"
 	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/tee-signer/handover"
@@ -99,7 +100,7 @@ func newOriginPlatform(t *testing.T, name string) *originPlatform {
 		// MAA's check of the report data reports a mismatch as ErrNonce.
 		return &originPlatform{
 			name: name, others: []string{"hostdata"}, bindErr: attest.ErrNonce,
-			opts: []Option{WithHTTPClient(env.srv.Client())},
+			opts: []Option{verify.WithHTTPClient(env.srv.Client())},
 			settings: func(image string) Attestation {
 				return Attestation{Verifier: VerifierAzureMAA, MAAHost: env.host, CCEPolicySHA256: hostData(image)}
 			},
@@ -119,7 +120,7 @@ func newOriginPlatform(t *testing.T, name string) *originPlatform {
 		// The user data is the token's eat_nonce, so a mismatch is ErrNonce.
 		return &originPlatform{
 			name: name, others: []string{"digest"}, bindErr: attest.ErrNonce,
-			opts: []Option{WithHTTPClient(env.srv.Client())},
+			opts: []Option{verify.WithHTTPClient(env.srv.Client())},
 			settings: func(image string) Attestation {
 				a := gcpGood(env.issuer)
 				a.GCPImageDigest = digest(image)
@@ -212,7 +213,7 @@ func (p *originPlatform) check(t *testing.T, b *handoverorder.Body, hash [32]byt
 		t.Fatalf("decode page: %v", err)
 	}
 	src := b.Source
-	a := RunnerAttestation(&src)
+	a := verify.RunnerAttestation(&src)
 	verify, err := a.NewDocumentVerifier(p.opts...)
 	if err != nil {
 		t.Fatalf("the source's settings: %v", err)
