@@ -398,12 +398,15 @@ start with a smaller margin. Persisted commit-ahead marks, the clone
 guard's record and the mark log add further floors; the loaded watermark
 is the field-wise maximum. Every floor bounds sources as well as targets.
 
-Why the margin is `max_epochs_ahead + 1`: the core signs up to
-`clock_epoch + max_epochs_ahead`, so anything below that lets a vote
+Why the margin is `max_epochs_ahead + 1`: the core's epoch horizon is
+`clock_epoch + max_epochs_ahead`, so anything below that would let a vote
 signed ahead escape the floor, and the extra epoch absorbs a restart
 reading that is up to one epoch behind the last reading before the
-restart. `TestFloorBrokenBySubSecondSkewAtRestart` shows the failure with
-`m = max_epochs_ahead`. Why the floor bounds sources: without it, a vote
+restart. The core's slot rule (`signer-core/README.md`, "Policy") now
+keeps every signed vote and block at or below the slot at the clock + 2 s,
+so `m = max_epochs_ahead` would also hold against sub-epoch skew
+(`TestFloorSubSecondSkewAtRestart`); the margin stays until a separate
+change lowers it. Why the floor bounds sources: without it, a vote
 signed before a restart can be surrounded by a later vote with a lower
 source.
 

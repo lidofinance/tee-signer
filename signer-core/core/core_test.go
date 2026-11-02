@@ -11,9 +11,11 @@ import (
 
 const genesis = 1_000_000
 
-// clockAtEpoch returns a fixed clock 5 s into epoch e of DevConfig(genesis, 12, 32).
+// clockAtEpoch returns a fixed clock 5 s into the last slot of epoch e of
+// DevConfig(genesis, 12, 32): every slot of e has started (the slot rule),
+// and no slot of e+1 has.
 func clockAtEpoch(e uint64) func() (uint64, error) {
-	return func() (uint64, error) { return genesis + e*12*32 + 5, nil }
+	return func() (uint64, error) { return genesis + e*12*32 + 31*12 + 5, nil }
 }
 
 func newTestSigner(t *testing.T, hooks *software.MemHooks) (*core.Signer, backend.Pubkey, core.Config) {
@@ -73,7 +75,7 @@ func wantStatus(t *testing.T, err error, want backend.Status) {
 }
 
 func TestStatusNamesMatchCore(t *testing.T) {
-	for i := 0; i <= int(backend.StatusPolicyBuilderAuth); i++ {
+	for i := 0; i <= int(backend.StatusPolicyTargetSlot); i++ {
 		if got, want := core.StatusName(i), backend.Status(i).String(); got != want {
 			t.Errorf("status %d: core says %s, Go says %s", i, got, want)
 		}
@@ -119,7 +121,7 @@ func TestSignAllKindsVerifies(t *testing.T) {
 
 func TestForkVersionSwitch(t *testing.T) {
 	h := software.NewMemHooks()
-	h.Clock = clockAtEpoch(9)
+	h.Clock = clockAtEpoch(10)
 	s, pk, cfg := newTestSigner(t, h)
 	// Epoch 9 uses the genesis version, epoch 10 the fork version.
 	for _, a := range []*backend.AttestationData{att(8, 9), att(9, 10)} {

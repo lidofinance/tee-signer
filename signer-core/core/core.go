@@ -38,6 +38,11 @@ const (
 	maxSlotTimes        = C.SC_MAX_SLOT_TIMES
 )
 
+// SlotMarginSeconds is the core's slot rule margin (SC_SLOT_MARGIN_SECONDS):
+// a block, attestation, PTC vote or payload envelope signs once its slot
+// starts at most this many seconds after the clock.
+const SlotMarginSeconds = C.SC_SLOT_MARGIN_SECONDS
+
 // Hooks are the host callbacks of the core: durable watermark storage and
 // the trusted clock. The runner composes them from platform hooks and the
 // restart rule (runner/state).

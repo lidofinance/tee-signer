@@ -669,6 +669,8 @@ int sc_sign_block(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
     epoch = block->slot / s->cfg.slots_per_epoch;
     if ((rc = sc_policy_check_epoch(&s->cfg, &s->slot_times, now, epoch)) != SC_OK)
         return rc;
+    if ((rc = sc_policy_check_slot(&s->cfg, &s->slot_times, now, block->slot)) != SC_OK)
+        return rc;
 
     sc_htr_beacon_block_header(block, obj);
     sc_signer_signing_root(s, SC_DOMAIN_BEACON_PROPOSER, epoch, obj, root);
@@ -701,9 +703,17 @@ int sc_sign_attestation(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
         return SC_ERR_UNKNOWN_VALIDATOR;
     if (data->source.epoch > data->target.epoch)
         return SC_ERR_SLASH_SOURCE_GT_TARGET;
+    /* process_attestation asserts target.epoch == epoch(slot). Data that
+     * breaks it is never included, so it is refused before the repeat
+     * shortcut and the marks. With the slot rule below, the target can then
+     * be at most the epoch of a slot that has started. */
+    if (data->target.epoch != data->slot / s->cfg.slots_per_epoch)
+        return SC_ERR_POLICY_TARGET_SLOT;
     if ((rc = read_clock(s, &now)) != SC_OK)
         return rc;
     if ((rc = sc_policy_check_epoch(&s->cfg, &s->slot_times, now, data->target.epoch)) != SC_OK)
+        return rc;
+    if ((rc = sc_policy_check_slot(&s->cfg, &s->slot_times, now, data->slot)) != SC_OK)
         return rc;
 
     sc_htr_attestation_data(data, obj);
@@ -822,8 +832,11 @@ static int slot_rule(const sc_validator *v, uint32_t has_slot, uint64_t last, ui
     return SC_OK;
 }
 
-/* Gloas in force at epoch, and epoch within the clock horizon. */
-static int gloas_epoch_ok(sc_signer *s, uint64_t epoch)
+/* Gloas in force at epoch, and epoch within the clock horizon. With a
+ * non-NULL slot, also the slot rule: *slot has started. PTC votes and
+ * envelopes pass their slot, since their last slot refuses every later
+ * message at or below it. */
+static int gloas_epoch_ok(sc_signer *s, uint64_t epoch, const uint64_t *slot)
 {
     uint64_t now;
     int rc = sc_policy_check_gloas(&s->cfg, epoch);
@@ -831,7 +844,9 @@ static int gloas_epoch_ok(sc_signer *s, uint64_t epoch)
         return rc;
     if ((rc = read_clock(s, &now)) != SC_OK)
         return rc;
-    return sc_policy_check_epoch(&s->cfg, &s->slot_times, now, epoch);
+    if ((rc = sc_policy_check_epoch(&s->cfg, &s->slot_times, now, epoch)) != SC_OK)
+        return rc;
+    return slot ? sc_policy_check_slot(&s->cfg, &s->slot_times, now, *slot) : SC_OK;
 }
 
 int sc_sign_payload_attestation(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
@@ -849,7 +864,7 @@ int sc_sign_payload_attestation(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN
     if (!v)
         return SC_ERR_UNKNOWN_VALIDATOR;
     epoch = data->slot / s->cfg.slots_per_epoch;
-    if ((rc = gloas_epoch_ok(s, epoch)) != SC_OK)
+    if ((rc = gloas_epoch_ok(s, epoch, &data->slot)) != SC_OK)
         return rc;
     sc_htr_payload_attestation_data(data, obj);
     sc_signer_signing_root(s, SC_DOMAIN_PTC_ATTESTER, epoch, obj, root);
@@ -883,7 +898,7 @@ int sc_sign_payload_envelope(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
         return SC_ERR_UNKNOWN_VALIDATOR;
     slot = env->payload.slot_number;
     epoch = slot / s->cfg.slots_per_epoch;
-    if ((rc = gloas_epoch_ok(s, epoch)) != SC_OK)
+    if ((rc = gloas_epoch_ok(s, epoch, &slot)) != SC_OK)
         return rc;
     /* Our keys are validators, never builders (builder.md: builders are a
      * separate registry). A validator key signs an envelope only for its
@@ -935,7 +950,7 @@ int sc_sign_proposer_preferences(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LE
         return SC_ERR_POLICY_INDEX;
     /* validator.md: compute_fork_version(compute_epoch_at_slot(proposal_slot)). */
     epoch = pref->proposal_slot / s->cfg.slots_per_epoch;
-    if ((rc = gloas_epoch_ok(s, epoch)) != SC_OK)
+    if ((rc = gloas_epoch_ok(s, epoch, NULL)) != SC_OK)
         return rc;
     if ((rc = sc_policy_check_fee_recipient(&s->cfg, pref->fee_recipient)) != SC_OK)
         return rc;
@@ -963,7 +978,7 @@ int sc_sign_builder_request_auth(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LE
         return SC_ERR_DECODE;
     if (!v)
         return SC_ERR_UNKNOWN_VALIDATOR;
-    if ((rc = gloas_epoch_ok(s, req->slot / s->cfg.slots_per_epoch)) != SC_OK)
+    if ((rc = gloas_epoch_ok(s, req->slot / s->cfg.slots_per_epoch, NULL)) != SC_OK)
         return rc;
     sc_htr_builder_auth_data(req->data, req->data_len, data_root);
     for (i = 0; i < s->cfg.builder_auth_root_count; i++)
@@ -1237,6 +1252,7 @@ const char *sc_status_name(int status)
     case SC_ERR_SELECTION_PROOF: return "SC_ERR_SELECTION_PROOF";
     case SC_ERR_SCHEDULE: return "SC_ERR_SCHEDULE";
     case SC_ERR_POLICY_BUILDER_AUTH: return "SC_ERR_POLICY_BUILDER_AUTH";
+    case SC_ERR_POLICY_TARGET_SLOT: return "SC_ERR_POLICY_TARGET_SLOT";
     default: return "SC_ERR_UNKNOWN";
     }
 }
