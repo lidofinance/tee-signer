@@ -26,7 +26,7 @@
 # The record writer stays the running signer's IAM user, so the mark
 # bucket's policy needs no change. The admin gives the target its own copy:
 # a second access key of that user, encrypted under the new key
-# (platform-aws/deploy/README.md, "Clone guard"; the user has one key, and an IAM
+# (platform-aws/deploy/README.md, "Clone protection"; the user has one key, and an IAM
 # user may hold two).
 #
 # Inputs: the target EIF's PCR0..2 (build/nitro-.../build-enclave-aarch64.json

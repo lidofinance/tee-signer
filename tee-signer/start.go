@@ -43,8 +43,8 @@ const setupWait = 2 * time.Minute
 
 // setupRefuses are the flags a runner with -setup refuses, with the reason:
 // the values the setup carries, and the flags that let a host weaken the
-// signer or that a phase 1 image does not have. -record is allowed as
-// "none" only; -platform-opt only for options the setup does not set.
+// signer or that a phase 1 image does not have. -platform-opt only for
+// options the setup does not set.
 var setupRefuses = map[string]string{
 	"config":         "the setup carries the chain, safety and first config values",
 	"tls-client-ca":  "the setup carries allowed_client_ca",
@@ -55,9 +55,6 @@ var setupRefuses = map[string]string{
 	"floor-margin":   "the floor margin is max_sign_epochs_ahead_of_clock + 1",
 	"mark-create":    "a signer that lost its mark log gets a new setup and a share re-import",
 	"state-create":   "a signer that lost its key release gets a new setup and a share re-import",
-	"record-create":  "an image with a setup has no DynamoDB clone guard",
-	"record-key":     "an image with a setup has no DynamoDB clone guard",
-	"record-ahead":   "an image with a setup has no DynamoDB clone guard",
 }
 
 // checkSetupFlags refuses the flags of setupRefuses among given (the flags
@@ -73,9 +70,6 @@ func checkSetupFlags(given map[string]string) error {
 			return fmt.Errorf("-%s cannot be used with -setup: %s", n, why)
 		}
 	}
-	if r, ok := given["record"]; ok && r != "none" {
-		return fmt.Errorf("-record %s cannot be used with -setup: the mark log of the setup is the clone protection (-record none)", r)
-	}
 	return nil
 }
 
@@ -90,9 +84,9 @@ type startArgs struct {
 	clockCheck   bool
 
 	// The flag path's values; the setup path fills them from the setup.
-	tlsCA, recordSpec, markSpec, stateSpec, signerID string
-	stateCreate                                      bool
-	maxValidators                                    uint32
+	tlsCA, markSpec, stateSpec, signerID string
+	stateCreate                          bool
+	maxValidators                        uint32
 }
 
 // start is what the first steps decide.
@@ -109,9 +103,9 @@ type start struct {
 	// on mainnet a key rule without a lock (GCP) passes.
 	noLockAccepted bool
 
-	recordSpec, markSpec, stateSpec, signerID string
-	stateCreate                               bool
-	maxValidators                             uint32
+	markSpec, stateSpec, signerID string
+	stateCreate                   bool
+	maxValidators                 uint32
 }
 
 // setupChannelFor returns the channel of -setup src on the platform.
@@ -184,7 +178,7 @@ func fromSetup(ctx context.Context, a *startArgs, log *slog.Logger) (_ *start, e
 	if st.Wire.Platform.SealingKeyRelease.UnsafeSingleKeyAccepted {
 		log.Warn("UNSAFE: the setup accepts a key held alone on GCP (sealing_key_release.unsafe_single_key_accepted); a 1 of 1 import order is taken", "why", setupwire.UnsafeSingleKeyWarning)
 	}
-	return &start{setup: st, cfg: cfg, params: params, caPEM: st.ClientCAPEM(), mainnet: setupwire.IsMainnet(cfg.GenesisForkVersion), recordSpec: "none",
+	return &start{setup: st, cfg: cfg, params: params, caPEM: st.ClientCAPEM(), mainnet: setupwire.IsMainnet(cfg.GenesisForkVersion),
 		noLockAccepted: st.Wire.Platform.SealingKeyRelease.NoLockAccepted,
 		markSpec:       st.SlashingLogStore(), stateSpec: st.EncryptedStateStore(), signerID: st.SignerID(),
 		maxValidators: st.MaxKeys()}, nil
@@ -195,7 +189,7 @@ func fromFlags(a *startArgs) (*start, error) {
 	if err := runStartHooks(nil, nil); err != nil {
 		return nil, err
 	}
-	return &start{params: a.params, recordSpec: a.recordSpec, markSpec: a.markSpec, stateSpec: a.stateSpec,
+	return &start{params: a.params, markSpec: a.markSpec, stateSpec: a.stateSpec,
 		signerID: a.signerID, stateCreate: a.stateCreate, maxValidators: a.maxValidators}, nil
 }
 
@@ -215,7 +209,7 @@ func startPlatform(ctx context.Context, a *startArgs, newPlatform platformFunc, 
 		return nil, nil, nil, err
 	}
 	if !a.clockCheck {
-		if err := checkFlags(a.platformName, a.listens, a.tlsCA != "" || s.caPEM != nil, s.recordSpec, s.markSpec); err != nil {
+		if err := checkFlags(a.platformName, a.listens, a.tlsCA != "" || s.caPEM != nil, s.markSpec); err != nil {
 			return nil, nil, nil, err
 		}
 	}

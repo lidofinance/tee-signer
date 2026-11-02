@@ -41,7 +41,7 @@ type durableCopy struct {
 
 func newDurableCopy(spec, signer string, create bool, log *slog.Logger) (*durableCopy, error) {
 	if signer == "" {
-		return nil, errors.New("-state-store needs -mark-signer (or -record-key): the copy is kept per signer")
+		return nil, errors.New("-state-store needs -mark-signer: the copy is kept per signer")
 	}
 	if err := markstore.CheckSigner(signer); err != nil {
 		return nil, err

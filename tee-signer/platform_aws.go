@@ -10,8 +10,8 @@ import (
 )
 
 // AWS Nitro Enclaves. The command line calls the platform nitro. This tag
-// also brings the AWS SDK (KMS), the NSM and CBOR code, vsock and the
-// DynamoDB record store. The setup comes from the host agent at the fixed
+// also brings the AWS SDK (KMS), the NSM and CBOR code, vsock and the S3
+// client of the mark log. The setup comes from the host agent at the fixed
 // vsock address of the image, before any KMS call.
 func init() {
 	register("nitro", nitro.New)
