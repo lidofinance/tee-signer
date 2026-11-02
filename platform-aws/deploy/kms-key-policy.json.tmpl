@@ -8,7 +8,7 @@
       "Principal": { "AWS": "arn:aws:iam::${ACCOUNT_ID}:role/${ADMIN_ROLE}" },
       "Action": [
         "kms:Describe*", "kms:Get*", "kms:List*", "kms:PutKeyPolicy",
-        "kms:EnableKeyRotation", "kms:ScheduleKeyDeletion", "kms:CancelKeyDeletion"
+        "kms:EnableKeyRotation", "kms:CancelKeyDeletion"
       ],
       "Resource": "*"
     },

@@ -22,7 +22,12 @@
 #
 # Always checked: the EIF header and its arch flag, the kernel header (arm64
 # "Image": the magic ARMd at offset 56; x86_64 bzImage: HdrS at 0x202), the
-# arch of the init and runner ELF files. Exit 1 if a check fails.
+# arch of the init and runner ELF files, and that each ramdisk is one cpio
+# archive with nothing but zero bytes after its trailer. Exit 1 if a check
+# fails.
+#
+# This is a sanity check. It reads only what it knows; approve PCRs only
+# from your own reproducible rebuild (tee-signer/docs/runner.md).
 #
 # The layout is the one nitro-cli's image format crate writes (version 4):
 # a header with up to 32 section offsets, then sections of type kernel (1),
@@ -91,23 +96,29 @@ else:
     check(kern[0x202:0x206] == b"HdrS", "kernel is an x86 bzImage: magic %r at 0x202" % kern[0x202:0x206])
     kname = "bzImage"
 
-# cpio "newc" archives.
-def cpio(buf):
+# cpio "newc" archives. The kernel unpacks every archive in a ramdisk, so
+# the check reads one archive to its trailer and refuses anything after it
+# but zero padding: a second archive could replace any file read here.
+def cpio(buf, which):
     out, pos = {}, 0
-    while pos + 110 <= len(buf):
-        if buf[pos:pos + 6] != b"070701":
-            break
+    while True:
+        if pos + 110 > len(buf) or buf[pos:pos + 6] != b"070701":
+            sys.exit("eif-check: %s ramdisk: no cpio newc header at offset %d" % (which, pos))
         f = [int(buf[pos + 6 + 8 * i:pos + 14 + 8 * i], 16) for i in range(13)]
         mode, fsize, nsize = f[1], f[6], f[11]
         ns = pos + 110
         name = buf[ns:ns + nsize - 1].decode()
         do = (ns + nsize + 3) & ~3
         pos = (do + fsize + 3) & ~3
+        if pos > len(buf):
+            sys.exit("eif-check: %s ramdisk: entry %s runs past the end" % (which, name))
         if name == "TRAILER!!!":
             break
         out[name] = (mode, buf[do:do + fsize])
+    if buf[pos:].strip(b"\0"):
+        sys.exit("eif-check: %s ramdisk: data after the cpio trailer at offset %d" % (which, pos))
     return out
-boot, app = cpio(rd[0]), cpio(rd[1])
+boot, app = cpio(rd[0], "bootstrap"), cpio(rd[1], "image")
 
 want_machine = 0xB7 if a.arch == "aarch64" else 0x3E
 def elf_ok(b):
