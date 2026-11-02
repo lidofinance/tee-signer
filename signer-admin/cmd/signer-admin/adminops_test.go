@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
+	"github.com/lidofinance/tee-signer/governance/exitapproval"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-core/software"
@@ -115,10 +116,10 @@ func split(t *testing.T, dir string, tt, n int, names []string) (backend.Pubkey,
 	})
 }
 
-// The import order track without a runner that takes it: import-draft,
-// show, sign in both forms, assemble; push refuses an import order and
-// more than one file.
-func TestImportOffline(t *testing.T) {
+// The import order and exit approval tracks without a runner that takes
+// them: import-draft, show, sign in both forms, assemble; exit-draft,
+// show, sign, assemble; push refuses an import order and a batch of 9.
+func TestImportAndExitOffline(t *testing.T) {
 	fc := newFakeCluster(t)
 	cl := fc.cluster
 	mustTool(t, "pin", "-cluster", cl)
@@ -142,14 +143,33 @@ func TestImportOffline(t *testing.T) {
 	wantIn(t, mustTool(t, "show", "-active", body+".active", signed), "signatures: complete and valid")
 	wantIn(t, failTool(t, "push", "-cluster", cl, signed), "an import order is not pushed")
 
-	wantIn(t, failTool(t, "push", "-cluster", cl, signed, signed), "usage")
+	exit := fc.path("exit.bin")
+	out = mustTool(t, "exit-draft", "-cluster", cl, "-pubkey", pk.String(), "-index", "7", "-epoch", "1000", "-balance", "32000000000", "-out", exit)
+	wantIn(t, out, "exit approval for validator 7", "push sends it to all 3 signers")
+	if fi, err := os.Stat(exit); err != nil || fi.Size() != exitapproval.Len {
+		t.Fatalf("exit.bin: %v %v", fi, err)
+	}
+	wantIn(t, mustTool(t, "show", exit), "validator_index = 7", "before you sign, check on the beacon chain", "signer-ta-exit-approval-hash-v1")
+	var esigs []string
+	for _, i := range []int{0, 2} {
+		mustTool(t, "sign", "-hashed", "-key", fc.keys[i].file, exit)
+		esigs = append(esigs, fmt.Sprintf("%s.%s.sig", exit, fc.keys[i].pub[2:10]))
+	}
+	esigned := fc.path("exit.signed")
+	wantIn(t, mustTool(t, "assemble", "-out", esigned, exit, esigs[0], esigs[1]), "exit_approvals_needed 2")
+	wantIn(t, mustTool(t, "show", "-active", exit+".active", esigned), "signatures: complete and valid")
+	many := []string{"push", "-cluster", cl}
+	for range 9 {
+		many = append(many, esigned)
+	}
+	wantIn(t, failTool(t, many...), "9 exit approvals in one push", "at most 8")
 }
 
 // probe, import and exits against a dev runner with a setup: probe tells
 // the admin leaf from a signing leaf; import seals a share under an
 // import order with the admin leaf and gets FORBIDDEN with a signing leaf;
-// the signing leaf's VOLUNTARY_EXIT signs for the share's index, and not
-// for another.
+// an exit is refused until push brought its approval, then the signing
+// leaf's VOLUNTARY_EXIT signs.
 //
 // SIGNER_ADMIN_RUNNER names a dev runner of this repo with the role
 // check; without it the test is skipped.
@@ -162,7 +182,7 @@ func TestAdminFlowDevRunner(t *testing.T) {
 	pki, ca, cert, key := clientPKIWith(t, dir)
 	keys := approvers(t, dir, 3)
 	genesis := genesisTime()
-	conf := writeFile(t, filepath.Join(dir, "setup.conf"), setupText(dir, ca, genesis, lockedText(keys, 2, 0, fee1), "g1"))
+	conf := writeFile(t, filepath.Join(dir, "setup.conf"), setupText(dir, ca, genesis, lockedText(keys, 2, 0, fee1)+"exit_allowed_validators = 7\n", "g1"))
 	hashes := setupHashes(mustTool(t, "setup", "-out", filepath.Join(dir, "setups"), conf))
 
 	addr := fmt.Sprintf("127.0.0.1:%d", freePort(t))
@@ -252,13 +272,23 @@ func TestAdminFlowDevRunner(t *testing.T) {
 	exitReq := backend.SignRequest{Pubkey: pk, Message: &backend.VoluntaryExit{Epoch: epoch, ValidatorIndex: 7},
 		Domain: backend.ComputeDomain(backend.DomainVoluntaryExit, setup.Chain.VoluntaryExitForkVersion, setup.Chain.GenesisValidatorsRoot)}
 	ctx := context.Background()
-	if _, err := lane.Sign(ctx, exitReq); err != nil {
-		t.Fatalf("exit: %v", err)
+	if _, err := lane.Sign(ctx, exitReq); err == nil || !strings.Contains(err.Error(), "exit approval") {
+		t.Fatalf("exit before its approval: %v", err)
 	}
-	other := exitReq
-	other.Message = &backend.VoluntaryExit{Epoch: epoch, ValidatorIndex: 8}
-	if _, err := lane.Sign(ctx, other); err == nil || !strings.Contains(err.Error(), "SC_ERR_POLICY_INDEX") {
-		t.Fatalf("exit for another index: %v", err)
+	// A signing leaf cannot push the approval.
+	exit := filepath.Join(dir, "exit.bin")
+	mustTool(t, "exit-draft", "-cluster", cl, "-pubkey", pk.String(), "-index", "7", "-epoch", fmt.Sprint(epoch), "-balance", "32000000000", "-out", exit)
+	var esigs []string
+	for _, i := range []int{1, 2} {
+		mustTool(t, "sign", "-hashed", "-key", keys[i].file, exit)
+		esigs = append(esigs, fmt.Sprintf("%s.%s.sig", exit, keys[i].pub[2:10]))
+	}
+	esigned := filepath.Join(dir, "exit.signed")
+	mustTool(t, "assemble", "-out", esigned, exit, esigs[0], esigs[1])
+	wantIn(t, failTool(t, "push", "-cluster", laneCl, esigned), "FORBIDDEN")
+	wantIn(t, mustTool(t, "push", "-cluster", cl, esigned), "g1 holds "+esigned)
+	if _, err := lane.Sign(ctx, exitReq); err != nil {
+		t.Fatalf("exit after its approval: %v", err)
 	}
 	b, _ := json.Marshal(exitReq.Message)
 	t.Logf("signed %s", b)

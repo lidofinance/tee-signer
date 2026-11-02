@@ -79,6 +79,10 @@
 //	    Probe the role, check the runner's attestation, seal each share of
 //	    FILE (mode 0600) to the attested import key and send
 //	    IMPORT_SHARE_SEALED under the order.
+//	signer-admin exit-draft -cluster cluster.json -pubkey 0x.. -index N -epoch E -balance GWEI [-not-after 24h] [-out exit.bin]
+//	    Draft an exit approval (the TA's 152-byte layout) with a fresh
+//	    nonce. show prints what approvers check on the chain before they
+//	    sign; push sends signed approvals to every signer, at most 8 a run.
 //	signer-admin issue-client-cert -ca-cert FILE -ca-key FILE -role admin|attest|signing -name CN -out DIR
 //	signer-admin issue-client-cert -ca-cert FILE -ca-key FILE -make-intermediate ROLE -name CN -out DIR
 //	    Issue one client certificate of a role, or a role intermediate from
@@ -153,13 +157,14 @@ const usage = `usage:
   signer-admin status -cluster cluster.json [-signers NAME,...]
   signer-admin draft -cluster cluster.json -group locked|open [-margin 10m] [-out update.bin] FILE
   signer-admin show [-active FILE] FILE
-  signer-admin sign -key FILE|openpgp:KEYGRIP [-hashed] [-expect-sha256 HEX] [-out FILE] update.bin|import.bin
+  signer-admin sign -key FILE|openpgp:KEYGRIP [-hashed] [-expect-sha256 HEX] [-out FILE] update.bin|import.bin|exit.bin
   signer-admin approver-key -key FILE|openpgp:KEYGRIP | -openpgp FILE [-fingerprint HEX]
   signer-admin assemble [-active FILE] [-out update.signed] update.bin SIG...
-  signer-admin push -cluster cluster.json [-raise-min] [-signers NAME,...] update.signed
+  signer-admin push -cluster cluster.json [-raise-min] [-signers NAME,...] update.signed|exit.signed
   signer-admin probe -cluster cluster.json [-signers NAME,...]
   signer-admin import-draft -cluster cluster.json -signer NAME -split FILE [-not-after 12h] [-allow-gcp-unsafe-single-key] [-out import.bin]
   signer-admin import -cluster cluster.json -signer NAME -order import.signed -shares FILE -commitments FILE
+  signer-admin exit-draft -cluster cluster.json -pubkey 0x.. -index N -epoch E -balance GWEI [-not-after 24h] [-out exit.bin]
   signer-admin issue-client-cert -ca-cert FILE -ca-key FILE -role admin|attest|signing|-make-intermediate ROLE -name CN -out DIR`
 
 func run(args []string, out io.Writer) error {
@@ -169,7 +174,7 @@ func run(args []string, out io.Writer) error {
 	cmds := map[string]func([]string, io.Writer) error{
 		"setup": cmdSetup, "pin": cmdPin, "status": cmdStatus, "draft": cmdDraft,
 		"show": cmdShow, "sign": cmdSign, "assemble": cmdAssemble, "push": cmdPush,
-		"probe": cmdProbe, "import-draft": cmdImportDraft, "import": cmdImport,
+		"probe": cmdProbe, "import-draft": cmdImportDraft, "import": cmdImport, "exit-draft": cmdExitDraft,
 		"issue-client-cert": cmdIssueClientCert, "approver-key": cmdApproverKey,
 	}
 	cmd, ok := cmds[args[0]]

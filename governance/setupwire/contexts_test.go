@@ -28,7 +28,7 @@ func TestContexts(t *testing.T) {
 	// The TA header lists the same names except the import order, the
 	// hash-then-sign and the handover carry contexts, which are the
 	// runner's only.
-	if len(Contexts) != 35 {
+	if len(Contexts) != 37 {
 		t.Fatalf("%d contexts; add a new one to Contexts and to the TA header", len(Contexts))
 	}
 	// Package backend cannot import this one, so it holds the names of the
@@ -58,11 +58,11 @@ func TestContexts(t *testing.T) {
 	}
 }
 
-// The three approver contexts have a hashed form: its message is the 32
+// The four approver contexts have a hashed form: its message is the 32
 // bytes SHA-256 of the hashed context and SHA-256 of the direct message.
 // No other context has one.
 func TestHashedContexts(t *testing.T) {
-	approverCtx := []Context{CtxConfigUpdate, CtxHandoverOrder, CtxImportOrder}
+	approverCtx := []Context{CtxConfigUpdate, CtxHandoverOrder, CtxImportOrder, CtxTAExitApproval}
 	for _, c := range approverCtx {
 		h, ok := HashedContext(c)
 		name := c.String()

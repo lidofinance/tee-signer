@@ -131,6 +131,8 @@ func lockedText(set []approver, k, timeLock int, fees ...string) string {
 	b.WriteString(`builder_gas_limit_min = 30000000
 builder_gas_limit_max = 60000000
 builder_registration_max_future_seconds = 3600
+exit_stake_cap_per_day = 4096 ETH
+exit_approvals_needed = 2
 min_activation_balance = 32 ETH
 max_effective_balance = 2048 ETH
 withdrawal_credentials = 0x0200000000000000000000004242424242424242424242424242424242424242
@@ -173,7 +175,7 @@ func setupText(dir string, ca []byte, genesis int64, locked string, names ...str
 		mode = "single"
 	}
 	fmt.Fprintf(&b, `# a test cluster
-setup_format_version = 3
+setup_format_version = 2
 signing_mode = %s
 handover_generation = 1
 genesis_validators_root = 0x4b36000000000000000000000000000000000000000000000000000000000000

@@ -140,7 +140,7 @@ func TestImageCheckRefusesAllButStatusAndConfig(t *testing.T) {
 			t.Fatalf("%v: %v", typ, err)
 		}
 	}
-	for _, typ := range []wire.MsgType{wire.TypeSign, wireadmin.TypeImportSealed, 0x09, 0x30, 0x31, 0x32, 0x33, 0x27, 0x28} {
+	for _, typ := range []wire.MsgType{wire.TypeSign, wireadmin.TypeImportSealed, wireadmin.TypeApproveExit, 0x30, 0x31, 0x32, 0x33, 0x27, 0x28} {
 		_, err := e.srv.dispatch(ctx, wire.Frame{Type: typ, Payload: []byte{1, 2, 3}})
 		wantCode(t, err, backend.StatusNotReady, "image check:")
 	}

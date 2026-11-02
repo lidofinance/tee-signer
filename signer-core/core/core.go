@@ -32,6 +32,7 @@ import (
 
 const (
 	maxForks            = C.SC_MAX_FORKS
+	maxExitAllowlist    = C.SC_MAX_EXIT_ALLOWLIST
 	maxFeeRecipients    = C.SC_MAX_FEE_RECIPIENTS
 	maxBuilderAuthRoots = C.SC_MAX_BUILDER_AUTH_ROOTS
 	maxSlotTimes        = C.SC_MAX_SLOT_TIMES
@@ -186,6 +187,10 @@ func fillConfig(cc *C.sc_config, c *Config) {
 	cc.seconds_per_slot = C.uint64_t(c.SecondsPerSlot)
 	cc.slots_per_epoch = C.uint64_t(c.SlotsPerEpoch)
 	cc.max_epochs_ahead = C.uint64_t(c.MaxEpochsAhead)
+	for i, idx := range c.ExitAllowlist {
+		cc.exit_allowlist[i] = C.uint64_t(idx)
+	}
+	cc.exit_allowlist_count = C.uint32_t(len(c.ExitAllowlist))
 	for i, a := range c.FeeRecipients {
 		copyBytes(unsafe.Pointer(&cc.fee_recipients[i][0]), a[:])
 	}
@@ -406,7 +411,7 @@ func (s *Signer) CheckPolicy(p Policy) error {
 }
 
 // SetPolicy replaces the signer's signing policy with p
-// (sc_signer_set_policy): fee recipients, gas limit range,
+// (sc_signer_set_policy): exit allowlist, fee recipients, gas limit range,
 // registration_max_future_seconds, and allow_unverified_nonslashable, which
 // only this binding reads. The chain, the clock horizon, the slashing
 // settings and the fork schedule stay, and so do the loaded validators and

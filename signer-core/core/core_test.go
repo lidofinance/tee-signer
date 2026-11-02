@@ -262,9 +262,8 @@ func TestRepeatAfterRestart(t *testing.T) {
 	}
 }
 
-// A validator loaded with an index signs an exit for that index only, and
-// for any epoch.
-func TestExitBoundIndex(t *testing.T) {
+// A validator whose index is not on the allowlist cannot exit.
+func TestExitAllowlist(t *testing.T) {
 	cfg := software.DevConfig(genesis, 12, 32)
 	h := software.NewMemHooks()
 	h.Clock = clockAtEpoch(20)
@@ -278,13 +277,8 @@ func TestExitBoundIndex(t *testing.T) {
 	if _, err := s.AddValidator(pk, sk, 8, nil); err != nil {
 		t.Fatal(err)
 	}
-	for _, epoch := range []uint64{5, 20, 2000} {
-		if _, err := s.Sign(signReq(s, pk, &backend.VoluntaryExit{Epoch: epoch, ValidatorIndex: 8})); err != nil {
-			t.Fatalf("exit at epoch %d: %v", epoch, err)
-		}
-	}
-	_, err = s.Sign(signReq(s, pk, &backend.VoluntaryExit{Epoch: 5, ValidatorIndex: 9}))
-	wantStatus(t, err, backend.StatusPolicyIndex)
+	_, err = s.Sign(signReq(s, pk, &backend.VoluntaryExit{Epoch: 5, ValidatorIndex: 8}))
+	wantStatus(t, err, backend.StatusPolicyExit)
 }
 
 type failingHooks struct {

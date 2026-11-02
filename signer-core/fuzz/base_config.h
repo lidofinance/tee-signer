@@ -36,6 +36,9 @@ static inline void fz_base_config(sc_config *c)
     c->seconds_per_slot = 12;
     c->slots_per_epoch = 32;
     c->max_epochs_ahead = 2;
+    c->exit_allowlist[0] = 100;
+    c->exit_allowlist[1] = 101;
+    c->exit_allowlist_count = 2;
     memset(c->fee_recipients[0], 0x11, 20);
     memset(c->fee_recipients[1], 0x22, 20);
     c->fee_recipient_count = 2;
@@ -67,7 +70,7 @@ static inline void fz_patch_config(sc_config *c, fz_in *in)
 {
     uint8_t field = fz_u8(in);
     uint8_t i = fz_u8(in);
-    switch (field % 21) {
+    switch (field % 23) {
     case 0: c->genesis_time = fz_near(in, c->genesis_time); break;
     case 1: c->seconds_per_slot = fz_near(in, c->seconds_per_slot); break;
     case 2: c->slots_per_epoch = fz_near(in, c->slots_per_epoch); break;
@@ -75,19 +78,21 @@ static inline void fz_patch_config(sc_config *c, fz_in *in)
     case 4: c->forks[i % SC_MAX_FORKS].epoch = fz_near(in, c->forks[i % SC_MAX_FORKS].epoch); break;
     case 5: c->forks[i % SC_MAX_FORKS].version[0] = fz_u8(in); break;
     case 6: c->max_epochs_ahead = fz_near(in, c->max_epochs_ahead); break;
-    case 7: c->fee_recipient_count = (uint32_t)fz_near(in, c->fee_recipient_count); break;
-    case 8: fz_bytes(in, c->fee_recipients[i % SC_MAX_FEE_RECIPIENTS], SC_ADDRESS_LEN); break;
-    case 9: c->gas_limit_min = fz_near(in, c->gas_limit_min); break;
-    case 10: c->gas_limit_max = fz_near(in, c->gas_limit_max); break;
-    case 11: c->registration_max_future_seconds = fz_near(in, c->registration_max_future_seconds); break;
-    case 12: c->commit_ahead.block_slots = fz_near(in, c->commit_ahead.block_slots); break;
-    case 13: c->commit_ahead.source_epochs = fz_near(in, c->commit_ahead.source_epochs); break;
-    case 14: c->commit_ahead.target_epochs = fz_near(in, c->commit_ahead.target_epochs); break;
-    case 15: c->mark_scope = (uint32_t)fz_near(in, c->mark_scope); break;
-    case 16: c->gloas_scheduled = (uint32_t)fz_near(in, c->gloas_scheduled); break;
-    case 17: c->gloas_fork_epoch = fz_near(in, c->gloas_fork_epoch); break;
-    case 18: c->builder_auth_root_count = (uint32_t)fz_near(in, c->builder_auth_root_count); break;
-    case 19: fz_bytes(in, c->builder_auth_roots[i % SC_MAX_BUILDER_AUTH_ROOTS], 32); break;
+    case 7: c->exit_allowlist_count = (uint32_t)fz_near(in, c->exit_allowlist_count); break;
+    case 8: c->exit_allowlist[i] = fz_near(in, 100); break;
+    case 9: c->fee_recipient_count = (uint32_t)fz_near(in, c->fee_recipient_count); break;
+    case 10: fz_bytes(in, c->fee_recipients[i % SC_MAX_FEE_RECIPIENTS], SC_ADDRESS_LEN); break;
+    case 11: c->gas_limit_min = fz_near(in, c->gas_limit_min); break;
+    case 12: c->gas_limit_max = fz_near(in, c->gas_limit_max); break;
+    case 13: c->registration_max_future_seconds = fz_near(in, c->registration_max_future_seconds); break;
+    case 14: c->commit_ahead.block_slots = fz_near(in, c->commit_ahead.block_slots); break;
+    case 15: c->commit_ahead.source_epochs = fz_near(in, c->commit_ahead.source_epochs); break;
+    case 16: c->commit_ahead.target_epochs = fz_near(in, c->commit_ahead.target_epochs); break;
+    case 17: c->mark_scope = (uint32_t)fz_near(in, c->mark_scope); break;
+    case 18: c->gloas_scheduled = (uint32_t)fz_near(in, c->gloas_scheduled); break;
+    case 19: c->gloas_fork_epoch = fz_near(in, c->gloas_fork_epoch); break;
+    case 20: c->builder_auth_root_count = (uint32_t)fz_near(in, c->builder_auth_root_count); break;
+    case 21: fz_bytes(in, c->builder_auth_roots[i % SC_MAX_BUILDER_AUTH_ROOTS], 32); break;
     default: fz_bytes(in, c->genesis_validators_root, 32); break;
     }
 }

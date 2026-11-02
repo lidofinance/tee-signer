@@ -59,13 +59,16 @@ func TestOpenPGPApprover(t *testing.T) {
 		t.Fatalf("push:\n%s", out)
 	}
 
-	// An import order.
-	_, _, splitPath := split(t, fc.dir, 3, 4, []string{"s1", "s2", "s3", "s4"})
+	// An import order and an exit approval.
+	pk, _, splitPath := split(t, fc.dir, 3, 4, []string{"s1", "s2", "s3", "s4"})
 	imp := fc.path("import.bin")
 	mustTool(t, "import-draft", "-cluster", cl, "-signer", "s2", "-split", splitPath, "-out", imp)
 	assemble(imp, fc.path("import.signed"), "2 approvers")
+	exit := fc.path("exit.bin")
+	mustTool(t, "exit-draft", "-cluster", cl, "-pubkey", pk.String(), "-index", "7", "-epoch", "1000", "-balance", "32000000000", "-out", exit)
+	assemble(exit, fc.path("exit.signed"), "exit_approvals_needed 2")
 
-	if _, _, n := agent.Last(); n != 2 {
+	if _, _, n := agent.Last(); n != 3 {
 		t.Fatalf("the card signed %d messages, want one per kind", n)
 	}
 }

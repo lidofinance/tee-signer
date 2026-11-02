@@ -632,7 +632,7 @@ network the validator client signs for. The image has none.
   beacon node (default `http://127.0.0.1:33001`) the same way the signing
   client's local test mode does, and writes `chain.json`. It sets the policy
   fields to the values of that mode: fee recipient `0x...dEaD`, gas limits
-  30 to 60 million, `max_epochs_ahead` 2. Environment variables
+  30 to 60 million, `max_epochs_ahead` 2, no exits. Environment variables
   override them.
 
 A local test chain gets a new genesis time each time it is created, so it

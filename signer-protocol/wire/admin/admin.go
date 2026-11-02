@@ -1,5 +1,6 @@
 // Package admin holds the wire codecs of the admin messages: plaintext
-// and sealed share import and config updates (docs/protocol.md). Only clients of the admin role may send them
+// and sealed share import, config updates and exit approvals
+// (docs/protocol.md). Only clients of the admin role may send them
 // (runner/server/roles.go). Package wire keeps the frames, the errors and
 // the signing and attestation messages, so a signing client
 // builds without this package.
@@ -23,7 +24,10 @@ const (
 	// TypeConfigUpdate carries an approver-signed config update
 	// (CONFIG_UPDATE) and answers with the runner's setup state.
 	TypeConfigUpdate wire.MsgType = 0x08
-	// 0x09 was APPROVE_EXIT, the exit approvals; it is not reused.
+	// TypeApproveExit carries a signed exit approval (package
+	// exitapproval) that a runner with a setup holds until a voluntary
+	// exit matches it. Empty answer.
+	TypeApproveExit wire.MsgType = 0x09
 )
 
 // readVersion checks the version byte an answer starts with and returns

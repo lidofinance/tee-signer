@@ -239,7 +239,7 @@ var AttestOnlyClientOID = asn1.ObjectIdentifier{1, 2, 840, 113556, 1, 8000, 2554
 
 // AdminClientOID is the extended key usage of the admin client role
 // (docs/protocol.md, "Client roles"): the only role that may send imports,
-// config updates and orders. It counts only when the leaf and the leaf's direct issuer both
+// config updates, exit approvals and orders. It counts only when the leaf and the leaf's direct issuer both
 // list it and that issuer is an intermediate, not the pinned root
 // (runner/attls.Role). Same GUID arc as AttestOnlyClientOID, last arc 2.
 var AdminClientOID = asn1.ObjectIdentifier{1, 2, 840, 113556, 1, 8000, 2554,

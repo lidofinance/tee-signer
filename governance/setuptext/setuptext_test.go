@@ -55,7 +55,7 @@ func TestParseSetupRefusals(t *testing.T) {
 		{"format set twice", nitro + "setup_format_version = 1\n", "setup_format_version: set again"},
 		{"key missing", replaceLine(t, nitro, "approvals_needed", ""), "approvals_needed is missing"},
 		{"format missing", replaceLine(t, nitro, "setup_format_version", ""), "setup_format_version is missing"},
-		{"format 1", replaceLine(t, nitro, "setup_format_version", "setup_format_version = 1"), `setup_format_version: "1", want 3`},
+		{"format 1", replaceLine(t, nitro, "setup_format_version", "setup_format_version = 1"), `setup_format_version: "1", want 2`},
 		{"signing_mode missing", replaceLine(t, nitro, "signing_mode", ""), "signing_mode is missing"},
 		{"signing_mode unknown", replaceLine(t, nitro, "signing_mode", "signing_mode = solo"), `signing_mode: "solo": want threshold or single`},
 		{"signing_mode as a number", replaceLine(t, nitro, "signing_mode", "signing_mode = 2"), `signing_mode: "2": want threshold or single`},
@@ -77,13 +77,13 @@ func TestParseSetupRefusals(t *testing.T) {
 		{"hex not hex", replaceLine(t, nitro, "cluster_id", "cluster_id = 0x"+strings.Repeat("zz", 32)), "want 32 bytes of hex"},
 		{"bool case", replaceLine(t, nitro, "allow_unverified_nonslashable_signing", "allow_unverified_nonslashable_signing = True"), "want true or false"},
 		{"bool as number", replaceLine(t, nitro, "allow_unverified_nonslashable_signing", "allow_unverified_nonslashable_signing = 1"), "want true or false"},
-		{"amount without unit", replaceLine(t, nitro, "min_activation_balance", "min_activation_balance = 4096"), "want N ETH or N Gwei"},
-		{"amount glued to unit", replaceLine(t, nitro, "min_activation_balance", "min_activation_balance = 4096ETH"), "want N ETH or N Gwei"},
-		{"amount unit case", replaceLine(t, nitro, "min_activation_balance", "min_activation_balance = 4096 eth"), `unit "eth"`},
-		{"amount 10 decimals", replaceLine(t, nitro, "min_activation_balance", "min_activation_balance = 0.1234567891 ETH"), "at most 9 digits"},
-		{"amount fraction of Gwei", replaceLine(t, nitro, "min_activation_balance", "min_activation_balance = 1.5 Gwei"), "want N Gwei"},
-		{"amount too large", replaceLine(t, nitro, "min_activation_balance", "min_activation_balance = 18446744074 ETH"), "too large"},
-		{"amount sign", replaceLine(t, nitro, "min_activation_balance", "min_activation_balance = -1 ETH"), "want N ETH"},
+		{"amount without unit", replaceLine(t, nitro, "exit_stake_cap_per_day", "exit_stake_cap_per_day = 4096"), "want N ETH or N Gwei"},
+		{"amount glued to unit", replaceLine(t, nitro, "exit_stake_cap_per_day", "exit_stake_cap_per_day = 4096ETH"), "want N ETH or N Gwei"},
+		{"amount unit case", replaceLine(t, nitro, "exit_stake_cap_per_day", "exit_stake_cap_per_day = 4096 eth"), `unit "eth"`},
+		{"amount 10 decimals", replaceLine(t, nitro, "exit_stake_cap_per_day", "exit_stake_cap_per_day = 0.1234567891 ETH"), "at most 9 digits"},
+		{"amount fraction of Gwei", replaceLine(t, nitro, "exit_stake_cap_per_day", "exit_stake_cap_per_day = 1.5 Gwei"), "want N Gwei"},
+		{"amount too large", replaceLine(t, nitro, "exit_stake_cap_per_day", "exit_stake_cap_per_day = 18446744074 ETH"), "too large"},
+		{"amount sign", replaceLine(t, nitro, "exit_stake_cap_per_day", "exit_stake_cap_per_day = -1 ETH"), "want N ETH"},
 		{"number with sign", replaceLine(t, nitro, "builder_gas_limit_min", "builder_gas_limit_min = +5"), "want a decimal number"},
 		{"number in hex", replaceLine(t, nitro, "max_keys", "max_keys = 0x10"), "want a decimal number"},
 		{"number above 32 bits", replaceLine(t, nitro, "max_keys", "max_keys = 4294967296"), "below 2^32"},
@@ -300,7 +300,7 @@ func TestParsePeerHosts(t *testing.T) {
 	if !strings.Contains(out, "\npeer_attestation_hosts = sharedneu.neu.attest.azure.net:443\n") {
 		t.Fatalf("human form:\n%s", out)
 	}
-	if strings.Contains(nitro, "peer_attestation_hosts") || !strings.Contains(nitro, "\nsetup_format_version = 3\n") {
+	if strings.Contains(nitro, "peer_attestation_hosts") || !strings.Contains(nitro, "\nsetup_format_version = 2\n") {
 		t.Fatal("a setup without hosts names them, or another format")
 	}
 }

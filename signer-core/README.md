@@ -76,7 +76,7 @@ include/signer_core.h   public API, for the TA and the host
 src/ssz.c               SSZ encode/decode, hash_tree_root, compute_domain, signing roots
 src/bls.c               blst wrapper and the hash_to_G2 LRU cache
 src/slashing.c          EIP-3076 minimal strategy plus commit-ahead watermarks
-src/policy.c            clock horizon, exit index, builder registration rules
+src/policy.c            clock horizon, exit allowlist, builder registration rules
 src/signer.c            signer object: validator table, ties the parts together
 tests/                  test programs, EIP-3076 JSON flattener, Go-generated vectors
 fuzz/                   fuzz targets (ASan, UBSan), engine for gcc, seed generator (fuzz/README.md)
@@ -304,8 +304,7 @@ core does not parse JSON; the caller does.
   changes the signer holds (`sc_slot_times`, none for `sc_signer_init`):
   time maps to slots piece by piece, each change starting another slot time
   at the first slot of its epoch (`sc_slot_at`, `sc_epoch_at`).
-- VoluntaryExit for any epoch (no clock horizon applies) and any index,
-  but a validator loaded with an index signs an exit only for that index.
+- VoluntaryExit only for a validator index in `exit_allowlist`.
 - ValidatorRegistration only with `fee_recipient` in `fee_recipients`,
   `gas_limit` in `[gas_limit_min, gas_limit_max]`, `pubkey` equal to the
   signing validator, and, if `registration_max_future_seconds` is non-zero,
@@ -314,7 +313,7 @@ core does not parse JSON; the caller does.
   `validator_index` must match it.
 
 `sc_signer_set_policy` replaces the policy fields of a running signer:
-`fee_recipients`, the gas limit range and
+`exit_allowlist`, `fee_recipients`, the gas limit range and
 `registration_max_future_seconds`. The chain, clock horizon and slashing
 settings stay, and so do the loaded validators, their slashing state and
 the exact-repeat roots. A merged config that fails the checks of

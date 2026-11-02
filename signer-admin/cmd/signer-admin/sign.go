@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/lidofinance/tee-signer/governance/exitapproval"
 	adminapprover "github.com/lidofinance/tee-signer/signer-admin/approver"
 	"io"
 	"os"
@@ -84,6 +85,8 @@ func cmdShow(args []string, out io.Writer) error {
 	}
 	defer printSigning(out, head)
 	switch {
+	case isExitFile(head):
+		return showExit(out, fs.Arg(0), head, *activePath)
 	case isImportFile(head):
 		return showImport(out, fs.Arg(0), head, *activePath)
 	}
@@ -238,7 +241,7 @@ func cmdSign(args []string, out io.Writer) error {
 		return err
 	}
 	if *keyPath == "" || fs.NArg() != 1 {
-		return errors.New("usage: signer-admin sign -key FILE|openpgp:KEYGRIP [-hashed] [-expect-sha256 HEX] [-out FILE] update.bin|import.bin")
+		return errors.New("usage: signer-admin sign -key FILE|openpgp:KEYGRIP [-hashed] [-expect-sha256 HEX] [-out FILE] update.bin|import.bin|exit.bin")
 	}
 	raw, err := os.ReadFile(fs.Arg(0))
 	if err != nil {
@@ -249,11 +252,11 @@ func cmdSign(args []string, out io.Writer) error {
 			return fmt.Errorf("%s: %w", fs.Arg(0), err)
 		}
 	}
-	if len(raw) > 0 && (raw[0] == 'U' || raw[0] == 'J') {
-		return fmt.Errorf("%s is signed already; sign the body that draft or import-draft wrote", fs.Arg(0))
+	if len(raw) > 0 && (raw[0] == 'U' || raw[0] == 'J' || isExitFile(raw) && len(raw) > exitapproval.Len) {
+		return fmt.Errorf("%s is signed already; sign the body that draft, import-draft or exit-draft wrote", fs.Arg(0))
 	}
 	var body *setupwire.UpdateBody
-	if !isImportFile(raw) {
+	if !isExitFile(raw) && !isImportFile(raw) {
 		if body, err = setupwire.DecodeUpdateBody(raw); err != nil {
 			return fmt.Errorf("%s: %w", fs.Arg(0), err)
 		}
@@ -267,7 +270,7 @@ func cmdSign(args []string, out io.Writer) error {
 		fprintf(out, "an OpenPGP key signs the hashed form only: signing that form\n")
 	}
 	switch {
-	case isImportFile(raw):
+	case isExitFile(raw) || isImportFile(raw):
 		return signKind(out, fs.Arg(0), raw, key, *hashed, *outPath)
 	}
 	h, err := body.Hash()
@@ -321,7 +324,7 @@ func cmdAssemble(args []string, out io.Writer) error {
 	if *activePath == "" {
 		*activePath = fs.Arg(0) + ".active"
 	}
-	if isImportFile(raw) {
+	if isExitFile(raw) || isImportFile(raw) {
 		return assembleKind(out, fs.Arg(0), raw, *activePath, fs.Args()[1:], *outPath)
 	}
 	*outPath = cmpOr(*outPath, "update.signed")

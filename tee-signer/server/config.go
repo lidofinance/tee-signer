@@ -31,7 +31,7 @@ import (
 //
 // The locked values the core signs by (allowed_fee_recipients, the builder
 // gas limits, builder_registration_max_future_seconds,
-// allow_unverified_nonslashable_signing) switch at
+// exit_allowed_validators, allow_unverified_nonslashable_signing) switch at
 // the effective time (core.Signer.SetPolicy), and so do the slot time
 // changes (core.Signer.SetSlotTimes). The slot time rule takes an update
 // only if its slot times agree with those in force on every epoch up to
@@ -166,6 +166,7 @@ func NewUpdates(o UpdatesOptions) (*Updates, error) {
 // policyOf is the core's signing policy of a locked group.
 func policyOf(l *setupwire.Locked) core.Policy {
 	return core.Policy{
+		ExitAllowlist:                append([]uint64(nil), l.ExitAllowedValidators...),
 		FeeRecipients:                append([]backend.Address(nil), l.AllowedFeeRecipients...),
 		BuilderRequestAuthRoots:      append([]backend.Root(nil), l.AllowedBuilderRequestAuthDataRoots...),
 		GasLimitMin:                  l.BuilderGasLimitMin,

@@ -674,7 +674,7 @@ func fastChain(t *testing.T) (string, uint64) {
 	t.Helper()
 	genesis := uint64(time.Now().Unix()) - 2000
 	cfg := fmt.Sprintf(`{"genesis_validators_root":"0x%s","genesis_fork_version":"0x00000001","voluntary_exit_fork_version":"0x03000001",
-"genesis_time":%d,"seconds_per_slot":1,"slots_per_epoch":2,"max_epochs_ahead":1,
+"genesis_time":%d,"seconds_per_slot":1,"slots_per_epoch":2,"max_epochs_ahead":1,"exit_allowlist":[7],
 "fee_recipients":["0x1111111111111111111111111111111111111111"],"gas_limit_min":30000000,"gas_limit_max":60000000,
 "registration_max_future_seconds":3600,"commit_ahead":{"block_slots":32,"source_epochs":1,"target_epochs":1}}`,
 		strings.Repeat("ab", 32), genesis)

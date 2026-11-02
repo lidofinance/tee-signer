@@ -141,6 +141,9 @@ static void make_config(sc_config *c)
     c->seconds_per_slot = 12;
     c->slots_per_epoch = 32;
     c->max_epochs_ahead = 2;
+    c->exit_allowlist[0] = 100;
+    c->exit_allowlist[1] = 200;
+    c->exit_allowlist_count = 2;
     memset(c->fee_recipients[0], 0x11, 20);
     memset(c->fee_recipients[1], 0x22, 20);
     c->fee_recipient_count = 2;
@@ -642,19 +645,14 @@ static void test_exits(void)
     root_with(SC_DOMAIN_VOLUNTARY_EXIT, V_CAPELLA, cfg.genesis_validators_root, obj, root);
     CHECK_RC(sc_bls_verify(k100.share_pk, root, 32, sig), SC_OK);
 
-    ex.validator_index = 200; /* not this validator's bound index */
+    ex.validator_index = 200; /* allowlisted, but not this validator */
     CHECK_RC(sc_sign_voluntary_exit(s, k100.pk, &ex, sig), SC_ERR_POLICY_INDEX);
     ex.validator_index = 300;
-    CHECK_RC(sc_sign_voluntary_exit(s, k300.pk, &ex, sig), SC_OK);
-    /* Any epoch: exits have no clock horizon. */
-    ex.epoch = E + 1000;
-    CHECK_RC(sc_sign_voluntary_exit(s, k300.pk, &ex, sig), SC_OK);
-    ex.epoch = E;
-    /* A key loaded without an index signs an exit for any index. */
+    CHECK_RC(sc_sign_voluntary_exit(s, k300.pk, &ex, sig), SC_ERR_POLICY_EXIT);
     ex.validator_index = 200;
     CHECK_RC(sc_sign_voluntary_exit(s, kany.pk, &ex, sig), SC_OK);
     ex.validator_index = 300;
-    CHECK_RC(sc_sign_voluntary_exit(s, kany.pk, &ex, sig), SC_OK);
+    CHECK_RC(sc_sign_voluntary_exit(s, kany.pk, &ex, sig), SC_ERR_POLICY_EXIT);
 }
 
 static void test_registrations(void)
@@ -728,6 +726,7 @@ static void test_set_policy(void)
     memset(pol.fee_recipients, 0, sizeof pol.fee_recipients);
     memset(pol.fee_recipients[0], 0x44, 20);
     pol.fee_recipient_count = 1;
+    pol.exit_allowlist_count = 0;
     pol.gas_limit_min = 40000000;
     pol.gas_limit_max = 50000000;
     pol.max_epochs_ahead = 1000; /* not a policy field: ignored */
@@ -737,6 +736,7 @@ static void test_set_policy(void)
     CHECK_RC(sc_sign_validator_registration(s, k.pk, &r, sig), SC_ERR_POLICY_GAS_LIMIT);
     r.gas_limit = 45000000;
     CHECK_RC(sc_sign_validator_registration(s, k.pk, &r, sig), SC_OK);
+    CHECK_RC(sc_sign_voluntary_exit(s, k.pk, &ex, sig), SC_ERR_POLICY_EXIT);
     /* The clock horizon stayed at 2 epochs. */
     sc_attestation_data far = att(E, E + 10, 2);
     CHECK_RC(sc_sign_attestation(s, k.pk, &far, sig), SC_ERR_POLICY_FUTURE);

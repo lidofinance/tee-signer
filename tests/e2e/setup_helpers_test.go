@@ -87,6 +87,7 @@ func devSetupFor(t *testing.T, c chain, dir, caFile, name string, cluster [32]by
 	l.ChangeDelaySeconds, l.AllowedImageMeasurements = timeLock, nil
 	l.AllowedFeeRecipients = slices.SortedFunc(slices.Values(cfg.FeeRecipients), func(a, b backend.Address) int { return bytes.Compare(a[:], b[:]) })
 	l.BuilderGasLimitMin, l.BuilderGasLimitMax, l.BuilderRegistrationMaxFutureSeconds = cfg.GasLimitMin, cfg.GasLimitMax, cfg.RegistrationMaxFutureSeconds
+	l.ExitAllowedValidators = slices.Sorted(slices.Values(cfg.ExitAllowlist))
 	// Compounding (0x02) withdrawal credentials to the address.
 	addr, err := hex.DecodeString(strings.TrimPrefix(withdrawal, "0x"))
 	if err != nil || len(addr) != 20 {

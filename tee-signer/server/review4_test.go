@@ -288,22 +288,26 @@ func TestReview5R2FreshLogSourceBoundZero(t *testing.T) {
 	}
 }
 
-// A runner with a setup signs a voluntary exit like any other message:
-// for the index the key was imported with, at any epoch, and for no
-// other index.
-func TestExitWithSetup(t *testing.T) {
+// Issue #4 F4: the runner signed a voluntary exit for an allowlisted index
+// with no approval and no stake cap, while the setup (and the attestation
+// statement built from it) carries exit_approvals_needed 2 and
+// exit_stake_cap_per_day 4096 ETH. Like the TA, it now needs m-of-n
+// approvals bound to key, index, epoch and a nonce, under a daily cap.
+func TestReview4F4ExitWithoutApprovals(t *testing.T) {
 	e := newTgtEnv(t, "dev", nil)
+	l := e.setup.Locked
+	t.Logf("setup: exit_allowed_validators %v, exit_approvals_needed %d, exit_stake_cap_per_day %d Gwei",
+		l.ExitAllowedValidators, l.ExitApprovalsNeeded, l.ExitStakeCapPerDay)
+	if l.ExitApprovalsNeeded < 2 || len(l.ExitAllowedValidators) == 0 {
+		t.Fatal("the dev sample setup no longer asks for exit approvals")
+	}
 	sk, pk := newKey(t)
-	if err := e.importSealed(pk, sk, 77, nil); err != nil {
+	idx := l.ExitAllowedValidators[0]
+	if err := e.importSealed(pk, sk, idx, nil); err != nil {
 		t.Fatal(err)
 	}
-	now := e.signer.EpochAt(e.now())
-	for _, epoch := range []uint64{now, now + 1000} {
-		if err := e.signMsg(pk, &backend.VoluntaryExit{Epoch: epoch, ValidatorIndex: 77}); err != nil {
-			t.Errorf("exit at epoch %d: %v", epoch, err)
-		}
-	}
-	if err := e.signMsg(pk, &backend.VoluntaryExit{Epoch: now, ValidatorIndex: 78}); refusedWith(err) != backend.StatusPolicyIndex {
-		t.Errorf("an exit for another index: %v, want POLICY_INDEX", err)
+	exit := &backend.VoluntaryExit{Epoch: e.signer.EpochAt(e.now()), ValidatorIndex: idx}
+	if err := e.signMsg(pk, exit); err == nil {
+		t.Errorf("voluntary exit of index %d signed with no approval (exit_approvals_needed %d) and no cap check", idx, l.ExitApprovalsNeeded)
 	}
 }

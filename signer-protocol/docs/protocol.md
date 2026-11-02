@@ -91,7 +91,7 @@ that; a client that needs to tell causes apart reads `detail`.
 | 8 | `SC_ERR_CLOCK` | no trusted time (the NTS clock lacks a quorum, or the clock is not trusted for a config update) | later |
 | 9 to 12 | `SC_ERR_SLASH_BLOCK`, `_SOURCE`, `_TARGET`, `_SOURCE_GT_TARGET` | slashing protection refused | no |
 | 13 | `SC_ERR_POLICY_FUTURE` | the message's epoch is past the clock horizon, or the slot of a block, attestation, PTC vote or envelope has not started (2 s margin, `SC_SLOT_MARGIN_SECONDS`) | no (only once the clock catches up) |
-| 14 to 20 | `SC_ERR_POLICY_EXIT` (no longer sent), `_FEE_RECIPIENT`, `_GAS_LIMIT`, `_TIMESTAMP`, `_PUBKEY`, `_INDEX`, `_DOMAIN` | policy refused; `_DOMAIN` also for root types 2 to 6 without `allow_unverified_nonslashable` | no (until a config update) |
+| 14 to 20 | `SC_ERR_POLICY_EXIT`, `_FEE_RECIPIENT`, `_GAS_LIMIT`, `_TIMESTAMP`, `_PUBKEY`, `_INDEX`, `_DOMAIN` | policy refused; `_DOMAIN` also for root types 2 to 6 without `allow_unverified_nonslashable` | no (until a config update) |
 | 21 | `SC_ERR_POLICY_FORK` | Gloas: a message before the Gloas fork, Gloas not in the chain config, or an aggregate form that does not fit the fork | no |
 | 22 | `SC_ERR_POLICY_BUILDER` | Gloas: an envelope of another builder | no |
 | 23 | `SC_ERR_POLICY_ENVELOPE` | Gloas: an envelope not for the last block this validator signed | no |
@@ -126,16 +126,16 @@ A refusal caused by the restart floor carries
 | 0x05 | IMPORT_SHARE | see below (debug build, dev platform only) | key |
 | 0x06 | IDENTITY | `nonce_len:u16 nonce version:u8` (version 1) | identity, see below |
 | 0x07 | IMPORT_SHARE_SEALED | see below | key |
+| 0x09 | APPROVE_EXIT | a signed exit approval (governance/exitapproval) | empty |
 | 0x08 | CONFIG_UPDATE | the signed update, see below (a runner with a setup) | `version:u8 outcome:u8 setup_state` |
 
 A `mark` is `has_block:u8 block_slot:u64 has_attestation:u8 source_epoch:u64
 target_epoch:u64`. PUBLIC_KEYS has no paging: one frame holds at most
 10,082 keys (see "Open items").
 
-Type numbers: 0x01 to 0x08 are taken, the next free one is 0x0a. 0x09
-belonged to the removed exit approvals, 0x20 to 0x28 to the removed key
-generation and 0x31 to 0x33 to the removed handover; none of them is
-reused (TestRoleTable keeps them
+Type numbers: 0x01 to 0x09 are taken, the next free one is 0x0a. 0x20 to
+0x28 belonged to the removed key generation and 0x31 to 0x33 to the
+removed handover; neither range is reused (TestRoleTable keeps them
 refused). A response type is the request type with 0x80 set, so request
 types stay below 0x80.
 
@@ -232,7 +232,7 @@ chain config. It refuses a mismatch (`DOMAIN_MISMATCH`), refuses an epoch
 past the clock horizon, and for RANDAO requires
 `object_root = hash_tree_root(epoch)`. No root message can carry a
 proposer, attester, exit, deposit or builder domain, so the generic path
-cannot bypass slashing protection or the exit index check.
+cannot bypass slashing protection or the exit allowlist.
 
 Root messages are the generic path: a generic `Sign` from a stock client,
 when the signing client cannot find the typed message behind a root. The signing
@@ -484,7 +484,7 @@ The start order:
    later update lists the image: then a restart loads them (state
    `restart_needed`).
 4. Every request but HEALTH, PUBLIC_KEYS, ATTEST, IDENTITY and
-   CONFIG_UPDATE runs the check again: SIGN and the
+   CONFIG_UPDATE runs the check again: SIGN, APPROVE_EXIT and the
    imports get `NOT_READY` with `image check:` and the reason. A locked update that
    drops the image stops the runner at that update's effective time.
 
@@ -655,18 +655,32 @@ file or stdin and takes the verifier settings of `attestation-verify/runnerclien
 verifier, see `attest/README.md`). The signing client's `cloud-import` does the
 same with the same settings.
 
-### Voluntary exits
+### APPROVE_EXIT
 
-A runner signs a VOLUNTARY_EXIT like any other message, on request of a
-signing client, with or without a setup. The core checks only that a key
-loaded with a validator index signs an exit for that index
-(`SC_ERR_POLICY_INDEX`); a key loaded without an index signs an exit for
-any index. No clock horizon applies to exits. Exits use the exit fork
-version of the chain (EIP-7044).
+A runner with a setup signs a voluntary exit only under the OP-TEE trusted
+app's exit rules (issue #4 F4): `exit_approvals_needed` approvers in force
+sign an exit approval in the TA's layout (152 bytes: magic `SIGPEXA1`,
+genesis validators root, validator key, index, exit epoch, effective
+balance, `not_after`, nonce; Ed25519 over `signer-ta-exit-approval-v1`),
+followed by `sig_count:u8 {position:u8 signature[64]}`. The runner checks
+the chain, the signatures, `not_after` (at most 7 days ahead of the trusted
+clock), that the nonce was not used today and that the stated balance is
+between 1 Gwei and `max_effective_balance`, then holds it in memory (8 at
+most). A voluntary exit signs only if a held approval names its key, index
+and epoch and the day's stake (`exit_stake_cap_per_day`) has room for
+`max_effective_balance`: every exit counts that much, whatever balance the
+approval states and the credentials prefix
+(VSEXIT-02; the runner cannot check a stated balance). The exit (key,
+index, epoch, stake, the approval's nonce) goes into a mark log record
+before it is signed, so a rollback of the host's local state does not
+free the day's cap; every later record carries the day's exits. The same
+exit (same key, index and epoch) signs again that day without counting. `exit_allowed_validators` stays the core's check. A restart
+drops held approvals, as in the TA. A runner without a setup answers
+UNSUPPORTED.
 
 ### Approver signatures: direct and hashed
 
-Each approver signature (config update, import order)
+Each approver signature (config update, import order, exit approval)
 has two forms, and the runner takes either
 per signature in the same `position:u8 signature[64]` slot:
 
@@ -681,6 +695,7 @@ per signature in the same `position:u8 signature[64]` slot:
 | --- | --- | --- |
 | config update (over the header) | `signer-config-update-v1` | `signer-config-update-hash-v1` |
 | import order | `signer-import-order-v1` | `signer-import-order-hash-v1` |
+| exit approval | `signer-ta-exit-approval-v1` | `signer-ta-exit-approval-hash-v1` |
 
 The direct message starts with its context, and the hashed one is SHA-256
 over an input that starts with its hash context, so a signature of one
@@ -688,7 +703,8 @@ form or kind passes for another only through a SHA-256 collision. The
 `-hash-v1` contexts of the first build signed the hash context and the
 32 bytes without the outer SHA-256, 58 to 65 bytes, which gpg's scdaemon
 does not pass to a card; `-hash-v2` replaces them, and a runner takes no
-v1 signature. `signer-admin sign
+v1 signature. The TA does not take the hashed exit approval yet; one
+hashed approval serves the cloud runners only. `signer-admin sign
 -hashed` makes the hashed form; `show` prints both messages so an
 approver can compare them over a second channel.
 
@@ -952,6 +968,7 @@ has mutual TLS.
 | 0x05 | IMPORT_SHARE (debug builds) | no | no | yes |
 | 0x07 | IMPORT_SHARE_SEALED | no | no | yes |
 | 0x08 | CONFIG_UPDATE | no | no | yes |
+| 0x09 | APPROVE_EXIT | no | no | yes |
 | any other | | no | no | no |
 
 An admin certificate cannot SIGN, so a stolen one makes no signature.
@@ -977,6 +994,9 @@ image constants, in any minute:
 
 More get `RATE_LIMITED`, with the seconds until the next one. Admin and
 local clients have no limit.
+
+A runner without a setup refuses VOLUNTARY_EXIT off the dev platform: it
+has no exit approvals and no daily stake cap.
 
 **Role probe.** `signer-admin probe` (signer-admin/cmd/signer-admin) finds out
 whether admin messages from a certificate pass, and changes nothing. It

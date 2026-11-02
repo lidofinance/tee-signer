@@ -74,3 +74,29 @@ func TestRBRLOG01ForeignRecordNextToOwnLatchesLost(t *testing.T) {
 		t.Errorf("A appended next to the clone's record at version %d: err %v, Lost %v; two instances sign on", v+1, err, a.Lost())
 	}
 }
+
+// SHH-02: the day of the exit ledger never goes back: a record that would
+// carry an earlier day than the one in the log is refused.
+func TestSHH02ExitDayNeverGoesBack(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_800_000_000, 0)
+	m, err := New(&memLog{objs: map[string][][]byte{}}, "signer-1", testKey(1), Options{Setup: testSetup("signer-1"), Clock: clockAt(&now), Log: quiet})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := m.Claim(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	day := func(d uint64) *ExitDay {
+		return &ExitDay{Day: d, Stake: 1, Exits: []ExitEntry{{ValidatorIndex: 1, ExitEpoch: 1, Stake: 1, Nonce: [32]byte{byte(d)}}}}
+	}
+	if err := m.RecordExits(ctx, day(20)); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.RecordExits(ctx, day(19)); err == nil {
+		t.Error("the exit ledger went from day 20 back to day 19")
+	}
+	if d := m.Exits(); d == nil || d.Day != 20 {
+		t.Errorf("ledger after the refused write: %+v", d)
+	}
+}

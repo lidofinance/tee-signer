@@ -10,6 +10,7 @@ signer-share-v1
 signer-runner azure sealing v1
 signer-runner azure key wrap v1
 signer-ta-policy-v1
+signer-ta-exit-approval-v1
 signer-ta-pause-v1
 signer-ta-resume-v1
 signer-chain-v1
@@ -32,4 +33,5 @@ signer-import-commitments-v1
 signer-config-update-hash-v1
 signer-handover-order-hash-v1
 signer-import-order-hash-v1
+signer-ta-exit-approval-hash-v1
 signer-handover-carry-v1

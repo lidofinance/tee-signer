@@ -97,7 +97,7 @@ func governanceRun(t *testing.T, seed uint64, steps int) {
 				}
 				log = append(log, "rotate")
 			} else {
-				body.Locked.BuilderGasLimitMax += 1 + extra
+				body.Locked.ExitAllowedValidators = append(body.Locked.ExitAllowedValidators, 1_000_000+extra)
 				extra++
 				log = append(log, "locked")
 			}

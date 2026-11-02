@@ -31,6 +31,12 @@ if [ "$(jq -r '.fee_recipients[0]' "$T/hoodi-fee.json")" = 0x1111111111111111111
 else
   bad "FEE_RECIPIENT override"
 fi
+EXIT_ALLOWLIST=1234567 bash "$CHAIN" build hoodi "$T/hoodi-exit.json" 2>/dev/null
+if [ "$(jq -c .exit_allowlist "$T/hoodi-exit.json")" = "[1234567]" ] && bash "$CHAIN" verify hoodi "$T/hoodi-exit.json" 2>/dev/null; then
+  ok "an exit allowlist: another file, still chain hoodi"
+else
+  bad "EXIT_ALLOWLIST override"
+fi
 [ "$(jq -c '[.forks[] | .epoch]' "$HOODI")" = "[0,0,0,0,2048,50688,132352]" ] && ok "fork epochs Altair to Gloas" || bad "fork epochs: $(jq -c '[.forks[] | .epoch]' "$HOODI")"
 [ "$(jq -c .gloas_fork_epoch "$HOODI")" = 132352 ] && ok "gloas_fork_epoch 132352" || bad "gloas_fork_epoch: $(jq -c .gloas_fork_epoch "$HOODI")"
 

@@ -6,7 +6,9 @@
 #       Write the runner chain.json of NAME (default OUT: chains/NAME.json)
 #       from chains/NAME.source.json. Offline. The policy fields come from the
 #       "policy" object of the source file; MAX_EPOCHS_AHEAD, FEE_RECIPIENT,
-#       GAS_LIMIT_MIN, GAS_LIMIT_MAX and COMMIT_AHEAD (block,source,target) override them. Another policy gives
+#       GAS_LIMIT_MIN, GAS_LIMIT_MAX, EXIT_ALLOWLIST (validator indices, comma
+#       separated; the signers refuse an exit of any other index) and
+#       COMMIT_AHEAD (block,source,target) override them. Another policy gives
 #       another file, so another image. Write such a file to OUT and pass it
 #       as CHAIN_JSON to the image builds; it is still chain NAME.
 #   chain.sh check-source NAME CONFIG_YAML GVR_FILE
@@ -83,13 +85,14 @@ cmd_build() {
   local commit="${COMMIT_AHEAD:-}"
   jq --arg far "$FAR_FUTURE" \
     --arg maxahead "${MAX_EPOCHS_AHEAD:-}" --arg fee "${FEE_RECIPIENT:-}" \
-    --arg gasmin "${GAS_LIMIT_MIN:-}" --arg gasmax "${GAS_LIMIT_MAX:-}" --arg commit "$commit" '
+    --arg gasmin "${GAS_LIMIT_MIN:-}" --arg gasmax "${GAS_LIMIT_MAX:-}" --arg commit "$commit"     --arg exits "${EXIT_ALLOWLIST:-}" '
     .config as $c
     | (.policy
        | if $maxahead != "" then .max_epochs_ahead = ($maxahead | tonumber) else . end
        | if $fee != "" then .fee_recipients = [$fee] else . end
        | if $gasmin != "" then .gas_limit_min = ($gasmin | tonumber) else . end
        | if $gasmax != "" then .gas_limit_max = ($gasmax | tonumber) else . end
+       | if $exits != "" then .exit_allowlist = ($exits | split(",") | map(tonumber)) else . end
        | if $commit != "" then ($commit | split(",") | map(tonumber)) as $x
            | .commit_ahead = {block_slots: $x[0], source_epochs: $x[1], target_epochs: $x[2]} else . end) as $p
     | {
@@ -109,6 +112,7 @@ cmd_build() {
                            else ($c.SLOT_DURATION_MS | tonumber) / 1000 end),
         slots_per_epoch: .slots_per_epoch,
         max_epochs_ahead: $p.max_epochs_ahead,
+        exit_allowlist: $p.exit_allowlist,
         fee_recipients: $p.fee_recipients,
         gas_limit_min: $p.gas_limit_min,
         gas_limit_max: $p.gas_limit_max,

@@ -1,4 +1,4 @@
-# Attestation statement: setup format 3
+# Attestation statement: setup format 2
 
 This file gives the exact bytes. The golden vectors are in `attestation-verify/docs/attestation-statement-vectors.json`; `governance/setupwire` makes them (`go test -run TestStatementVectors -update`), except the human forms, which `governance/setuptext` makes (`go test -run TestStatementHuman -update`), and `TestStatementVectors` recomputes every value in the file from the formulas below without the package's helpers.
 
@@ -49,7 +49,7 @@ Each leaf has its own 32-byte salt. A salt of 32 zero bytes is refused everywher
 
 | # | Name | Value |
 | --- | --- | --- |
-| 0 | `setup_format_version` | u8, 3 |
+| 0 | `setup_format_version` | u8, 2 |
 | 1 | `cluster_id` | 32 bytes, not zero |
 | 2 | `handover_generation` | u64, 1 or more |
 | 3 | `genesis_validators_root` | 32 bytes |
@@ -67,7 +67,7 @@ Each leaf has its own 32-byte salt. A salt of 32 zero bytes is refused everywher
 | 15 | `slashing_log_min_lock_days` | u32, 1 to 36500 |
 | 16 | `signing_mode` | u8: 1 threshold (shares of t-of-n splits, n >= 2), 2 single (whole keys, 1 of 1 import orders only) |
 
-`locked`, 16 leaves:
+`locked`, 19 leaves:
 
 | # | Name | Value |
 | --- | --- | --- |
@@ -79,14 +79,17 @@ Each leaf has its own 32-byte salt. A salt of 32 zero bytes is refused everywher
 | 5 | `builder_gas_limit_min` | u64 |
 | 6 | `builder_gas_limit_max` | u64 |
 | 7 | `builder_registration_max_future_seconds` | u64 |
-| 8 | `min_activation_balance` | u64 Gwei |
-| 9 | `max_effective_balance` | u64 Gwei |
-| 10 | `withdrawal_credentials` | 32 bytes, prefix 0x01 or 0x02 |
-| 11 | `allowed_deposit_amounts` | count:u8 (0 to 8), then u64 Gwei, sorted |
-| 12 | `allow_unverified_nonslashable_signing` | u8, 0 or 1 |
-| 13 | `bare_root_domains` | u16; bit n set allows domain type 0x0n000000; only bits 2, 5, 6, 7, 8, 9 |
-| 14 | `slot_time_changes` | count:u8 (0 to 16), then per change epoch:u64 and seconds_per_slot:u64, ascending epochs (section 4) |
-| 15 | `allowed_builder_request_auth_data_roots` | count:u8 (0 to 16), then 32-byte roots, sorted; each is hash_tree_root of a BuilderRequestAuth `data` field as SSZ ByteList[4096] (builder-specs, Gloas). The signer signs a BuilderRequestAuth only when the root of its data is on the list; empty means it signs none |
+| 8 | `exit_allowed_validators` | count:u16 (0 to 1024), then u64 validator indices, sorted |
+| 9 | `exit_stake_cap_per_day` | u64 Gwei |
+| 10 | `exit_approvals_needed` | u8 |
+| 11 | `min_activation_balance` | u64 Gwei |
+| 12 | `max_effective_balance` | u64 Gwei |
+| 13 | `withdrawal_credentials` | 32 bytes, prefix 0x01 or 0x02 |
+| 14 | `allowed_deposit_amounts` | count:u8 (0 to 8), then u64 Gwei, sorted |
+| 15 | `allow_unverified_nonslashable_signing` | u8, 0 or 1 |
+| 16 | `bare_root_domains` | u16; bit n set allows domain type 0x0n000000; only bits 2, 5, 6, 7, 8, 9 |
+| 17 | `slot_time_changes` | count:u8 (0 to 16), then per change epoch:u64 and seconds_per_slot:u64, ascending epochs (section 4) |
+| 18 | `allowed_builder_request_auth_data_roots` | count:u8 (0 to 16), then 32-byte roots, sorted; each is hash_tree_root of a BuilderRequestAuth `data` field as SSZ ByteList[4096] (builder-specs, Gloas). The signer signs a BuilderRequestAuth only when the root of its data is on the list; empty means it signs none |
 
 `open`, 2 leaves:
 
@@ -105,7 +108,7 @@ Each group has its own root:
 group_root = MerkleRoot(leaf_hash[0], ..., leaf_hash[n-1])
 ```
 
-MerkleRoot pads the list with 32-byte zero hashes up to the next power of two P, then hashes pairs level by level, `node = H(CTX_NODE, left || right)`, until one hash is left. One leaf is its own root. So `public` (17 leaves, padded to 32) has depth 5, `locked` (16 leaves, padded to 16) depth 4 and `open` (2 leaves) depth 1. A zero hash cannot pose as a leaf or node hash, which would need a SHA-256 preimage of zero.
+MerkleRoot pads the list with 32-byte zero hashes up to the next power of two P, then hashes pairs level by level, `node = H(CTX_NODE, left || right)`, until one hash is left. One leaf is its own root. So `public` (17 leaves, padded to 32) has depth 5, `locked` (19 leaves, padded to 32) depth 5 and `open` (2 leaves) depth 1. A zero hash cannot pose as a leaf or node hash, which would need a SHA-256 preimage of zero.
 
 ```
 policy_root = H(CTX_POLICY, public_root || locked_root || open_root)
@@ -332,4 +335,4 @@ The design fixes the split and the field names. This file adds these points, and
 6. Key origin counts are u32 and are part of the setup state, so they are in IDENTITY and ATTEST alike. Every byte of the setup state is a public output; keys_hash is the one private input from the signer.
 7. The slot time rule compares the new changes with the ones in force and is checked at arrival with T the effective activation time; the core takes the new slot times at T. The fork rule counts epochs under the slot times in force and those pending, in both orders of arrival (section 4).
 8. The ranges: `max_sign_epochs_ahead_of_clock` 1 to 16, `slashing_mark_prewrite.block_slots` 0 to 64, `source_epochs` and `target_epochs` 0 to 8 (the design's proposed numbers, lower bounds this file's).
-9. `signing_mode` is a public leaf (format 2), the last of `public`, so the leaf numbers of format 1 stay. Format 3 dropped the exit approval leaves of `locked` (`exit_allowed_validators`, `exit_stake_cap_per_day`, `exit_approvals_needed`); the later `locked` leaves moved up by three. A verifier who gets the published leaves reads whether the signer holds shares or whole keys, checked against the attested policy_root, and the mode cannot change without a new setup.
+9. `signing_mode` is a public leaf (format 2), the last of `public`, so the leaf numbers of format 1 stay. A verifier who gets the published leaves reads whether the signer holds shares or whole keys, checked against the attested policy_root, and the mode cannot change without a new setup.

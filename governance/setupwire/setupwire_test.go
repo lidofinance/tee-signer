@@ -110,10 +110,9 @@ func TestDecodeSetupBytes(t *testing.T) {
 		want string
 	}{
 		{"kind", set(0, 'X'), "not a setup"},
-		{"format 0", set(1, 0), "setup format 0, want 3"},
-		{"format 1 (before signing_mode)", set(1, 1), "setup format 1, want 3"},
-		{"format 2 (with the exit approval fields)", set(1, 2), "setup format 2, want 3"},
-		{"format 4", set(1, 4), "setup format 4, want 3"},
+		{"format 0", set(1, 0), "setup format 0, want 2"},
+		{"format 1 (before signing_mode)", set(1, 1), "setup format 1, want 2"},
+		{"format 3", set(1, 3), "setup format 3, want 2"},
 		{"empty signer name", set(o.private, 0), "signer_name is empty"},
 		{"oversize", append(slices.Clone(b), make([]byte, MaxSetup)...), "at most 65536"},
 		{"empty", nil, "short"},
@@ -242,7 +241,7 @@ func setupRefusals(t testing.TB) []setupRefusal {
 		{"signing mode 0", "", func(s *Setup) { s.SigningMode = 0 }, "signing_mode 0, want 1 (threshold) or 2 (single)", ""},
 		{"signing mode 3", "", func(s *Setup) { s.SigningMode = 3 }, "signing_mode 3", ""},
 		{"public salts missing", "", func(s *Setup) { s.PolicySalts.Public = nil }, "public: no salts", "skip"},
-		{"locked salts short", "", func(s *Setup) { s.PolicySalts.Locked = s.PolicySalts.Locked[:15] }, "locked: 15 salts, want one for each of the 16 leaves", "skip"},
+		{"locked salts short", "", func(s *Setup) { s.PolicySalts.Locked = s.PolicySalts.Locked[:18] }, "locked: 18 salts, want one for each of the 19 leaves", "skip"},
 		{"open salt zero", "", func(s *Setup) { s.PolicySalts.Open[0] = [32]byte{} }, "open: salt 0 is zero", ""},
 		{"platform salt zero", "", func(s *Setup) { s.PlatformSalt = [32]byte{} }, "platform_salt is zero", ""},
 		{"platform 0", "", func(s *Setup) { s.Platform.Platform = 0 }, "platform: 0", "unknown platform 0"},
@@ -338,6 +337,16 @@ func setupRefusals(t testing.TB) []setupRefusal {
 		{"fee recipients unsorted", "", func(s *Setup) { slices.Reverse(s.Locked.AllowedFeeRecipients) }, "allowed_fee_recipients must be sorted", ""},
 		{"fee recipient repeated", "", func(s *Setup) { s.Locked.AllowedFeeRecipients[1] = s.Locked.AllowedFeeRecipients[0] }, "allowed_fee_recipients must be sorted", ""},
 		{"gas min above max", "", func(s *Setup) { s.Locked.BuilderGasLimitMin = s.Locked.BuilderGasLimitMax + 1 }, "builder_gas_limit_min", ""},
+		{"1025 exit validators", "", func(s *Setup) {
+			s.Locked.ExitAllowedValidators = nil
+			for i := range 1025 {
+				s.Locked.ExitAllowedValidators = append(s.Locked.ExitAllowedValidators, uint64(i))
+			}
+		}, "1025 exit_allowed_validators", "1025 exit_allowed_validators entries, at most 1024"},
+		{"exit validators unsorted", "", func(s *Setup) { slices.Reverse(s.Locked.ExitAllowedValidators) }, "exit_allowed_validators must be sorted", ""},
+		{"exit validator repeated", "", func(s *Setup) { s.Locked.ExitAllowedValidators[1] = s.Locked.ExitAllowedValidators[0] }, "exit_allowed_validators must be sorted", ""},
+		{"exit approvals 1", "", func(s *Setup) { s.Locked.ExitApprovalsNeeded = 1 }, "exit_approvals_needed 1", ""},
+		{"exit approvals above n", "", func(s *Setup) { s.Locked.ExitApprovalsNeeded = 4 }, "exit_approvals_needed 4", ""},
 		{"min activation 0", "", func(s *Setup) { s.Locked.MinActivationBalance = 0 }, "min_activation_balance", ""},
 		{"min activation above max", "", func(s *Setup) { s.Locked.MinActivationBalance = s.Locked.MaxEffectiveBalance + 1 }, "min_activation_balance", ""},
 		{"credentials prefix 0", "", func(s *Setup) { s.Locked.WithdrawalCredentials[0] = 0 }, "prefix 0x00", ""},

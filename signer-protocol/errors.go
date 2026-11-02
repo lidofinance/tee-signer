@@ -25,7 +25,7 @@ const (
 	StatusSlashTarget         Status = 11
 	StatusSlashSourceGtTarget Status = 12
 	StatusPolicyFuture        Status = 13
-	StatusPolicyExit          Status = 14 // the exit allowlist and approvals of older images; this runner does not send it
+	StatusPolicyExit          Status = 14
 	StatusPolicyFeeRecipient  Status = 15
 	StatusPolicyGasLimit      Status = 16
 	StatusPolicyTimestamp     Status = 17

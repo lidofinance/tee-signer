@@ -10,3 +10,7 @@ func (updatesWriteMuName) LockName() string { return "server.Updates.writeMu" }
 type updatesMuName struct{}
 
 func (updatesMuName) LockName() string { return "server.Updates.mu" }
+
+type exitsMuName struct{}
+
+func (exitsMuName) LockName() string { return "server.exitState.mu" }

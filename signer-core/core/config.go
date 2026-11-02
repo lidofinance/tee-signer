@@ -39,6 +39,7 @@ type Config struct {
 	SlotsPerEpoch            uint64          `json:"slots_per_epoch"`
 
 	MaxEpochsAhead               uint64            `json:"max_epochs_ahead"`
+	ExitAllowlist                []uint64          `json:"exit_allowlist"`
 	FeeRecipients                []backend.Address `json:"fee_recipients"`
 	GasLimitMin                  uint64            `json:"gas_limit_min"`
 	GasLimitMax                  uint64            `json:"gas_limit_max"`
@@ -118,6 +119,8 @@ func (c *Config) Validate() error {
 		return errors.New("config: seconds_per_slot and slots_per_epoch must be non-zero")
 	case len(c.Forks) > maxForks:
 		return fmt.Errorf("config: at most %d forks", maxForks)
+	case len(c.ExitAllowlist) > maxExitAllowlist:
+		return fmt.Errorf("config: at most %d exit_allowlist entries", maxExitAllowlist)
 	case len(c.FeeRecipients) > maxFeeRecipients:
 		return fmt.Errorf("config: at most %d fee_recipients", maxFeeRecipients)
 	case len(c.BuilderRequestAuthRoots) > maxBuilderAuthRoots:
@@ -361,6 +364,7 @@ func (c Config) WithSchedule(s Schedule) Config {
 // Policy is the signing policy of a Config: the values of a `locked` config
 // update that the cloud runner signs by (Signer.SetPolicy).
 type Policy struct {
+	ExitAllowlist                []uint64          `json:"exit_allowlist"`
 	FeeRecipients                []backend.Address `json:"fee_recipients"`
 	GasLimitMin                  uint64            `json:"gas_limit_min"`
 	GasLimitMax                  uint64            `json:"gas_limit_max"`
@@ -372,6 +376,7 @@ type Policy struct {
 // Policy returns a copy of c's signing policy.
 func (c *Config) Policy() Policy {
 	return Policy{
+		ExitAllowlist:                append([]uint64(nil), c.ExitAllowlist...),
 		FeeRecipients:                append([]backend.Address(nil), c.FeeRecipients...),
 		GasLimitMin:                  c.GasLimitMin,
 		GasLimitMax:                  c.GasLimitMax,
@@ -383,6 +388,7 @@ func (c *Config) Policy() Policy {
 
 // WithPolicy returns a copy of c with the signing policy p.
 func (c Config) WithPolicy(p Policy) Config {
+	c.ExitAllowlist = append([]uint64(nil), p.ExitAllowlist...)
 	c.FeeRecipients = append([]backend.Address(nil), p.FeeRecipients...)
 	c.GasLimitMin, c.GasLimitMax = p.GasLimitMin, p.GasLimitMax
 	c.RegistrationMaxFutureSeconds = p.RegistrationMaxFutureSeconds

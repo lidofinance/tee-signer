@@ -49,7 +49,8 @@ static int h_store_dev(void *ctx, const sc_watermark *wm)
 static int surely_bad(const sc_config *c, const sc_slot_times *t)
 {
     return c->seconds_per_slot == 0 || c->slots_per_epoch == 0 ||
-           c->fork_count > SC_MAX_FORKS || c->fee_recipient_count > SC_MAX_FEE_RECIPIENTS ||
+           c->fork_count > SC_MAX_FORKS || c->exit_allowlist_count > SC_MAX_EXIT_ALLOWLIST ||
+           c->fee_recipient_count > SC_MAX_FEE_RECIPIENTS ||
            c->builder_auth_root_count > SC_MAX_BUILDER_AUTH_ROOTS || c->mark_scope > 1 ||
            c->gloas_scheduled > 1 ||
            c->gas_limit_min > c->gas_limit_max || t->count > SC_MAX_SLOT_TIMES;
@@ -203,7 +204,8 @@ static void do_policy(sc_signer *s, const sc_config *cfg, fz_in *in)
     version_root(s, FZ_E, before);
     rc = sc_signer_set_policy(s, &pol);
     FUZZ_CHECK(rc == SC_OK || rc == SC_ERR_ARG);
-    if (pol.fee_recipient_count > SC_MAX_FEE_RECIPIENTS ||
+    if (pol.exit_allowlist_count > SC_MAX_EXIT_ALLOWLIST ||
+        pol.fee_recipient_count > SC_MAX_FEE_RECIPIENTS ||
         pol.builder_auth_root_count > SC_MAX_BUILDER_AUTH_ROOTS ||
         pol.gas_limit_min > pol.gas_limit_max)
         FUZZ_CHECK(rc == SC_ERR_ARG);

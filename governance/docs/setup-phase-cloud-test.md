@@ -169,16 +169,16 @@ Set these once per shell, from the deploy settings of each cloud.
    `setup-tool chain-lines $CHAIN_JSON`. It prints the chain, the safety
    values, the `locked` values the chain file holds
    (`allowed_fee_recipients`, the builder gas limits,
-   `builder_registration_max_future_seconds`,
+   `builder_registration_max_future_seconds`, `exit_allowed_validators`,
    `allow_unverified_nonslashable_signing`) and the `open` `fork_schedule`.
-5. The cluster file `setup.conf` (setup format 3).
+5. The cluster file `setup.conf` (setup format 2).
    Before the first section, the lines all signers share:
-   `setup_format_version = 3`, `signing_mode = threshold` (three signers
+   `setup_format_version = 2`, `signing_mode = threshold` (three signers
    hold shares; a one-signer file says `single`), `handover_generation = 1`, the chain lines
    (set `allow_unverified_nonslashable_signing` as the test's signing paths need),
    `allowed_client_ca` (the client CA, base64 DER), `max_keys`,
    `slashing_log_min_lock_days = 1`, and the rest of `locked`: approvers 1
-   to 3, `approvals_needed = 2`, `change_delay_seconds = 0`, the
+   to 3, `approvals_needed = 2`, `change_delay_seconds = 0`, the exit and
    balance values and `withdrawal_credentials`
    (`governance/setuptext/testdata/setup-gcp.conf` lists them, without its
    `salt.*` and `platform_salt` lines: `signer-config setup` draws the

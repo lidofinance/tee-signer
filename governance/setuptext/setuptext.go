@@ -691,6 +691,9 @@ func (p *parser) locked(l *setupwire.Locked) {
 	l.BuilderGasLimitMin = scalar(p, "builder_gas_limit_min", parseU64)
 	l.BuilderGasLimitMax = scalar(p, "builder_gas_limit_max", parseU64)
 	l.BuilderRegistrationMaxFutureSeconds = scalar(p, "builder_registration_max_future_seconds", parseU64)
+	l.ExitAllowedValidators = sortedSet(p, "exit_allowed_validators", listOf(p, "exit_allowed_validators", parseU64), cmp.Compare[uint64])
+	l.ExitStakeCapPerDay = scalar(p, "exit_stake_cap_per_day", parseAmount)
+	l.ExitApprovalsNeeded = uint8(scalar(p, "exit_approvals_needed", parseUint(8)))
 	l.MinActivationBalance = scalar(p, "min_activation_balance", parseAmount)
 	l.MaxEffectiveBalance = scalar(p, "max_effective_balance", parseAmount)
 	l.WithdrawalCredentials = scalar(p, "withdrawal_credentials", parseRoot)
@@ -890,6 +893,11 @@ func formatLocked(w *printer, l *setupwire.Locked) {
 	w.kv("builder_gas_limit_min", l.BuilderGasLimitMin)
 	w.kv("builder_gas_limit_max", l.BuilderGasLimitMax)
 	w.kv("builder_registration_max_future_seconds", l.BuilderRegistrationMaxFutureSeconds)
+	for _, i := range l.ExitAllowedValidators {
+		w.kv("exit_allowed_validators", i)
+	}
+	w.kv("exit_stake_cap_per_day", formatAmount(l.ExitStakeCapPerDay))
+	w.kv("exit_approvals_needed", l.ExitApprovalsNeeded)
 	w.kv("min_activation_balance", formatAmount(l.MinActivationBalance))
 	w.kv("max_effective_balance", formatAmount(l.MaxEffectiveBalance))
 	w.kv("withdrawal_credentials", hexOf(l.WithdrawalCredentials[:]))

@@ -410,7 +410,7 @@ func TestTypeNames(t *testing.T) {
 	if MsgType(0x08).String() != "CONFIG_UPDATE" || (MsgType(0x08)|ResponseFlag).String() != "CONFIG_UPDATE_RESPONSE" {
 		t.Fatalf("names %v %v", MsgType(0x08), MsgType(0x08)|ResponseFlag)
 	}
-	for _, typ := range []MsgType{0x05, 0x07} {
+	for _, typ := range []MsgType{0x05, 0x07, 0x09} {
 		if strings.HasPrefix(typ.String(), "TYPE_") {
 			t.Errorf("type 0x%02x has no name", uint8(typ))
 		}
