@@ -71,6 +71,13 @@ type tgtEnv struct {
 	upd      *Updates
 	signer   *core.Signer
 	srv      *Server
+	// looseLoad: a start logs LoadListedShares' error, as main does,
+	// rather than failing the test; loadErr is that error.
+	looseLoad bool
+	loadErr   error
+	// beforeLoad and afterLoad, if set, run around LoadListedShares at a
+	// start.
+	beforeLoad, afterLoad func()
 	// lockDays: markstore.Options.LockDays of the next start. The log
 	// then reports a compliance lock of that many days until lockGone.
 	lockDays uint32
@@ -196,8 +203,15 @@ func (e *tgtEnv) start() {
 	if e.srv.ImportKey, err = sealedimport.Generate(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.srv.LoadListedShares(stored); err != nil {
-		t.Fatal(err)
+	if e.beforeLoad != nil {
+		e.beforeLoad()
+	}
+	_, e.loadErr = e.srv.LoadListedShares(stored)
+	if e.afterLoad != nil {
+		e.afterLoad()
+	}
+	if e.loadErr != nil && !e.looseLoad {
+		t.Fatal(e.loadErr)
 	}
 	// As main does it: the source side first, then the import.
 	if err := e.srv.EnableHandoverSource(HandoverSourceOptions{}); err != nil {

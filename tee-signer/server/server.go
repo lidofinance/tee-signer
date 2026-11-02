@@ -4,6 +4,7 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
@@ -135,6 +136,11 @@ type Server struct {
 	// max_keys slot until its import ends (SIAC-01, checkSlots).
 	admitMu   sync.Mutex
 	admitting map[backend.Pubkey]bool
+	// shareHash is the sha256 of each stored share record this runner
+	// loaded or wrote, nil without a mark log (putShare). shareSetMu
+	// orders share writes.
+	shareSetMu sync.Mutex
+	shareHash  map[backend.Pubkey][32]byte
 	// attestLimit counts the fresh attestations of attest-only clients
 	// (limit.go); limitNow, if set, is its clock (tests).
 	attestLimit attestLimit
@@ -167,9 +173,9 @@ type shareRecord struct {
 	// SourceFloor: the import came without vote history, and the key signs
 	// no vote with a source below this epoch, the restart floor epoch at the
 	// import (state.Hooks.ImportFloor, SLBOUND-01). A restart sets it again.
-	// The host stores the record and can put back an older one with a lower
-	// floor or none; only a follow-up change anchors the floor in the mark
-	// log.
+	// The host stores the record; the mark log's share set vouches for it
+	// (LoadListedShares), so an older record with a lower floor or none
+	// loads every key with a fresh floor instead.
 	SourceFloor uint64 `json:"source_floor,omitempty"`
 }
 
@@ -273,12 +279,32 @@ func sharePubkey(k string) (backend.Pubkey, error) {
 // them into the signer. It returns how many loaded; a share that fails
 // stays unloaded and is logged. A share sealed under another setup or
 // another log_id does not unseal.
+//
+// With a mark log the stored records must be a set the log vouches for
+// (markstore.ShareSet): the root of the records that unseal and parse is
+// the newest record's current or pending root. Else the host replayed, hid
+// or changed a record, or a write was cut, and the runner cannot tell which
+// record: it loads every key without history and with a source floor of
+// at least the restart floor epoch now, the bounds of an import without
+// history, has the log vouch for the rewritten records, then writes them.
+// If that log record fails, no key loads. A replayed record never gives a
+// key history.
 func (s *Server) LoadListedShares(keys []string) (int, error) {
 	if err := s.checkLogID(); err != nil {
 		return 0, err
 	}
-	loaded := 0
 	var errs []error
+	// The records that unseal and parse, and their blobs: the share set is
+	// the set of records this runner can read. A blob that does not unseal
+	// never loads and counts on neither side of the vouch check.
+	recs := map[backend.Pubkey]*shareRecord{}
+	hashes := map[backend.Pubkey][32]byte{}
+	var pks []backend.Pubkey
+	defer func() {
+		for _, r := range recs {
+			clear(r.Secret)
+		}
+	}()
 	// In name order, as the file store lists them: with more shares stored
 	// than the core holds, every start loads the same ones.
 	for _, k := range slices.Sorted(slices.Values(keys)) {
@@ -286,34 +312,103 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 			errs = append(errs, fmt.Errorf("%s: not a share name", k))
 			continue
 		}
-		blob, err := s.Platform.Store.Get(k)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", k, err))
-			continue
-		}
-		pkHex := strings.TrimPrefix(k, "shares/")
 		var pk backend.Pubkey
-		if b, err := hex.DecodeString(pkHex); err != nil || len(b) != len(pk) {
+		if b, err := hex.DecodeString(strings.TrimPrefix(k, "shares/")); err != nil || len(b) != len(pk) {
 			errs = append(errs, fmt.Errorf("%s: bad key name", k))
 			continue
 		} else {
 			copy(pk[:], b)
 		}
+		if _, seen := recs[pk]; seen {
+			continue
+		}
+		blob, err := s.Platform.Store.Get(k)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", k, err))
+			continue
+		}
 		plain, err := s.Platform.Sealer.Unseal(blob, s.shareAAD(pk))
 		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: unseal: %w", k, err))
+			errs = append(errs, fmt.Errorf("%s: unseal: %w (it never loads under this setup and log; remove the object)", k, err))
 			continue
 		}
 		rec, err := parseShareRecord(plain)
 		clear(plain)
 		if err != nil || rec.Pubkey != pk || len(rec.Secret) != 32 {
 			clear(rec.Secret)
-			errs = append(errs, fmt.Errorf("%s: bad record", k))
+			errs = append(errs, fmt.Errorf("%s: bad record (it never loads; remove the object)", k))
 			continue
+		}
+		recs[pk], hashes[pk] = &rec, sha256.Sum256(blob)
+		pks = append(pks, pk)
+	}
+	set, committed := s.Hooks.ShareSet()
+	reset := committed && !set.Vouches(markstore.ShareSetRoot(hashes))
+	blobs := map[backend.Pubkey][]byte{}
+	if reset {
+		var resetFloor uint64
+		f, on, err := s.Hooks.ImportFloor()
+		if err != nil {
+			return 0, fmt.Errorf("stored share records the mark log does not vouch for: %w", err)
+		}
+		if on {
+			resetFloor = f
+		}
+		if set == nil {
+			// Expected once: the log was written by an image without
+			// share sets.
+			s.Log.Warn("the mark log holds no share set yet (first start of this image on it): every key loads without history, with a fresh source floor, once",
+				"records", len(recs), "floor_epoch", resetFloor)
+		} else {
+			s.Log.Warn("stored share records are not the set the mark log vouches for (a record was replaced, hidden, or not written back at "+
+				"an earlier reset; a record the store keeps refusing is named below): every key loads without history, with a fresh source floor",
+				"records", len(recs), "floor_epoch", resetFloor)
+		}
+		// The log vouches only for the rewritten records. One the reset
+		// could not seal stays out, so the next start resets again.
+		hashes = map[backend.Pubkey][32]byte{}
+		for _, pk := range pks {
+			rec := recs[pk]
+			rec.History, rec.SourceFloor = false, max(rec.SourceFloor, resetFloor)
+			blob, err := s.sealRecord(*rec)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("%s: %w", shareKey(pk), err))
+				continue
+			}
+			blobs[pk], hashes[pk] = blob, sha256.Sum256(blob)
+		}
+	}
+	if committed {
+		cur := &markstore.ShareSet{Current: markstore.ShareSetRoot(hashes)}
+		if reset {
+			// Before the rewrites: if this record fails, the log still
+			// vouches for the old set, so no key loads, and a start cut
+			// after it finds records the log does not vouch for and
+			// resets again.
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			err := s.Hooks.RecordShareSet(ctx, cur)
+			cancel()
+			if err != nil {
+				return 0, errors.Join(append(errs, fmt.Errorf("the mark log does not vouch for the reset share records, no key loaded: %w", err))...)
+			}
+		} else {
+			s.Hooks.SetShareSet(cur)
+		}
+		s.shareSetMu.Lock()
+		s.shareHash = hashes
+		s.shareSetMu.Unlock()
+	}
+	loaded := 0
+	for _, pk := range pks {
+		k, rec := shareKey(pk), recs[pk]
+		if blob, ok := blobs[pk]; ok {
+			if err := s.Platform.Store.Put(k, blob); err != nil {
+				s.Log.Warn("share record not written back: the key loads with the fresh floor, and every start resets until the store takes this record",
+					"pubkey", pk.String()[:18], "err", err)
+			}
 		}
 		var sec [32]byte
 		copy(sec[:], rec.Secret)
-		clear(rec.Secret)
 		if err := s.checkWholeKey(pk, &sec); err != nil {
 			clear(sec[:])
 			errs = append(errs, fmt.Errorf("%s: %w; the record stays in the store and is not loaded: remove it (a handover from this runner refuses until then)", k, err))
@@ -323,7 +418,7 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 		if rec.SourceFloor != 0 && !rec.History {
 			s.Hooks.NoteImportFloor(pk, rec.SourceFloor)
 		}
-		_, err = s.Signer.AddValidator(pk, sec, rec.Index, nil)
+		_, err := s.Signer.AddValidator(pk, sec, rec.Index, nil)
 		clear(sec[:])
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", k, err))
@@ -335,6 +430,72 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 		loaded++
 	}
 	return loaded, errors.Join(errs...)
+}
+
+// putShare stores pk's sealed record blob. With a mark log the write goes
+// under the share set commitment: first a log record that vouches for the
+// set before the write and the set after it (current and pending root),
+// then the store write. A start after a cut between the two finds one of
+// the two sets and loads it; the set before holds no record of the key,
+// so nothing with more history than the set after. Share writes go one at
+// a time.
+func (s *Server) putShare(pk backend.Pubkey, blob []byte) error {
+	if _, committed := s.Hooks.ShareSet(); !committed {
+		return s.Platform.Store.Put(shareKey(pk), blob)
+	}
+	s.shareSetMu.Lock()
+	defer s.shareSetMu.Unlock()
+	// The set before. It leaves out the key's old record, which this
+	// runner did not load and which may say the key has history: a write
+	// that fails then leaves no set the log vouches for with it, and the
+	// next start resets.
+	prev := make(map[backend.Pubkey][32]byte, len(s.shareHash))
+	for k, v := range s.shareHash {
+		prev[k] = v
+	}
+	delete(prev, pk)
+	next := make(map[backend.Pubkey][32]byte, len(prev)+1)
+	for k, v := range prev {
+		next[k] = v
+	}
+	next[pk] = sha256.Sum256(blob)
+	before, pending := markstore.ShareSetRoot(prev), markstore.ShareSetRoot(next)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	err := s.Hooks.RecordShareSet(ctx, &markstore.ShareSet{Current: before, Pending: &pending})
+	cancel()
+	if err != nil {
+		return fmt.Errorf("mark log share set: %w", err)
+	}
+	if err := s.Platform.Store.Put(shareKey(pk), blob); err != nil {
+		// The write may have landed with its reply lost. Then the stored
+		// set is the one after: keep it, so the next write names the set
+		// the store holds and a start finds it vouched.
+		if !s.landed(pk, next[pk]) {
+			// Drop the set after from the commitment the next log record
+			// carries: the host keeps the blob and could store it later.
+			s.shareHash = prev
+			s.Hooks.SetShareSet(&markstore.ShareSet{Current: before})
+			return err
+		}
+	}
+	s.shareHash = next
+	s.Hooks.SetShareSet(&markstore.ShareSet{Current: pending})
+	return nil
+}
+
+// landed reports whether pk's stored record has hash h, reading it up to
+// three times: a store that just failed a write may fail a read as well.
+func (s *Server) landed(pk backend.Pubkey, h [32]byte) bool {
+	for try := range 3 {
+		if try > 0 {
+			time.Sleep(100 * time.Millisecond)
+		}
+		cur, err := s.Platform.Store.Get(shareKey(pk))
+		if err == nil {
+			return sha256.Sum256(cur) == h
+		}
+	}
+	return false
 }
 
 // Serve accepts connections until ctx ends or the listener fails.
@@ -882,7 +1043,7 @@ func (s *Server) addShareOf(pk backend.Pubkey, secret *[32]byte, index uint64, i
 	if err != nil {
 		return backend.ValidatorKey{}, err
 	}
-	if err := s.Platform.Store.Put(shareKey(pk), blob); err != nil {
+	if err := s.putShare(pk, blob); err != nil {
 		return backend.ValidatorKey{}, backend.Refused(backend.StatusPlatform, "store share: %v", err)
 	}
 	return s.loadShare(pk, secret, index, interchange, loadFloor, how)
