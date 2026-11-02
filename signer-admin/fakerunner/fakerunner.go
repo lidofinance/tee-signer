@@ -238,7 +238,8 @@ func (r *Runner) serve(c net.Conn) {
 		case wireadmin.TypeConfigUpdate:
 			answer = r.configUpdate(f.Payload)
 		default:
-			return
+			// A type the runner does not serve, as the admin role probe sends.
+			answer = wire.EncodeError(cloud.Refused(cloud.StatusForbidden, "message type 0x%02x not served", uint8(f.Type)))
 		}
 		if err := wire.WriteFrame(c, wire.Frame{Type: f.Type | wire.ResponseFlag, ID: f.ID, Payload: answer}); err != nil {
 			return

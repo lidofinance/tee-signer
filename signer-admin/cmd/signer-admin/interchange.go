@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
+	"unicode"
 
 	cloud "github.com/lidofinance/tee-signer/signer-protocol"
 )
@@ -53,6 +57,9 @@ func loadInterchange(path string) (*interchange, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
+	}
+	if err := checkKeys(b); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	var f interchangeFile
 	if err := json.Unmarshal(b, &f); err != nil {
@@ -113,6 +120,91 @@ func loadInterchange(path string) (*interchange, error) {
 		ic.marks[pk] = w
 	}
 	return ic, nil
+}
+
+// interchangeKeys are the keys of interchangeFile.
+var interchangeKeys = []string{"metadata", "interchange_format_version", "genesis_validators_root", "data",
+	"pubkey", "signed_blocks", "slot", "signed_attestations", "source_epoch", "target_epoch"}
+
+// checkKeys refuses JSON in which one object has a key twice, or two keys
+// that differ only in case, or which has a key that differs only in case
+// from a key of interchangeFile. encoding/json keeps the last of repeated
+// keys and matches keys to fields without regard to case, so such a file
+// could carry lower maxima than its first keys show to a person or to
+// another tool. It checks keys only; json.Unmarshal checks the rest.
+func checkKeys(b []byte) error {
+	known := map[string]string{}
+	for _, k := range interchangeKeys {
+		known[foldKey(k)] = k
+	}
+	// One frame per open object or array; keys is nil for an array.
+	type frame struct {
+		keys    map[string]string // folded key to the key as written
+		wantKey bool
+	}
+	var stack []*frame
+	valueDone := func() {
+		if n := len(stack); n > 0 && stack[n-1].keys != nil {
+			stack[n-1].wantKey = true
+		}
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	for {
+		tok, err := dec.Token()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if n := len(stack); n > 0 && stack[n-1].wantKey {
+			top := stack[n-1]
+			if tok == json.Delim('}') {
+				stack = stack[:n-1]
+				valueDone()
+				continue
+			}
+			k, _ := tok.(string)
+			f := foldKey(k)
+			switch prev, ok := top.keys[f]; {
+			case ok && prev == k:
+				return fmt.Errorf("key %q twice in one object", k)
+			case ok:
+				return fmt.Errorf("keys %q and %q in one object differ only in case", prev, k)
+			}
+			if want, ok := known[f]; ok && want != k {
+				return fmt.Errorf("key %q: the format's key is %q", k, want)
+			}
+			top.keys[f] = k
+			top.wantKey = false
+			continue
+		}
+		switch tok {
+		case json.Delim('{'):
+			stack = append(stack, &frame{keys: map[string]string{}, wantKey: true})
+		case json.Delim('['):
+			stack = append(stack, &frame{})
+		case json.Delim(']'):
+			stack = stack[:len(stack)-1]
+			valueDone()
+		default:
+			valueDone()
+		}
+	}
+}
+
+// foldKey maps s to one string for all strings strings.EqualFold holds
+// equal: each rune becomes the smallest rune of its case folding orbit.
+func foldKey(s string) string {
+	var sb strings.Builder
+	for _, r := range s {
+		m := r
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			m = min(m, f)
+		}
+		sb.WriteRune(m)
+	}
+	return sb.String()
 }
 
 // markOf returns the maxima of validator pk, or nil when its entry holds no
