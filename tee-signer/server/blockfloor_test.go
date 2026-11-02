@@ -110,9 +110,10 @@ func TestLateImportGetsAPTCFloor(t *testing.T) {
 // the target takes the first share, the clock moves on 20 epochs, then it
 // takes the second. The target's device mark loaded with the first share
 // and the page's mark hold only bounds from then; the second key's own
-// mark holds its later floor.
+// mark holds its later floor. The source imports whole keys made by
+// newKey, so it and its target run in single mode.
 func TestHandoverTargetGetsABlockFloor(t *testing.T) {
-	src := newSrcEnv(t, nil)
+	src := newSingleSrcEnv(t)
 	tgt := newTargetOf(t, src, nil, nil, nil)
 	var pks []backend.Pubkey
 	for i := range 2 {
