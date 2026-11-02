@@ -88,7 +88,7 @@ func startRunner(base *tgtEnv) (*modelRunner, error) {
 		return nil, err
 	}
 	e.fl, r.log = fl, &faultLog{Log: fl}
-	m, err := markstore.New(r.log, e.setup.SignerName, dev.NewDevKeys("handover import test"), markstore.Options{Setup: ms, Clock: e.clock.Now, Log: quiet})
+	m, err := markstore.New(r.log, e.setup.SignerName, dev.NewDevKeys("server test env"), markstore.Options{Setup: ms, Clock: e.clock.Now, Log: quiet})
 	if err != nil {
 		return nil, err
 	}

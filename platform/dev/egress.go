@@ -13,8 +13,7 @@ import (
 // EgressClient is the dev platform's HTTP client when the setup lists
 // peer_attestation_hosts (platform option egress, host:port comma-separated): it
 // dials those host:ports directly and refuses every other one, as a Nitro
-// enclave reaches only the routes of its setup. Local runners and tests
-// use it to see that the handover verifier works with no other network.
+// enclave reaches only the routes of its setup.
 func EgressClient(endpoints []string) *http.Client {
 	allowed := slices.Clone(endpoints)
 	var d net.Dialer

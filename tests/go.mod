@@ -21,9 +21,10 @@ require (
 	github.com/lidofinance/tee-signer/signer-core v0.0.0
 	github.com/lidofinance/tee-signer/signer-protocol v0.0.0
 	github.com/lidofinance/tee-signer/slashing-log v0.0.0
-	github.com/lidofinance/tee-signer/tee-signer v0.0.0
 	github.com/lidofinance/tee-signer/trusted-time v0.0.0
 )
+
+require github.com/lidofinance/tee-signer/devkit v0.0.0 // indirect
 
 replace (
 	github.com/lidofinance/tee-signer/attestation-verify => ../attestation-verify

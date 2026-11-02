@@ -1,6 +1,6 @@
-# Durable state and the handover
+# Durable state
 
-Three mechanisms for the clouds whose runner keeps its state on
+Two mechanisms for the clouds whose runner keeps its state on
 a disk that does not outlive the container or VM (Azure ACI, GCP
 Confidential Space):
 
@@ -8,11 +8,7 @@ Confidential Space):
    the wrapped sealing key and the rest of the state that matters live in an
    object store as well, and a restart restores them before the mark log
    claim.
-2. The handover: on Azure a new image cannot open the old image's sealed
-   data or mark log, so the old runner verifies the new runner's
-   attestation and hands its shares and its mark over, under an
-   approver-signed handover order.
-3. On GCP, key release only through attestation: the KMS key and the
+2. On GCP, key release only through attestation: the KMS key and the
    buckets grant their roles to the WIF pool's principal set, not to the
    service account the VM runs as (`platform-gcp/deploy/README.md`, "Key release
    through the principal set").
@@ -263,152 +259,28 @@ On a cloud object store each commit is at least one object create.
 - PUBLIC_KEYS fails above 10,082 keys, because its answer must fit one
   1 MiB frame.
 
-## The handover (Azure)
-
-### Why Azure needs it
+## A new image
 
 On Azure each image gets a new Key Vault key version whose release policy
 names the image's CCE policy hash, and the release policy cannot change
-afterwards. A new image gets the new version only: it opens neither the old
-image's sealing key (so not its sealed shares or state copy) nor its mark
-log records (the record keys come from the released key). With key
-generation inside the runner there is no other copy of the share. So the
-old runner itself has to hand the shares to the new one.
+afterwards. A new image opens neither the old image's sealing key (so not
+its sealed shares or state copy) nor its mark log records. This image has
+no handover, so a new Azure image starts as a new signer: a new setup and
+mark log, and the shares imported again with the sealed import, with
+their interchange maxima or under the import floor.
 
-### The mark: a new log above the old mark
+On AWS and GCP the KMS key policy and the WIF provider condition can name
+the new measurement next to the old one: the old ciphertext, the old log's
+record keys and the state copy stay readable, and the new image reads its
+predecessor's log as on a restart. Those policies are mutable: an account
+admin who edits them can let another workload release the key without
+anyone's signature.
 
-The new runner keeps a log of its own (a new `-mark-signer`, which is in its
-CCE policy) whose mark starts at least at the old runner's mark. Continuing
-the old log would need the new image to open the old records, which on
-Azure means handing over a key derived from the old released key and
-keeping it sealed in every later image: each upgrade would add a key and
-tie the new image to the old key versions. The new log needs nothing from
-the old key release, keeps each image's log under its own release policy,
-and leaves the old log locked as evidence.
-
-What makes it safe:
-
-- The old runner's mark is at least everything it signed: the core signs
-  past its committed mark only after a record is durable, and that record's
-  mark is the one handed over.
-- The tombstone (block slot, source and target all at 2^64-1) ends the old
-  log. After it every append fails, so the old core signs at most inside
-  its committed mark, and the server refuses every request but `HEALTH`,
-  `PUBLIC_KEYS`, `ATTEST`, `IDENTITY` and the handover messages. A restart of the old
-  image reads the tombstone, writes no claim, loads it as its mark and
-  refuses everything, with this runner version or an older one.
-- The new runner refuses targets and blocks at or below the old mark and
-  sources below it, so a vote of the old runner and one of the new can be
-  neither a double vote nor a surround.
-- The mark travels inside the HPKE associated data of each share: the
-  operator cannot lower it without the import failing, and only the old
-  runner holds the share to seal. A runner that never had the share cannot
-  make such a package.
-- The new runner raises its log before it stores the share. If its core
-  then refuses the maxima, the validator stays blocked until a restart,
-  which reads the raised log. The sealed import with interchange maxima in
-  mark log mode raises the log the same way.
-
-The handover can be asked for again for the same target (the same mark
-comes back, also after a restart of the old runner, from the record before
-the tombstone).
-
-### AWS and GCP
-
-Not needed there. AWS KMS key policies and the GCP WIF provider condition
-can name the new measurement next to the old one: the old ciphertext, the
-old log's record keys and the state copy stay readable, and the new image
-reads its predecessor's log as on a restart. The handover works on every
-platform whose attestation the runner's verifiers check.
-
-The trade-off: those policies are mutable. An account admin who edits the
-KMS key policy or the WIF condition can let an unmeasured or debug workload
-release the key, at any time, without anyone's signature. Azure's release
-policy is immutable per key version, which is stronger; the price is the
-handover, and the approvers' handover order is the new trust point. On AWS and GCP the
-handover would add nothing as long as the admin can rewrite the policy.
-
-## Handover under an order (runners with a setup)
-
-A runner with a setup, in a release build, hands over
-under an approver-signed handover order (`signer-protocol/docs/protocol.md`,
-"Handover").
-
-- HANDOVER_ORDER (0x31, `tee-signer/handoverorder`): k approvers in force
-  sign an order that names this runner's setup as the source and one
-  target: its setup_hash, image and verifier settings. The runner checks
-  it, keeps the body sealed in the host store and records it as the
-  pending order in the mark log's state. It acts the time lock in force
-  after its arrival, and at least the images minimum (7 days, 7 minutes in
-  a testnet build; the time lock only on dev). A rotation drops it.
-- HANDOVER (0x32, `tee-signer/handover` message.go, `tee-signer/server`
-  handover_source.go) carries the order, the target's IDENTITY answer and
-  its published setup. Before the tombstone the runner checks the order
-  (its wait, not_after, signatures and the image list in force), that no
-  config update is pending here, and the target: its
-  published setup hashes to the order's setup_hash and its attested
-  identity carries it; the attestation verifies with the order's settings;
-  cluster_id, chain and safety are this runner's, handover_generation is
-  one higher, version 0 of both groups equals this runner's config in
-  force; it holds no key, has nothing pending, holds this order in its
-  slot and has room for every share.
-- Then it stops signing and adding shares, reads every share once,
-  writes the tombstone that names the target (markstore `HandOverTo`) and
-  seals each page from that read. After the tombstone, also after a
-  restart, it answers that target only, with the same mark.
-- Each share's header adds its key origin (always imported) to the
-  sealed import's header. The page carries the carry: the key set handed over and the
-  day's exits of the mark log. Each share is sealed under the HPKE
-  associated data `signer-handover-share-v1` over its header and the
-  carry's hash. The runner signs each header with an origin key it makes
-  per process, and the response carries the attestation of that key
-  (`signer-handover-origin-key-v1` over the order hash and the key). A
-  target that checks both with the order's source settings knows that the
-  headers came from the source's image; anyone can seal a share to its
-  public import key.
-
-### The target
-
-A runner with a setup takes the sealed pages as a target, in a release
-build: IMPORT_HANDOVER (0x33, `tee-signer/handover`
-import.go, `tee-signer/server` handover_import.go). Its setup comes from
-`signer-config setup -handover-from`: the source's cluster_id, chain and
-safety, handover_generation 2, version 0 of both groups equal to the
-source's config in force. So its first mark log record, the claim of a
-fresh log, carries that config as version 0 of both groups.
-
-- Each request carries the signed order and a page, or part of one. The
-  order must name this runner's setup_hash as its target, this cluster and
-  chain, and verify under the approvers in force here, which are the
-  source's. Its not_after does not apply: the source answers its target
-  after it, and an import a restart cut must go on.
-- The first request finds the runner empty (no key, version 0 of both
-  groups, nothing pending, handover_generation 2 or more, max_keys of at
-  least the total) and passes every check below before the runner writes
-  the order into the order slot of its mark log's state. It checks version
-  0 and no key again while it writes, under the locks of config writes and
-  share additions, so an update or a share that came in meanwhile stops
-  the start. From then on it signs nothing, takes no plain sealed import
-  and no CONFIG_UPDATE, and HEALTH is not ready, also after a restart: the
-  slot is in the locked log. Only the record that ends the import clears
-  the slot, once the runner holds exactly the carry's key set and a share
-  of the request opened under that carry: a rotation that comes into force
-  keeps it, and later requests of the same order need no approvals in
-  force again.
-- The origin proof must verify with the verifier and image the order names
-  for the source (the dev verifier on the dev platform only), and every
-  share's header under the origin key. A runner that cannot check the
-  proof refuses, unless the request asks to skip the origin checks
-  (`handover-target import -as-imported`).
-- Each share opens with this boot's import key under its header and the
-  carry's hash, so a lowered mark, an edited origin or an edited carry does
-  not open. The carried exits go into the mark log before the import ends. The mark log is raised
-  to the mark before the share is stored, as for a sealed import with
-  interchange maxima; a source that never signed hands over an empty mark
-  and no maxima. Every request of one process carries the same mark.
-- A validator held with the same share counts as held, so a resumed import
-  skips what is in. After a restart the import key is new: the tool reads
-  the identity again and the source seals again for it.
+A mark log written by an image with a handover can end with a tombstone
+(every bound at 2^64-1), or hold a handover order in the order slot of its
+state. This image refuses to claim a log that ends with a tombstone
+(`markstore.ErrHandedOver`) and refuses to start on a log state with an
+order in the slot.
 
 ## The network entry's node state
 
@@ -445,17 +317,15 @@ CCE policy hash or the image digest.
   chunk (fallback to an older commit, then refusal); a delete finished at
   start; hints never uploaded; refresh compacting.
 - `platform/filestore`: `PutMany`, `Delete`, `List` by folder.
-- `slashing-log` `TestHandOverTombstone`, `TestUntargetedTombstone`,
-  `TestAppendMerges`; `tee-signer/handover` and the handover tests of
-  `tee-signer/server`; `platform-gcp/gcp` `TestFederatedTokenWithoutServiceAccount` (KMS and
+- `slashing-log` `TestTombstoneNotClaimed`, `TestAppendMerges`;
+  `platform-gcp/gcp` `TestFederatedTokenWithoutServiceAccount` (KMS and
   storage with the federated token, no IAM call; with `service_account` the
   impersonation fails, since the roles sit on the principal set).
 - `tests/e2e`: `TestE2EDurableStateDev` and `TestE2EDurableStateGCP` (the
   GCP debug build, mark log and copy in one locked GCS fake): the state
   directory is wiped, the share comes back, a vote below the log's source is
   refused at every epoch and the log's source signs; another image does not
-  start on the copy. `TestE2EHandoverGate`: three images hand over in turn
-  through the two tools.
+  start on the copy.
 - `attestation-verify/runnerclient` `TestE2EAzureRunnerDurable`: the Azure debug build
   with fake SNP, MAA and Key Vault; the file system lost and restored.
 - Fuzzer (`signer-core/sim`): `OP_WIPE` covers the restored
@@ -467,10 +337,9 @@ CCE policy hash or the image digest.
 ## What needs a cloud check
 
 - Azure: MAA's key set at `https://<provider>/certs` as the runner fetches it
-  (format: `x5c` and `n`/`e`), a real token's claims in the handover's
-  verifier, and the runner's TLS trust of the provider from inside the group. A group
+  (format: `x5c` and `n`/`e`), and the runner's TLS trust of the provider from inside the group. A group
   restart with the container's file system gone, restoring from the locked
-  container. The handover between two real groups with two key versions.
+  container.
 - GCP: the STS exchange followed by KMS and Cloud Storage calls with the
   federated token (no service account), and a VM recreated with its disk gone restoring from the bucket.
 - All: commit and chunk sizes and timing on the real stores (one commit per

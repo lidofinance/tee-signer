@@ -239,7 +239,7 @@ var AttestOnlyClientOID = asn1.ObjectIdentifier{1, 2, 840, 113556, 1, 8000, 2554
 
 // AdminClientOID is the extended key usage of the admin client role
 // (docs/protocol.md, "Client roles"): the only role that may send imports,
-// config updates, exit approvals, orders and handover messages. It counts only when the leaf and the leaf's direct issuer both
+// config updates, exit approvals and orders. It counts only when the leaf and the leaf's direct issuer both
 // list it and that issuer is an intermediate, not the pinned root
 // (runner/attls.Role). Same GUID arc as AttestOnlyClientOID, last arc 2.
 var AdminClientOID = asn1.ObjectIdentifier{1, 2, 840, 113556, 1, 8000, 2554,
@@ -307,8 +307,9 @@ type PendingUpdate struct {
 	EffectiveAt uint64 `json:"effective_at"` // Unix seconds
 }
 
-// Order is the pending handover order (kind 1). Kind 0, all zero: none.
-// ParseSetupState refuses every other kind.
+// Order is the pending handover order (kind 1) of the mark log's order
+// slot. Only an image with a handover sets it; this image reports none.
+// Kind 0, all zero: none. ParseSetupState refuses every other kind.
 type Order struct {
 	Kind  uint8  `json:"kind"`
 	Hash  Root   `json:"hash"`
@@ -316,8 +317,8 @@ type Order struct {
 }
 
 // KeyOrigin counts the runner's loaded keys, the ones keys_hash covers.
-// Every key comes in by an import (sealed, handed over, or plaintext in a
-// debug build), so Imported is their number. The encoding keeps 36
+// Every key comes in by an import (sealed, or plaintext in a debug build),
+// so Imported is their number. The encoding keeps 36
 // reserved bytes around it, zero (AppendSetupState).
 type KeyOrigin struct {
 	Imported uint32 `json:"imported"`

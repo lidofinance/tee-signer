@@ -1,6 +1,6 @@
 // Package statestore keeps a durable copy of the runner's local state in an
-// object store outside the host: the wrapped sealing key, the sealed shares
-// and the handover order bodies (Prefixes). On Azure ACI and in a
+// object store outside the host: the wrapped sealing key and the sealed
+// shares (Prefixes). On Azure ACI and in a
 // Confidential Space VM that local state lives on the container's or the
 // VM's own disk and is gone after a restart, and a sealed share has no
 // other copy.
@@ -61,14 +61,11 @@ import (
 )
 
 // Prefixes are the parts of the platform store that the copy holds. A
-// build hook may add one (runner/hooks.go). handover/ holds the sealed
-// bodies of a source's handover orders: without one the source reads its
-// own pending order as an import and signs nothing (SHO-01). Not in
-// it: rr/ (repeat roots of older builds, never read now), wm/ (persisted
+// build hook may add one (runner/hooks.go). Not in it: rr/ (repeat roots of older builds, never read now), wm/ (persisted
 // marks, not used with the mark log)
 // and mark-hint/ (written on every mark record; without it the claim
 // compares nothing, as on any restart with lost state).
-var Prefixes = []string{"sealing/", "shares/", "handover/"}
+var Prefixes = []string{"sealing/", "shares/"}
 
 // Durable reports whether key belongs in the copy.
 func Durable(key string) bool {
@@ -107,9 +104,8 @@ const (
 var ErrLost = errors.New("statestore: another runner instance wrote this signer's state copy; this one changes nothing more")
 
 // Prefix is the object name prefix of a signer's copy:
-// state/<setup_hash hex>/<signer>/, so a new setup (a handover target
-// that keeps the signer name included) never meets the objects of
-// another, which it could not open and would refuse to start over. A zero
+// state/<setup_hash hex>/<signer>/, so a new setup (one that keeps the
+// signer name included) never meets the objects of another, which it could not open and would refuse to start over. A zero
 // setup is the flag path without a setup: state/<signer>/.
 func Prefix(setup [32]byte, signer string) string {
 	if setup == ([32]byte{}) {
@@ -240,8 +236,8 @@ func Open(ctx context.Context, local platform.Store, l markstore.Log, signer str
 		}
 		if idx.present > 0 && !opt.AllowCreate {
 			return nil, fmt.Errorf("state copy %s: %d commit names hold objects but none opens under this key release with every object it needs "+
-				"(%d open but name chunks or commits that are missing or changed; the others: another image or key, and on Azure a new image "+
-				"takes over through the handover, docs/durable-state.md); refusing to start, -state-create overrides", l, idx.present, idx.broken)
+				"(%d open but name chunks or commits that are missing or changed; the others: another image or key, docs/durable-state.md); "+
+				"refusing to start, -state-create overrides", l, idx.present, idx.broken)
 		}
 		if len(localEntries) > 0 {
 			ops := map[string]op{}

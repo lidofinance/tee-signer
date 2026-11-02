@@ -1,5 +1,3 @@
-//go:build !verifierselect
-
 package azureid
 
 import (

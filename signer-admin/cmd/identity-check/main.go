@@ -1,5 +1,3 @@
-//go:build !verifierselect
-
 // Command identity-check connects to one runner the way the signing
 // client does and checks its attestation, several times, each time on a new
 // connection. It sends no request but IDENTITY, and one HEALTH after the

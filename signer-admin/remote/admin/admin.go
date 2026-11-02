@@ -1,5 +1,5 @@
 // Package admin is the client side of the admin messages: share import,
-// config updates, exit approvals and handovers. A runner
+// config updates and exit approvals. A runner
 // answers them only to a client of the admin role (docs/protocol.md,
 // "Client roles"). Client wraps a remote.Client, so it has the signing and
 // attestation calls too; the signing client builds remote without this package.
@@ -10,13 +10,11 @@ import (
 	"crypto/rand"
 	"errors"
 
-	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/remote"
 	"github.com/lidofinance/tee-signer/signer-protocol/sealedimport"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
 	wireadmin "github.com/lidofinance/tee-signer/signer-protocol/wire/admin"
-	"github.com/lidofinance/tee-signer/tee-signer/handover"
 )
 
 // Client is a remote.Client with the admin calls.
@@ -126,50 +124,4 @@ func (c *Client) ImportSealed(ctx context.Context, req *backend.SealedImportRequ
 		return backend.ValidatorKey{}, err
 	}
 	return wire.DecodeKey(b)
-}
-
-// Handover sends HANDOVER to a source under a handover order and
-// returns one page of shares sealed to the target of q.Identity, with the
-// page's encoding as the source sent it. The source checks the target; the
-// client checks only the encoding.
-func (c *Client) Handover(ctx context.Context, q *handover.Request) (*handover.Response, []byte, error) {
-	p, err := q.Encode()
-	if err != nil {
-		return nil, nil, err
-	}
-	b, err := c.RoundTrip(ctx, handover.Type, p)
-	if err != nil {
-		return nil, nil, err
-	}
-	r, err := handover.DecodeResponse(b)
-	if err != nil {
-		return nil, nil, err
-	}
-	return r, b, nil
-}
-
-// HandoverImport sends IMPORT_HANDOVER to a handover target: the signed
-// order and a page of shares the source sealed to the target (package
-// handover, import.go).
-func (c *Client) HandoverImport(ctx context.Context, q *handover.ImportRequest) (*handover.ImportResponse, error) {
-	p, err := q.Encode()
-	if err != nil {
-		return nil, err
-	}
-	b, err := c.RoundTrip(ctx, handover.TypeImport, p)
-	if err != nil {
-		return nil, err
-	}
-	return handover.DecodeImportResponse(b)
-}
-
-// HandoverOrder pushes a signed handover order (backend/handoverorder) and
-// returns the runner's state of it. Pushing it again does no harm and
-// reads the state.
-func (c *Client) HandoverOrder(ctx context.Context, signed []byte) (*handoverorder.State, error) {
-	b, err := c.RoundTrip(ctx, handoverorder.TypeOrder, signed)
-	if err != nil {
-		return nil, err
-	}
-	return handoverorder.DecodeState(b)
 }

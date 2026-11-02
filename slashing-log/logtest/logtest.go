@@ -746,32 +746,19 @@ func Run(t *testing.T, kind wormfake.Kind, newLog NewLog) {
 		}
 	})
 
-	t.Run("tombstone names the target setup", func(t *testing.T) {
+	t.Run("a log that ends with a tombstone is not claimed", func(t *testing.T) {
 		srv, l := fresh(t)
 		m := open(t, srv, l, nil, key(1))
 		if _, _, err := m.Claim(ctx, false); err != nil {
 			t.Fatal(err)
 		}
-		if err := m.Append(ctx, wm(9, 10, 320)); err != nil {
+		// The record an image with a handover ends the log with.
+		if err := m.Append(ctx, markstore.Tombstone); err != nil {
 			t.Fatal(err)
 		}
-		target := Setup(3, 30).Hash
-		before, err := m.HandOverTo(ctx, target)
-		if err != nil || before != wm(9, 10, 320) {
-			t.Fatalf("handover: %+v %v", before, err)
-		}
-		if _, err := m.HandOverTo(ctx, Setup(4, 30).Hash); err == nil {
-			t.Fatal("a second target for one tombstone")
-		}
 		m2 := open(t, srv, l, nil, key(1))
-		if got, _, err := m2.Claim(ctx, true); err != nil || !markstore.IsTombstone(got) {
-			t.Fatalf("restart after the handover: %+v %v", got, err)
-		}
-		if got, ok := m2.HandedOverTo(); !ok || got != target {
-			t.Fatalf("restart: target %x %v", got, ok)
-		}
-		if again, err := m2.HandOverTo(ctx, target); err != nil || again != before {
-			t.Fatalf("handover repeated to the same target: %+v %v", again, err)
+		if _, _, err := m2.Claim(ctx, true); !errors.Is(err, markstore.ErrHandedOver) {
+			t.Fatalf("claim of a log that ends with a tombstone: %v", err)
 		}
 	})
 

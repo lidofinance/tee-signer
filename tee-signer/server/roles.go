@@ -13,7 +13,6 @@ import (
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
 	wireadmin "github.com/lidofinance/tee-signer/signer-protocol/wire/admin"
 	"github.com/lidofinance/tee-signer/tee-signer/attls"
-	"github.com/lidofinance/tee-signer/tee-signer/handover"
 )
 
 // Client roles (docs/protocol.md, "Client roles"). Every connection has a
@@ -143,7 +142,6 @@ const (
 // adminTypes are the message types only the admin role may send.
 var adminTypes = []wire.MsgType{
 	wireadmin.TypeImportShare, wireadmin.TypeImportSealed, wireadmin.TypeConfigUpdate, wireadmin.TypeApproveExit,
-	handover.TypeOrder, handover.Type, handover.TypeImport,
 }
 
 // allows is the role table. A role or a type missing here is denied.
@@ -190,7 +188,7 @@ func grantFor(cl *client, t wire.MsgType) grant {
 }
 
 // dispatchFor serves f for cl. A type the role table does not grant cl's
-// role gets FORBIDDEN before the handed-over check and before anything of
+// role gets FORBIDDEN before anything of
 // the payload is read; a refused import's payload is wiped. Limited types
 // count against the certificate's attestation limit (limit.go).
 func (s *Server) dispatchFor(ctx context.Context, f wire.Frame, cl *client) ([]byte, error) {

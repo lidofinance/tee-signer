@@ -36,8 +36,8 @@ enough.
 | time | 8 | unix seconds from the trusted clock (the host clock on the flag path); the age check reads it |
 | locked group | 53, or 113 with a pending update | see below |
 | open group | 53, or 113 with a pending update | see below |
-| pending order | 1, or 42 | presence byte, then kind (1 handover, the only kind; a reader refuses any other), hash, act time (phase 2) |
-| target | 1, or 33 | presence byte, then the `setup_hash` a tombstone hands over to |
+| pending order | 1, or 42 | presence byte, then kind (1 handover, the only kind; a reader refuses any other), hash, act time; only an image with a handover writes it, and this image does not start on a state that holds one |
+| target | 1, or 33 | presence byte, then the `setup_hash` a tombstone hands over to; only an image with a handover writes it |
 | exits | 1, or 19 + 104 per exit | presence byte, then the day (8), the stake counted that day in Gwei (8), the number of exits (2, up to 200), and per exit the validator key (48), index (8), exit epoch (8), stake (8) and the approval's nonce (32) |
 | source gate | 1, or 9 | presence byte, then the source floor epoch (see "Source gate") |
 | share set | 1, 34 or 66 | presence byte, then the current root (32), a presence byte and the pending root (32) (see "Share set") |
@@ -267,18 +267,17 @@ roll the mark back.
   the source must reach the floor and stay below the clock epoch.
   `tests/e2e` `TestE2EMarkLogLostState*`,
   `TestE2EDurableState*` and `attestation-verify/runnerclient`
-  `TestE2EAzureRunnerMarkLogLostState`, `TestE2EAzureRunnerDurableAndHandover`
+  `TestE2EAzureRunnerMarkLogLostState`, `TestE2EAzureRunnerDurable`
   run this on each platform build.
 - Merge. A record holds the merge of the mark before it and the new one, so
   the log's mark never goes down. An import with interchange maxima (an
-  EIP-3076 import, or a handover's mark) raises the log before
+  EIP-3076 import) raises the log before
   the share is stored.
-- Tombstone. A handover (`slashing-log/docs/durable-state.md`) ends the log
-  with a record whose bounds are all 2^64-1. Nothing appends after it, and a
-  runner that reads it writes no claim and refuses every slashable message.
-  A runner with a setup hands over to one named target only: the tombstone
-  carries the target's `setup_hash` (`HandOverTo`), and a second target is
-  refused. Phase 1 images hand over to no one.
+- Tombstone. An image with a handover ends the log with a record whose
+  bounds are all 2^64-1, which may name the target's `setup_hash`. Nothing
+  appends after it. This image writes none; its claim of a log that ends
+  with one fails with `ErrHandedOver`, so it writes no record and signs
+  nothing on it (`slashing-log/docs/durable-state.md`, "A new image").
 - Hint. After each write the runner keeps the version and hash it wrote,
   sealed in the platform store under the context `signer-mark-hint-v1`,
   the `setup_hash` and the signer. At start a hint above the newest record in
@@ -384,7 +383,6 @@ Config updates (`tee-signer/server/config.go`, CONFIG_UPDATE in
 | `Body(group, version)` | the stored update, for `CONFIG_STATE` and the effective config; `ErrBodyMissing` without a readable copy |
 | `LogID()` | the log ID, for the share AAD |
 | `Refresh(ctx)`, `RefreshLoop(ctx, every)` | the body copies and keep-alive records |
-| `HandOverTo(ctx, target)`, `HandedOverTo()` | the tombstone that names its target (phase 2) |
 
 `markstore` checks the shape of a state, not the rules of section 6
 (signatures, waits, supersede). `tee-signer/server/config.go` checks those,
@@ -525,8 +523,7 @@ holds its true mark.
   non-finality may take long and which the stopped keys cannot help
   bring about. In signing_mode single the whole validator set behind the
   signer stops attesting; in threshold mode one member of the cluster
-  does. A handover carries the bound to the target, so a new image does
-  not clear it. It cannot cause a slashing: it only refuses votes. The
+  does. It cannot cause a slashing: it only refuses votes. The
   runner raises an alarm when such a vote is signed, before any restart
   (`tee-signer/server/sourcewatch.go`): a vote whose source is more than
   one epoch above the highest source of the votes it signed for the

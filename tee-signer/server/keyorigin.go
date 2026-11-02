@@ -10,7 +10,7 @@ import (
 )
 
 // The key origin of the setup state counts the loaded keys. Every key comes
-// in by an import: sealed, plaintext in debug builds, or the handover's. So
+// in by an import: sealed, or plaintext in debug builds. So
 // Imported is their number.
 
 // keyOrigin is the key origin of keys, the loaded keys.

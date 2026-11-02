@@ -25,7 +25,7 @@ func cmdPush(args []string, out io.Writer) error {
 		return err
 	}
 	if fs.NArg() == 0 {
-		return errors.New("usage: signer-admin push -cluster cluster.json [-raise-min] [-signers NAME,...] update.signed|order.signed|handover.signed|exit.signed...")
+		return errors.New("usage: signer-admin push -cluster cluster.json [-raise-min] [-signers NAME,...] update.signed|exit.signed...")
 	}
 	raw, err := os.ReadFile(fs.Arg(0))
 	if err != nil {
@@ -46,16 +46,6 @@ func cmdPush(args []string, out io.Writer) error {
 	}
 	if isImportFile(raw) {
 		return errors.New("an import order is not pushed: signer-admin import sends it with the shares")
-	}
-	if isHandoverFile(fs.Arg(0)) {
-		if *raise {
-			return errors.New("-raise-min is for config updates, not handover orders")
-		}
-		c, err := cf.load()
-		if err != nil {
-			return err
-		}
-		return pushHandover(out, c, raw, *cf.timeout)
 	}
 	u, err := setupwire.DecodeUpdate(raw)
 	if err != nil {

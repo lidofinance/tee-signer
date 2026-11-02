@@ -17,7 +17,7 @@ setup ("Setup").
 | `test-client-ca.pem` | public root certificate of a test PKI (`scripts/make-test-ca.sh`), for a test setup's `allowed_client_ca` (base64 of its DER). Its private key is not in the repo |
 | `kms-key-policy.json.tmpl` | key policy: `Decrypt`/`GenerateDataKey` only with `kms:RecipientAttestation:PCR0/1/2/3`; `Encrypt` for the key admin only with exactly the encryption context `purpose=record-creds` (the record credentials), so the admin cannot make a sealing key (`purpose=sealing`) or a mark log key (`signer-key`), which carry setup_hash (`platform-aws/nitro`, `slashing-log/docs/marklog.md`, "Record keys"); `DescribeKey`, `GetKeyPolicy` and `ListGrants` for the parent role, which the runner reads at start for key_release_hash and the lock check (`platform-aws/nitro` KeyRule). `platform-aws/nitro/planting_test.go` evaluates these conditions. `scripts/kms-policy.sh` renders it per build to `build/nitro/kms-key-policy-<arch>.json` |
 | `main.tf` | KMS key (PCR0-3), parent role, enclave-enabled EC2 instance, the record writer user (the mark log's S3 credentials), the mark bucket's policy (`mark_bucket`), and an optional inbound rule for the network entry (`entry_cidrs`). Optional `ssh_public_key` and `ssh_cidrs` give a key pair and an SSH rule for the operator. Variables `instance_type` (default `c6g.large`) and `region` (default `eu-central-1`) are the Graviton choice, see "Graviton (arm64)" |
-| `target/main.tf` | a second signer next to a running one, a handover target. Its own root module and state, so no plan of it can change the running signer. It reads the parent role, instance profile, security group and key pair by name. It makes a new KMS key that releases to the target EIF's PCR0..2 alone (the same PCR3, the parent role's read of the key and its policy, the admin's `record-creds` encrypt) and, with `instance = true`, a second `c6g.large` parent. The admin encrypts a second access key of the record writer under the new key. `scripts/tf-validate.sh` validates it |
+| `target/main.tf` | a second signer next to a running one. Its own root module and state, so no plan of it can change the running signer. It reads the parent role, instance profile, security group and key pair by name. It makes a new KMS key that releases to the target EIF's PCR0..2 alone (the same PCR3, the parent role's read of the key and its policy, the admin's `record-creds` encrypt) and, with `instance = true`, a second `c6g.large` parent. The admin encrypts a second access key of the record writer under the new key. `scripts/tf-validate.sh` validates it |
 | `parent-run.sh` | parent setup: allocator, one vsock-proxy per route of the signer's setup (KMS, STS, the coarse-time host, the mark bucket, four NTS-KE), the host agent with the setup (`SETUP`), udprelay, `nitro-cli run-enclave`, the forwarder (network entry). Runs on x86_64 and arm64 parents (`SETUP`, `CPU_COUNT`, `MEMORY_MIB`) |
 | `../../platform-aws/cmd/forwarder` | the network entry: a plain TCP to vsock byte forwarder, no TLS. Built by `scripts/build-runner.sh`, started by `parent-run.sh` |
 | `../../platform-aws/cmd/udprelay` | the NTS clock's NTP path: vsock 7102 to UDP 123 and 4123, for an allowlist of the four NTS operators, with rate limits (package `platform-aws/udprelay`). Built by `scripts/build-runner.sh`, started by `parent-run.sh` |
@@ -70,7 +70,7 @@ SETUP=signer-2.bin platform-aws/deploy/parent-run.sh               # on the pare
   warning and makes a new key. `<hash>` is the first 8 bytes of the
   blob's SHA-256. Each start without a share leaves one more copy: it
   sets aside the blob the start before it made. A signer that waits for
-  its first import, or a handover target, gathers one copy per restart;
+  its first import gathers one copy per restart;
   delete them on the parent once the signer's shares open. A production
   enclave has no console, so look for `.ignored-` files on the parent
   rather than for the log line.
@@ -148,14 +148,13 @@ SETUP=signer-2.bin platform-aws/deploy/parent-run.sh               # on the pare
   sealed under it would be lost. A locked key therefore stays until the
   account closes. A key locked under the older policy, whose admin still
   holds `kms:ScheduleKeyDeletion`, now reads as not locked, and its
-  policy can never change. Such a key needs a new locked key and a
-  handover to it (`target/main.tf`). On mainnet a runner with this check
-  refuses to start on the old key, so run the handover from the image
-  that runs now, before the update; off mainnet the runner only logs a
-  warning. Run Terraform as
+  policy can never change. Such a key needs a new locked key
+  (`target/main.tf`) and the shares imported again under it. On mainnet a
+  runner with this check refuses to start on the old key; off mainnet the
+  runner only logs a warning. Run Terraform as
   `admin_role_arn` then, since no other principal can read the key
   afterwards. The policy never changes again: a new image gets a new key
-  (`target/main.tf`, a handover), so set `prev_pcrs` at creation if a
+  (`target/main.tf`) and the shares imported again, so set `prev_pcrs` at creation if a
   rollback image should keep this key. The variable has no default.
   Setting it to true on an existing key makes Terraform lock that key's
   policy for good, so keep `false` for a devnet key that should stay
@@ -163,9 +162,7 @@ SETUP=signer-2.bin platform-aws/deploy/parent-run.sh               # on the pare
 - The routes follow from the setup over a fixed port map: KMS and STS of
   the key release region on vsock 8000 and 8001, `www.cloudflare.com` on
   8002, the mark bucket on 8004, NTS-KE on 8005 to 8008, and the setup's
-  `peer_attestation_hosts` on 8010 to 8025 (at most 16): the hosts
-  that the runner's attestation verifier fetches key sets from when it
-  checks a handover target, an Azure MAA host or Google's Confidential Space hosts
+  `peer_attestation_hosts` on 8010 to 8025 (at most 16)
   (`governance/docs/setup-phase-cloud-test.md`, "Nitro peer endpoints").
   `hostagent -setup FILE -proxy-routes` prints them; `parent-run.sh` starts
   one vsock-proxy per line and writes the allowlist. The coarse-time URLs

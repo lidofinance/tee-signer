@@ -22,7 +22,7 @@ import (
 // evidence its key release used (platform.Platform.SelfImage) and compares
 // it with the list in force, the newest mark log record's locked group with
 // every pending update past its effective time made active (Updates). An
-// image the list does not name signs, hands over and imports nothing. It
+// image the list does not name signs and imports nothing. It
 // stays up and answers HEALTH, PUBLIC_KEYS, ATTEST, IDENTITY and
 // CONFIG_UPDATE, so a watchdog sees why and the approvers can list it.
 //
@@ -94,7 +94,7 @@ func (g *ImageGate) Withhold() {
 	g.mu.Unlock()
 }
 
-// Check is nil when the runner may serve a request that signs, hands over
+// Check is nil when the runner may serve a request that signs
 // or imports, and a NOT_READY refusal that says why otherwise.
 func (g *ImageGate) Check(u *Updates) error {
 	_, err := g.verdict(u)
@@ -125,7 +125,7 @@ func (g *ImageGate) verdict(u *Updates) (backend.ImageCheck, error) {
 		case backend.ImageOverride:
 			g.log.Warn("image check: this image is NOT on allowed_image_measurements in force; served anyway under the testnet build's override", attrs...)
 		default:
-			g.log.Error("image check failed: this runner signs, hands over and imports nothing", attrs...)
+			g.log.Error("image check failed: this runner signs and imports nothing", attrs...)
 		}
 	}
 	if refuse != "" {
@@ -183,7 +183,7 @@ func (g *ImageGate) evaluate(u *Updates) (backend.ImageCheck, string) {
 		return c, ""
 	}
 	c.State = backend.ImageNotAllowed
-	c.Why = fmt.Sprintf("this %s image is not on allowed_image_measurements of locked version %d in force (it lists %d %s images): it signs, hands over and imports nothing until a locked update lists it",
+	c.Why = fmt.Sprintf("this %s image is not on allowed_image_measurements of locked version %d in force (it lists %d %s images): it signs and imports nothing until a locked update lists it",
 		g.self.Kind, v, n, g.self.Kind)
 	return c, c.Why
 }

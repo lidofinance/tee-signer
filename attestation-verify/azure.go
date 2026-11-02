@@ -1,5 +1,3 @@
-//go:build !verifierselect || platform_azure
-
 package attest
 
 import (

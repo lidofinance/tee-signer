@@ -29,7 +29,6 @@ import (
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
 	wireadmin "github.com/lidofinance/tee-signer/signer-protocol/wire/admin"
 	"github.com/lidofinance/tee-signer/slashing-log"
-	"github.com/lidofinance/tee-signer/tee-signer/handover"
 	"github.com/lidofinance/tee-signer/tee-signer/state"
 	"github.com/lidofinance/tee-signer/trusted-time/clock"
 )
@@ -88,7 +87,7 @@ type Server struct {
 	// hang on it.
 	OnWedged func(error)
 	// Image, if set, is the image check (imagegate.go) of a runner with a
-	// setup: a request that signs, hands over or imports goes through only
+	// setup: a request that signs or imports goes through only
 	// while it passes. nil: no check (the flag path, and tests).
 	Image *ImageGate
 	// SealingKeyUnproven: the platform's sealing key came from a stored
@@ -97,15 +96,6 @@ type Server struct {
 	// seals no share. Set before Serve and changed only by
 	// ProveSealingKey, also before Serve.
 	SealingKeyUnproven bool
-
-	// handoverSrc serves HANDOVER_ORDER and HANDOVER as a source
-	// (handover_source.go, release builds with a setup and the mark log);
-	// nil: UNSUPPORTED.
-	handoverSrc handoverSource
-	// imp serves IMPORT_HANDOVER, the target's side of HANDOVER
-	// (handover_import.go, release builds with a setup and the mark log);
-	// nil: UNSUPPORTED.
-	imp handoverImporter
 
 	started time.Time
 	wg      sync.WaitGroup
@@ -116,16 +106,10 @@ type Server struct {
 	panicked atomic.Pointer[string]
 	// panicHook, tests only, runs before each request is served.
 	panicHook func(wire.Frame)
-	// handedOver: this runner handed its shares over and signs nothing.
-	handedOver atomic.Bool
 	// lostLogged: the loss of the mark log is in the log (lostRefusal).
 	lostLogged atomic.Bool
 	// sources is the device source alarm (sourcewatch.go).
 	sources sourceWatch
-	// sharesMu orders share additions (read) against the handover's read
-	// of every share and its tombstone (write): no share is added between
-	// the two, so none is left behind.
-	sharesMu namedRWMutex[sharesMuName]
 	// blocked holds validators whose import raised the mark log but whose
 	// interchange maxima the core did not take: they sign nothing until a
 	// restart, which reads the raised mark.
@@ -411,7 +395,7 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 		copy(sec[:], rec.Secret)
 		if err := s.checkWholeKey(pk, &sec); err != nil {
 			clear(sec[:])
-			errs = append(errs, fmt.Errorf("%s: %w; the record stays in the store and is not loaded: remove it (a handover from this runner refuses until then)", k, err))
+			errs = append(errs, fmt.Errorf("%s: %w; the record stays in the store and is not loaded: remove it", k, err))
 			continue
 		}
 		s.Hooks.ExpectRecord(pk)
@@ -617,23 +601,11 @@ func (s *Server) handleConn(ctx context.Context, c net.Conn) {
 
 func (s *Server) dispatch(ctx context.Context, f wire.Frame) ([]byte, error) {
 	switch f.Type {
-	case wire.TypeHealth, wire.TypePublicKeys, wire.TypeAttest, wire.TypeIdentity, handover.Type, handover.TypeOrder:
-	default:
-		// After a handover the runner answers status, keys and attestation
-		// only, and the handover again; nothing that signs or imports.
-		if s.HandedOver() {
-			if f.Type == wireadmin.TypeImportShare {
-				clear(f.Payload)
-			}
-			return nil, backend.Refused(backend.StatusStorage, "handed over to another image: this runner signs and imports nothing")
-		}
-	}
-	switch f.Type {
 	case wire.TypeHealth, wire.TypePublicKeys, wire.TypeAttest, wire.TypeIdentity:
 	default:
 		// Another runner instance took the mark log over (RBRLOG-03), or a
 		// state-changing request panicked (recover.go): this one signs,
-		// imports and hands over nothing, also messages that write no
+		// and imports nothing, also messages that write no
 		// record, and answers status, keys and attestation only.
 		err := s.panicRefusal()
 		if err == nil {
@@ -661,21 +633,6 @@ func (s *Server) dispatch(ctx context.Context, f wire.Frame) ([]byte, error) {
 		}
 	}
 	switch f.Type {
-	case handover.Type, handover.TypeOrder:
-		if s.handoverSrc == nil {
-			return nil, backend.Refused(backend.StatusUnsupported,
-				"this runner hands over to no one: HANDOVER needs a release build with a setup and the mark log, whose verifier checks the target's attestation")
-		}
-		if f.Type == handover.TypeOrder {
-			return s.handoverSrc.order(ctx, f.Payload)
-		}
-		return s.handoverSrc.handover(ctx, f.Payload)
-	case handover.TypeImport:
-		if s.imp == nil {
-			return nil, backend.Refused(backend.StatusUnsupported,
-				"this runner takes no handed-over shares: IMPORT_HANDOVER needs a release build with a setup and the mark log, whose verifier checks the source's origin proof")
-		}
-		return s.imp.importShares(ctx, f.Payload)
 	case wire.TypeHealth:
 		h, err := s.health()
 		if err != nil {
@@ -703,9 +660,6 @@ func (s *Server) dispatch(ctx context.Context, f wire.Frame) ([]byte, error) {
 	case wireadmin.TypeImportSealed:
 		if s.ImportKey == nil {
 			return nil, backend.Refused(backend.StatusUnsupported, "sealed share import is disabled (-sealed-import=false)")
-		}
-		if o := s.importing(); o != nil {
-			return nil, backend.Refused(backend.StatusNotReady, "a handover import (order %x) is in progress: this runner takes the handed-over shares only until it ends", o.Hash[:8])
 		}
 		req, err := wireadmin.DecodeImportSealed(f.Payload)
 		if err != nil {
@@ -759,7 +713,7 @@ func (s *Server) lostRefusal() error {
 		return nil
 	}
 	if s.lostLogged.CompareAndSwap(false, true) {
-		s.Log.Error("mark log lost to another runner instance: this runner signs, imports and hands over nothing until it is replaced",
+		s.Log.Error("mark log lost to another runner instance: this runner signs and imports nothing until it is replaced",
 			"err", lost, "record", s.Hooks.MarkLogStatus())
 	}
 	return backend.Refused(backend.StatusNotReady, "mark log: %v", lost)
@@ -826,12 +780,6 @@ func (s *Server) sign(req backend.SignRequest) (backend.Signature, error) {
 		return backend.Signature{}, backend.Refused(backend.StatusStorage, "the import's bounds (interchange maxima or import floor) did not reach the core; restart the runner")
 	}
 	kind := req.Message.Kind().String()
-	if o := s.importing(); o != nil {
-		// A handover target signs nothing before every share is in, also
-		// after a restart mid-import: the slot is in the mark log.
-		return backend.Signature{}, backend.Refused(backend.StatusNotReady,
-			"a handover import (order %x) is in progress: nothing is signed until every handed-over share is in", o.Hash[:8])
-	}
 	if a, ok := req.Message.(*backend.AttestationData); ok && s.Hooks != nil {
 		if f, on := s.Hooks.SourceFloor(req.Pubkey); on && a.Source.Epoch < f {
 			err := backend.Refused(backend.StatusSlashSource,
@@ -962,45 +910,24 @@ func describe(m backend.Message) string {
 
 // addShare seals and stores an imported share and loads it into the
 // signer. how is "plaintext" or "sealed", for the log.
-func (s *Server) addShare(pk backend.Pubkey, secret *[32]byte, index uint64, interchange *backend.Watermark, how string) (backend.ValidatorKey, error) {
-	return s.addShareOf(pk, secret, index, interchange, how, nil)
-}
-
-// addShareOf is addShare with keys, the signer's list the duplicate check
-// uses (a handover import takes it once per request); nil reads it now.
 //
 // One share per validator is added at a time, and the duplicate check
-// looks at the core after the caller's list: keys may be older than a
+// looks at the core after the signer's list: the list may be older than a
 // share of pk that another request loaded since. A second share of a
 // validator is refused before it is stored, so it never replaces the
 // stored record of the share that loaded (SSI-STORAGE-01).
-func (s *Server) addShareOf(pk backend.Pubkey, secret *[32]byte, index uint64, interchange *backend.Watermark, how string,
-	keys []backend.ValidatorKey) (backend.ValidatorKey, error) {
+func (s *Server) addShare(pk backend.Pubkey, secret *[32]byte, index uint64, interchange *backend.Watermark, how string) (backend.ValidatorKey, error) {
 	if err := s.reserve(pk); err != nil {
 		return backend.ValidatorKey{}, err
 	}
 	defer s.release(pk)
-	s.sharesMu.RLock()
-	defer s.sharesMu.RUnlock()
-	if s.HandedOver() {
-		return backend.ValidatorKey{}, backend.Refused(backend.StatusStorage, "handed over to another image: this runner imports nothing")
-	}
-	if o := s.importing(); o != nil && how != "handover" {
-		// Checked under the share lock, which the import's start holds while
-		// it writes the slot (handover_import.go).
-		return backend.ValidatorKey{}, backend.Refused(backend.StatusNotReady,
-			"a handover import (order %x) is in progress: this runner takes the handed-over shares only until it ends", o.Hash[:8])
-	}
-	if keys == nil {
-		keys = s.Signer.Keys()
-	}
-	if err := s.checkShare(pk, secret, keys); err != nil {
+	if err := s.checkShare(pk, secret, s.Signer.Keys()); err != nil {
 		return backend.ValidatorKey{}, err
 	}
 	if _, err := s.Signer.State(pk); err == nil {
 		return backend.ValidatorKey{}, &backend.RefusedError{Code: backend.StatusDuplicate, Detail: "validator already loaded"}
 	}
-	// Interchange maxima (an EIP-3076 import, or the handover's mark) raise
+	// Interchange maxima (an EIP-3076 import) raise
 	// the mark log first: once the share is stored, a restart must read
 	// them from the log.
 	if interchange != nil && s.Hooks != nil {
@@ -1101,33 +1028,11 @@ func (s *Server) release(pk backend.Pubkey) {
 	delete(s.admitting, pk)
 }
 
-// importing is the handover order whose import is in progress here, nil
-// when none is (Updates.ImportOrder).
-func (s *Server) importing() *markstore.Order {
-	if s.Updates == nil {
-		return nil
-	}
-	return s.Updates.ImportOrder()
-}
-
 // checkMaxima refuses interchange maxima above the clock epoch plus the
 // restart floor's margin (max_epochs_ahead + 1). No honest signer signed
 // past that, and maxima above it raise the mark log and stop every key of
-// this runner from signing until the clock gets there (2^64-1 is the
-// handover tombstone).
+// this runner from signing until the clock gets there.
 func (s *Server) checkMaxima(wm *backend.Watermark) error {
-	return s.checkMaximaAhead(wm, 0)
-}
-
-// checkHandoverMark is checkMaxima for a handover's mark (SHC-02): the
-// source's device mark, whose target and block bounds run up to the
-// commit-ahead window past what it signed, so the horizon is that much
-// later (this runner's commit_ahead target_epochs).
-func (s *Server) checkHandoverMark(wm *backend.Watermark) error {
-	return s.checkMaximaAhead(wm, s.Signer.Config().CommitAhead.TargetEpochs)
-}
-
-func (s *Server) checkMaximaAhead(wm *backend.Watermark, window uint64) error {
 	if wm == nil {
 		return nil
 	}
@@ -1137,7 +1042,7 @@ func (s *Server) checkMaximaAhead(wm *backend.Watermark, window uint64) error {
 	}
 	cfg := s.Signer.Config()
 	now := s.Signer.EpochAt(uint64(t.Unix()))
-	horizon := now + state.DefaultFloorMargin(cfg) + window
+	horizon := now + state.DefaultFloorMargin(cfg)
 	if horizon < now {
 		horizon = ^uint64(0)
 	}
@@ -1181,7 +1086,7 @@ func (s *Server) checkShare(pk backend.Pubkey, secret *[32]byte, keys []backend.
 // a signer holds shares of splits only, and a share equal to the whole
 // key comes from a degenerate split (for an honest one the chance is
 // about 1 in r). It runs wherever a key is stored or loaded: the sealed
-// import, the handover import, the debug plain import and a restart.
+// import, the debug plain import and a restart.
 func (s *Server) checkWholeKey(pk backend.Pubkey, secret *[32]byte) error {
 	if s.Updates == nil {
 		return nil
@@ -1293,13 +1198,6 @@ func (s *Server) loadShare(pk backend.Pubkey, secret *[32]byte, index uint64, in
 	return k, nil
 }
 
-// UserData is what ATTEST binds into the platform document:
-// backend.AttestUserData over the nonce, the setup state st and the hash of
-// the loaded keys.
-func (s *Server) UserData(nonce []byte, st *backend.SetupState) []byte {
-	return backend.AttestUserData(nonce, st, backend.KeysHash(s.Signer.Keys()))
-}
-
 func (s *Server) health() (*backend.Health, error) {
 	setup := s.SetupState()
 	h := &backend.Health{
@@ -1338,9 +1236,6 @@ func (s *Server) health() (*backend.Health, error) {
 	}
 	if r, ok := s.Platform.Clock.(clock.NTSReporter); ok {
 		h.NTS = healthNTS(r.NTSSummary())
-	}
-	if s.HandedOver() || s.importing() != nil {
-		h.Ready = false
 	}
 	if s.lostRefusal() != nil {
 		h.Ready, h.MarkLogLost = false, s.Hooks.MarkLogLost().Error()

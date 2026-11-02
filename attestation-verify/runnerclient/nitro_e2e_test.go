@@ -1,5 +1,3 @@
-//go:build !verifierselect
-
 package runnerclient
 
 // End to end: the AWS debug runner (build/<arch>/bin/runner-aws-debugimport) on the

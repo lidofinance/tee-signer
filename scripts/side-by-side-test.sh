@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The deploy scripts' names for a second signer next to a running one, a
-# handover target, checked without Azure or GCP:
+# The deploy scripts' names for a second signer next to a running one,
+# checked without Azure or GCP:
 #
 #   GCP    VM, ADDRESS_NAME, KMS_KEY, WIF_POOL and WIF_PROVIDER: the plan
 #          makes the target's address, key (kms-key-create, no key ring),

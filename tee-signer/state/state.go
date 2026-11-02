@@ -179,20 +179,13 @@ type MarkLog interface {
 	Append(ctx context.Context, wm backend.Watermark) error
 	// Raise makes the log's mark at least wm (one record if it is not yet).
 	Raise(ctx context.Context, wm backend.Watermark) error
-	// HandedOver reports a log that ends with a tombstone.
-	HandedOver() (backend.Watermark, bool)
-	// HandOverTo ends a log with a setup with a tombstone that names the
-	// target's setup_hash; again for the same target it returns the same
-	// mark, for another it refuses.
-	HandOverTo(ctx context.Context, target [32]byte) (backend.Watermark, error)
-	// HandedOverTo is the setup_hash the tombstone names, if any.
-	HandedOverTo() ([32]byte, bool)
 	// Exits is the day's exits the newest record carries;
 	// RecordExits writes a record that carries d (exit approvals).
 	Exits() *markstore.ExitDay
 	RecordExits(ctx context.Context, d *markstore.ExitDay) error
 	// Lost is the error the log latched: markstore.ErrLost after another
-	// instance wrote it, markstore.ErrHandedOver after a handover.
+	// instance wrote it, markstore.ErrHandedOver for a log that ends with a
+	// tombstone.
 	Lost() error
 	// SourceGate is the source gate the log holds; SetSourceGate sets the
 	// one the next record carries.
@@ -349,25 +342,6 @@ func (h *Hooks) RecordShareSet(ctx context.Context, s *markstore.ShareSet) error
 	return h.marks.RecordShareSet(ctx, s)
 }
 
-// HandOverTo ends the mark log for a handover to the runner of target's
-// setup (handover, one target per tombstone) and returns the mark the
-// target must start above.
-func (h *Hooks) HandOverTo(ctx context.Context, target [32]byte) (backend.Watermark, error) {
-	if h.marks == nil {
-		return backend.Watermark{}, ErrNoMarkLog
-	}
-	return h.marks.HandOverTo(ctx, target)
-}
-
-// HandedOverTo is the setup_hash the mark log's tombstone names, if it
-// ends with one that names a target.
-func (h *Hooks) HandedOverTo() ([32]byte, bool) {
-	if h.marks == nil {
-		return [32]byte{}, false
-	}
-	return h.marks.HandedOverTo()
-}
-
 // Exits is the day's exits in the mark log; ErrNoMarkLog without one.
 func (h *Hooks) Exits() (*markstore.ExitDay, error) {
 	if h.marks == nil {
@@ -386,7 +360,7 @@ func (h *Hooks) RecordExits(ctx context.Context, d *markstore.ExitDay) error {
 }
 
 // MarkLogLost is markstore.ErrLost once another runner instance took the
-// mark log over (RBRLOG-03), nil otherwise; a handover is not a loss.
+// mark log over (RBRLOG-03), nil otherwise; a tombstone is not a loss.
 func (h *Hooks) MarkLogLost() error {
 	if h.marks == nil {
 		return nil
@@ -420,15 +394,6 @@ func (h *Hooks) MarkLogUnchecked() error {
 		return u.LockUnchecked()
 	}
 	return nil
-}
-
-// HandedOver reports a mark log that ends with a handover's tombstone.
-func (h *Hooks) HandedOver() bool {
-	if h.marks == nil {
-		return false
-	}
-	_, ok := h.marks.HandedOver()
-	return ok
 }
 
 // MarkLogStatus describes the mark log, or "none".

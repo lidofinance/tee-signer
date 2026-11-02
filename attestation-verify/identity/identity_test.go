@@ -1,5 +1,3 @@
-//go:build !verifierselect
-
 package identity
 
 import (

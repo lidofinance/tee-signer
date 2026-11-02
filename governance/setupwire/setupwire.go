@@ -326,10 +326,8 @@ type PlatformConfig struct {
 	SlashingLogStore    Store
 	EncryptedStateStore *Store // Azure, GCP and dev only; nil: none
 	SealingKeyRelease   KeyRelease
-	// PeerAttestationHosts are the host:port names that the runner's
-	// attestation verifier fetches key sets from over HTTPS when it checks
-	// the other image of a handover: an Azure peer's MAA host, Google's
-	// Confidential Space issuer and key host.
+	// PeerAttestationHosts are host:port names the runner's HTTP client
+	// may reach over HTTPS besides its fixed routes.
 	// Nitro and dev only: a Nitro enclave reaches no host but the routes of
 	// its setup, and on dev the list limits the runner the same way, for
 	// tests. Sorted, without repeats.

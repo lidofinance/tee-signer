@@ -26,8 +26,7 @@ func serveOne(s *Server) (net.Conn, chan struct{}) {
 	return peer, done
 }
 
-// A panic in a request (SHH-03: a truncated carry in IMPORT_HANDOVER) is
-// a bug, never a way to stop the runner: that connection closes, and the
+// A panic in a request is a bug, never a way to stop the runner: that connection closes, and the
 // runner goes on answering on other connections. Here PUBLIC_KEYS on a
 // server without a signer panics on the nil signer.
 func TestPanicInARequestClosesOnlyItsConnection(t *testing.T) {
