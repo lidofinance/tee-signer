@@ -164,9 +164,10 @@ func TestHTC01ReserveRefusesStoredShare(t *testing.T) {
 }
 
 // HTC-01 on the first page without a reservation: the import does not
-// start on a runner with a stored share.
+// start on a runner with a stored share. The source hands over shares of
+// splits, so the target runs in threshold mode.
 func TestHTC01FirstPageRefusesStoredShare(t *testing.T) {
-	e := newTgtEnv(t, "dev", nil)
+	e := newShareTgtEnv(t, "dev", nil)
 	plantUnloaded(t, e)
 	src := newSource(t, 2, testMark)
 	order, hash := e.order([]byte{1, 2}, nil)

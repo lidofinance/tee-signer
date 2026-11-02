@@ -38,6 +38,14 @@ func newSrcEnv(t *testing.T, change func(s *setupwire.Setup)) *tgtEnv {
 	})
 }
 
+// newSingleSrcEnv is newSrcEnv in single mode: it holds whole keys, as
+// the tests that import keys made by newKey need. A target of it
+// (newTargetOf) is single-mode too.
+func newSingleSrcEnv(t *testing.T) *tgtEnv {
+	t.Helper()
+	return newSrcEnv(t, func(s *setupwire.Setup) { s.SigningMode = setupwire.SigningModeSingle })
+}
+
 // newTargetOf is a target of src: src's setup with handover_generation one
 // higher and version 0 of both groups as given (the source's values in
 // force), new salts; then change.
