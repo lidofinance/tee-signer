@@ -25,7 +25,7 @@ import (
 //     stay sealed in the store: no key material enters the core, and the
 //     runner serves HEALTH, PUBLIC_KEYS, ATTEST, IDENTITY and CONFIG_UPDATE
 //     only. A restart loads them once the list in force names the image.
-//  4. every request that signs or imports runs the check again
+//  4. every request that signs, hands over or imports runs the check again
 //     (server.Server.dispatch), so a locked update that drops the image
 //     stops the runner at its effective time.
 //

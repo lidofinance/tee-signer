@@ -1,3 +1,5 @@
+//go:build !verifierselect
+
 package runnerclient
 
 // End to end: the Azure debug runner (build/<arch>/bin/runner-azure-debugimport) with
@@ -90,7 +92,9 @@ type azureFakes struct {
 	denyKV   bool            // Key Vault answers 403, as for an attestation outside the release policy
 	// selfIssuer: the fake MAA is a provider of its own, as the real one
 	// is: its tokens' issuer is its own address, and it serves its OpenID
-	// configuration and key set (the main key set).
+	// configuration and key set (the main key set). The handover test uses
+	// it, because a runner checks another runner's token against the key
+	// set of its own maa_endpoint.
 	selfIssuer bool
 
 	mu       sync.Mutex

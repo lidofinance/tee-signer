@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/lidofinance/tee-signer/signer-protocol"
@@ -274,7 +275,8 @@ func TestUnreadableRecordDoesNotReset(t *testing.T) {
 }
 
 // A record whose write-back the store refuses at every start: every start
-// resets, and the key loads with the fresh floor.
+// resets, the key loads with the fresh floor, and the runner refuses to
+// read the stale record (no promotion, no handover from it).
 func TestRewriteAlwaysFailsKeepsResetting(t *testing.T) {
 	e := newTgtEnv(t, "dev", nil)
 	pka, pkb, floor := historyPair(t, e)
@@ -291,6 +293,9 @@ func TestRewriteAlwaysFailsKeepsResetting(t *testing.T) {
 		if f, on := e.hooks.SourceFloor(pkb); !on || f <= floor {
 			t.Fatalf("start %d: B loaded with floor %d (on %t)", i+1, f, on)
 		}
+	}
+	if err := e.srv.readShare(pkb, func(*shareRecord, *[32]byte) error { return nil }); err == nil {
+		t.Fatal("the stale record of B read without refusal")
 	}
 }
 
@@ -426,4 +431,175 @@ func TestFailedReimportDoesNotVouchOldRecord(t *testing.T) {
 	e.clock.add((f + 1 - e.signer.EpochAt(e.now())) * testEpoch)
 	en := e.signer.EpochAt(e.now())
 	wantSlashSource(t, e.signMsg(pkb, vote(floor+1, en+1)), "B below its import floor "+strconv.FormatUint(f2, 10))
+}
+
+// promotedPair imports A and B without history and lets B earn history:
+// B's record is the last share write.
+func promotedPair(t *testing.T, e *tgtEnv) (a, b backend.Pubkey, floor uint64) {
+	t.Helper()
+	floor = e.floorOf()
+	ska, pka := newKey(t)
+	skb, pkb := newKey(t)
+	for i, k := range []struct {
+		sk [32]byte
+		pk backend.Pubkey
+	}{{ska, pka}, {skb, pkb}} {
+		if err := e.importSealed(k.pk, k.sk, uint64(5+i), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.clock.add((floor + 1 - e.signer.EpochAt(e.now())) * testEpoch)
+	if err := e.signMsg(pkb, vote(floor, floor+1)); err != nil {
+		t.Fatal(err)
+	}
+	e.srv.promotions.Wait()
+	if !e.recordOf(pkb).History {
+		t.Fatal("B did not earn history")
+	}
+	return pka, pkb, floor
+}
+
+// At most maxPromotions promotion writes run at once; a vote over it
+// leaves its key for a later vote.
+func TestPromoteInFlightBound(t *testing.T) {
+	e := newTgtEnv(t, "dev", nil)
+	floor := e.floorOf()
+	var pks []backend.Pubkey
+	for i := range maxPromotions + 1 {
+		sk, pk := newKey(t)
+		if err := e.importSealed(pk, sk, uint64(20+i), nil); err != nil {
+			t.Fatal(err)
+		}
+		pks = append(pks, pk)
+	}
+	e.clock.add((floor + 1 - e.signer.EpochAt(e.now())) * testEpoch)
+	release := make(chan struct{})
+	e.store.mu.Lock()
+	e.store.failPut = func(string) bool { <-release; return false }
+	e.store.mu.Unlock()
+	for _, pk := range pks {
+		if err := e.signMsg(pk, vote(floor, floor+1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(release)
+	e.srv.promotions.Wait()
+	e.store.mu.Lock()
+	e.store.failPut = nil
+	e.store.mu.Unlock()
+	n := 0
+	for _, pk := range pks {
+		if e.recordOf(pk).History {
+			n++
+		}
+	}
+	if n != maxPromotions {
+		t.Fatalf("%d keys promoted with %d votes at once, want %d", n, len(pks), maxPromotions)
+	}
+}
+
+// The host hides a share record at the start before a handover: the first
+// key's (the start resets, and the log vouches for the smaller set) or the
+// newest key's (the set before its write, which the log still vouches
+// for). The log's count of records stays: the handover is refused until
+// the record is back, so no share is left on a source that handed over.
+func TestHiddenRecordBlocksHandover(t *testing.T) {
+	for hide := range 2 {
+		src := newSrcEnv(t, nil)
+		pks := src.addKeys(2, nil)
+		tgt := newTargetOf(t, src, nil, nil, nil)
+		blob, err := src.store.Get(shareKey(pks[hide]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		src.deleteShare(pks[hide])
+		src.restart()
+		if n := len(src.signer.Keys()); n != 1 {
+			t.Fatalf("hide %d: %d keys loaded with one record hidden", hide, n)
+		}
+		// A restart with the record still hidden keeps the count.
+		src.restart()
+		order, _ := srcOrder(t, src, tgt, []byte{1, 2}, nil)
+		if _, err := src.push(order); err != nil {
+			t.Fatal(err)
+		}
+		src.clock.add(srcDelay)
+		if _, err := handOver(t, src, tgt, order, 0); err == nil || !strings.Contains(err.Error(), "vouched for 2") {
+			t.Fatalf("hide %d: handover with a hidden record: %v", hide, err)
+		}
+		if src.srv.HandedOver() {
+			t.Fatalf("hide %d: the source handed over", hide)
+		}
+		// The record is back: the next start loads both and the handover
+		// carries both.
+		src.putRaw(pks[hide], blob)
+		src.restart()
+		_, imp := handOverAll(t, src, tgt, order)
+		if !imp.Done || imp.Total != 2 {
+			t.Fatalf("hide %d: handover after the record came back: %+v", hide, imp)
+		}
+	}
+}
+
+// After the tombstone the host puts back a record of B that has history,
+// from before B was imported again without it. A restart that stops
+// loading early (no clock for the reset floor) must not serve that
+// record in a handover page.
+func TestHandoverAfterLoadStoppedEarly(t *testing.T) {
+	src := newSingleSrcEnv(t)
+	src.looseLoad = true
+	tgt := newTargetOf(t, src, nil, nil, nil)
+	_, pkb, floor := promotedPair(t, src)
+	old, _ := src.store.Get(shareKey(pkb))
+	skb := src.secretOf(pkb)
+	src.deleteShare(pkb)
+	src.restart()
+	src.clock.add(20 * testEpoch) // B votes elsewhere
+	if err := src.importSealed(pkb, skb, 6, nil); err != nil {
+		t.Fatal(err)
+	}
+	order, _ := srcOrder(t, src, tgt, []byte{1, 2}, nil)
+	if _, err := src.push(order); err != nil {
+		t.Fatal(err)
+	}
+	src.clock.add(srcDelay)
+	if _, err := handOver(t, src, tgt, order, 0); err != nil {
+		t.Fatal(err)
+	}
+	src.putRaw(pkb, old)
+	src.beforeLoad = func() { src.clock.set(func(c *fakeClock) { c.err = errors.New("no clock") }) }
+	src.afterLoad = func() { src.clock.set(func(c *fakeClock) { c.err = nil }) }
+	src.restart()
+	src.beforeLoad, src.afterLoad = nil, nil
+	src.srv.ReadHandover()
+	if page, err := handOver(t, src, tgt, order, 0); err == nil {
+		for _, sh := range page.Shares {
+			if sh.Pubkey == pkb {
+				t.Fatalf("handover page after a load that stopped early: B history %t floor %d (vote floor %d)", sh.History, sh.SourceFloor, floor)
+			}
+		}
+		t.Fatal("handover page after a load that stopped early")
+	}
+}
+
+// After the tombstone and a restart the host hides a record: the handover
+// is refused rather than leaving that key behind unnamed.
+func TestHandoverAfterRestartHiddenRecord(t *testing.T) {
+	src := newSrcEnv(t, nil)
+	pks := src.addKeys(2, nil)
+	tgt := newTargetOf(t, src, nil, nil, nil)
+	order, _ := srcOrder(t, src, tgt, []byte{1, 2}, nil)
+	if _, err := src.push(order); err != nil {
+		t.Fatal(err)
+	}
+	src.clock.add(srcDelay)
+	if _, err := handOver(t, src, tgt, order, 0); err != nil {
+		t.Fatal(err)
+	}
+	src.restart()
+	src.srv.ReadHandover()
+	src.deleteShare(pks[1])
+	if page, err := handOver(t, src, tgt, order, 0); err == nil {
+		t.Fatalf("handover after a hidden record: %d of 2 shares served", page.Total)
+	}
 }

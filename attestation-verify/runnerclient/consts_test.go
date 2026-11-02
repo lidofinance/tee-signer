@@ -1,3 +1,5 @@
+//go:build !verifierselect
+
 package runnerclient
 
 // The platform and format names of the documents the tests build: the

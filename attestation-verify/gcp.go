@@ -1,3 +1,5 @@
+//go:build !verifierselect || platform_gcp
+
 package attest
 
 import (

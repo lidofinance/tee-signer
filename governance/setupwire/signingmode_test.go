@@ -8,7 +8,8 @@ import (
 
 // signing_mode is the last leaf of the public part: one byte after
 // slashing_log_min_lock_days, 1 threshold or 2 single. It moves
-// policy_root and setup_hash, not platform_commitment.
+// policy_root and setup_hash, not platform_commitment, and survives the
+// published form that a handover source reads.
 func TestSigningMode(t *testing.T) {
 	th := samples(t)["setup-nitro"]
 	si := samples(t)["setup-nitro"]
@@ -38,13 +39,29 @@ func TestSigningMode(t *testing.T) {
 	if ok(th.PlatformCommitment()) != ok(si.PlatformCommitment()) {
 		t.Fatal("signing_mode moved platform_commitment")
 	}
-	// A bad byte in the setup.
+	pb, err := PublishedOf(si)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := DecodePublished(must(pb.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.Policy.SigningMode != SigningModeSingle || ok(back.SetupHash()) != ok(si.Hash()) {
+		t.Fatalf("published round trip: %v", err)
+	}
+	// A bad byte in the setup and in a published leaf.
 	for _, v := range []byte{0, 3} {
 		raw := bytes.Clone(b)
 		raw[at] = v
 		if _, err := DecodeSetup(raw); err == nil || !strings.Contains(err.Error(), "signing_mode") {
 			t.Errorf("signing_mode byte %d: %v, want a refusal", v, err)
 		}
+	}
+	pubL, lk, op, _ := si.Policy().Leaves()
+	pubL[NumPublicLeaves-1].Value = []byte{0}
+	if _, err := PolicyFromLeaves(pubL, lk, op); err == nil || !strings.Contains(err.Error(), "signing_mode") {
+		t.Errorf("published signing_mode 0: %v, want a refusal", err)
 	}
 	for _, c := range []struct {
 		s    string

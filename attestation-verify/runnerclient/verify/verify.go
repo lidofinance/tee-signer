@@ -1,8 +1,10 @@
 // Package verify checks a runner's attestation: the settings
 // (Attestation), the verifier of each platform for an IDENTITY response
-// (NewVerifier), and the setup pins. The tools reach it through package
-// runnerclient, which dials the runner and runs the verifier on every
-// connection.
+// (NewVerifier) and for a document with user data the caller computed
+// (NewDocumentVerifier), and the setup pins. A runner links this package
+// to check the other runner of a handover; the tools reach it through
+// package runnerclient, which dials the runner and runs the verifier on
+// every connection.
 package verify
 
 import (
@@ -225,7 +227,7 @@ func (a *Attestation) verifier(o *optset.Options) (VerifyFunc, error) {
 	}
 	f, ok := verifierFactories[a.Verifier]
 	if !ok {
-		return nil, fmt.Errorf("attestation.verifier: %q is not built into this program", a.Verifier)
+		return nil, fmt.Errorf("attestation.verifier: %q is not built into this program (build tag %s)", a.Verifier, peerTags[a.Verifier])
 	}
 	v, err := f(a, o)
 	if err != nil {
@@ -239,8 +241,21 @@ func (a *Attestation) verifier(o *optset.Options) (VerifyFunc, error) {
 }
 
 // verifierFactories holds the verifiers built into this program. Each
-// verifier's file adds its own.
+// verifier's file adds its own. A runner built with the tag verifierselect
+// has only those its platform_* tags name (the handover checks the other
+// image with its own platform's verifier); every other program has all four.
 var verifierFactories = map[string]func(a *Attestation, o *optset.Options) (VerifyFunc, error){}
+
+// peerTags names the build tag of each verifier, for the error above.
+var peerTags = map[string]string{
+	VerifierDev: "platform_dev", VerifierAzureMAA: "platform_azure", VerifierAWSNitro: "platform_aws", VerifierGCPCS: "platform_gcp",
+}
+
+// Available reports whether the verifier is built into this program.
+func Available(verifier string) bool {
+	_, ok := verifierFactories[verifier]
+	return ok
+}
 
 // checkDocument makes the checks that need no key set or root: id carries a
 // document of this platform and format, and its user data is what

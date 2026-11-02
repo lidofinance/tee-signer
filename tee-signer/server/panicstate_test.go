@@ -10,6 +10,7 @@ import (
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
 	wireadmin "github.com/lidofinance/tee-signer/signer-protocol/wire/admin"
+	"github.com/lidofinance/tee-signer/tee-signer/handover"
 )
 
 // ask sends one frame as the local admin, as a connection would (answer
@@ -45,7 +46,8 @@ func (e *tgtEnv) panicOn(t wire.MsgType) {
 // IDENTITY until it restarts, as after ErrLost, and HEALTH says why. A
 // panic in a read-only request only closes its connection.
 func TestPanicInAStateChangingRequestRefusesUntilRestart(t *testing.T) {
-	changing := []wire.MsgType{wire.TypeSign, wireadmin.TypeImportSealed, wireadmin.TypeConfigUpdate}
+	changing := []wire.MsgType{wire.TypeSign, wireadmin.TypeImportSealed, wireadmin.TypeConfigUpdate,
+		handover.TypeOrder, handover.Type, handover.TypeImport}
 	for _, pt := range changing {
 		t.Run(pt.String(), func(t *testing.T) {
 			e := newTgtEnv(t, "dev", nil)

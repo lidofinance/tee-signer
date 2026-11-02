@@ -25,11 +25,10 @@ bad() { echo "check-imports: $*" >&2; fail=1; }
 # (space-separated prefixes). Nothing for any other package.
 host_only() {
   case "$1" in
-    # The enclave's side of the host agent and of the UDP relay.
+    # The enclave's side of the host agent and of the UDP relay, and the
+    # attestation checks a runner makes of the other runner of a handover.
     platform-aws/hostagent/agentclient|platform-aws/hostagent/agentwire|platform-aws/udprelay/relayclient) ;;
-    # The attestation verifiers: the tools and the tests check runners, no
-    # runner checks another one.
-    attestation-verify/runnerclient/verify|attestation-verify/runnerclient/internal/optset) echo "attestation-verify/ signer-admin/ tests/" ;;
+    attestation-verify/runnerclient/verify|attestation-verify/runnerclient/internal/optset) ;;
     platform-aws/hostagent|platform-aws/hostagent/*) echo "platform-aws/cmd/" ;;
     platform-aws/udprelay|platform-aws/udprelay/*) echo "platform-aws/cmd/" ;;
     attestation-verify/runnerclient|attestation-verify/runnerclient/*) echo "signer-admin/ tests/" ;;

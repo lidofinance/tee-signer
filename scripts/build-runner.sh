@@ -145,6 +145,14 @@ for arch in "${archs[@]}"; do
         has_string "$out/$name" "0.1.0+testnet" no "a default build is not a testnet build"
         has_string "$out/$name" allow-unlisted-image no "a default build always holds the image check (signer-protocol/docs/protocol.md, Image check)" ;;
     esac
+    # Every release build has both handover sides; the debug builds have
+    # neither (tee-signer/server, tag debugimport).
+    case "$name" in
+      *-debugimport)
+        has_string "$out/$name" signer-handover-order-record-v1 no "a debug build cannot hand over, so no image takes it" ;;
+      *)
+        has_string "$out/$name" signer-handover-order-record-v1 yes "a release build has the handover source side" ;;
+    esac
     for opt in test_nsm_url test_snp_hostdata test_imds_url test_google_url; do
       case "$name:$opt" in
         runner-aws-debugimport:test_nsm_url|runner-azure-debugimport:test_snp_hostdata|runner-azure-debugimport:test_imds_url|runner-gcp-debugimport:test_google_url)

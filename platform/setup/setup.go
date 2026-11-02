@@ -81,6 +81,23 @@ func Load(raw []byte, image string) (*Setup, error) {
 	return &Setup{Raw: bytes.Clone(raw), SHA256: h, Wire: s}, nil
 }
 
+// AttestationEgress says which hosts the runner's HTTP client reaches when its
+// egress is limited: on Nitro always, the setup's peer_attestation_hosts over the
+// peer block of the port map (maybe none); on dev when the setup lists
+// any, the same hosts dialled directly (dev.New, option egress). limited
+// is false where the runner reaches any host: Azure, GCP, and dev without
+// a list. The handover orders refuse an image whose verifier fetches a
+// key set from a host outside a limited list.
+func AttestationEgress(s *setupwire.Setup) (endpoints []string, limited bool) {
+	switch p := &s.Platform; p.Platform {
+	case setupwire.PlatformNitro:
+		return p.PeerAttestationHosts, true
+	case setupwire.PlatformDev:
+		return p.PeerAttestationHosts, len(p.PeerAttestationHosts) > 0
+	}
+	return nil, false
+}
+
 // HashHex is setup_hash in hex.
 func (s *Setup) HashHex() string { return hex.EncodeToString(s.SHA256[:]) }
 

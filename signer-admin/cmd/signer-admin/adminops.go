@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
+	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/governance/importorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	adminapprover "github.com/lidofinance/tee-signer/signer-admin/approver"
@@ -813,6 +814,14 @@ func signingInput(raw []byte) (setupwire.Context, []byte, bool) {
 		if _, body, _, err := readImport(raw); err == nil {
 			return setupwire.CtxImportOrder, body, true
 		}
+	case handoverorder.IsOrder(raw):
+		if o, err := handoverorder.Decode(raw); err == nil {
+			if body, err := o.Body.Encode(); err == nil {
+				return setupwire.CtxHandoverOrder, body, true
+			}
+		}
+	case handoverorder.IsBody(raw):
+		return setupwire.CtxHandoverOrder, raw, true
 	case raw[0] == 'U':
 		if u, err := setupwire.DecodeUpdate(raw); err == nil {
 			if h, err := u.Body.Header(); err == nil {

@@ -30,7 +30,7 @@ import (
 //     hold its first FreeFrameBytes (64 KiB) without counting, so SIGN,
 //     HEALTH, IDENTITY and ATTEST (all far below that) are never refused
 //     for memory. Only the bytes past 64 KiB of a frame count: share
-//     imports and big config updates. 64 MiB holds 64
+//     imports, handover pages and big config updates. 64 MiB holds 64
 //     frames of the full 1 MiB at once; with 256 connections times 64 KiB
 //     the frame buffers stay below 80 MiB, against the 1 GiB of the Azure
 //     container.

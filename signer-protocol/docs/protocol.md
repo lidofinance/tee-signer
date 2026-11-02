@@ -6,12 +6,13 @@ vsock. On GCP and Azure the TCP stream, and on AWS the vsock stream, runs
 inside mutual TLS 1.3 (see "Channel binding" below). The reference code is
 `signer-protocol/wire/wire.go`;
 its tests encode and decode every message and compare the bytes. The fuzz targets in `signer-protocol/wire`
-(`fuzz_test.go`, `go test -fuzz=FuzzX`) check that
+and `governance/handoverorder` (`fuzz_test.go`, `go test -fuzz=FuzzX`) check that
 no decoder panics and that what decodes encodes back to the same bytes.
 
 IDENTITY and ATTEST carry a version byte, 1: the request ends with it, and
 the answer starts with it and carries the setup state. A runner answers a
-request of another version with `UNSUPPORTED`.
+request of another version with `UNSUPPORTED`. The identity inside the
+handover messages starts with the same version byte.
 
 ## Framing
 
@@ -41,7 +42,8 @@ body  = version:u8  type:u8  id:u32  payload
   frame may hold its first 64 KiB freely; the bytes past that count
   against 64 MiB for all frames together (`-max-inflight-mib`), and a
   frame that would go over closes its connection. So SIGN, HEALTH,
-  IDENTITY and ATTEST never wait on that cap; large imports may. There is no idle timeout between frames by default
+  IDENTITY and ATTEST never wait on that cap; large imports and handover
+  pages may. There is no idle timeout between frames by default
   (`-idle-timeout`, 0): a client pool that does not dial again when it
   finds a connection closed would fail a request on each idle one.
 - A request that panics in the runner gets no answer: its connection
@@ -84,11 +86,11 @@ that; a client that needs to tell causes apart reads `detail`.
 | 1 | `SC_ERR_ARG` | the core refused an argument; also a config update whose values the core refuses (policy, slot times) | no |
 | 2 | `SC_ERR_NOMEM` | the core is out of memory | maybe |
 | 3 | `SC_ERR_DECODE` | the core could not decode the message | no |
-| 4 | `SC_ERR_BAD_KEY` | a share or key does not check out: a sealed share for another runner or boot, a header changed in transit, a share that does not match `share_pubkey` | no; a sealed import needs a fresh IDENTITY and a new seal |
+| 4 | `SC_ERR_BAD_KEY` | a share or key does not check out: a sealed share for another runner or boot, a header changed in transit, a share that does not match `share_pubkey`, a HANDOVER target whose attestation fails | no; a sealed import needs a fresh IDENTITY and a new seal |
 | 5 | `SC_ERR_DUPLICATE` | the validator is loaded already | no |
 | 6 | `SC_ERR_UNKNOWN_VALIDATOR` | no share of this validator is loaded | no |
-| 7 | `SC_ERR_STORAGE` | overloaded: an import whose maxima did not reach the core (until a restart); the mark log has no `log_id` yet; the body of a config update in force is unreadable (until that update is sent again); a mark log or share write failed | maybe |
-| 8 | `SC_ERR_CLOCK` | no trusted time (the NTS clock lacks a quorum, or the clock is not trusted for a config update) | later |
+| 7 | `SC_ERR_STORAGE` | overloaded: the runner handed over and signs nothing (for good); an import whose maxima did not reach the core (until a restart); the mark log has no `log_id` yet; the body of a config update in force is unreadable (until that update is sent again); a mark log or share write failed | maybe |
+| 8 | `SC_ERR_CLOCK` | no trusted time (the NTS clock lacks a quorum, or the clock is not trusted for a config update or a handover) | later |
 | 9 to 12 | `SC_ERR_SLASH_BLOCK`, `_SOURCE`, `_TARGET`, `_SOURCE_GT_TARGET` | slashing protection refused | no |
 | 13 | `SC_ERR_POLICY_FUTURE` | the message's epoch is past the clock horizon, or the slot of a block, attestation, PTC vote or envelope has not started (2 s margin, `SC_SLOT_MARGIN_SECONDS`) | no (only once the clock catches up) |
 | 14 to 20 | `SC_ERR_POLICY_EXIT` (no longer sent), `_FEE_RECIPIENT`, `_GAS_LIMIT`, `_TIMESTAMP`, `_PUBKEY`, `_INDEX`, `_DOMAIN` | policy refused; `_DOMAIN` also for root types 2 to 6 without `allow_unverified_nonslashable` | no (until a config update) |
@@ -100,11 +102,11 @@ that; a client that needs to tell causes apart reads `detail`.
 | 26 | `SC_ERR_SCHEDULE` | a fork schedule update changes an epoch the signer may sign before it applies (`sc_signer_set_schedule`); CONFIG_UPDATE returns it, no SIGN does | no |
 | 27 | `SC_ERR_POLICY_BUILDER_AUTH` | kind 14: the root of the BuilderRequestAuth data is not on `builder_request_auth_roots` (an empty list refuses all) | no (until a locked config update) |
 | 28 | `SC_ERR_POLICY_TARGET_SLOT` | kind 1: the attestation's target epoch is not the epoch of its slot; no chain includes such data. A data check: a vote for a slot that has not started gets `SC_ERR_POLICY_FUTURE` | no |
-| 1000 | `BAD_REQUEST` | the payload does not parse, or the kind of a typed SIGN is unknown; also a well-formed CONFIG_UPDATE the runner refuses (reason in `detail`) | no |
+| 1000 | `BAD_REQUEST` | the payload does not parse, or the kind of a typed SIGN is unknown; also a well-formed CONFIG_UPDATE or HANDOVER message the runner refuses (reason in `detail`) | no |
 | 1001 | `UNSUPPORTED` | a message type this runner does not serve (unknown, another build, a flag that turns it off, a runner without a setup); an ATTEST or IDENTITY request of another version; an unknown root message type | no |
 | 1002 | `INTERNAL` | anything else | maybe |
 | 1003 | `DOMAIN_MISMATCH` | the request's domain (a typed kind's, or a root message's) differs from the one the runner computes | no |
-| 1004 | `NOT_READY` | the runner is not serving yet (CONFIG_UPDATE before its core exists), or the image check refuses (`detail` starts with `image check:`, see "Image check") | later |
+| 1004 | `NOT_READY` | the runner is not serving yet (CONFIG_UPDATE before its core exists), a handover import is in progress, or the image check refuses (`detail` starts with `image check:`, see "Image check") | later |
 | 1005 | `PLATFORM` | a sealing, store or attestation hook failed | maybe |
 | 1006 | `FORBIDDEN` | the client certificate's role does not allow this message (see "Client roles") | no |
 | 1007 | `RATE_LIMITED` | an attest-only client certificate had its fresh attestations of the minute (see "Client roles"); `detail` says how many seconds to wait | later |
@@ -127,17 +129,29 @@ A refusal caused by the restart floor carries
 | 0x06 | IDENTITY | `nonce_len:u16 nonce version:u8` (version 1) | identity, see below |
 | 0x07 | IMPORT_SHARE_SEALED | see below | key |
 | 0x08 | CONFIG_UPDATE | the signed update, see below (a runner with a setup) | `version:u8 outcome:u8 setup_state` |
+| 0x31 | HANDOVER_ORDER | the signed handover order (`governance/handoverorder`) | `outcome:u8 status:u8 hash[32] arrived:u64 act_at:u64 not_after:u64 why_len:u16 why` |
+| 0x32 | HANDOVER | `version:u8(2) nonce_len:u16 nonce identity_len:u32 identity policy_len:u32 policy order_len:u32 order start:u32` | `version:u8(2) mark[26] total:u32 origin_proof count:u16 (len:u16 share)* carry_len:u32 carry`, at most 256 shares; see `tee-signer/handover` message.go and carry.go |
+| 0x33 | IMPORT_HANDOVER | `version:u8(1) flags:u8 order_len:u32 order page_len:u32 page` | `version:u8(1) count:u16 (outcome:u8)* held:u32 total:u32 done:u8 reserved:u32 imported:u32` (reserved is zero) |
 
 A `mark` is `has_block:u8 block_slot:u64 has_attestation:u8 source_epoch:u64
 target_epoch:u64`. PUBLIC_KEYS has no paging: one frame holds at most
 10,082 keys (see "Open items").
 
-Type numbers: 0x01 to 0x08 are taken, the next free one is 0x0a. 0x09
-belonged to the removed exit approvals, 0x20 to 0x28 to the removed key
-generation and 0x31 to 0x33 to the removed handover; none of them is
-reused (TestRoleTable keeps them
-refused). A response type is the request type with 0x80 set, so request
-types stay below 0x80.
+The handover messages live in `tee-signer/handover`. HANDOVER_ORDER and
+HANDOVER are the source side, IMPORT_HANDOVER the target side of a
+handover between two runners with setups (see "Handover" below). A release
+build with a setup and the mark log serves all three. Other
+runners answer `UNSUPPORTED`.
+
+Type numbers: 0x01 to 0x08 are taken, the next free one is 0x0a. The
+handover takes 0x31 to 0x33. 0x09 belonged to the removed exit approvals
+and 0x20 to 0x28 to the removed key generation; neither is reused
+(TestRoleTable keeps them refused). A response type is the request type
+with 0x80 set, so request types stay below 0x80.
+
+After a handover the runner answers HEALTH, PUBLIC_KEYS, ATTEST, IDENTITY
+and the two handover source messages (0x31 and 0x32) as usual, and every
+other message with `SC_ERR_STORAGE`.
 
 `key = pubkey[48] share_pubkey[48] index:u64`. `pubkey` is the validator's
 on-chain key; `share_pubkey` the key of the share this runner holds;
@@ -295,15 +309,16 @@ key_origin: reserved[4] imported_keys:u32 reserved[32]
   `signer-approver-set-v1`), of the locked group in force. Zero when the
   runner cannot read the body of that update.
 - The pending order (kind 1 handover), its hash and act time, or
-  zeros. Only an image with a handover sets the order slot of the mark
-  log. This image does not start on a log whose state holds an order, so
-  it always reports zeros. A reader refuses any other kind.
+  zeros. Kind 1 is a source's handover order (from its arrival on, also
+  after the tombstone) or a target's handover import in progress (act
+  time: the import's start). A reader refuses any other kind.
 - `key_release_hash` (context `signer-key-release-v1`): the AWS runner's
   KMS key metadata and key policy, or the Azure runner's Key Vault release
   policy and flags, read once at start. Zero on GCP and dev, and when the
   read failed (the runner logs why).
 - The key origin: `imported_keys`, the number of loaded keys. Every key
-  came in by an import (sealed, or plaintext in a debug build). The reserved bytes are zero, and a reader refuses a state
+  came in by an import (sealed, handed over, or plaintext in a debug
+  build). The reserved bytes are zero, and a reader refuses a state
   where they are not: earlier builds counted keys made in key generation
   inside the runner there.
 
@@ -360,7 +375,7 @@ t = n = 1 only and refuses any share of a split with n > 1; a
 threshold-mode runner refuses t = n = 1 and applies the threshold rule
 (2t > n, and 2t - n >= 2 on mainnet) to every other split. Both
 refusals are `BAD_KEY` and name the setup's mode. The runner also checks
-each key against the mode on every import path (sealed and the
+each key against the mode on every import path (sealed, handover, the
 debug plain import) and at restart: a single-mode runner refuses a key
 whose public key is not the validator key, a threshold-mode runner one
 whose public key is the validator key (a share of a degenerate split is
@@ -368,7 +383,8 @@ the whole key). An import is refused with `BAD_KEY`, and so is a split
 with a commitment at the point at infinity. At restart the record stays
 in the store, the key is not loaded, the start goes on and logs "some
 stored shares did not load" with the key's name and a request to remove
-the record. Single mode is allowed
+the record; a handover from this runner refuses until it is removed,
+because the stored and loaded key sets differ. Single mode is allowed
 on every chain, mainnet included, on AWS and Azure. One key is held by
 one runner: a single-mode cluster has one signer, and each share index
 of a split belongs to one signer. A runner sees only its own setup, so
@@ -376,7 +392,9 @@ the tools apply this rule (`setupwire.CheckMembers`,
 `setupwire.CheckShareIndices`): `signer-admin setup` and every tool that
 reads `cluster.json` refuse a single-mode cluster of more than one
 signer, and `import-draft` refuses a split file that gives one index to
-two signers. The approvers check it for each import order they sign.
+two signers. The approvers check it for each import order they sign. A handover keeps the
+mode: the source refuses a target whose published `signing_mode` differs
+from its own, as it refuses any other public value that differs.
 
 A GCP signer holds a key alone only with a second, separate acceptance:
 a GCP setup with `signing_mode = single` is refused, so no runner starts
@@ -414,7 +432,8 @@ TestSampleSigningModes, TestUnsafeSingleKeyAccepted, TestCheckMembers,
 TestCheckShareIndices (setupwire), TestLoad (signer-admin/cluster),
 TestImportSigningMode, TestImportSampleSigningModes,
 TestSingleModeRefusesAnotherKey, TestThresholdModeRefusesAWholeKey,
-TestImportDegenerateSplit, TestHealthSingleKey (tee-signer/server),
+TestImportDegenerateSplit, TestHealthSingleKey,
+TestHandoverKeepsSigningMode (tee-signer/server),
 TestImportDraftSigningMode,
 TestSetupSingleSignerOnEveryPlatform, TestSetupAllowGCPSingleFlagScope,
 TestSetupMainnetGCPSingleNeedsNoLockAccepted, TestImportDraftSingleGCP,
@@ -467,7 +486,7 @@ or two key release calls that name two images, leave the image unknown.
 
 The list it compares with is the one in force: the newest mark log
 record's locked group, with every pending update past its effective time
-active (the `Updates` view that also feeds the core, with
+active (the `Updates` view that also feeds the core and the handover orders, with
 effective times from `setupwire.EffectiveActivation`). A pending update
 that adds the image counts only from its effective time, which is at least
 the images minimum (7 days, 7 minutes in a testnet build) after it
@@ -484,8 +503,9 @@ The start order:
    later update lists the image: then a restart loads them (state
    `restart_needed`).
 4. Every request but HEALTH, PUBLIC_KEYS, ATTEST, IDENTITY and
-   CONFIG_UPDATE runs the check again: SIGN and the
-   imports get `NOT_READY` with `image check:` and the reason. A locked update that
+   CONFIG_UPDATE runs the check again: SIGN, the imports,
+   and every handover message get
+   `NOT_READY` with `image check:` and the reason. A locked update that
    drops the image stops the runner at that update's effective time.
 
 A runner that fails the check stays up rather than exiting. An exit would
@@ -502,6 +522,9 @@ What "allowed" means on each path:
 - A signer's first start (a fresh setup, an empty mark log): the list is
   version 0 of the setup's locked group. A setup must list the image it
   runs; an empty list allows no cloud image.
+- A handover target: its setup's version 0 is the source's config in
+  force, which lists the target's image (the source checks the order's
+  target image against it). So a target passes on the same list.
 - The in-place swap: the new image must be on the list in force before it
   starts, so the allowed-images update goes first and waits out the images
   minimum.
@@ -666,8 +689,8 @@ version of the chain (EIP-7044).
 
 ### Approver signatures: direct and hashed
 
-Each approver signature (config update, import order)
-has two forms, and the runner takes either
+Each approver signature (config update, handover order,
+import order) has two forms, and the runner takes either
 per signature in the same `position:u8 signature[64]` slot:
 
 - direct: Ed25519 over the kind's context and the body, as above;
@@ -680,6 +703,7 @@ per signature in the same `position:u8 signature[64]` slot:
 | Kind | Direct context | Hashed context |
 | --- | --- | --- |
 | config update (over the header) | `signer-config-update-v1` | `signer-config-update-hash-v1` |
+| handover order | `signer-handover-order-v1` | `signer-handover-order-hash-v1` |
 | import order | `signer-import-order-v1` | `signer-import-order-hash-v1` |
 
 The direct message starts with its context, and the hashed one is SHA-256
@@ -804,7 +828,8 @@ order (the status of each refusal in brackets):
    (`SC_ERR_CLOCK` otherwise). The dev platform takes its untrusted clock.
    The clock comes before the version checks because it decides which
    pending update is in force already.
-4. The core exists (`NOT_READY` otherwise). The group's pending or active update sent again skips to
+4. No handover import is in progress, and the core exists (`NOT_READY`
+   otherwise). The group's pending or active update sent again skips to
    its signatures (pending) or straight to the body write (active), and
    answers `outcome` 2.
 5. `version` is above the group's active and pending versions, at most
@@ -862,11 +887,206 @@ its body back and the runner signs again. For the update in force the
 runner then checks only that the body has the hash the record names: its
 signers may have rotated away since.
 
+### Handover
+
+A handover moves every share and the slashing mark of one runner (the
+source) to a runner of a new image (the target), under an order that k
+approvers in force signed. The source's setup and the target's are
+different setups of one cluster: the setup puts the image's rules into
+`setup_hash`, so a new image needs a new setup, and a new setup starts with
+an empty mark log. The source side is `tee-signer/server/handover_source.go`,
+the target side `handover_import.go`; the encodings are in
+`governance/handoverorder` and `tee-signer/handover` (`message.go`,
+`import.go`, `carry.go`). All four messages need the admin role. Every release
+build with a setup and the mark log has both sides, and no image may go
+out without them (release gate, below).
+
+A handover works only between runners on the same cloud. A release build
+links the attestation verifier of its own platform only
+(`attestation-verify/runnerclient`, tag `verifierselect`), and the source
+checks the target with it: nitro hands over to an `aws-nitro` target,
+azure to `azure-maa`, gcp to `gcp-cs`, dev to `dev`. The source refuses
+an order whose target verifier it lacks (HANDOVER_ORDER, below), and
+`signer-admin handover-draft` refuses to draft one
+(`handoverorder.Runner.CheckSameCloud`).
+
+The operator's steps, with the tools of this tree:
+
+1. A target setup (`signer-admin handover-setup`): the source's setup
+   with `handover_generation` one higher, the same `cluster_id`, chain,
+   safety values and `signing_mode`, version 0 of both groups equal to the source's config in
+   force, its own salts, `max_keys`, stores and platform part, and a
+   `slashing_log_min_lock_days` no lower than the source's. The tool takes
+   the private part from a file, everything else from the source's setup
+   and its attested config in force, and draws one set of policy salts for
+   all targets of the cluster. If the target's image is new, an
+   allowed-images update on the source first.
+2. The order (`signer-admin handover-draft -target-setup`, then the
+   approvers' signatures) goes to the source in HANDOVER_ORDER. The draft
+   refuses a target the source would refuse, and writes the target's
+   published setup into the `.active` file, so `signer-admin show` prints
+   the target's public values and the source's check of them before an
+   approver signs. The private part stays behind `platform_commitment`.
+   If a share record is gone for good (the source holds fewer shares than
+   its mark log vouched for, and no keystore is left to import the key
+   again), the order's `left_behind` (`-left-behind`) names the group
+   pubkey of each lost share. The approvers sign that they accept the
+   loss. The source then hands over the rest, but only if exactly that
+   many records are missing and none of the named keys is stored. It
+   cannot tell which key a missing record held, so the approvers must
+   get the names right; a wrong name leaves the actual key behind all
+   the same. Without `left_behind` the source refuses the handover
+   while a record is missing.
+3. The target starts with no keys. `handover-target identity -order`
+   pushes the order to the target, which reserves itself for it (below),
+   then reads its IDENTITY for a fresh nonce over a connection pinned
+   to its `setup_sha256` and writes the identity file with the published
+   setup (`setupwire.Published`: the public part with every salt, and
+   `platform_commitment`; never the private part).
+4. Once the order acts, `handover-source -go` sends HANDOVER and writes
+   the pages; `handover-target import` passes them to the target in
+   IMPORT_HANDOVER.
+
+HANDOVER_ORDER on the target. An order that names the runner as its
+target reserves it: the runner checks the order as the first import
+request does (its target `setup_hash`, cluster, chain, k signatures of the
+approvers in force) and that it is empty, at version 0 of both groups with
+nothing pending, and writes the order into its import slot. From then on
+it takes no config update, no other order and no share but the order's,
+also after a restart, and its IDENTITY shows the order. So the IDENTITY
+answer the source checks stays true until the import, though the tool,
+not the source, chose its nonce. The same order again reports the
+reservation. It ends with the import; a target whose order is abandoned is
+replaced.
+
+HANDOVER_ORDER. The source checks the order's cluster, chain and source
+`setup_hash`, k signatures of the approvers in force, the target image on
+`allowed_image_measurements` in force, and a verifier for the target's
+settings built into this runner (the dev verifier on the dev platform
+only; on a runner limited to its peer hosts, key set hosts among them). It
+records the order in the order slot of the mark log's state with its act
+time: arrival on the trusted clock plus the change delay in force, at
+least the images minimum (7 days, 7 minutes in a testnet build; the dev
+platform waits the change delay only). `not_after` must lie after the act
+time. A second order is refused while one is pending or active; an
+expired or void one (approvals or image no longer in force) can be
+replaced. The same order again answers its state and keeps its time.
+At `not_after` the order leaves the slot by itself: IDENTITY no longer
+shows it, and the next record
+(the config sync writes one) holds the empty slot. The same order is then
+refused as expired. After the tombstone the order stays in the slot.
+
+HANDOVER. Before anything changes, the source checks:
+
+- the order is its pending order, past its act time, before `not_after`,
+  still signed by k approvers in force, its target image still allowed;
+- no config update is pending on the source;
+- the target's published setup rebuilds `policy_root` from its leaves and
+  salts, and `setup_hash` = H(`policy_root`, `platform_commitment`) is the
+  order's target and the one the target's identity carries;
+- the target's attestation verifies with the order's settings over the
+  IDENTITY user data, so its measurement is the order's image;
+- the target's public part equals the source's values leaf by leaf:
+  `cluster_id`, chain, safety, `handover_generation` + 1, and version 0
+  of both groups equal to the source's config in force; its
+  `slashing_log_min_lock_days` is no lower than the source's, since a
+  shorter lock would let the host delete the marks the target takes over
+  sooner (`handoverorder.CheckTarget`, which `signer-admin` applies too);
+- the target's state: version 0 of both groups with its published group
+  hashes, nothing pending, its setup's approver set, no key
+  (`imported_keys` 0), reserved for this order (the order in its slot), and `max_keys`
+  at least the source's share count, checked again on the shares read
+  under the share lock.
+
+Then the source stops signing, reads every stored share once, checks that
+they are its loaded keys and as many as its mark log vouched for, and writes the tombstone that names the target
+into the mark log (under the lock of config writes, and only if the config
+in force is still the one checked). Only then does it seal the first page.
+From the tombstone on, also after a restart, the source signs nothing,
+takes no other order, and answers HANDOVER for that target only, with
+the same mark: one target per tombstone. A target that restarted mid-import
+has a new import key; the source seals the same shares to it again.
+
+What a page carries, besides the shares sealed with HPKE to the target's
+attested import key:
+
+- the mark before the tombstone, as each share's interchange maxima. The
+  target raises its own log to it before it stores a share, and a fresh
+  target log takes its vote history from it;
+- each share's own vote history state, from the share's sealed record
+  (`history:u8 source_floor:u64` after the origin and its reserved bytes
+  in the share header). A key has history if an import with vote
+  history stored it, or once the source signed it a vote with a source at
+  or above its floor. The mark is the device mark of every key, so it does
+  not say that one key has history. The target exempts a key from the
+  source gate only if `history` is 1, which needs a mark with a vote and
+  no floor. Any other key gets a source floor of the higher of
+  `source_floor` and the target's restart floor epoch at the import
+  (marklog.md, "Source gate"). The target refuses a `source_floor` above
+  its clock epoch plus the floor margin and one epoch. Under
+  `-as-imported` the target does not check the origin signature, so it
+  trusts the history state as it trusts the mark there: only whoever
+  holds the share's secret can seal it. Version 2 of HANDOVER added these
+  fields. A runner of version 1 and one of version 2 refuse each other's
+  request and page, so no floor is lost between them;
+- each share's header (its mark, key origin and history state; the
+  origin is always imported, and the target refuses any other origin),
+  signed with the source's origin key, whose attestation over the order
+  hash the page carries;
+- the carry, which every page has: the key set the source hands over (how
+  many shares, and `KeysHash` of their pubkey and share pubkey pairs).
+  `has_exits` is always 0: an image with exit approvals carried the day's
+  exits after it, and a carry that has them is refused.
+
+```
+carry = version:u8(1) total:u32 keys_hash[32] has_exits:u8(0)
+```
+
+Each share's HPKE associated data covers its header (the mark, the
+origin and the history state) and the carry's hash (`signer-handover-carry-v1`). Nobody can
+change or drop the mark, the origin, the history state or the carry
+without the share failing to open. The config needs no carry: the target's version 0 is the source's
+config in force, which the source compared leaf by leaf, and old updates
+of the source do not chain onto the target's version 0 (`prev_hash`).
+
+IMPORT_HANDOVER. The target checks the order (its own `setup_hash`, cluster
+and chain, k approvers in force), finds itself empty at version 0 on the
+first request and writes the order into the slot: it signs nothing and
+takes no other share or update until every share is in, also
+after a restart. Every request of one process carries the same mark. It
+checks the origin proof and signatures (or skips them on request), opens
+each share, stores it after raising its log, and clears
+the slot when it holds exactly the carry's key set. Only a request in which a share
+opened under the carry ends the import: the page's total alone is not
+authenticated, and a page whose total is not its carry's does not decode.
+It then signs above the mark, after its restart floor. One share per
+validator is stored at a time, and a page that names a validator twice
+does not decode.
+
+A source keeps the sealed body of its pending order in the state copy. A
+source whose host lost it anyway reads the slot as an import and signs
+nothing until the order is pushed again, which restores the body on the
+hash the slot holds, before any check under the config in force: an order
+that a rotation or an image removal voided since comes back too, as void.
+It never takes an import for its own order.
+
+Release gate. `tests/e2e` `TestE2EHandoverGate` runs a dev release
+runner N that hands over to N+1 of the same tree, which hands over to N+2,
+with signing above the mark after each step and the source refusing
+everything after its tombstone. It runs in the default e2e set
+(`scripts/test.sh` fails unless it passed), and `scripts/handover-gate.sh`
+runs it on the dev release build of each flavour, default and testnet
+(`go test -tags testnet`, a test chain), and writes
+`build/handover-gate.stamp` with the source id of the tree once both
+passed. The Azure, GCP and Nitro image builds refuse to start unless the
+stamp matches the sources (`require_handover_gate` in `scripts/common.sh`).
+There is no override.
+
 ### Client roles
 
 Every connection has a client role, and the role table below is the only
 grant: a message type a role may not send gets `FORBIDDEN` before the
-runner reads its payload, and a refused
+runner reads its payload, before the handed-over check, and a refused
 IMPORT_SHARE or IMPORT_SHARE_SEALED payload is wiped. A type missing from
 the table (an unknown one, or a new message nobody added) is `FORBIDDEN`
 for every role.
@@ -952,6 +1172,7 @@ has mutual TLS.
 | 0x05 | IMPORT_SHARE (debug builds) | no | no | yes |
 | 0x07 | IMPORT_SHARE_SEALED | no | no | yes |
 | 0x08 | CONFIG_UPDATE | no | no | yes |
+| 0x31 to 0x33 | HANDOVER_ORDER, HANDOVER, IMPORT_HANDOVER | no | no | yes |
 | any other | | no | no | no |
 
 An admin certificate cannot SIGN, so a stolen one makes no signature.
@@ -1092,7 +1313,8 @@ document describes the code as it is.
 3. PUBLIC_KEYS has no paging. Past 10,082 keys the answer is larger than a
    frame: `WriteFrame` fails, the runner logs it and closes the connection
    without an answer.
-4. `detail` (1024 bytes) is cut at a byte count, which can split a UTF-8 sequence.
+4. `detail` (1024 bytes) and the `why` of handover order states
+   (512 bytes) are cut at a byte count, which can split a UTF-8 sequence.
 5. A request type with bit 0x80 set is not refused as such.
 6. IMPORT_SHARE and IMPORT_SHARE_SEALED take flags 0 with maxima that are
    not zero and drop the maxima. Only all-zero maxima should pass with

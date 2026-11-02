@@ -77,6 +77,8 @@ NITRO_IMAGE="signer-cloud/nitro-cli:$NITRO_CLI_TAG-$HOST_ARCH"
 # build/nitro-testnet).
 SUFFIX="$(image_suffix)"
 TAGS="netgo,osusergo,$(runner_tags "runner-aws$SUFFIX")"
+# The handover release gate (common.sh require_handover_gate).
+require_handover_gate "runner-aws$SUFFIX" || die "no image without the handover gate"
 ENCLAVE_IMAGE="signer-cloud/runner-enclave$SUFFIX:$arch"
 OUT="$BUILD/nitro$SUFFIX"
 CTX="$OUT/ctx-$arch"

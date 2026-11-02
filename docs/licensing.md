@@ -42,4 +42,4 @@ release review. These components are not Go modules or Rust crates.
 
 Adding notice files to an image changes its digest and, for Nitro, its enclave
 measurements. Rebuild and approve the resulting image through the normal image
-process.
+and handover process.

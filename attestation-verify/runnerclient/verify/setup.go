@@ -158,8 +158,8 @@ func EffectiveVersion(g backend.ConfigGroup, now time.Time) uint64 {
 // CheckPending refuses a state in which a locked update waits for its
 // effective activation time, or an order is pending. cloud-import runs it
 // on the identity of each share unless the operator passes -allow-pending: a share sent now stays under the
-// approvers or allowed images that the update brings in. Only an image
-// with a handover sets an order.
+// approvers, allowed images or handover target that the update or order
+// brings in.
 func CheckPending(s *backend.SetupState, now time.Time) error {
 	if p := s.Locked.Pending; Waiting(s.Locked, now) {
 		return fmt.Errorf("a locked config update is pending: version %d (sha256 %s), effective at %s",

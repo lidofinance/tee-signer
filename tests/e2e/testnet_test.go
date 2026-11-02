@@ -205,7 +205,7 @@ func TestE2ETestnetImagesUpdateWaits(t *testing.T) {
 	caFile, cliCfg := testPKI(t, dir, "waits")
 	var cluster [32]byte
 	rand.Read(cluster[:])
-	raw := devSetupFor(t, c, filepath.Join(dir, "signer-1"), caFile, "signer-1", cluster, nil)
+	raw := orderSetupFor(t, c, filepath.Join(dir, "signer-1"), caFile, "signer-1", cluster, nil)
 	s, err := setupwire.DecodeSetup(raw)
 	if err != nil {
 		t.Fatal(err)

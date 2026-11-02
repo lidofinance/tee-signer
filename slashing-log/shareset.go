@@ -17,6 +17,11 @@ import (
 type ShareSet struct {
 	Current [32]byte
 	Pending *[32]byte
+	// Held is the most share records the log has vouched for at once
+	// on this signer; 0 when not known (a record written before the
+	// count). The runner never removes a share record, so a set smaller
+	// than Held means a record is missing, and a handover waits for it.
+	Held uint32
 }
 
 // Clone copies s.
@@ -24,7 +29,7 @@ func (s *ShareSet) Clone() *ShareSet {
 	if s == nil {
 		return nil
 	}
-	c := &ShareSet{Current: s.Current}
+	c := &ShareSet{Current: s.Current, Held: s.Held}
 	if s.Pending != nil {
 		p := *s.Pending
 		c.Pending = &p
@@ -45,7 +50,7 @@ func sameShares(a, b *ShareSet) bool {
 	switch {
 	case a == nil || b == nil:
 		return a == nil && b == nil
-	case a.Current != b.Current || (a.Pending == nil) != (b.Pending == nil):
+	case a.Current != b.Current || a.Held != b.Held || (a.Pending == nil) != (b.Pending == nil):
 		return false
 	}
 	return a.Pending == nil || *a.Pending == *b.Pending

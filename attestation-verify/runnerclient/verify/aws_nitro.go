@@ -1,3 +1,5 @@
+//go:build !verifierselect || platform_aws
+
 package verify
 
 import (
@@ -82,6 +84,15 @@ func (a *Attestation) nitroVerifier(o *optset.Options) (VerifyFunc, error) {
 	return n.verify, nil
 }
 
+// nitroDocumentVerifier returns the aws-nitro document verifier.
+func (a *Attestation) nitroDocumentVerifier(o *optset.Options) (DocumentVerifier, error) {
+	n, err := a.newNitro(o)
+	if err != nil {
+		return nil, err
+	}
+	return n.verifyDocument, nil
+}
+
 func (a *Attestation) newNitro(o *optset.Options) (*nitroVerifier, error) {
 	pcrs, err := a.nitroPCRs()
 	if err != nil {
@@ -115,6 +126,18 @@ func (n *nitroVerifier) verify(_ context.Context, nonce []byte, id *backend.Iden
 	return err
 }
 
+// verifyDocument checks an NSM document that carries nonce and userData.
+func (n *nitroVerifier) verifyDocument(_ context.Context, nonce, userData []byte, a *backend.Attestation) error {
+	if err := checkUserData(userData, a, nitroPlatform, nitroFormat, "an AWS Nitro document"); err != nil {
+		return err
+	}
+	o := n.opts
+	o.Nonce, o.UserData = nonce, userData
+	_, err := attest.VerifyNitro(a.Document, o)
+	return err
+}
+
 func init() {
 	verifierFactories[VerifierAWSNitro] = (*Attestation).nitroVerifier
+	documentFactories[VerifierAWSNitro] = (*Attestation).nitroDocumentVerifier
 }

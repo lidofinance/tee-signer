@@ -29,6 +29,7 @@ import (
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
 	wireadmin "github.com/lidofinance/tee-signer/signer-protocol/wire/admin"
 	"github.com/lidofinance/tee-signer/slashing-log"
+	"github.com/lidofinance/tee-signer/tee-signer/handover"
 	"github.com/lidofinance/tee-signer/tee-signer/state"
 	"github.com/lidofinance/tee-signer/trusted-time/clock"
 )
@@ -87,7 +88,7 @@ type Server struct {
 	// hang on it.
 	OnWedged func(error)
 	// Image, if set, is the image check (imagegate.go) of a runner with a
-	// setup: a request that signs or imports goes through only
+	// setup: a request that signs, hands over or imports goes through only
 	// while it passes. nil: no check (the flag path, and tests).
 	Image *ImageGate
 	// SealingKeyUnproven: the platform's sealing key came from a stored
@@ -96,6 +97,15 @@ type Server struct {
 	// seals no share. Set before Serve and changed only by
 	// ProveSealingKey, also before Serve.
 	SealingKeyUnproven bool
+
+	// handoverSrc serves HANDOVER_ORDER and HANDOVER as a source
+	// (handover_source.go, release builds with a setup and the mark log);
+	// nil: UNSUPPORTED.
+	handoverSrc handoverSource
+	// imp serves IMPORT_HANDOVER, the target's side of HANDOVER
+	// (handover_import.go, release builds with a setup and the mark log);
+	// nil: UNSUPPORTED.
+	imp handoverImporter
 
 	started time.Time
 	wg      sync.WaitGroup
@@ -106,10 +116,16 @@ type Server struct {
 	panicked atomic.Pointer[string]
 	// panicHook, tests only, runs before each request is served.
 	panicHook func(wire.Frame)
+	// handedOver: this runner handed its shares over and signs nothing.
+	handedOver atomic.Bool
 	// lostLogged: the loss of the mark log is in the log (lostRefusal).
 	lostLogged atomic.Bool
 	// sources is the device source alarm (sourcewatch.go).
 	sources sourceWatch
+	// sharesMu orders share additions (read) against the handover's read
+	// of every share and its tombstone (write): no share is added between
+	// the two, so none is left behind.
+	sharesMu namedRWMutex[sharesMuName]
 	// blocked holds validators whose import raised the mark log but whose
 	// interchange maxima the core did not take: they sign nothing until a
 	// restart, which reads the raised mark.
@@ -121,10 +137,23 @@ type Server struct {
 	admitMu   sync.Mutex
 	admitting map[backend.Pubkey]bool
 	// shareHash is the sha256 of each stored share record this runner
-	// loaded or wrote, nil without a mark log (putShare). shareSetMu
-	// orders share writes.
+	// loaded or wrote, nil without a mark log and empty while a start's
+	// load has not set it (putShare, checkShareBlob);
+	// shareSetMu orders share writes. shareHeld is the share set's Held:
+	// the most records the mark log vouched for on this signer.
 	shareSetMu sync.Mutex
 	shareHash  map[backend.Pubkey][32]byte
+	shareHeld  uint32
+	// promoting holds the keys whose share record promote is writing now,
+	// promoted those whose record it wrote in this process; promotions
+	// counts the writes in flight.
+	promoteMu  sync.Mutex
+	promoting  map[backend.Pubkey]bool
+	promoted   map[backend.Pubkey]bool
+	promotions sync.WaitGroup
+	// promoteFailed: per key, the clock epoch of its last failed promotion
+	// write and how many failed (promote's brake).
+	promoteFailed map[backend.Pubkey]promoteTry
 	// attestLimit counts the fresh attestations of attest-only clients
 	// (limit.go); limitNow, if set, is its clock (tests).
 	attestLimit attestLimit
@@ -148,7 +177,9 @@ type shareRecord struct {
 	Secret []byte         `json:"secret"`
 	Index  uint64         `json:"index"`
 	// History: the import that stored the share carried attestation
-	// maxima, which raised the mark log first. A restart exempts the key
+	// maxima, which raised the mark log first, or the runner signed the
+	// key a vote at or above its source floor since (promote). A restart
+	// exempts the key
 	// from the source gate (state.Hooks.NoteHistory). The host can roll
 	// the record back to one without it, which only gates the key again.
 	History bool `json:"history,omitempty"`
@@ -275,6 +306,14 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 	if err := s.checkLogID(); err != nil {
 		return 0, err
 	}
+	if _, committed := s.Hooks.ShareSet(); committed {
+		// No stored record counts as loaded until the share set is known:
+		// a load that stops early leaves the runner reading none of them
+		// (checkShareBlob).
+		s.shareSetMu.Lock()
+		s.shareHash = map[backend.Pubkey][32]byte{}
+		s.shareSetMu.Unlock()
+	}
 	var errs []error
 	// The records that unseal and parse, and their blobs: the share set is
 	// the set of records this runner can read. A blob that does not unseal
@@ -361,7 +400,18 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 		}
 	}
 	if committed {
-		cur := &markstore.ShareSet{Current: markstore.ShareSetRoot(hashes)}
+		// Held never goes down: a record the host hides at this start
+		// still counts, so a handover waits until it is back.
+		held := uint32(0)
+		if set != nil {
+			held = set.Held
+		}
+		if uint64(len(pks)) < uint64(held) {
+			s.Log.Warn("fewer share records stored than the mark log vouched for: a handover is refused until the missing ones are back",
+				"records", len(pks), "vouched", held)
+		}
+		held = heldOf(held, len(pks))
+		cur := &markstore.ShareSet{Current: markstore.ShareSetRoot(hashes), Held: held}
 		if reset {
 			// Before the rewrites: if this record fails, the log still
 			// vouches for the old set, so no key loads, and a start cut
@@ -377,7 +427,7 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 			s.Hooks.SetShareSet(cur)
 		}
 		s.shareSetMu.Lock()
-		s.shareHash = hashes
+		s.shareHash, s.shareHeld = hashes, held
 		s.shareSetMu.Unlock()
 	}
 	loaded := 0
@@ -393,7 +443,7 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 		copy(sec[:], rec.Secret)
 		if err := s.checkWholeKey(pk, &sec); err != nil {
 			clear(sec[:])
-			errs = append(errs, fmt.Errorf("%s: %w; the record stays in the store and is not loaded: remove it", k, err))
+			errs = append(errs, fmt.Errorf("%s: %w; the record stays in the store and is not loaded: remove it (a handover from this runner refuses until then)", k, err))
 			continue
 		}
 		s.Hooks.ExpectRecord(pk)
@@ -414,6 +464,22 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 	return loaded, errors.Join(errs...)
 }
 
+// heldOf is the share set count after n records: held or n, the larger.
+func heldOf(held uint32, n int) uint32 {
+	if uint64(n) > uint64(held) {
+		return uint32(min(uint64(n), 1<<32-1))
+	}
+	return held
+}
+
+// SharesHeld is the most share records the mark log vouched for on this
+// signer (markstore.ShareSet.Held), 0 without a mark log.
+func (s *Server) SharesHeld() uint32 {
+	s.shareSetMu.Lock()
+	defer s.shareSetMu.Unlock()
+	return s.shareHeld
+}
+
 // putShare stores pk's sealed record blob. With a mark log the write goes
 // under the share set commitment: first a log record that vouches for the
 // set before the write and the set after it (current and pending root),
@@ -421,49 +487,29 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 // the two sets and loads it; the set before holds no record of the key,
 // so nothing with more history than the set after. Share writes go one at
 // a time.
-func (s *Server) putShare(pk backend.Pubkey, blob []byte) error {
-	if _, committed := s.Hooks.ShareSet(); !committed {
-		return s.Platform.Store.Put(shareKey(pk), blob)
-	}
-	s.shareSetMu.Lock()
-	defer s.shareSetMu.Unlock()
-	// The set before. It leaves out the key's old record, which this
-	// runner did not load and which may say the key has history: a write
-	// that fails then leaves no set the log vouches for with it, and the
-	// next start resets.
-	prev := make(map[backend.Pubkey][32]byte, len(s.shareHash))
-	for k, v := range s.shareHash {
-		prev[k] = v
-	}
-	delete(prev, pk)
-	next := make(map[backend.Pubkey][32]byte, len(prev)+1)
-	for k, v := range prev {
-		next[k] = v
-	}
-	next[pk] = sha256.Sum256(blob)
-	before, pending := markstore.ShareSetRoot(prev), markstore.ShareSetRoot(next)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	err := s.Hooks.RecordShareSet(ctx, &markstore.ShareSet{Current: before, Pending: &pending})
-	cancel()
-	if err != nil {
-		return fmt.Errorf("mark log share set: %w", err)
-	}
-	if err := s.Platform.Store.Put(shareKey(pk), blob); err != nil {
-		// The write may have landed with its reply lost. Then the stored
-		// set is the one after: keep it, so the next write names the set
-		// the store holds and a start finds it vouched.
-		if !s.landed(pk, next[pk]) {
-			// Drop the set after from the commitment the next log record
-			// carries: the host keeps the blob and could store it later.
-			s.shareHash = prev
-			s.Hooks.SetShareSet(&markstore.ShareSet{Current: before})
-			return err
-		}
-	}
-	s.shareHash = next
-	s.Hooks.SetShareSet(&markstore.ShareSet{Current: pending})
-	return nil
+func (s *Server) putShare(pk backend.Pubkey, blob []byte) error { return s.writeShare(pk, blob, false) }
+
+// replaceShare is putShare for a record this runner holds (a promotion).
+// Best effort: it checks before the log record and again before the store
+// write that the stored record is still the one the runner loaded or
+// wrote, and fails if not, so a late promotion does not bring back a
+// record the host removed or changed before the last check. The store has
+// no conditional write: a change between that check and the write is
+// overwritten. That window is benign: the record written says the key has
+// history, which is true (its vote is in the log), and the log vouches
+// for it.
+func (s *Server) replaceShare(pk backend.Pubkey, blob []byte) error {
+	return s.writeShare(pk, blob, true)
 }
+
+// errShareChanged: replaceShare found another stored record than the one
+// this runner holds, or none.
+var errShareChanged = errors.New("the stored share record is not the one this runner holds")
+
+// errNoLogRecord marks a failed share write that stopped before its mark
+// log record: it cost no record, so a promotion does not count it as a
+// try.
+var errNoLogRecord = errors.New("no mark log record written")
 
 // landed reports whether pk's stored record has hash h, reading it up to
 // three times: a store that just failed a write may fail a read as well.
@@ -480,6 +526,121 @@ func (s *Server) landed(pk backend.Pubkey, h [32]byte) bool {
 	return false
 }
 
+func (s *Server) writeShare(pk backend.Pubkey, blob []byte, replace bool) error {
+	_, committed := s.Hooks.ShareSet()
+	// held checks the stored record before a replacing write. Without a
+	// mark log the runner keeps no hash, so the record must only exist.
+	held := func() error {
+		if !replace {
+			return nil
+		}
+		cur, err := s.Platform.Store.Get(shareKey(pk))
+		if err != nil {
+			return fmt.Errorf("%w: %v", errShareChanged, err)
+		}
+		if h, ok := s.shareHash[pk]; committed && (!ok || h != sha256.Sum256(cur)) {
+			return errShareChanged
+		}
+		return nil
+	}
+	if !committed {
+		if err := held(); err != nil {
+			return err
+		}
+		return s.Platform.Store.Put(shareKey(pk), blob)
+	}
+	s.shareSetMu.Lock()
+	defer s.shareSetMu.Unlock()
+	if err := held(); err != nil {
+		return fmt.Errorf("%w: %w", errNoLogRecord, err)
+	}
+	// The set before. A new record of a key this runner did not load
+	// leaves out the key's old record, which may say it has history: a
+	// write that fails then leaves no set the log vouches for, and the
+	// next start resets.
+	prev := make(map[backend.Pubkey][32]byte, len(s.shareHash))
+	for k, v := range s.shareHash {
+		prev[k] = v
+	}
+	if !replace {
+		delete(prev, pk)
+	}
+	next := make(map[backend.Pubkey][32]byte, len(prev)+1)
+	for k, v := range prev {
+		next[k] = v
+	}
+	next[pk] = sha256.Sum256(blob)
+	pending := markstore.ShareSetRoot(next)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// The count covers the set after: a host that hides the new record
+	// after this write cannot shrink the set either. A write cut after
+	// this record leaves the count one above the stored set until that
+	// key is imported again.
+	count := heldOf(s.shareHeld, len(next))
+	before := markstore.ShareSetRoot(prev)
+	err := s.Hooks.RecordShareSet(ctx, &markstore.ShareSet{Current: before, Pending: &pending, Held: count})
+	cancel()
+	if err != nil {
+		return fmt.Errorf("mark log share set: %w", err)
+	}
+	s.shareHeld = count
+	// notWritten drops the set after from the commitment the next log
+	// record carries: the host keeps the blob and could store it later.
+	notWritten := func() {
+		s.shareHash = prev
+		s.Hooks.SetShareSet(&markstore.ShareSet{Current: before, Held: s.shareHeld})
+	}
+	if err := held(); err != nil {
+		notWritten()
+		return err
+	}
+	if err := s.Platform.Store.Put(shareKey(pk), blob); err != nil {
+		// The write may have landed with its reply lost. Then the stored
+		// set is the one after: keep it, so the next write names the set
+		// the store holds and a start finds it vouched.
+		if !s.landed(pk, next[pk]) {
+			notWritten()
+			return err
+		}
+	}
+	s.shareHash = next
+	s.Hooks.SetShareSet(&markstore.ShareSet{Current: pending, Held: s.shareHeld})
+	return nil
+}
+
+// checkShareSet refuses unless the n records just read, each passed by
+// checkShareBlob, are every record this runner loaded or wrote and the
+// mark log vouches for that set. No-op without a mark log.
+func (s *Server) checkShareSet(n int) error {
+	set, committed := s.Hooks.ShareSet()
+	if !committed {
+		return nil
+	}
+	s.shareSetMu.Lock()
+	defer s.shareSetMu.Unlock()
+	if n != len(s.shareHash) || !set.Vouches(markstore.ShareSetRoot(s.shareHash)) {
+		return fmt.Errorf("%d share records stored are not the set the mark log vouches for: a record was hidden, replaced or not written back", n)
+	}
+	return nil
+}
+
+// checkShareBlob refuses a stored record of pk that is not the one this
+// runner loaded or wrote: the host changed it since. No-op without a mark
+// log.
+func (s *Server) checkShareBlob(pk backend.Pubkey, blob []byte) error {
+	s.shareSetMu.Lock()
+	defer s.shareSetMu.Unlock()
+	if s.shareHash == nil {
+		return nil
+	}
+	if h, ok := s.shareHash[pk]; !ok || h != sha256.Sum256(blob) {
+		return fmt.Errorf("the stored record of %s is not the one this runner loaded or wrote; the runner does not use it, and a start "+
+			"that finds it loads every key with a fresh source floor",
+			pk.String()[:18])
+	}
+	return nil
+}
+
 // Serve accepts connections until ctx ends or the listener fails.
 func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 	if s.started.IsZero() {
@@ -494,6 +655,7 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 		if err != nil {
 			if ctx.Err() != nil {
 				s.wg.Wait()
+				s.promotions.Wait()
 				return nil
 			}
 			return err
@@ -599,11 +761,23 @@ func (s *Server) handleConn(ctx context.Context, c net.Conn) {
 
 func (s *Server) dispatch(ctx context.Context, f wire.Frame) ([]byte, error) {
 	switch f.Type {
+	case wire.TypeHealth, wire.TypePublicKeys, wire.TypeAttest, wire.TypeIdentity, handover.Type, handover.TypeOrder:
+	default:
+		// After a handover the runner answers status, keys and attestation
+		// only, and the handover again; nothing that signs or imports.
+		if s.HandedOver() {
+			if f.Type == wireadmin.TypeImportShare {
+				clear(f.Payload)
+			}
+			return nil, backend.Refused(backend.StatusStorage, "handed over to another image: this runner signs and imports nothing")
+		}
+	}
+	switch f.Type {
 	case wire.TypeHealth, wire.TypePublicKeys, wire.TypeAttest, wire.TypeIdentity:
 	default:
 		// Another runner instance took the mark log over (RBRLOG-03), or a
 		// state-changing request panicked (recover.go): this one signs,
-		// and imports nothing, also messages that write no
+		// imports and hands over nothing, also messages that write no
 		// record, and answers status, keys and attestation only.
 		err := s.panicRefusal()
 		if err == nil {
@@ -631,6 +805,21 @@ func (s *Server) dispatch(ctx context.Context, f wire.Frame) ([]byte, error) {
 		}
 	}
 	switch f.Type {
+	case handover.Type, handover.TypeOrder:
+		if s.handoverSrc == nil {
+			return nil, backend.Refused(backend.StatusUnsupported,
+				"this runner hands over to no one: HANDOVER needs a release build with a setup and the mark log, whose verifier checks the target's attestation")
+		}
+		if f.Type == handover.TypeOrder {
+			return s.handoverSrc.order(ctx, f.Payload)
+		}
+		return s.handoverSrc.handover(ctx, f.Payload)
+	case handover.TypeImport:
+		if s.imp == nil {
+			return nil, backend.Refused(backend.StatusUnsupported,
+				"this runner takes no handed-over shares: IMPORT_HANDOVER needs a release build with a setup and the mark log, whose verifier checks the source's origin proof")
+		}
+		return s.imp.importShares(ctx, f.Payload)
 	case wire.TypeHealth:
 		h, err := s.health()
 		if err != nil {
@@ -658,6 +847,9 @@ func (s *Server) dispatch(ctx context.Context, f wire.Frame) ([]byte, error) {
 	case wireadmin.TypeImportSealed:
 		if s.ImportKey == nil {
 			return nil, backend.Refused(backend.StatusUnsupported, "sealed share import is disabled (-sealed-import=false)")
+		}
+		if o := s.importing(); o != nil {
+			return nil, backend.Refused(backend.StatusNotReady, "a handover import (order %x) is in progress: this runner takes the handed-over shares only until it ends", o.Hash[:8])
 		}
 		req, err := wireadmin.DecodeImportSealed(f.Payload)
 		if err != nil {
@@ -709,7 +901,7 @@ func (s *Server) lostRefusal() error {
 		return nil
 	}
 	if s.lostLogged.CompareAndSwap(false, true) {
-		s.Log.Error("mark log lost to another runner instance: this runner signs and imports nothing until it is replaced",
+		s.Log.Error("mark log lost to another runner instance: this runner signs, imports and hands over nothing until it is replaced",
 			"err", lost, "record", s.Hooks.MarkLogStatus())
 	}
 	return backend.Refused(backend.StatusNotReady, "mark log: %v", lost)
@@ -776,6 +968,12 @@ func (s *Server) sign(req backend.SignRequest) (backend.Signature, error) {
 		return backend.Signature{}, backend.Refused(backend.StatusStorage, "the import's bounds (interchange maxima or import floor) did not reach the core; restart the runner")
 	}
 	kind := req.Message.Kind().String()
+	if o := s.importing(); o != nil {
+		// A handover target signs nothing before every share is in, also
+		// after a restart mid-import: the slot is in the mark log.
+		return backend.Signature{}, backend.Refused(backend.StatusNotReady,
+			"a handover import (order %x) is in progress: nothing is signed until every handed-over share is in", o.Hash[:8])
+	}
 	if a, ok := req.Message.(*backend.AttestationData); ok && s.Hooks != nil {
 		if f, on := s.Hooks.SourceFloor(req.Pubkey); on && a.Source.Epoch < f {
 			err := backend.Refused(backend.StatusSlashSource,
@@ -833,6 +1031,9 @@ func (s *Server) sign(req backend.SignRequest) (backend.Signature, error) {
 		s.Log.Info("signed (exact repeat, same signature)", "kind", kind, "pubkey", req.Pubkey.String()[:18], "msg", describe(req.Message))
 		return sig, nil
 	}
+	if a, ok := req.Message.(*backend.AttestationData); ok && s.Hooks != nil && s.Hooks.Earns(req.Pubkey, a.Source.Epoch) {
+		s.promote(req.Pubkey, a.Source.Epoch)
+	}
 	if m, ok := req.Message.(*backend.RootMessage); ok && m.Type.Unverified() {
 		s.Log.Warn("signed unverified (allow_unverified_nonslashable)", "root_type", m.Type, "epoch", m.Epoch,
 			"pubkey", req.Pubkey.String()[:18], "count", s.Signer.Stats().UnverifiedSignatures)
@@ -840,6 +1041,123 @@ func (s *Server) sign(req backend.SignRequest) (backend.Signature, error) {
 	}
 	s.Log.Info("signed", "kind", kind, "pubkey", req.Pubkey.String()[:18], "msg", describe(req.Message))
 	return sig, nil
+}
+
+// maxPromotions bounds the promotion writes in flight; a vote over it
+// leaves the key for a later vote.
+const maxPromotions = 8
+
+// maxPromotionTries bounds the failed promotion writes of one key in one
+// process. Each try writes a mark log record before the store write, so a
+// store that keeps failing one key must not cost a record per vote.
+const maxPromotionTries = 3
+
+// promoteTry is a key's failed promotion writes: the clock epoch of the
+// last one and how many.
+type promoteTry struct {
+	epoch uint64
+	n     int
+}
+
+// promote marks pk's sealed share record with vote history of its own
+// after the core signed pk a vote with a source at or above its source
+// floor (state.Hooks.Earns): History set, the floor dropped. A handover
+// then sends pk with history, and its target sets no floor for it.
+//
+// It runs after the signature, so the source is already in the mark log
+// (the core writes the mark before it signs): the flag is never set for a
+// vote that was not signed. The write runs off the signing path, at most
+// maxPromotions at a time, and at most one per key. Only a write that
+// succeeded latches the key. After a failed one a vote in a later clock
+// epoch tries again, up to maxPromotionTries per process.
+// A failed write, or a host that rolls the record back, leaves the key
+// without history: it only waits for its floor again after a handover.
+func (s *Server) promote(pk backend.Pubkey, source uint64) {
+	t, err := s.Platform.Clock.Now()
+	if err != nil {
+		return
+	}
+	epoch := s.Signer.EpochAt(uint64(t.Unix()))
+	s.promoteMu.Lock()
+	f, failed := s.promoteFailed[pk]
+	if s.promoted[pk] || s.promoting[pk] || len(s.promoting) >= maxPromotions ||
+		failed && (f.n >= maxPromotionTries || epoch <= f.epoch) {
+		s.promoteMu.Unlock()
+		return
+	}
+	if s.promoting == nil {
+		s.promoting, s.promoted = map[backend.Pubkey]bool{}, map[backend.Pubkey]bool{}
+		s.promoteFailed = map[backend.Pubkey]promoteTry{}
+	}
+	s.promoting[pk] = true
+	s.promoteMu.Unlock()
+	s.promotions.Add(1)
+	go func() {
+		defer s.promotions.Done()
+		err := s.promoteNow(pk, source)
+		s.promoteMu.Lock()
+		delete(s.promoting, pk)
+		n := 0
+		switch {
+		case err == nil:
+			s.promoted[pk] = true
+			delete(s.promoteFailed, pk)
+		default:
+			n = s.promoteFailed[pk].n
+			if !errors.Is(err, errNoLogRecord) {
+				n++ // only a try that wrote a log record counts
+			}
+			s.promoteFailed[pk] = promoteTry{epoch: epoch, n: n}
+		}
+		s.promoteMu.Unlock()
+		switch {
+		case err != nil && n >= maxPromotionTries:
+			s.Log.Warn("share record not marked with vote history; no more tries until a restart, the key keeps its source floor",
+				"pubkey", pk.String()[:18], "tries", n, "err", err)
+		case err != nil:
+			s.Log.Warn("share record not marked with vote history; a vote in a later epoch tries again",
+				"pubkey", pk.String()[:18], "tries", n, "err", err)
+		}
+	}()
+}
+
+// promoteNow writes pk's promoted record. Under the share lock (read), so
+// the handover's read of every record (write lock) sees the record either
+// before or after, and a runner that handed over writes nothing.
+func (s *Server) promoteNow(pk backend.Pubkey, source uint64) error {
+	s.sharesMu.RLock()
+	defer s.sharesMu.RUnlock()
+	if s.HandedOver() {
+		return nil
+	}
+	var floor uint64
+	wrote, reached := false, false
+	err := s.readShare(pk, func(rec *shareRecord, sec *[32]byte) error {
+		reached = true
+		if rec.History {
+			return nil
+		}
+		floor = rec.SourceFloor
+		rec.History, rec.SourceFloor, rec.Secret = true, 0, sec[:]
+		blob, err := s.sealRecord(*rec)
+		if err != nil {
+			return err
+		}
+		wrote = true
+		return s.replaceShare(pk, blob)
+	})
+	if err != nil && !reached {
+		err = fmt.Errorf("%w: %w", errNoLogRecord, err)
+	}
+	if err != nil {
+		return err
+	}
+	s.Hooks.NoteHistory(pk)
+	if wrote {
+		s.Log.Info("vote history: signed a vote at or above the source floor; the floor is cleared",
+			"pubkey", pk.String()[:18], "source", source, "cleared_floor", floor)
+	}
+	return nil
 }
 
 func atOrBelowFloor(m backend.Message, floor, slotsPerEpoch uint64) bool {
@@ -892,24 +1210,54 @@ func describe(m backend.Message) string {
 
 // addShare seals and stores an imported share and loads it into the
 // signer. how is "plaintext" or "sealed", for the log.
+func (s *Server) addShare(pk backend.Pubkey, secret *[32]byte, index uint64, interchange *backend.Watermark, how string) (backend.ValidatorKey, error) {
+	return s.addShareOf(pk, secret, index, interchange, how, nil, nil)
+}
+
+// handedState is a handed-over share's own vote history state at the
+// source. The page's interchange is the source's device mark, so history
+// and floor, not the mark, set the record's History and SourceFloor.
+type handedState struct {
+	history bool
+	floor   uint64
+}
+
+// addShareOf is addShare with the handover's state of the share (nil for
+// any other import) and keys, the signer's list the duplicate check uses
+// (a handover import takes it once per request); nil reads it now.
 //
 // One share per validator is added at a time, and the duplicate check
-// looks at the core after the signer's list: the list may be older than a
+// looks at the core after the caller's list: keys may be older than a
 // share of pk that another request loaded since. A second share of a
 // validator is refused before it is stored, so it never replaces the
 // stored record of the share that loaded (SSI-STORAGE-01).
-func (s *Server) addShare(pk backend.Pubkey, secret *[32]byte, index uint64, interchange *backend.Watermark, how string) (backend.ValidatorKey, error) {
+func (s *Server) addShareOf(pk backend.Pubkey, secret *[32]byte, index uint64, interchange *backend.Watermark, how string,
+	handed *handedState, keys []backend.ValidatorKey) (backend.ValidatorKey, error) {
 	if err := s.reserve(pk); err != nil {
 		return backend.ValidatorKey{}, err
 	}
 	defer s.release(pk)
-	if err := s.checkShare(pk, secret, s.Signer.Keys()); err != nil {
+	s.sharesMu.RLock()
+	defer s.sharesMu.RUnlock()
+	if s.HandedOver() {
+		return backend.ValidatorKey{}, backend.Refused(backend.StatusStorage, "handed over to another image: this runner imports nothing")
+	}
+	if o := s.importing(); o != nil && how != "handover" {
+		// Checked under the share lock, which the import's start holds while
+		// it writes the slot (handover_import.go).
+		return backend.ValidatorKey{}, backend.Refused(backend.StatusNotReady,
+			"a handover import (order %x) is in progress: this runner takes the handed-over shares only until it ends", o.Hash[:8])
+	}
+	if keys == nil {
+		keys = s.Signer.Keys()
+	}
+	if err := s.checkShare(pk, secret, keys); err != nil {
 		return backend.ValidatorKey{}, err
 	}
 	if _, err := s.Signer.State(pk); err == nil {
 		return backend.ValidatorKey{}, &backend.RefusedError{Code: backend.StatusDuplicate, Detail: "validator already loaded"}
 	}
-	// Interchange maxima (an EIP-3076 import) raise
+	// Interchange maxima (an EIP-3076 import, or the handover's mark) raise
 	// the mark log first: once the share is stored, a restart must read
 	// them from the log.
 	if interchange != nil && s.Hooks != nil {
@@ -922,17 +1270,24 @@ func (s *Server) addShare(pk backend.Pubkey, secret *[32]byte, index uint64, int
 	}
 	rec := shareRecord{Pubkey: pk, Secret: secret[:], Index: index,
 		History: interchange != nil && interchange.HasAttestation}
+	if handed != nil {
+		rec.History, rec.SourceFloor = handed.history, handed.floor
+	}
 	if !rec.History && s.Hooks != nil {
 		// No vote history: the key may have voted elsewhere up to now, past
 		// the log's gate (SLBOUND-01). Gate it from now on, before it can
-		// sign; the record keeps the floor for a restart.
+		// sign; the record keeps the floor for a restart. A handed-over key
+		// takes the higher of this and its floor at the source, so a
+		// target clock behind the source's lowers nothing.
 		f, on, err := s.Hooks.ImportFloor()
 		if err != nil {
 			return backend.ValidatorKey{}, backend.Refused(backend.StatusPlatform, "%v", err)
 		}
 		if on {
-			rec.SourceFloor = f
-			s.Hooks.NoteImportFloor(pk, f)
+			rec.SourceFloor = max(rec.SourceFloor, f)
+		}
+		if rec.SourceFloor != 0 {
+			s.Hooks.NoteImportFloor(pk, rec.SourceFloor)
 		}
 	}
 	// Every key added now, with history or not, gets the floor's block and
@@ -955,7 +1310,7 @@ func (s *Server) addShare(pk backend.Pubkey, secret *[32]byte, index uint64, int
 	if err := s.putShare(pk, blob); err != nil {
 		return backend.ValidatorKey{}, backend.Refused(backend.StatusPlatform, "store share: %v", err)
 	}
-	return s.loadShare(pk, secret, index, interchange, loadFloor, how)
+	return s.loadShare(pk, secret, index, interchange, rec.History, loadFloor, how)
 }
 
 // reserve marks pk as being added. Under a setup it also holds a max_keys
@@ -1010,11 +1365,58 @@ func (s *Server) release(pk backend.Pubkey) {
 	delete(s.admitting, pk)
 }
 
+// importing is the handover order whose import is in progress here, nil
+// when none is (Updates.ImportOrder).
+func (s *Server) importing() *markstore.Order {
+	if s.Updates == nil {
+		return nil
+	}
+	return s.Updates.ImportOrder()
+}
+
 // checkMaxima refuses interchange maxima above the clock epoch plus the
 // restart floor's margin (max_epochs_ahead + 1). No honest signer signed
 // past that, and maxima above it raise the mark log and stop every key of
-// this runner from signing until the clock gets there.
+// this runner from signing until the clock gets there (2^64-1 is the
+// handover tombstone).
 func (s *Server) checkMaxima(wm *backend.Watermark) error {
+	return s.checkMaximaAhead(wm, 0)
+}
+
+// checkHandoverMark is checkMaxima for a handover's mark (SHC-02): the
+// source's device mark, whose target and block bounds run up to the
+// commit-ahead window past what it signed, so the horizon is that much
+// later (this runner's commit_ahead target_epochs).
+func (s *Server) checkHandoverMark(wm *backend.Watermark) error {
+	return s.checkMaximaAhead(wm, s.Signer.Config().CommitAhead.TargetEpochs)
+}
+
+// checkSourceFloor refuses a handed-over share's source floor above the
+// clock epoch plus the floor margin, and one epoch more for a source clock
+// a little ahead of this one. A source's floor is its clock epoch at an
+// import plus the margin; a far-future one would keep the key from voting
+// at this runner until real time passed it.
+func (s *Server) checkSourceFloor(f uint64) error {
+	if f == 0 {
+		return nil
+	}
+	t, err := s.Platform.Clock.Now()
+	if err != nil {
+		return backend.Refused(backend.StatusPlatform, "the source floor check needs the clock: %v", err)
+	}
+	cfg := s.Signer.Config()
+	now := s.Signer.EpochAt(uint64(t.Unix()))
+	horizon := now + state.DefaultFloorMargin(cfg) + 1
+	if horizon < now {
+		horizon = ^uint64(0)
+	}
+	if f > horizon {
+		return backend.Refused(backend.StatusBadRequest, "handed-over source floor %d above the clock horizon, epoch %d (clock epoch %d)", f, horizon, now)
+	}
+	return nil
+}
+
+func (s *Server) checkMaximaAhead(wm *backend.Watermark, window uint64) error {
 	if wm == nil {
 		return nil
 	}
@@ -1024,7 +1426,7 @@ func (s *Server) checkMaxima(wm *backend.Watermark) error {
 	}
 	cfg := s.Signer.Config()
 	now := s.Signer.EpochAt(uint64(t.Unix()))
-	horizon := now + state.DefaultFloorMargin(cfg)
+	horizon := now + state.DefaultFloorMargin(cfg) + window
 	if horizon < now {
 		horizon = ^uint64(0)
 	}
@@ -1068,7 +1470,7 @@ func (s *Server) checkShare(pk backend.Pubkey, secret *[32]byte, keys []backend.
 // a signer holds shares of splits only, and a share equal to the whole
 // key comes from a degenerate split (for an honest one the chance is
 // about 1 in r). It runs wherever a key is stored or loaded: the sealed
-// import, the debug plain import and a restart.
+// import, the handover import, the debug plain import and a restart.
 func (s *Server) checkWholeKey(pk backend.Pubkey, secret *[32]byte) error {
 	if s.Updates == nil {
 		return nil
@@ -1132,7 +1534,7 @@ func (s *Server) sealRecord(rec shareRecord) ([]byte, error) {
 // watermark the core imports with the key, under the same lock hold, so
 // the key never signs without them: blocks, PTC votes and envelopes up to
 // the last slot of that epoch, and targets up to it.
-func (s *Server) loadShare(pk backend.Pubkey, secret *[32]byte, index uint64, interchange *backend.Watermark, floor uint64, how string) (backend.ValidatorKey, error) {
+func (s *Server) loadShare(pk backend.Pubkey, secret *[32]byte, index uint64, interchange *backend.Watermark, history bool, floor uint64, how string) (backend.ValidatorKey, error) {
 	imp := interchange
 	if floor != 0 {
 		fw := state.FloorWatermark(s.Signer.Config(), floor)
@@ -1161,7 +1563,7 @@ func (s *Server) loadShare(pk backend.Pubkey, secret *[32]byte, index uint64, in
 		}
 		return k, err
 	}
-	if interchange != nil && interchange.HasAttestation {
+	if history {
 		// Only now is the key's vote history in the core (SSI-HISTORY-01).
 		s.Hooks.NoteHistory(pk)
 	}
@@ -1178,6 +1580,13 @@ func (s *Server) loadShare(pk backend.Pubkey, secret *[32]byte, index uint64, in
 	}
 	s.Log.Info("imported share", "how", how, "pubkey", pk.String()[:18], "share_pubkey", k.SharePubkey.String()[:18], "index", index)
 	return k, nil
+}
+
+// UserData is what ATTEST binds into the platform document:
+// backend.AttestUserData over the nonce, the setup state st and the hash of
+// the loaded keys.
+func (s *Server) UserData(nonce []byte, st *backend.SetupState) []byte {
+	return backend.AttestUserData(nonce, st, backend.KeysHash(s.Signer.Keys()))
 }
 
 func (s *Server) health() (*backend.Health, error) {
@@ -1218,6 +1627,9 @@ func (s *Server) health() (*backend.Health, error) {
 	}
 	if r, ok := s.Platform.Clock.(clock.NTSReporter); ok {
 		h.NTS = healthNTS(r.NTSSummary())
+	}
+	if s.HandedOver() || s.importing() != nil {
+		h.Ready = false
 	}
 	if s.lostRefusal() != nil {
 		h.Ready, h.MarkLogLost = false, s.Hooks.MarkLogLost().Error()

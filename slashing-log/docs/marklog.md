@@ -36,11 +36,11 @@ enough.
 | time | 8 | unix seconds from the trusted clock (the host clock on the flag path); the age check reads it |
 | locked group | 53, or 113 with a pending update | see below |
 | open group | 53, or 113 with a pending update | see below |
-| pending order | 1, or 42 | presence byte, then kind (1 handover, the only kind; a reader refuses any other), hash, act time; only an image with a handover writes it, and this image does not start on a state that holds one |
-| target | 1, or 33 | presence byte, then the `setup_hash` a tombstone hands over to; only an image with a handover writes it |
+| pending order | 1, or 42 | presence byte, then kind (1 handover, the only kind; a reader refuses any other), hash, act time (phase 2) |
+| target | 1, or 33 | presence byte, then the `setup_hash` a tombstone hands over to |
 | exits | 1 | presence byte, always 0. An image with exit approvals wrote the day's exits here; this image refuses a record that holds them |
 | source gate | 1, or 9 | presence byte, then the source floor epoch (see "Source gate") |
-| share set | 1, 34 or 66 | presence byte, then the current root (32), a presence byte and the pending root (32) (see "Share set") |
+| share set | 1, 34, 38, 66 or 70 | presence byte, then the current root (32), a presence byte and the pending root (32), and the count (4, left out while 0) (see "Share set") |
 | signature | 64 | Ed25519 over the context `signer-mark-v1` and the fields above |
 
 Each group is the active version (8), the hash of the update that set it
@@ -93,7 +93,10 @@ with attestation maxima stored it.
 The gate covers only votes cast before the log started. A validator that
 comes in later without vote history may have voted elsewhere since, so
 its import sets a source floor of its own: the restart floor epoch of the
-clock at the import (SLBOUND-01). The share record keeps it
+clock at the import (SLBOUND-01). Every floor assumes the trusted clock:
+no honest signer signs a target past the clock plus `max_epochs_ahead`,
+so the floor lies above every vote the key cast before. A clock that
+reads behind at the import gives a floor that is too low. The share record keeps it
 (`source_floor`), and a restart sets it again. The validator signs no
 vote with a source below the higher of the two floors, also after the
 log's gate has dropped. Any validator added while the runner runs, with
@@ -103,6 +106,38 @@ here signed. So the core takes the restart floor's block and target
 bounds with the key, in the same step that loads it. The key signs no
 block or PTC vote up to the last slot of the floor epoch and no vote
 with a target up to it (a restart floors every key again).
+
+A handover sends each share's own state with it: whether the key has
+imported history, and else the floor its record holds. The
+handed-over mark is the device mark of every key, so the target does not
+read it as one key's history. A key without history at the source gets
+the higher of the source's floor and the target's own restart floor epoch
+at the import, and the target's record keeps it. With trusted clocks the
+target's floor is the higher one, as it is read later; the source's floor
+keeps a target clock that reads behind the source's from lowering it.
+
+A key earns history of its own by signing. The first time the runner
+signs it a vote with a source at or above every floor that holds for it,
+the runner sets `history` in its share record and drops the floor, once
+per key, after the signature: the core wrote that source into the mark
+before it signed. Every vote the key may have cast before its import has
+a target below its floor, and no later vote, here or at a handover
+target, has a source below the mark's, so none can surround those votes.
+A handover then sends the key with history, and the target sets no floor
+for it. A failed write, or a record the host rolls back, leaves the key
+without history: it waits for its floor again after a handover, which
+costs liveness, not safety. The write is meant only for the record the
+runner holds: it checks the stored record before the log record and
+again before the store write, and fails if the host removed or changed
+it. This is best effort, as the store has no conditional write. A change
+between the last check and the write is overwritten with a record whose
+history is true of the key and which the log vouches for. After a failed write the runner tries again
+in a later epoch, at most 3 times per process, since each try writes a
+log record. The promotion fixes the clock reading taken
+at the import for the key's whole life: without it, each handover target
+would floor the key again from its own, later clock reading. A key
+without a floor of its own (a record stored before floors) earns
+nothing.
 
 A record is about 420 bytes on the dev platform, 60 more for each
 pending update, and 150 to 250 more with a cloud KMS ciphertext in the
@@ -266,17 +301,18 @@ roll the mark back.
   the source must reach the floor and stay below the clock epoch.
   `tests/e2e` `TestE2EMarkLogLostState*`,
   `TestE2EDurableState*` and `attestation-verify/runnerclient`
-  `TestE2EAzureRunnerMarkLogLostState`, `TestE2EAzureRunnerDurable`
+  `TestE2EAzureRunnerMarkLogLostState`, `TestE2EAzureRunnerDurableAndHandover`
   run this on each platform build.
 - Merge. A record holds the merge of the mark before it and the new one, so
   the log's mark never goes down. An import with interchange maxima (an
-  EIP-3076 import) raises the log before
+  EIP-3076 import, or a handover's mark) raises the log before
   the share is stored.
-- Tombstone. An image with a handover ends the log with a record whose
-  bounds are all 2^64-1, which may name the target's `setup_hash`. Nothing
-  appends after it. This image writes none; its claim of a log that ends
-  with one fails with `ErrHandedOver`, so it writes no record and signs
-  nothing on it (`slashing-log/docs/durable-state.md`, "A new image").
+- Tombstone. A handover (`slashing-log/docs/durable-state.md`) ends the log
+  with a record whose bounds are all 2^64-1. Nothing appends after it, and a
+  runner that reads it writes no claim and refuses every slashable message.
+  A runner with a setup hands over to one named target only: the tombstone
+  carries the target's `setup_hash` (`HandOverTo`), and a second target is
+  refused. Phase 1 images hand over to no one.
 - Hint. After each write the runner keeps the version and hash it wrote,
   sealed in the platform store under the context `signer-mark-hint-v1`,
   the `setup_hash` and the signer. At start a hint above the newest record in
@@ -330,12 +366,13 @@ Each record carries the share set: the root of the stored share records
 order, each validator key and the sha256 of its sealed record as
 stored), and, while a write is under way, the root of the set after it.
 
-- A share write (any import) first writes a log record whose current
-  root is the set before and whose pending root is the set after, then
-  the share record. Share writes go one at a time. The next record
-  carries the set after as its current root. The set before leaves out
-  an older record of the same key, so a write that fails does not leave
-  the log vouching for that older record.
+- A share write (an import, a handover's share, a promotion) first
+  writes a log record whose current root is the set before and whose
+  pending root is the set after, then the share record. Share writes go
+  one at a time. The next record carries the set after as its current
+  root. The set before leaves out an older record of the same key, so a
+  write that fails does not leave the log vouching for that older
+  record.
 - A start reads every listed record and computes the root over the ones
   that unseal and parse. A stored object that does not (sealed under
   another setup or log, corrupt, or no record) never loads and is no
@@ -361,6 +398,21 @@ stored), and, while a write is under way, the root of the set after it.
   next record, which carries the set after as current. So a pending root
   in the newest record does not mean a write was cut. It also vouches
   for the set before, which holds no more history.
+- While the runner runs it keeps the sha256 of each record it loaded or
+  wrote. A handover's read and a promotion refuse a record the host
+  changed since; after a restart that record goes through the rule
+  above.
+- The count is the most share records the log has vouched for on this
+  signer. A share write's first record carries the count of the set
+  after it. A reset keeps the count, and the runner never removes a
+  share record, so a set smaller than the count means a record is
+  missing: the host hid it, or the write after its log record was cut.
+  The runner logs this at start and refuses a handover until the record
+  is back or that key is imported again; else the hidden share would
+  stay on a source that handed over. A share that is gone for good needs
+  a handover order whose `left_behind` names its key (protocol.md,
+  "Handover"). A record from before the count
+  reads as count 0, and the first start of this image sets it.
 - A log record written before share sets (`SMARK1`), or one with no share
   set, vouches for the empty set only. The first start of this image on
   such a log with shares resets once.
@@ -382,6 +434,7 @@ Config updates (`tee-signer/server/config.go`, CONFIG_UPDATE in
 | `Body(group, version)` | the stored update, for `CONFIG_STATE` and the effective config; `ErrBodyMissing` without a readable copy |
 | `LogID()` | the log ID, for the share AAD |
 | `Refresh(ctx)`, `RefreshLoop(ctx, every)` | the body copies and keep-alive records |
+| `HandOverTo(ctx, target)`, `HandedOverTo()` | the tombstone that names its target (phase 2) |
 
 `markstore` checks the shape of a state, not the rules of section 6
 (signatures, waits, supersede). `tee-signer/server/config.go` checks those,
@@ -522,7 +575,8 @@ holds its true mark.
   non-finality may take long and which the stopped keys cannot help
   bring about. In signing_mode single the whole validator set behind the
   signer stops attesting; in threshold mode one member of the cluster
-  does. It cannot cause a slashing: it only refuses votes. The
+  does. A handover carries the bound to the target, so a new image does
+  not clear it. It cannot cause a slashing: it only refuses votes. The
   runner raises an alarm when such a vote is signed, before any restart
   (`tee-signer/server/sourcewatch.go`): a vote whose source is more than
   one epoch above the highest source of the votes it signed for the

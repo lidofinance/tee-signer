@@ -24,10 +24,9 @@ import (
 // nothing new from then on.
 var ErrLost = errors.New("markstore: another runner instance wrote this signer's log; this one signs nothing new")
 
-// ErrHandedOver: the log ends with a tombstone record: an image with a
-// handover gave this signer's shares and mark to a runner of another
-// image. Nothing is signed under it again, and this image does not claim
-// it.
+// ErrHandedOver: this signer's shares and mark went to a runner of another
+// image (HANDOVER, docs/durable-state.md). The log ends with a
+// tombstone record and nothing is signed under it again.
 var ErrHandedOver = errors.New("markstore: this signer was handed over to another image; it signs nothing new")
 
 // ErrUnreadable: at or above the newest valid record lies a record of this
@@ -53,8 +52,7 @@ var ErrLockUnchecked = errors.New("markstore: the store's lock could not be chec
 // it reads the lock again itself. Refresh reads it at every call.
 var lockRecheckGap = 30 * time.Second
 
-// Tombstone is the mark of the record that ends a log at a handover (an
-// image with a handover writes it; this one only reads it): every
+// Tombstone is the mark of the record that ends a log at a handover: every
 // bound at its maximum, so the core refuses every slashable message under
 // it, a runner of any version that reads the log included.
 var Tombstone = backend.Watermark{HasBlock: true, BlockSlot: math.MaxUint64,
@@ -210,6 +208,14 @@ type MarkLog struct {
 	uncheckedAt time.Time
 	skipped     int
 	writes      uint64
+	// handedOver: the log ends with a tombstone. handoverMark is the mark
+	// before it, the one a handover gives the next image (known when the
+	// record before the tombstone was read or written by this process).
+	// target is the setup_hash the tombstone names, if any.
+	handedOver   bool
+	handoverMark backend.Watermark
+	hasHandover  bool
+	target       *[32]byte
 }
 
 // New returns the log of signer, with the platform's key release keys.
@@ -543,7 +549,7 @@ func (m *MarkLog) Claim(ctx context.Context, expect bool) (backend.Watermark, bo
 	if r != nil {
 		m.version, m.hash, m.mark = r.Version, h, r.Mark
 		m.logID, m.written = logIDOf(r, enc), time.Unix(int64(r.Time), 0)
-		m.state = r.State.Clone()
+		m.state, m.target = r.State.Clone(), r.Target
 		m.gate = cloneGate(r.SourceGate)
 		m.shares = r.Shares.Clone()
 		m.found = r.Mark.HasAttestation || r.Mark.HasBlock
@@ -556,7 +562,22 @@ func (m *MarkLog) Claim(ctx context.Context, expect bool) (backend.Watermark, bo
 			"block_slot", r.Mark.BlockSlot, "source", r.Mark.SourceEpoch, "target", r.Mark.TargetEpoch)
 	}
 	if r != nil && IsTombstone(r.Mark) {
-		return backend.Watermark{}, false, fmt.Errorf("mark log %s: version %d: %w", m.log, r.Version, ErrHandedOver)
+		// Handed over: no claim record (nothing is signed under the
+		// tombstone, so there is nothing to fence), but find the mark before
+		// it, so the handover can be repeated after this restart.
+		prev, ok, err := m.markBefore(ctx, r)
+		if err != nil {
+			return backend.Watermark{}, false, fmt.Errorf("mark log %s: the record before the tombstone: %w", m.log, err)
+		}
+		if err := m.checkLockAfterRead(ctx); err != nil {
+			return backend.Watermark{}, false, err
+		}
+		m.handedOver, m.handoverMark, m.hasHandover = true, prev, ok
+		m.lost, m.claimed = ErrHandedOver, true
+		m.opt.Log.Warn("mark log: this signer was handed over to another image; nothing is signed", "store", m.log.String(),
+			"signer", m.signer, "tombstone_version", r.Version, "mark_before_known", ok,
+			"target", prev.TargetEpoch, "source", prev.SourceEpoch, "block", prev.BlockSlot)
+		return m.mark, true, nil
 	}
 	if err := m.checkLockAfterRead(ctx); err != nil {
 		return backend.Watermark{}, false, err
@@ -573,7 +594,7 @@ func (m *MarkLog) Claim(ctx context.Context, expect bool) (backend.Watermark, bo
 		clear(seed)
 		m.pubs[string(blob)] = m.key.Public().(ed25519.PublicKey)
 	}
-	if err := m.appendLocked(ctx, m.mark); err != nil {
+	if err := m.appendLocked(ctx, m.mark, nil); err != nil {
 		return backend.Watermark{}, false, fmt.Errorf("mark log %s: claim: %w", m.log, err)
 	}
 	m.claimed = true
@@ -702,6 +723,44 @@ func (m *MarkLog) findBody(ctx context.Context, k bodyKey, want [32]byte) ([]byt
 	return nil, ErrBodyMissing
 }
 
+// markBefore walks back from the tombstone r along the chain to the newest
+// record that is not a tombstone. ok is false when the chain ends first or a
+// link does not hold (that record is gone or was replaced).
+func (m *MarkLog) markBefore(ctx context.Context, r *Record) (backend.Watermark, bool, error) {
+	cur := r
+	for i := 0; i < 64 && cur.PrevVersion > 0; i++ {
+		name := Name(m.setup, m.signer, cur.PrevVersion)
+		es, err := m.log.List(ctx, name)
+		if err != nil {
+			return backend.Watermark{}, false, err
+		}
+		var exact []Entry
+		for _, e := range es {
+			if e.Name == name {
+				exact = append(exact, e)
+			}
+		}
+		recs, encs, err := m.validAt(ctx, cur.PrevVersion, exact, false)
+		if err != nil {
+			return backend.Watermark{}, false, err
+		}
+		var next *Record
+		for i, e := range encs {
+			if Hash(e) == cur.PrevHash {
+				next = recs[i]
+			}
+		}
+		if next == nil {
+			return backend.Watermark{}, false, nil
+		}
+		if !IsTombstone(next.Mark) {
+			return next.Mark, true, nil
+		}
+		cur = next
+	}
+	return backend.Watermark{}, false, nil
+}
+
 // Append writes a record with mark wm merged into the log's mark. It
 // returns nil only once the record is durable in the log; the core signs
 // past the old mark only then.
@@ -711,11 +770,11 @@ func (m *MarkLog) Append(ctx context.Context, wm backend.Watermark) error {
 	if !m.claimed {
 		return errors.New("markstore: not claimed")
 	}
-	return m.appendLocked(ctx, wm)
+	return m.appendLocked(ctx, wm, nil)
 }
 
 // Raise makes the log's mark at least wm, with one record if it is not yet.
-// A sealed import with interchange maxima raises it
+// A sealed import with interchange maxima (the handover's mark) raises it
 // before the share is stored, so a restart reads the raised mark.
 func (m *MarkLog) Raise(ctx context.Context, wm backend.Watermark) error {
 	m.mu.Lock()
@@ -726,7 +785,66 @@ func (m *MarkLog) Raise(ctx context.Context, wm backend.Watermark) error {
 	if m.lost == nil && Merge(m.mark, wm) == m.mark && m.version > 0 {
 		return nil
 	}
-	return m.appendLocked(ctx, wm)
+	return m.appendLocked(ctx, wm, nil)
+}
+
+// HandOverTo ends the log for a handover to the runner whose setup_hash is
+// target: the tombstone names it (section 10, one target per tombstone).
+// Called again for the same target it returns the same mark; for another
+// target it refuses.
+func (m *MarkLog) HandOverTo(ctx context.Context, target [32]byte) (backend.Watermark, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if target == ([32]byte{}) || target == m.setup {
+		return backend.Watermark{}, errors.New("markstore: handover target must be another setup")
+	}
+	return m.handOverLocked(ctx, &target)
+}
+
+func (m *MarkLog) handOverLocked(ctx context.Context, target *[32]byte) (backend.Watermark, error) {
+	if !m.claimed {
+		return backend.Watermark{}, errors.New("markstore: not claimed")
+	}
+	if m.handedOver {
+		switch {
+		case (m.target == nil) != (target == nil) || m.target != nil && *m.target != *target:
+			return backend.Watermark{}, errors.New("markstore: handed over to another target; a tombstone names one target only")
+		case !m.hasHandover:
+			return backend.Watermark{}, errors.New("markstore: handed over, but the mark before the tombstone is not readable; the handover cannot be repeated")
+		}
+		return m.handoverMark, nil
+	}
+	if m.lost != nil {
+		return backend.Watermark{}, m.lost
+	}
+	before := m.mark
+	if err := m.appendLocked(ctx, Tombstone, target); err != nil {
+		return backend.Watermark{}, fmt.Errorf("markstore: tombstone: %w", err)
+	}
+	m.handedOver, m.handoverMark, m.hasHandover, m.target = true, before, true, target
+	m.lost = ErrHandedOver
+	m.opt.Log.Warn("mark log: handed over; tombstone written, nothing is signed from now on", "version", m.version,
+		"target", before.TargetEpoch, "source", before.SourceEpoch, "block", before.BlockSlot, "named_target", target != nil)
+	return before, nil
+}
+
+// HandedOver reports whether the log ends with a tombstone, and the mark
+// before it if known.
+func (m *MarkLog) HandedOver() (backend.Watermark, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.handoverMark, m.handedOver
+}
+
+// HandedOverTo returns the setup_hash the tombstone names, if the log ends
+// with one that names a target.
+func (m *MarkLog) HandedOverTo() ([32]byte, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.handedOver || m.target == nil {
+		return [32]byte{}, false
+	}
+	return *m.target, true
 }
 
 // copiesLocked fills a record's body copies from what the log holds for the
@@ -741,7 +859,12 @@ func (m *MarkLog) copiesLocked() [4]BodyCopy {
 	return out
 }
 
-func (m *MarkLog) appendLocked(ctx context.Context, wm backend.Watermark) error {
+// sameTarget: both nil, or both name the same setup_hash.
+func sameTarget(a, b *[32]byte) bool {
+	return a == nil && b == nil || a != nil && b != nil && *a == *b
+}
+
+func (m *MarkLog) appendLocked(ctx context.Context, wm backend.Watermark, target *[32]byte) error {
 	if m.lost != nil {
 		return m.lost
 	}
@@ -769,7 +892,7 @@ func (m *MarkLog) appendLocked(ctx context.Context, wm backend.Watermark) error 
 		}
 		rec := Record{Setup: m.setup, Signer: m.signer, Version: v, PrevVersion: prevV, PrevHash: prevH, LogID: logID,
 			Owner: m.owner, KeyBlob: m.blob, Mark: wm, Time: uint64(now.Unix()), State: m.state.Clone(),
-			Copies: m.copiesLocked(), SourceGate: cloneGate(m.gate),
+			Copies: m.copiesLocked(), Target: target, SourceGate: cloneGate(m.gate),
 			Shares: m.shares.Clone()}
 		if err := rec.check(); err != nil {
 			return fmt.Errorf("markstore: record not written: %w", err)
@@ -825,6 +948,7 @@ func (m *MarkLog) appendLocked(ctx context.Context, wm backend.Watermark) error 
 				// Our own write from an earlier attempt whose reply was lost: a
 				// record with this process's owner, linked to our last record.
 				// Its time stamp, and maybe its mark, differ from this attempt's.
+				before := m.mark
 				m.version, m.hash, m.mark, m.written = v, Hash(e), r.Mark, time.Unix(int64(r.Time), 0)
 				if prevV == 0 {
 					m.logID = m.hash
@@ -832,7 +956,13 @@ func (m *MarkLog) appendLocked(ctx context.Context, wm backend.Watermark) error 
 				m.writes++
 				m.writeHint()
 				m.opt.Log.Warn("mark log: found this runner's own record of an attempt whose reply was lost", "version", v)
-				if Merge(r.Mark, wm) == r.Mark && r.State.Equal(m.state) &&
+				if IsTombstone(r.Mark) && !(IsTombstone(wm) && sameTarget(r.Target, target)) {
+					// A handover whose reply was lost: the log is ended.
+					m.handedOver, m.handoverMark, m.hasHandover, m.target = true, before, true, r.Target
+					m.lost = ErrHandedOver
+					return m.lost
+				}
+				if Merge(r.Mark, wm) == r.Mark && r.State.Equal(m.state) && sameTarget(r.Target, target) &&
 					sameGate(r.SourceGate, m.gate) && sameShares(r.Shares, m.shares) {
 					return nil
 				}
@@ -937,7 +1067,7 @@ func (m *MarkLog) RecordShareSet(ctx context.Context, s *ShareSet) error {
 	}
 	old := m.shares
 	m.shares = s.Clone()
-	if err := m.appendLocked(ctx, m.mark); err != nil {
+	if err := m.appendLocked(ctx, m.mark, nil); err != nil {
 		m.shares = old
 		return err
 	}
@@ -1103,7 +1233,7 @@ func (m *MarkLog) SetState(ctx context.Context, st ConfigState) error {
 	}
 	old := m.state
 	m.state = st.Clone()
-	if err := m.appendLocked(ctx, m.mark); err != nil {
+	if err := m.appendLocked(ctx, m.mark, nil); err != nil {
 		m.state = old
 		return err
 	}
@@ -1138,12 +1268,12 @@ func keepAlive(retention time.Duration) time.Duration { return min(retention/8, 
 // older than half the retention gets a new copy, and the log gets a new
 // record (same mark and state, the new copies) when a copy was written or
 // the newest record is older than keepAlive. With Options.LockDays it
-// checks the store's lock first (checkLockLocked). Without a setup it
+// checks the store's lock first (checkLockLocked). Without a setup, and after a handover, it
 // does nothing.
 func (m *MarkLog) Refresh(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.opt.Setup == nil || !m.claimed {
+	if m.opt.Setup == nil || !m.claimed || m.handedOver {
 		return nil
 	}
 	if m.lost != nil {
@@ -1179,7 +1309,7 @@ func (m *MarkLog) Refresh(ctx context.Context) error {
 	if !wrote && now.Sub(m.written) < keepAlive(ret) {
 		return nil
 	}
-	return m.appendLocked(ctx, m.mark)
+	return m.appendLocked(ctx, m.mark, nil)
 }
 
 // RefreshLoop calls Refresh every interval until ctx ends.
@@ -1237,6 +1367,8 @@ func (m *MarkLog) Status() string {
 		s += fmt.Sprintf(" skipped=%d", m.skipped)
 	}
 	switch {
+	case m.handedOver:
+		s += " HANDED-OVER"
 	case errors.Is(m.lost, ErrNoLock):
 		s += " NOT-LOCKED"
 	case m.lost != nil:

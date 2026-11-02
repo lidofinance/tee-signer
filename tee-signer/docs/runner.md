@@ -161,12 +161,21 @@ The setup format is in `attestation-verify/docs/attestation-statement.md`.
   `-tls-client-ca`, `-max-validators`, `-mark-store`, `-mark-signer`,
   `-state-store`, `-floor-margin`), the recovery flags (`-mark-create`,
   `-state-create`), and a `-platform-opt` the setup sets.
-- The runner has no handover: it does not know HANDOVER_ORDER, HANDOVER
-  or IMPORT_HANDOVER, refuses to claim a mark log that ends with a
-  handover tombstone, and refuses a log state with an order in the slot.
+- A release build hands its shares over under an approver-signed handover
+  order (HANDOVER_ORDER, HANDOVER) and takes them as a handover target
+  (IMPORT_HANDOVER; `signer-protocol/docs/protocol.md`, "Handover"). A
+  runner without a setup, or a debug build, answers the three UNSUPPORTED.
 - `signer-admin` makes setups from the human form and checks them;
   `signer-admin/cmd/setup-tool` checks a setup against a platform and a
   chain and prints a chain config's lines.
+- `signer-admin/cmd/handover-source` and `signer-admin/cmd/handover-target`
+  are the two halves of the handover tool. `handover-target identity`
+  reserves the target for the order, reads and checks its IDENTITY and
+  writes it with the published part of its setup; `handover-source` sends
+  HANDOVER to the source and writes the sealed pages; `handover-target
+  import` passes them on, a few requests at a time, skipping what the
+  target holds. `TestE2EHandoverGate` (tests/e2e) runs both halves across
+  three images.
 
 Without `-setup` the runner takes its values from flags, and none of the
 setup's checks run. This flag path is for tests: a release build refuses
@@ -455,16 +464,17 @@ loses only the floor's margin. The clients of the three stores are our
 own (SigV4 for S3, the JSON API for GCS, the Blob REST API for Azure), each
 in its own platform build.
 
-## State copy
+## State copy and handover
 
 `slashing-log/statestore` (`slashing-log/docs/durable-state.md`). On Azure
 and GCP the runner's local state is gone after a restart without its disk,
 and a sealed share has no other copy. The runner keeps the sealed shares
 and the wrapped sealing key in the object store as well (encrypted under
 the platform's key release, under `state/` in the mark log's locked
-bucket) and restores them before it claims the log. A runner of another
-image has another key release and cannot open that state: its shares go
-in again by sealed import.
+bucket) and restores them before it claims the log. HANDOVER under an
+approvers' order moves the shares and the mark from the runner of one image
+to the runner of the next, whose new key release cannot open the old state
+(`signer-protocol/docs/protocol.md`, "Handover").
 
 ## Sealed share import
 
@@ -553,11 +563,11 @@ approves an update that allows the image.
 - An image starts with its shares sealed and signs nothing while its own
   measurement is not on the signer's `allowed_image_measurements` in force.
   Before a new image runs on a signer, that list must name it: a locked
-  update, or a new setup that lists it and takes the shares by sealed
-  import.
+  update, or a new setup that lists it and takes the shares by handover.
 - A cloud start needs a mark log: the setup's, or on the flag path
   `-mark-store` (`none` must be explicit). The images take the setup's.
-- Release images have no plaintext import: shares go in sealed.
+- Release images have no plaintext import: shares go in sealed, by
+  handover.
 - Keep the mark log bucket's retention lock; the runner refuses to start
   when it cannot read its newest valid record.
 - With a setup, every object under `shares/` counts against `max_keys`,

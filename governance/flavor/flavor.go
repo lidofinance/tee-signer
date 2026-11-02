@@ -74,7 +74,7 @@ type Limits struct {
 	DefaultTimeLock   uint64 // when the setup names no change delay
 	MaxTimeLock       uint64
 	ActivationHorizon uint64 // past the required wait
-	ImagesMinTimeLock uint64 // allowed-images updates
+	ImagesMinTimeLock uint64 // allowed-images updates and handover orders
 }
 
 // Limits returns the governance times of f.
@@ -115,6 +115,16 @@ func (l Limits) Wait(active *setupwire.Locked, u *setupwire.UpdateBody) uint64 {
 		w = max(w, l.ImagesMinTimeLock)
 	}
 	return w
+}
+
+// OrderWait is handoverorder.Wait under l: the time lock in force, at least the
+// images minimum. On the dev platform a runner waits the time lock alone;
+// dev says so.
+func (l Limits) OrderWait(active *setupwire.Locked, dev bool) uint64 {
+	if dev {
+		return l.TimeLock(active)
+	}
+	return max(l.TimeLock(active), l.ImagesMinTimeLock)
 }
 
 // LatestActivateAt is setupwire.LatestActivateAt under l.

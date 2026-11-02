@@ -230,10 +230,11 @@ func TestSetupState(t *testing.T) {
 	log.body = raw
 	log.state.Locked = markstore.GroupState{Version: u.Body.Version, Hash: h}
 	log.state.Open.Pending = &markstore.Pending{Version: 1, Hash: [32]byte{9}, EffectiveAt: 1_800_000_000}
+	log.state.Order = &markstore.Order{Kind: markstore.OrderHandover, Hash: [32]byte{8}, ActAt: 1_900_000_000}
 	got = state()
 	if got.Locked != (backend.ConfigGroup{Version: u.Body.Version, Hash: h}) ||
 		got.Open.Pending != (backend.PendingUpdate{Version: 1, Hash: backend.Root{9}, EffectiveAt: 1_800_000_000}) ||
-		got.Order != (backend.Order{}) {
+		got.Order != (backend.Order{Kind: 1, Hash: backend.Root{8}, ActAt: 1_900_000_000}) {
 		t.Fatalf("after the rotation: %+v", got)
 	}
 	if got.ApproverSetHash != u.Body.Locked.Approvers.Hash() || got.ApproverSetHash == want.ApproverSetHash {
@@ -252,13 +253,6 @@ func TestSetupState(t *testing.T) {
 	}
 	if flagState([32]byte{7})() != (backend.SetupState{SetupHash: backend.Root{7}}) {
 		t.Fatal("flag path state")
-	}
-
-	// Only a handover writes the order slot: a log state with an order
-	// does not start.
-	log.state.Order = &markstore.Order{Kind: markstore.OrderHandover, Hash: [32]byte{8}, ActAt: 1_900_000_000}
-	if _, err := newConfigUpdates(st, log, fixedClock{time.Unix(1_790_000_000, 0)}, "nitro", nil); err == nil || !strings.Contains(err.Error(), "handover order") {
-		t.Fatalf("a log state with an order in the slot: %v", err)
 	}
 }
 

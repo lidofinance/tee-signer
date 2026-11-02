@@ -37,6 +37,9 @@ done
 mkdir -p "$OUT"
 # The chain record of the per-chain images: a generic image has none.
 rm -f "$OUT/runner.chain"
+# The handover release gate: scripts/handover-gate.sh must have passed on
+# these sources (common.sh require_handover_gate).
+require_handover_gate "runner-azure$IMAGE_SUFFIX" || die "no image without the handover gate"
 log "building the runners (scripts/build-runner.sh)"
 if ! IMAGE_FLAVOR="$IMAGE_FLAVOR" bash "$ROOT/scripts/build-runner.sh" x86_64 >"$OUT/build-runner.log" 2>&1; then
   tail -n 20 "$OUT/build-runner.log" >&2

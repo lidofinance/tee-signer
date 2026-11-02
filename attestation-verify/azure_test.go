@@ -1,3 +1,5 @@
+//go:build !verifierselect
+
 package attest
 
 import (
