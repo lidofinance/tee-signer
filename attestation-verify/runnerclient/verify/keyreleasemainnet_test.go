@@ -12,7 +12,8 @@ import (
 // On mainnet an Azure or Nitro signer is
 // reached only with key_release_sha256 pinned. On other chains the pin
 // stays optional, and GCP, whose key rule has no lock and whose
-// key_release_hash is always zero, never needs it.
+// key_release_hash is always zero, never needs it (on mainnet it needs
+// gcp_project_id and gcp_service_account instead, cloudpins_test.go).
 func TestKeyReleasePinMandatoryOnMainnet(t *testing.T) {
 	setup := pinOf(testSetupHash)
 	pin := pinOf(backend.Root{7})
@@ -32,6 +33,9 @@ func TestKeyReleasePinMandatoryOnMainnet(t *testing.T) {
 		{VerifierGCPCS, false, "", ""},
 	} {
 		a := Attestation{Verifier: c.verifier, SetupSHA256: setup, Mainnet: c.mainnet, KeyReleaseSHA256: c.pin}
+		if c.verifier == VerifierGCPCS {
+			a.GCPProjectID, a.GCPServiceAccount = "signer-project", gcpAccount
+		}
 		_, err := a.setupPins()
 		switch {
 		case c.want == "" && err != nil:

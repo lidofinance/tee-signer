@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 )
 
 // KeySet holds the RSA signing keys of one token issuer by key id.
@@ -143,18 +144,46 @@ func (ks *KeySet) lookup(kid string) *rsa.PublicKey {
 
 const maxFetch = 1 << 20
 
+// defaultFetchTimeout bounds a fetch when the caller passes no client.
+const defaultFetchTimeout = 30 * time.Second
+
+// hostPort is u's host in lower case and its port, the scheme's default
+// when u names none, so host and host:443 compare equal for https.
+func hostPort(u *url.URL) string {
+	port := u.Port()
+	if port == "" {
+		port = map[string]string{"https": "443", "http": "80"}[u.Scheme]
+	}
+	return strings.ToLower(u.Hostname()) + ":" + port
+}
+
 func httpGet(ctx context.Context, client *http.Client, url string) ([]byte, error) {
 	if !strings.HasPrefix(url, "https://") {
 		return nil, fmt.Errorf("attest: refusing non-https URL %q", url)
 	}
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{Timeout: defaultFetchTimeout}
+	}
+	// A copy, so the caller's client keeps its own redirect rule. A
+	// redirect off the requested scheme and host is refused: the host checks
+	// on the URL (checkJWKSURI) would mean nothing if the answer could come
+	// from elsewhere.
+	c := *client
+	c.CheckRedirect = func(r *http.Request, via []*http.Request) error {
+		first := via[0].URL
+		if r.URL.Scheme != first.Scheme || hostPort(r.URL) != hostPort(first) {
+			return fmt.Errorf("attest: %s redirects to %s, another host", url, r.URL.Redacted())
+		}
+		if len(via) >= 10 {
+			return fmt.Errorf("attest: %s: more than 10 redirects", url)
+		}
+		return nil
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := client.Do(req)
+	resp, err := c.Do(req)
 	if err != nil {
 		return nil, err
 	}
