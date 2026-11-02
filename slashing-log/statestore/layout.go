@@ -266,6 +266,9 @@ func (s *Store) commitLocked(ctx context.Context, ops map[string]op, full bool) 
 // createCommit writes a commit at the next free version.
 func (s *Store) createCommit(ctx context.Context, plain []byte) (uint64, []byte, error) {
 	for v, skips := s.version+1, 0; ; v, skips = v+1, skips+1 {
+		if v == 0 {
+			return 0, nil, fmt.Errorf("statestore: no version name left after %d (refusing)", s.version)
+		}
 		if skips > maxSkips {
 			return 0, nil, fmt.Errorf("statestore: %d names after version %d are taken by objects that are not commits", maxSkips, s.version)
 		}

@@ -230,8 +230,14 @@ func Open(ctx context.Context, local platform.Store, l markstore.Log, signer str
 	if err != nil {
 		return nil, fmt.Errorf("state copy: local store: %w", err)
 	}
-	s.version = idx.top
+	// The next commit goes above the newest version this key opens, not
+	// above any name: a planted name at the last version would make it wrap.
+	s.version = idx.authenticTop()
 	if r == nil {
+		if opt.AllowCreate {
+			// -state-create over another key's commits: start above them.
+			s.version = idx.top
+		}
 		if idx.present > 0 && !opt.AllowCreate {
 			return nil, fmt.Errorf("state copy %s: %d commit names hold objects but none opens under this key release with every object it needs "+
 				"(%d open but name chunks or commits that are missing or changed; the others: another image or key, and on Azure a new image "+
