@@ -204,9 +204,10 @@ func dataKey(ctx context.Context, rel KeyReleaser, kid string, setup [32]byte) (
 
 // releaseChecked reads the rule of the key kid (key_release_hash and the
 // lock, o.ReadKeyRule), then releases exactly the key version that read
-// described and checks that the released key is that key (RBRAZR-01). On
-// mainnet a policy that is not immutable, or a kid without a version,
-// stops the start here. Without a rule read (the flag path, or a failed
+// described and checks that the released key is that key (RBRAZR-01). If
+// the policy names one image, the runner's MAA token must state it. On
+// mainnet a policy that is not locked (see keyRuleOf), or a kid without a
+// version, stops the start here. Without a rule read (the flag path, or a failed
 // read off mainnet) the release names kid as given, as before.
 func releaseChecked(ctx context.Context, o platform.Options, rel *Releaser, kid string) (*platform.KeyRule, *rsa.PrivateKey, error) {
 	name, version, _ := strings.Cut(kid, "/")
@@ -228,7 +229,7 @@ func releaseChecked(ctx context.Context, o platform.Options, rel *Releaser, kid 
 		key, err := rel.ReleaseKey(ctx, kid)
 		return rule, key, err
 	}
-	key, releasedKid, err := rel.releaseKid(ctx, name+"/"+checked.Version)
+	key, releasedKid, err := rel.releaseKid(ctx, name+"/"+checked.Version, checked.HostData)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -282,7 +283,7 @@ func New(o platform.Options) (*platform.Platform, error) {
 	local := newClient(10 * time.Second)
 	maa := &MAAClient{Endpoint: maaHost, HTTP: httpc, Reports: reports, Collateral: &HostCollateral{HTTP: local}}
 	tokens := &IMDSTokens{URL: imdsURL, ClientID: clientID, HTTP: local}
-	rel := &Releaser{MAA: maa, KV: &KeyVault{Endpoint: akv, HTTP: httpc, Tokens: tokens}, Seen: &platform.ImageSeen{}}
+	rel := &Releaser{MAA: maa, KV: &KeyVault{Endpoint: akv, HTTP: httpc, Tokens: tokens, MAAHost: maaHost}, Seen: &platform.ImageSeen{}}
 
 	var clk platform.Clock = clock.System{}
 	switch c := o.Param("clock", "system"); c {
