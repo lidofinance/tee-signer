@@ -50,3 +50,30 @@ func TestUnsafeSingleKeyAccepted(t *testing.T) {
 		}
 	}
 }
+
+// CheckSingleKeyMainnet refuses only the one case where a runner would
+// never start: mainnet, a key held alone accepted, no_lock_accepted unset.
+func TestCheckSingleKeyMainnet(t *testing.T) {
+	for _, c := range []struct {
+		mainnet, single, noLock, refused bool
+	}{
+		{true, true, false, true},
+		{true, true, true, false},
+		{true, false, false, false},
+		{false, true, false, false},
+	} {
+		s := samples(t)["setup-gcp"]
+		k := &s.Platform.SealingKeyRelease
+		k.UnsafeSingleKeyAccepted, k.NoLockAccepted = c.single, c.noLock
+		if c.mainnet {
+			s.Chain.GenesisForkVersion = MainnetForkVersion
+		}
+		err := CheckSingleKeyMainnet(&s.Platform, s.Chain.GenesisForkVersion)
+		if refused := err != nil; refused != c.refused {
+			t.Errorf("mainnet %v single %v no_lock %v: err %v, want refused %v", c.mainnet, c.single, c.noLock, err, c.refused)
+		}
+		if err != nil && !strings.Contains(err.Error(), "sealing_key_release.no_lock_accepted = true") {
+			t.Errorf("the error does not name no_lock_accepted: %v", err)
+		}
+	}
+}

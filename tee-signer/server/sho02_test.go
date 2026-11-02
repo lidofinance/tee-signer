@@ -4,7 +4,7 @@ package server
 
 import (
 	"strings"
-	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/lidofinance/tee-signer/governance/setupwire"
@@ -12,16 +12,17 @@ import (
 
 // listHookStore runs onList once, right after the first listing of the
 // shares: a share another request adds just after the caller's check.
+// onList may list the shares again (addShareOf does).
 type listHookStore struct {
 	*shareStore
-	once   sync.Once
+	done   atomic.Bool
 	onList func()
 }
 
 func (s *listHookStore) List(prefix string) ([]string, error) {
 	out, err := s.shareStore.List(prefix)
-	if prefix == "shares/" {
-		s.once.Do(s.onList)
+	if prefix == "shares/" && s.done.CompareAndSwap(false, true) {
+		s.onList()
 	}
 	return out, err
 }

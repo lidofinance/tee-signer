@@ -139,7 +139,8 @@ build with a setup and the mark log serves all three. Other
 runners answer `UNSUPPORTED`.
 
 Type numbers: 0x01 to 0x09 are taken, the next free one is 0x0a. The
-handover takes 0x31 to 0x33. A response
+handover takes 0x31 to 0x33. 0x20 to 0x28 belonged to the removed key
+generation and are not reused (TestRoleTable keeps them refused). A response
 type is the request type with 0x80 set, so request types stay below 0x80.
 
 After a handover the runner answers HEALTH, PUBLIC_KEYS, ATTEST, IDENTITY
@@ -595,6 +596,19 @@ stored. The order travels in the request; the runner keeps nothing of
 it. `governance/importorder/testdata/vector.txt` is a test vector
 (body, hash, signed order).
 
+Room. With a setup, every object under `shares/` in the runner's store,
+every loaded key and every import in progress counts against the setup's
+`max_keys`; above it the import is refused with `SC_ERR_NOMEM` ("its
+setup's max_keys is N"). A stored record that never loads counts too: one
+sealed under another setup or log, or a corrupt one. The runner deletes
+nothing under `shares/`, so such a record keeps its slot until the
+operator moves it out. The start names each record that did not load
+("some stored shares did not load"). For a full store: compare the names
+under `shares/` with the keys the runner holds (`imported_keys` in
+IDENTITY, the start's log), move each record that does not load to a
+folder outside `shares/` (keep it, it may be the only copy of a share),
+restart the runner, and send the import again.
+
 The dealer fetches IDENTITY with a fresh nonce, verifies it, and seals the
 32-byte share with HPKE base mode to `import_key`: info
 `"signer-share-import-v1"`, associated data = the 129-byte header above
@@ -847,6 +861,15 @@ the target side `handover_import.go`; the encodings are in
 `import.go`, `carry.go`). All four messages need the admin role. Every release
 build with a setup and the mark log has both sides, and no image may go
 out without them (release gate, below).
+
+A handover works only between runners on the same cloud. A release build
+links the attestation verifier of its own platform only
+(`attestation-verify/runnerclient`, tag `verifierselect`), and the source
+checks the target with it: nitro hands over to an `aws-nitro` target,
+azure to `azure-maa`, gcp to `gcp-cs`, dev to `dev`. The source refuses
+an order whose target verifier it lacks (HANDOVER_ORDER, below), and
+`signer-admin handover-draft` refuses to draft one
+(`handoverorder.Runner.CheckSameCloud`).
 
 The operator's steps, with the tools of this tree:
 

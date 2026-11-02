@@ -48,6 +48,39 @@ func ParseVerifier(s string) (Verifier, error) {
 	return 0, fmt.Errorf("verifier %q, want aws-nitro, azure-maa, gcp-cs or dev", s)
 }
 
+// VerifierOf is the verifier a release runner on platform p links, the
+// only one it checks another runner's attestation with.
+func VerifierOf(p setupwire.Platform) (Verifier, bool) {
+	switch p {
+	case setupwire.PlatformNitro:
+		return VerifierNitro, true
+	case setupwire.PlatformAzure:
+		return VerifierAzure, true
+	case setupwire.PlatformGCP:
+		return VerifierGCP, true
+	case setupwire.PlatformDev:
+		return VerifierDev, true
+	}
+	return 0, false
+}
+
+// CheckSameCloud refuses a handover target r that is not on the source's
+// platform. A release runner links the verifier of its own platform only
+// (VerifierOf; attestation-verify/runnerclient, tag verifierselect) and
+// checks the target with it, so a runner hands over only to a runner on
+// the same cloud.
+func (r *Runner) CheckSameCloud(source setupwire.Platform) error {
+	want, ok := VerifierOf(source)
+	if !ok {
+		return fmt.Errorf("handover order: source platform %s has no verifier", source)
+	}
+	if r.Verifier != want {
+		return fmt.Errorf("handover order: target %s has the %s verifier, but the source is on %s, whose runner checks %s attestations only: "+
+			"a handover works only between runners on the same cloud", r.Name, r.Verifier, source, want)
+	}
+	return nil
+}
+
 // imageKind is the allowed-images kind of a verifier's measurement, 0 for
 // dev.
 func (v Verifier) imageKind() setupwire.ImageKind {
