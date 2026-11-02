@@ -34,14 +34,19 @@ func (s System) Trusted() bool { return false }
 
 // NTSSummary is the part of the NTS clock's state that HEALTH reports. It
 // is here, without the build tag nts, so the server can ask any clock for
-// it (NTSReporter); only the NTS clock has it.
+// it (NTSReporter); only the NTS clock has it. SampleAge is the age of the
+// oldest sample of the last quorum. Refused says why the clock gives no
+// time now; it is empty when Quorum is true.
 type NTSSummary struct {
 	Quorum         bool
+	Refused        string
 	BoundNow       time.Duration
 	MaxBound       time.Duration
 	OffsetFromHost time.Duration
 	Members        []string
 	AgeOfQuorum    time.Duration
+	SampleAge      time.Duration
+	MaxSampleAge   time.Duration
 	Refusals       int64
 	DriftPPM       float64
 	DriftErrPPM    float64

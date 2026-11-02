@@ -5,8 +5,9 @@ package main
 import (
 	"context"
 	"errors"
-	"flag"
+	"log/slog"
 	"net"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -69,8 +70,7 @@ func TestNTSStatusLine(t *testing.T) {
 	}
 }
 
-// Off by default; the flag or the variable turns it on; -clock https-date
-// next to it is refused before any server is asked.
+// Off by default; the flag or the variable turns it on.
 func TestNTSSwitch(t *testing.T) {
 	sys := clock.System{}
 	base := func(platform.Options) (*platform.Platform, error) { return &platform.Platform{Clock: sys}, nil }
@@ -91,20 +91,12 @@ func TestNTSSwitch(t *testing.T) {
 		}
 	}
 	defer func() { *ntsClockFlag = false }()
-	if flag.Lookup("clock") == nil {
-		flag.String("clock", "platform", "main.go's flag, for this test")
-	}
-	_ = flag.Set("clock", "https-date")
-	defer func() { _ = flag.Set("clock", "platform") }()
-	if _, err := ntsSwitch(base)(platform.Options{}); err == nil || !strings.Contains(err.Error(), "-clock https-date") {
-		t.Fatalf("with -clock https-date: %v", err)
-	}
 }
 
 // A set flag wins over its variable.
 func TestNTSFlagsOverVariables(t *testing.T) {
 	t.Setenv("RUNNER_NTS_COARSE_URLS", "https://a.example/,https://b.example/")
-	t.Setenv("RUNNER_NTS_MAX_BOUND", "1s")
+	t.Setenv("RUNNER_NTS_MAX_BOUND", "200ms")
 	*ntsCoarseFlag = "https://a.example/,https://b.example/,https://c.example/"
 	*ntsMaxBoundFlag = 50 * time.Millisecond
 	defer func() { *ntsCoarseFlag, *ntsMaxBoundFlag = "", 0 }()
@@ -121,7 +113,7 @@ func TestNTSFlagsOverVariables(t *testing.T) {
 	}
 	*ntsMaxBoundFlag = 0
 	n, _, err = newNTSClock(nil, nil, "", nil)
-	if err != nil || n.MaxBound != time.Second {
+	if err != nil || n.MaxBound != 200*time.Millisecond {
 		t.Fatalf("variable: %v %v", n.MaxBound, err)
 	}
 }
@@ -140,5 +132,64 @@ func TestNTSClockTakesThePlatformDialer(t *testing.T) {
 	}
 	if _, err := n.Dial(context.Background(), "udp", "x:123"); err == nil || !called {
 		t.Fatal("not the platform's dialer")
+	}
+}
+
+// No quorum within -nts-wait: the start fails, so the supervisor starts
+// the runner again. A runner that went on would load no share (the
+// restart floor needs the clock) and never load them later.
+func TestNTSClockStartFailsWithoutQuorum(t *testing.T) {
+	t.Setenv("RUNNER_NTS_COARSE_URLS", "https://127.0.0.1:1/,https://127.0.0.1:2/,https://127.0.0.1:3/")
+	t.Setenv("RUNNER_NTS_WAIT", "1s")
+	start := time.Now()
+	n, err := startNTSClock(context.Background(), &http.Client{Timeout: time.Second}, nil, "", slog.New(slog.DiscardHandler))
+	if err == nil || !strings.Contains(err.Error(), "no quorum") {
+		t.Fatalf("started without a quorum: %v %v", n, err)
+	}
+	if d := time.Since(start); d > 30*time.Second {
+		t.Fatalf("gave up after %v, want about the 1s wait", d)
+	}
+}
+
+// The wrapper hands that error to the host before it closes the platform:
+// main never sees the platform, so it cannot.
+func TestNTSClockStartFailureIsReported(t *testing.T) {
+	t.Setenv("RUNNER_NTS_COARSE_URLS", "https://127.0.0.1:1/,https://127.0.0.1:2/,https://127.0.0.1:3/")
+	t.Setenv("RUNNER_NTS_WAIT", "1s")
+	var reported string
+	closed := false
+	base := func(platform.Options) (*platform.Platform, error) {
+		return &platform.Platform{HTTPClient: &http.Client{Timeout: time.Second},
+			ReportExit: func(s string) { reported = s }, Close: func() error { closed = true; return nil }}, nil
+	}
+	if _, err := withNTSClock(base)(platform.Options{}); err == nil {
+		t.Fatal("started without a quorum")
+	}
+	if !strings.Contains(reported, "no quorum") || !closed {
+		t.Fatalf("reported %q, closed %v", reported, closed)
+	}
+}
+
+// -nts-max-bound and RUNNER_NTS_MAX_BOUND are refused above the cap: a
+// larger bound would let the clock serve a time it vouches for less.
+func TestNTSMaxBoundCap(t *testing.T) {
+	t.Setenv("RUNNER_NTS_COARSE_URLS", "https://a.example/,https://b.example/,https://c.example/")
+	defer func() { *ntsMaxBoundFlag = 0 }()
+	for _, v := range []time.Duration{100 * time.Millisecond, 250 * time.Millisecond} {
+		*ntsMaxBoundFlag = v
+		if n, _, err := newNTSClock(nil, nil, "", nil); err != nil || n.MaxBound != v {
+			t.Fatalf("-nts-max-bound %v: %v", v, err)
+		}
+	}
+	for _, v := range []time.Duration{251 * time.Millisecond, time.Second, time.Hour, 1000 * time.Hour} {
+		*ntsMaxBoundFlag = v
+		if _, _, err := newNTSClock(nil, nil, "", nil); err == nil || !strings.Contains(err.Error(), "-nts-max-bound") {
+			t.Fatalf("-nts-max-bound %v: %v", v, err)
+		}
+	}
+	*ntsMaxBoundFlag = 0
+	t.Setenv("RUNNER_NTS_MAX_BOUND", "24h")
+	if _, _, err := newNTSClock(nil, nil, "", nil); err == nil || !strings.Contains(err.Error(), "RUNNER_NTS_MAX_BOUND") {
+		t.Fatalf("RUNNER_NTS_MAX_BOUND=24h: %v", err)
 	}
 }

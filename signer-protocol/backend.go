@@ -150,10 +150,14 @@ type Health struct {
 // milliseconds.
 type ClockNTS struct {
 	// Quorum is true when the clock answers: a quorum that passed every
-	// check is in force and BoundNowMS is within MaxBoundMS. With no
-	// quorum yet, BoundNowMS, OffsetFromHostMS, Members and QuorumAgeMS
-	// are zero.
+	// check is in force, BoundNowMS is within MaxBoundMS and SampleAgeMS
+	// within MaxSampleAgeMS. With no quorum yet, BoundNowMS,
+	// OffsetFromHostMS, Members, QuorumAgeMS and SampleAgeMS are zero.
 	Quorum bool `json:"quorum"`
+	// Refused says why the clock does not answer, and so why the runner
+	// signs nothing: no quorum yet, the bound over MaxBoundMS, or the
+	// samples over MaxSampleAgeMS old. Empty when Quorum is true.
+	Refused string `json:"refused,omitempty"`
 	// BoundNowMS is the error bound of the signer's time now: the bound of
 	// the last quorum grown by rho since then. Real time is within
 	// +-BoundNowMS of the time the signer uses. Signing fails above
@@ -169,8 +173,15 @@ type ClockNTS struct {
 	// QuorumAgeMS is the time since the last quorum, on the local
 	// monotonic clock.
 	QuorumAgeMS float64 `json:"quorum_age_ms"`
+	// SampleAgeMS is the age of the oldest sample of the last quorum, on
+	// the local monotonic clock. The clock refuses over MaxSampleAgeMS:
+	// the host sets that clock's rate, so this caps how far ahead a fast
+	// one can move the time while the servers are out of reach.
+	SampleAgeMS    float64 `json:"sample_age_ms"`
+	MaxSampleAgeMS float64 `json:"max_sample_age_ms"`
 	// Refusals counts the reads of the clock refused because the bound was
-	// over MaxBoundMS, since the runner started.
+	// over MaxBoundMS or the samples over MaxSampleAgeMS old, since the
+	// runner started.
 	Refusals int64 `json:"refusals"`
 	// DriftPPM is the rate error of the local clock against NTS, within
 	// +-DriftErrPPM, over DriftBaselineS seconds. RhoViolations counts the

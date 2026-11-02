@@ -31,6 +31,7 @@ check: ## guards: module boundaries, secret scan, release gate, eif-check and af
 	bash $(ROOT)/scripts/check-forbidden.sh
 	bash $(ROOT)/scripts/fetch-nts.sh --check
 	bash $(ROOT)/scripts/affected-test.sh
+	bash $(ROOT)/scripts/nts-verify-crates-test.sh
 	bash $(ROOT)/scripts/release-gate-test.sh
 	bash $(ROOT)/scripts/eif-check-test.sh
 	python3 -B $(ROOT)/scripts/bundle-licenses-test.py

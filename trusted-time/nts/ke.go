@@ -31,7 +31,9 @@ type KEConfig struct {
 	// Roots are the CAs this server's certificate must chain to.
 	Roots *x509.CertPool
 	// Time is the clock that checks certificate validity. Required: the
-	// runner passes its anchored clock, not the host's clock.
+	// runner passes its anchored clock, not the host's clock. A zero time
+	// means "no trusted time": KeyExchange refuses it before dialing, and
+	// during the handshake checks the certificate at NoTrustedTime instead.
 	Time func() time.Time
 	// Dial opens the TCP connection. Nil: net.Dialer.
 	Dial DialFunc
@@ -55,12 +57,34 @@ func (c *KEConfig) dial(ctx context.Context, network, addr string) (net.Conn, er
 	return d.DialContext(ctx, network, addr)
 }
 
+// NoTrustedTime is the certificate time when the trusted clock has none:
+// one second after the Unix epoch, before every certificate a CA issues.
+// crypto/x509 refuses a certificate when now.Before(NotBefore) (isValid in
+// verify.go) and checks every certificate of the chain, so every chain
+// fails, expired ones included. It is not the zero time because crypto/tls
+// hands a zero time to crypto/x509 as CurrentTime, and crypto/x509 replaces
+// a zero CurrentTime with time.Now(), the host's clock.
+var NoTrustedTime = time.Unix(1, 0)
+
+// certTime is f with a zero time replaced by NoTrustedTime.
+func certTime(f func() time.Time) func() time.Time {
+	return func() time.Time {
+		if t := f(); !t.IsZero() {
+			return t
+		}
+		return NoTrustedTime
+	}
+}
+
 // KeyExchange runs NTS-KE (RFC 8915 section 4): TLS 1.3 with ALPN ntske/1,
 // the request, the response, and the two keys from the TLS exporter
 // (section 5.1). The Rust library builds and checks the records.
 func KeyExchange(ctx context.Context, cfg KEConfig) (*KEResult, error) {
 	if cfg.Time == nil || cfg.Roots == nil || cfg.Host == "" {
 		return nil, errors.New("nts: KEConfig needs Host, Roots and Time")
+	}
+	if cfg.Time().IsZero() {
+		return nil, fmt.Errorf("nts-ke %s: no trusted time to check the certificate (the certificate clock has no reading)", cfg.Host)
 	}
 	addr := cfg.Addr
 	if addr == "" {
@@ -82,7 +106,7 @@ func KeyExchange(ctx context.Context, cfg KEConfig) (*KEResult, error) {
 		MinVersion: tls.VersionTLS13,
 		MaxVersion: tls.VersionTLS13,
 		NextProtos: []string{ALPN()},
-		Time:       cfg.Time,
+		Time:       certTime(cfg.Time),
 	})
 	if err := conn.HandshakeContext(ctx); err != nil {
 		return nil, fmt.Errorf("nts-ke %s: TLS: %w", cfg.Host, err)

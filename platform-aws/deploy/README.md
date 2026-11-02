@@ -526,7 +526,8 @@ What the parent reports for the running enclave is the real check:
   ([Evervault](https://evervault.com/blog/how-we-built-enclaves-resolving-clock-drift-in-nitro-enclaves)),
   which is exactly what the floor must not trust. The image runs the NTS
   clock instead (`-nts-clock`, next section): four NTS operators, a quorum
-  with an error bound, signing refused above 100 ms. The parent can delay or
+  with an error bound, signing refused above 100 ms or when the samples are
+  over 60 s old. The parent can delay or
   drop that traffic but not forge it. The same clock checks the dates of
   client certificates. HTTPS Date readings over vsock-proxy are its coarse
   check.
@@ -581,16 +582,16 @@ until `-allow-nets` is extended.
 16 sessions at once; a session ends 10 s after its last datagram or 30 s
 after it began; 8 datagrams out per session; 10 datagrams per second out in
 all (burst 20) and 0.5 per second to one address (burst 4). The clock asks
-each server every 32 s at most, so a normal minute is 8 datagrams. Over a
+each server every 16 s at most, so a normal minute is 15 datagrams. Over a
 limit the datagram is dropped and counted, as a network would drop it.
 `udprelay` logs its counters every 10 minutes.
 
 ### What the parent can do
 
 Delay or drop NTS-KE and NTP. A delayed answer widens that sample's bound by
-half the delay and cannot move the time outside it; dropped answers age the
-bound until signing stops at 100 ms (500 ppm: about 140 s after a quorum
-with a 30 ms bound). It cannot forge: TLS 1.3 with pinned roots ends in the
+half the delay and cannot move the time outside it; dropped answers stop
+signing once the oldest sample of the last quorum is 60 s old (or the bound,
+aged by 500 ppm, reaches 100 ms first). It cannot forge: TLS 1.3 with pinned roots ends in the
 enclave, and every NTP answer carries the NTS authenticator with keys from
 that TLS session (AES-SIV-CMAC-256). It can send unauthenticated
 Kiss-o'-Death packets with our unique identifier, which may disable a server
@@ -598,7 +599,8 @@ Kiss-o'-Death packets with our unique identifier, which may disable a server
 disabled stop the quorum, so signing stops: fail closed. The host also runs
 the enclave's CPU counter, the clock's local time (`CLOCK_MONOTONIC_RAW`);
 the drift check against a quorum 17 minutes old refuses a rate beyond
-500 ppm, see `trusted-time/docs/nts.md`.
+500 ppm. While it blocks the servers, a counter it runs fast moves the time
+ahead by less than the 60 s sample age limit, see `trusted-time/docs/nts.md`.
 
 ### Security group
 
@@ -720,7 +722,8 @@ key either. `test-client-ca.pem` is the root of a test PKI made by
 - The runner checks the validity dates of the client certificate, and of
   its chain, against the clock of its platform (the NTS clock, "NTS clock in
   the enclave"), not against the system clock that the parent sets. If that
-  clock has no time (no quorum, or a bound over 100 ms), no client
+  clock has no time (no quorum, a bound over 100 ms, or samples over 60 s
+  old), no client
   certificate is accepted until it has one. With `clock=system` the parent
   could move time and let an expired certificate through, but it would still
   need that certificate and its key.
@@ -770,6 +773,13 @@ A reboot ends them and needs `parent-run.sh` again. The store under
 A runner that fails sends the line it prints (`runner: ...`) to the host
 agent before it exits (hostagent EXIT). The agent writes it with the time to
 `/var/lib/signer-runner/last-exit.txt` (`-exit-file`) and to its log.
+
+Nothing in this deploy restarts the enclave after it exits. A start
+failure ends it, and that includes an NTS outage at start: with no NTS
+quorum within `-nts-wait` (90 s) the runner exits rather than run without
+keys. On mainnet, run the enclave step of `parent-run.sh`
+(`nitro-cli run-enclave`) under a service unit that restarts on failure,
+or restart it by hand. The reason for each exit is in `last-exit.txt`.
 Nothing else leaves the enclave this way: one line of printable ASCII, at
 most 2048 bytes, the same text a console would show. An enclave that is not
 in debug mode has no console.

@@ -161,10 +161,12 @@ render() {
   if grep -Eq '@[A-Z_]+@' "$dir/template.json"; then
     die "unfilled token left in $dir/template.json"
   fi
-  # The runner's clock is the NTS clock (runner-azure has the tag nts), and
-  # nothing in the command replaces it.
+  # The runner's clock is the NTS clock (runner-azure has the tag nts), with
+  # its start wait and error bound in the command, and nothing in the
+  # command replaces it.
   jq -e '.resources[0].properties.containers[0].properties.command
-    | index("-nts-clock") != null and index("-nts-coarse-urls") != null and index("-clock") == null' \
+    | index("-nts-clock") != null and index("-nts-coarse-urls") != null
+      and index("-nts-wait") != null and index("-nts-max-bound") != null and index("-clock") == null' \
     "$dir/template.json" >/dev/null || die "the runner command in $dir/template.json does not run the NTS clock alone"
   # The runner takes its values from the setup in SIGNER_SETUP, a parameter
   # without a default, and the command names none of them.

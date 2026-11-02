@@ -91,7 +91,7 @@ done
 # not disturb the Go runtime (threads, signals, the cgo C core next to it).
 log "nts: e2e with the runners built with the tag, $HOST_ARCH"
 # shellcheck disable=SC2046 # the variables of bin_env, split on purpose
-(cd "$ROOT/tests" && env E2E_NETWORK=0 $(bin_env "$HOST_ARCH") go test -count=1 -v -tags platform_aws,nts ./e2e/) \
+(cd "$ROOT/tests" && env $(bin_env "$HOST_ARCH") go test -count=1 -v -tags platform_aws,nts ./e2e/) \
   >"$LOGS/nts-e2e-$HOST_ARCH.log" 2>&1 || { tail -80 "$LOGS/nts-e2e-$HOST_ARCH.log"; exit 1; }
 grep -E "^(--- |ok |FAIL|PASS$)" "$LOGS/nts-e2e-$HOST_ARCH.log" | sed "s/^/  [$HOST_ARCH] /"
 if [ "$HOST_ARCH" = x86_64 ] && command -v qemu-aarch64 >/dev/null && [ -x "$NTS_OUT/aarch64/bin/runner-dev-nts" ]; then

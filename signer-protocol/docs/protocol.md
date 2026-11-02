@@ -521,8 +521,9 @@ What "allowed" means on each path:
 - The in-place swap: the new image must be on the list in force before it
   starts, so the allowed-images update goes first and waits out the images
   minimum.
-- The flag path (no setup) has no list and no check; its key release is
-  not bound to any setup_hash, so it opens nothing a setup sealed.
+- The flag path (no setup; dev and the debug builds only) has no list and
+  no check; its key release is not bound to any setup_hash, so it opens
+  nothing a setup sealed.
 
 HEALTH reports `image`: `state` (`allowed`, `not_allowed`,
 `restart_needed`, `unknown`, `override`, `not_applicable`), the runner's

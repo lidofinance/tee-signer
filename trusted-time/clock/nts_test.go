@@ -4,9 +4,12 @@ package clock
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"math"
+	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -134,6 +137,8 @@ func TestNTSClockTwoWrongGiveNoTime(t *testing.T) {
 func TestNTSClockBoundGrowsUntilNowFails(t *testing.T) {
 	fs := newServers(t, nil, "a", "b", "c")
 	n := newNTS(fs, &coarseClock{})
+	// The sample age limit would refuse first.
+	n.MaxAge = time.Hour
 	if err := refresh(t, n); err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +164,42 @@ func TestNTSClockBoundGrowsUntilNowFails(t *testing.T) {
 		t.Fatal("refusal not counted")
 	}
 	// HEALTH sees the bound over the limit: no quorum in force, the refusal counted.
-	if sum := n.NTSSummary(); sum.Quorum || sum.Refusals != 1 || sum.BoundNow <= NTSMaxBound || sum.AgeOfQuorum < 200*time.Second {
+	if sum := n.NTSSummary(); sum.Quorum || sum.Refusals != 1 || sum.BoundNow <= NTSMaxBound || sum.AgeOfQuorum < 200*time.Second ||
+		!strings.Contains(sum.Refused, "error bound") {
+		t.Fatalf("summary %+v", sum)
+	}
+}
+
+// Samples over MaxAge old give no time, though the bound is within
+// MaxBound, and HEALTH says why. They do not form a quorum either.
+func TestNTSClockOldSamplesGiveNoTime(t *testing.T) {
+	fs := newServers(t, nil, "a", "b", "c")
+	n := newNTS(fs, &coarseClock{})
+	n.Interval, n.MaxBound = NTSInterval, time.Second
+	var ahead atomic.Int64
+	n.Local = func() int64 { return nts.Monotonic() + ahead.Load() }
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	if sum := n.NTSSummary(); !sum.Quorum || sum.Refused != "" || sum.MaxSampleAge != NTSMaxAge || sum.SampleAge > time.Second {
+		t.Fatalf("summary %+v", sum)
+	}
+	n.Dial = func(context.Context, string, string) (net.Conn, error) { return nil, errors.New("blocked by the host") }
+	ahead.Store(int64(NTSMaxAge - time.Second))
+	if _, err := n.Now(); err != nil {
+		t.Fatalf("%v before the limit: %v", NTSMaxAge-time.Second, err)
+	}
+	ahead.Store(int64(NTSMaxAge + time.Second))
+	_, b, err := n.Bounded()
+	if err == nil || !strings.Contains(err.Error(), "samples of the last quorum") || b > n.MaxBound {
+		t.Fatalf("%v after the samples: bound %v, err %v", NTSMaxAge+time.Second, b, err)
+	}
+	if err := refresh(t, n); err == nil || !strings.Contains(err.Error(), "0 fresh samples") {
+		t.Fatalf("quorum from old samples: %v", err)
+	}
+	sum := n.NTSSummary()
+	t.Logf("HEALTH: quorum %v, sample age %v, refused: %s", sum.Quorum, sum.SampleAge, sum.Refused)
+	if sum.Quorum || sum.Refusals != 1 || sum.SampleAge <= NTSMaxAge || !strings.Contains(sum.Refused, "samples of the last quorum") {
 		t.Fatalf("summary %+v", sum)
 	}
 }
@@ -268,7 +308,7 @@ func TestNTSClockKissCodes(t *testing.T) {
 		t.Fatalf("rate poll %v, deny %q", st.Peers["rate"].Poll, st.Peers["deny"].Disabled)
 	}
 	// 60 ms later the others are due again, the RATE server is not (100 ms),
-	// and the DENY server never again.
+	// and the DENY server not before NTSMaxPoll.
 	time.Sleep(60 * time.Millisecond)
 	rate, deny := fs[3].ntp.Requests.Load(), fs[4].ntp.Requests.Load()
 	if err := refresh(t, n); err != nil {
@@ -285,6 +325,38 @@ func TestNTSClockKissCodes(t *testing.T) {
 	}
 	if p := n.Status().Peers["rate"].Poll; p != 50*time.Millisecond {
 		t.Fatalf("poll after RATE ended: %v", p)
+	}
+}
+
+// A Kiss-o'-Death carries no authenticator, so anyone on the path who sees
+// the request can forge one. DENY or RSTR stops a server for maxPoll only:
+// a forged one must not take the operator out until the next restart.
+func TestNTSClockDenyExpires(t *testing.T) {
+	fs := newServers(t, map[string]ntstest.NTPOptions{"deny": {Kiss: "DENY"}}, "a", "b", "c", "deny")
+	n := newNTS(fs, &coarseClock{})
+	n.maxPoll = 200 * time.Millisecond
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	if d := n.Status().Peers["deny"].Disabled; d != "DENY" {
+		t.Fatalf("disabled %q, want DENY", d)
+	}
+	fs[3].ntp.Set(opt(ntstest.NTPOptions{}))
+	time.Sleep(60 * time.Millisecond)
+	deny := fs[3].ntp.Requests.Load()
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	if got := fs[3].ntp.Requests.Load(); got != deny {
+		t.Fatalf("the DENY server was asked again before maxPoll: %d requests, want %d", got, deny)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	p := n.Status().Peers["deny"]
+	if p.Disabled != "" || fs[3].ntp.Requests.Load() == deny || p.Stats.Samples != 1 {
+		t.Fatalf("after maxPoll: disabled %q, requests %d, samples %d", p.Disabled, fs[3].ntp.Requests.Load(), p.Stats.Samples)
 	}
 }
 
@@ -452,4 +524,41 @@ func testClock() time.Time { return testStart.Add(time.Duration(nts.Monotonic() 
 func opt(o ntstest.NTPOptions) ntstest.NTPOptions {
 	o.Clock = testClock
 	return o
+}
+
+// Without a coarse time the certificate clock gives the zero time, and
+// KeyExchange refuses it before it dials: the cause shows in the error,
+// and no certificate is checked at the system clock.
+func TestNTSCertificateClockWithoutCoarseTime(t *testing.T) {
+	n := &NTS{Coarse: &coarseClock{Err: errors.New("no coarse reading")}}
+	if got := n.certTime(); !got.IsZero() {
+		t.Fatalf("certificate time without a coarse reading: %v", got)
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	dialed := make(chan struct{}, 1)
+	go func() {
+		if c, err := l.Accept(); err == nil {
+			dialed <- struct{}{}
+			c.Close()
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err = nts.KeyExchange(ctx, nts.KEConfig{Host: "nts.test", Addr: l.Addr().String(), Roots: x509.NewCertPool(), Time: n.certTime})
+	if err == nil || !strings.Contains(err.Error(), "no trusted time") {
+		t.Fatalf("key exchange without a coarse time: %v", err)
+	}
+	select {
+	case <-dialed:
+		t.Fatal("key exchange dialed without a certificate time")
+	case <-time.After(100 * time.Millisecond):
+	}
+	n.Coarse = &coarseClock{}
+	if got := n.certTime(); got.Year() < 2026 {
+		t.Fatalf("certificate time with a coarse reading: %v", got)
+	}
 }

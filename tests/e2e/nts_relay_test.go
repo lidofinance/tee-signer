@@ -29,6 +29,9 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
+	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/trusted-time/nts/ntstest"
 )
 
@@ -160,13 +163,6 @@ func TestE2ENTSClockThroughRelay(t *testing.T) {
 		"-platform-opt", fmt.Sprintf("ntp_relay=tcp:127.0.0.1:%d", relayPort),
 		"-nts-clock", "-nts-coarse-urls", strings.Join(coarse, ","), "-nts-wait", "30s"}
 
-	// -clock https-date next to -nts-clock is refused.
-	if out, err := runnerCmd(bin, append([]string{"-config", c.path, "-state-dir", filepath.Join(dir, "s0"), "-listen", "unix:" + sock},
-		append(args, "-clock", "https-date", "-clock-urls", coarse[0])...)...).CombinedOutput(); err == nil ||
-		!strings.Contains(string(out), "-clock https-date would replace it") {
-		t.Fatalf("-clock https-date with -nts-clock: %v %s", err, out)
-	}
-
 	r := newRunnerOn(t, bin, "runner-nts-nitro", c, "unix:"+sock, args...)
 	r.start()
 	cl := client(t, "unix:"+sock)
@@ -222,6 +218,74 @@ func TestE2ENTSClockThroughRelay(t *testing.T) {
 	t.Logf("health: clock %s trusted=%v unix=%d; NTP requests a=%d b=%d c=%d d=%d", h2.ClockSource, h2.ClockTrusted, h2.ClockUnix,
 		ops[0].ntp.Requests.Load(), ops[1].ntp.Requests.Load(), ops[2].ntp.Requests.Load(), ops[3].ntp.Requests.Load())
 	t.Logf("last status line: %s", status)
+}
+
+// TestE2ENTSIgnoresHostClock: the host moves the system clock 1 h ahead
+// (clock_offset on the dev platform) and the runner signs on the NTS clock
+// of three test servers. HEALTH shows the servers' time, and a vote 4
+// epochs ahead of real time, long past for the moved clock, is refused.
+func TestE2ENTSIgnoresHostClock(t *testing.T) {
+	bin := runnerBinary(t, "aws-debug")
+	if out, err := runnerCmd(bin, "-nts-selftest").CombinedOutput(); err != nil {
+		t.Fatalf("%s has no NTS library (build it with the tag nts): %v %s", bin, err, out)
+	}
+	dir := t.TempDir()
+	raw0, start := rawNow(), time.Now()
+	serverClock := func() time.Time { return start.Add(time.Duration(rawNow() - raw0)) }
+	var roots []byte
+	var servers []string
+	for _, name := range []string{"a", "b", "c"} {
+		host := "nts-" + name + ".test"
+		store := ntstest.NewStore()
+		ntp, err := ntstest.StartNTP(store, ntstest.NTPOptions{Clock: serverClock})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(ntp.Close)
+		cert, ca, err := ntstest.CertificatePEM(host, start.Add(-time.Hour), start.Add(24*time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ke, err := ntstest.StartKE(cert, store, ntstest.KEOptions{NTPServer: "127.0.0.1", NTPPort: ntp.Port})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(ke.Close)
+		roots = append(roots, ca...)
+		servers = append(servers, name+"="+host+"@"+ke.Addr)
+	}
+	rootsFile := filepath.Join(dir, "nts-roots.pem")
+	if err := os.WriteFile(rootsFile, roots, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	coarse, _, caFile := coarseServers(t, dir)
+	t.Setenv("SSL_CERT_FILE", caFile)
+	t.Setenv("RUNNER_NTS_TEST_SERVERS", strings.Join(servers, ","))
+	t.Setenv("RUNNER_NTS_TEST_ROOTS", rootsFile)
+	t.Setenv("RUNNER_NTS_CLOCK", "")
+
+	c := newChain(t)
+	addr := fmt.Sprintf("tcp:127.0.0.1:%d", freePort(t))
+	r := newRunnerOn(t, bin, "runner-nts-host-clock", c, addr, "-allow-import", "-platform-opt", "clock_offset=1h",
+		"-nts-clock", "-nts-coarse-urls", strings.Join(coarse, ","), "-nts-wait", "30s")
+	r.start()
+	cl := client(t, addr)
+	h := waitReady(t, cl)
+	if h.ClockSource != "nts(a,b,c)" || !h.ClockTrusted {
+		t.Fatalf("clock %s trusted=%v", h.ClockSource, h.ClockTrusted)
+	}
+	if off := int64(h.ClockUnix) - serverClock().Unix(); off < -2 || off > 2 {
+		t.Fatalf("runner clock %d s off the NTS servers' clock; the host clock is 1 h ahead", off)
+	}
+	sk, _ := software.NewSecret()
+	pk, _ := core.PubkeyOf(sk)
+	if _, err := adminOf(cl).ImportShare(ctx, backend.ImportShareRequest{Pubkey: pk, Secret: sk, Index: 7}); err != nil {
+		t.Fatal(err)
+	}
+	e := c.stableEpoch(t)
+	_, err := cl.Sign(ctx, c.req(pk, att(e+3, e+4, 1)))
+	rr := wantRefused(t, err, backend.StatusPolicyFuture)
+	t.Logf("host clock +1h, runner clock %s within 2 s of the servers: vote 4 epochs ahead refused: %v", h.ClockSource, rr)
 }
 
 // coarseServers starts three HTTPS-date servers on loopback and returns

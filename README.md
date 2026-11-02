@@ -74,8 +74,7 @@ make test-core      # signer-core's own suites
 
 The signer-core vector suites need the pinned test vectors:
 `signer-core/scripts/fetch.sh` downloads them, or `VECTORS_DIR` names a copy.
-Without network, set `NO_NETWORK=1` and `GOPROXY=off` and use a filled Go module
-cache. `make loc` prints code line counts per module and per runner build.
+Without network, set `GOPROXY=off` and use a filled Go module cache. `make loc` prints code line counts per module and per runner build.
 
 ## License
 

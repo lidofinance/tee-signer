@@ -44,6 +44,7 @@
                 "-restart-floor=true", "-persist-watermarks=false",
                 "-nts-clock",
                 "-nts-coarse-urls", "https://login.microsoftonline.com/,https://management.azure.com/,https://www.cloudflare.com/",
+                "-nts-wait", "90s", "-nts-max-bound", "100ms",
                 "-log-json"
               ],
               "environmentVariables": [

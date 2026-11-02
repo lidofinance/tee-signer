@@ -23,16 +23,13 @@
 #   fuzz             scripts/fuzz.sh: every Go fuzz target for FUZZ_TIME (3s),
 #                    or those of FUZZ_MODULES; the C fuzz targets of markformat
 #                    and signer-core run only when FUZZ_MODULES is unset or ALL
-#   clock check      runner-dev -clock-check against public HTTPS sites
 #
-# Every go test runs with -race (RACE= turns it off). NO_NETWORK=1 skips
-# the tests that need public HTTPS.
+# Every go test runs with -race (RACE= turns it off).
 #
 # The variables of scripts/ci-scope.sh narrow the run; unset, everything
 # runs. CI_MODULES picks the modules, CI_E2E=0 skips the runner builds and
 # everything that needs them or checks them (release gate, EIF check,
-# chains, e2e, PCR3, deploy names, clock check), CI_CORE=0 skips the
-# signer-core suites.
+# chains, e2e, PCR3, deploy names), CI_CORE=0 skips the signer-core suites.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 mkdir -p "$LOGS"
@@ -62,11 +59,6 @@ else
   log "CI_E2E=0: no runner code changed: skipped the runner builds, release gate, chains and e2e"
 fi
 
-net=0
-if [ "${NO_NETWORK:-0}" != 1 ] && curl -sfI --max-time 10 https://www.cloudflare.com/ >/dev/null; then
-  net=1
-fi
-
 summary() {
   grep -E "^(--- |ok |FAIL|PASS$)|(e2e|cloud)_test.go:[0-9]+:" "$1" || true
 }
@@ -85,7 +77,7 @@ bin_env() {
 if [ "$e2e" = 1 ]; then
   log "e2e: static $HOST_ARCH runners"
   # shellcheck disable=SC2046 # the variables of bin_env, split on purpose
-  (cd "$ROOT/tests" && env E2E_NETWORK="$net" $(bin_env "$HOST_ARCH") go test $RACE -count=1 -v -timeout 40m -tags platform_aws ./e2e/) \
+  (cd "$ROOT/tests" && env $(bin_env "$HOST_ARCH") go test $RACE -count=1 -v -timeout 40m -tags platform_aws ./e2e/) \
     >"$LOGS/e2e-$HOST_ARCH.log" 2>&1 || { tail -80 "$LOGS/e2e-$HOST_ARCH.log"; exit 1; }
   summary "$LOGS/e2e-$HOST_ARCH.log" | grep -E '^(ok|FAIL)'
   grep -q -- "--- PASS: TestE2EHandoverGate " "$LOGS/e2e-$HOST_ARCH.log" && ! grep -q -- "--- SKIP: TestE2EHandoverGate" "$LOGS/e2e-$HOST_ARCH.log" ||
@@ -130,14 +122,5 @@ fi
 
 if [ "${FUZZ_TIME:-3s}" != 0 ]; then
   FUZZ_TIME="${FUZZ_TIME:-3s}" bash "$ROOT/scripts/fuzz.sh"
-fi
-
-if [ "$net" = 1 ] && [ "$e2e" = 1 ]; then
-  log "clock check: HTTPS Date quorum"
-  "$BUILD/$HOST_ARCH/bin/runner-dev" -platform dev -state-dir "$BUILD/clock-check" -clock https-date \
-    -clock-urls https://www.cloudflare.com/,https://www.google.com/,https://github.com/,https://kms.eu-west-1.amazonaws.com/,https://sts.googleapis.com/ \
-    -clock-check 2>&1 | tee "$LOGS/clock-check.log" | tail -1
-elif [ "$net" != 1 ]; then
-  log "no network: skipped HTTPS Date tests"
 fi
 log "ALL TESTS PASSED"

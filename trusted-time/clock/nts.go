@@ -18,8 +18,10 @@ import (
 
 // Defaults of the NTS clock.
 const (
-	// NTSInterval is the time between two queries to one server.
-	NTSInterval = 32 * time.Second
+	// NTSInterval is the time between two queries to one server. It is
+	// well under NTSMaxAge: a server that misses one answer still has a
+	// sample under NTSMaxAge old when the next one comes.
+	NTSInterval = 16 * time.Second
 	// NTSMinPoll is the shortest time between two queries to one server:
 	// RFC 5905 MINPOLL = 4, 2^4 s (section 7.2, appendix A.1.1).
 	NTSMinPoll = 16 * time.Second
@@ -28,6 +30,12 @@ const (
 	NTSMaxPoll = 1024 * time.Second
 	// NTSMaxBound: Now fails when the error bound is larger.
 	NTSMaxBound = 100 * time.Millisecond
+	// NTSMaxAge: Now fails when the oldest sample of the quorum in force
+	// is older, on the local clock, and older samples do not enter a
+	// quorum. The bound ages by rho of the local clock, which the host may
+	// run fast while it blocks the servers; this limit keeps the time
+	// served then within NTSMaxAge of real time.
+	NTSMaxAge = 60 * time.Second
 	// NTSMaxCoarseDiff: NTS time further than this from the coarse clock
 	// (the HTTPS-date quorum) is refused. The check only catches gross NTS
 	// failures; the safety rules work on epochs of 6.4 minutes. A 2 s limit
@@ -40,7 +48,7 @@ const (
 	// ntsDriftBaselinePolls times Interval is the baseline of the drift
 	// reading: the check also compares each quorum with the oldest quorum
 	// kept, at least this old.
-	ntsDriftBaselinePolls = 32
+	ntsDriftBaselinePolls = 64
 	// ntsExchangeTimeout limits one NTS-KE session or one NTP query.
 	ntsExchangeTimeout = 5 * time.Second
 )
@@ -59,18 +67,23 @@ type NTSServer struct {
 //   - Each server is asked every Interval (at least NTSMinPoll apart). A
 //     Kiss-o'-Death RATE doubles that server's interval up to NTSMaxPoll
 //     (RFC 5905 section 7.4); each good answer halves it back. DENY or RSTR
-//     stops using the server (RFC 5905 section 7.4); NTSN drops the keys and
-//     runs NTS-KE again (RFC 8915 section 5.7). NTS-KE failures back off
-//     from Interval to NTSMaxPoll.
-//   - The latest sample of each server, at most 4 x Interval old, goes to
-//     the Rust quorum (one server may be wrong). The result is an offset
-//     from the local monotonic clock and an error bound.
+//     stops using the server for NTSMaxPoll (RFC 5905 section 7.4 says for
+//     good, but a Kiss-o'-Death is not authenticated, so anyone on the path
+//     could send it); NTSN drops the keys and runs NTS-KE again (RFC 8915
+//     section 5.7). NTS-KE failures back off from Interval to NTSMaxPoll.
+//   - The latest sample of each server, at most MaxAge (and 4 x Interval)
+//     old, goes to the Rust quorum (one server may be wrong). The result
+//     is an offset from the local monotonic clock and an error bound.
 //   - Between quorums the bound grows by nts.RhoPPM of the elapsed
 //     monotonic time. Now fails once it is over MaxBound, so the signer
 //     refuses rather than signs on a time it cannot vouch for.
+//   - Now also fails once the oldest sample of the quorum in force is over
+//     MaxAge old. The host sets the rate of the local clock: run fast
+//     while the servers are blocked, it moves the time ahead by less than
+//     its own count since the samples, so by less than MaxAge.
 //   - Aging by rho holds only if the local clock (nts.Monotonic,
 //     CLOCK_MONOTONIC_RAW) keeps within rho of real time. Each quorum is
-//     checked against the last one and against a baseline quorum about 32
+//     checked against the last one and against a baseline quorum about 64
 //     Intervals older; if the offset moved more than the two bounds and rho
 //     allow, the quorum is refused and Now fails until the next quorum
 //     agrees with it. The short pair catches jumps, the long pair a steady
@@ -88,6 +101,7 @@ type NTS struct {
 	Coarse        interface{ Now() (time.Time, error) }
 	Interval      time.Duration // 0: NTSInterval
 	MaxBound      time.Duration // 0: NTSMaxBound
+	MaxAge        time.Duration // 0: NTSMaxAge
 	MaxCoarseDiff time.Duration // 0: NTSMaxCoarseDiff
 	Dial          nts.DialFunc  // nil: the default dialer
 	// Local is the monotonic clock in ns. Nil: nts.Monotonic, which the
@@ -96,6 +110,7 @@ type NTS struct {
 	Log   *slog.Logger // nil: no logs
 
 	minPoll time.Duration // 0: NTSMinPoll; tests set it lower
+	maxPoll time.Duration // 0: NTSMaxPoll; tests set it lower
 
 	once   sync.Once
 	rmu    sync.Mutex // one Refresh at a time; Status waits for it
@@ -142,6 +157,7 @@ type ntsResult struct {
 	offset  int64         // real Unix ns minus local ns
 	bound   time.Duration // at `at`
 	at      int64         // local ns
+	sampled int64         // local ns of the oldest sample (T4) in the quorum
 	members []string
 	lo, hi  int64
 }
@@ -155,7 +171,8 @@ type ntsPeer struct {
 	nextPoll int64
 	keWait   time.Duration
 	nextKE   int64
-	disabled string
+	disabled string // the kiss code that stopped the server, until reEnable
+	reEnable int64
 	lastErr  error
 	stats    NTSPeerStats
 }
@@ -176,8 +193,10 @@ type NTSPeerStats struct {
 
 func (n *NTS) interval() time.Duration { return cmpOr(n.Interval, NTSInterval) }
 func (n *NTS) maxBound() time.Duration { return cmpOr(n.MaxBound, NTSMaxBound) }
+func (n *NTS) maxAge() time.Duration   { return cmpOr(n.MaxAge, NTSMaxAge) }
 func (n *NTS) maxDiff() time.Duration  { return cmpOr(n.MaxCoarseDiff, NTSMaxCoarseDiff) }
 func (n *NTS) minPollD() time.Duration { return cmpOr(n.minPoll, NTSMinPoll) }
+func (n *NTS) maxPollD() time.Duration { return cmpOr(n.maxPoll, NTSMaxPoll) }
 func (n *NTS) baseline() int64         { return int64(ntsDriftBaselinePolls * n.interval()) }
 
 // coarseRefused says whether the NTS time is too far from the coarse
@@ -244,6 +263,9 @@ func (n *NTS) Refresh(ctx context.Context) error {
 	var wg sync.WaitGroup
 	now := coarseLocal
 	for _, p := range n.peers {
+		if p.disabled != "" && now >= p.reEnable {
+			p.disabled = ""
+		}
 		if p.disabled != "" || now < p.nextPoll {
 			continue
 		}
@@ -255,6 +277,19 @@ func (n *NTS) Refresh(ctx context.Context) error {
 	}
 	wg.Wait()
 	return n.combine(coarse, coarseLocal)
+}
+
+// certTime is the time NTS-KE checks certificate validity at: the coarse
+// clock's, not the host's. Without a coarse time it is the zero time, which
+// nts.KeyExchange takes as "no trusted time": it refuses before the dial,
+// and during the handshake checks at nts.NoTrustedTime, never at the
+// system clock.
+func (n *NTS) certTime() time.Time {
+	t, err := n.Coarse.Now()
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
 
 // poll runs NTS-KE if needed, then one query. Only this peer's fields are
@@ -272,15 +307,7 @@ func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time) {
 		kctx, cancel := context.WithTimeout(ctx, ntsExchangeTimeout)
 		r, err := nts.KeyExchange(kctx, nts.KEConfig{
 			Host: p.srv.Host, Addr: p.srv.KEAddr, Roots: p.srv.Roots, Dial: n.Dial,
-			// Certificate validity is checked against the coarse clock, not
-			// the host's. Without a coarse time the zero time fails the check.
-			Time: func() time.Time {
-				t, err := n.Coarse.Now()
-				if err != nil {
-					return time.Time{}
-				}
-				return t
-			},
+			Time: n.certTime,
 		})
 		cancel()
 		if err != nil {
@@ -315,7 +342,10 @@ func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time) {
 			p.poll = min(2*p.poll, NTSMaxPoll)
 			p.nextPoll = n.local() + int64(p.poll)
 		case "DENY", "RSTR":
+			// A Kiss-o'-Death carries no authenticator, so anyone who sees
+			// the request can forge one. Stop for maxPoll, not for good.
 			p.disabled = kiss.Code
+			p.reEnable = n.local() + int64(n.maxPollD())
 			p.sample = nil
 		case "NTSN":
 			p.assoc.Close()
@@ -340,7 +370,7 @@ func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time) {
 // coarse time.
 func (n *NTS) combine(coarse time.Time, coarseLocal int64) error {
 	now := n.local()
-	maxAge := int64(4 * n.interval())
+	maxAge := int64(min(4*n.interval(), n.maxAge()))
 	var in []nts.Interval
 	var errs []error
 	for _, p := range n.peers {
@@ -377,7 +407,11 @@ func (n *NTS) combine(coarse time.Time, coarseLocal int64) error {
 	for i, v := range in {
 		members[i] = v.Operator
 	}
-	cur := &ntsResult{offset: q.Offset, bound: q.Bound, at: now, members: members, lo: q.Lo, hi: q.Hi}
+	sampled := now
+	for _, v := range in {
+		sampled = min(sampled, v.T4)
+	}
+	cur := &ntsResult{offset: q.Offset, bound: q.Bound, at: now, sampled: sampled, members: members, lo: q.Lo, hi: q.Hi}
 	n.mu.Lock()
 	// The bound grows by rho only if the local clock keeps within rho of
 	// real time. Check that against the last quorum and the baseline: both
@@ -467,14 +501,10 @@ func (n *NTS) Bounded() (time.Time, time.Duration, error) {
 		return time.Time{}, 0, fmt.Errorf("clock: nts: no quorum yet: %v", n.lastErr)
 	}
 	now := n.local()
-	// AddBound saturates, and a negative bound is refused as well: a bound
-	// that wrapped around once let a quorum months old serve time again
-	// (TIME-BOUND-01).
-	bound := nts.AddBound(n.result.bound, nts.Drift(time.Duration(now-n.result.at)))
-	if limit := n.maxBound(); bound < 0 || bound > limit {
+	bound, _, why := n.check(now)
+	if why != "" {
 		n.refusals.Add(1)
-		return time.Time{}, bound, fmt.Errorf("clock: nts: error bound %v over %v (last quorum %v ago): %v",
-			bound, limit, time.Duration(now-n.result.at).Round(time.Second), n.lastErr)
+		return time.Time{}, bound, errors.New("clock: nts: " + why)
 	}
 	t := time.Unix(0, now+n.result.offset)
 	if t.Before(n.highest) {
@@ -482,6 +512,30 @@ func (n *NTS) Bounded() (time.Time, time.Duration, error) {
 	}
 	n.highest = t
 	return t, bound, nil
+}
+
+// check says why the quorum in force gives no time at local time now, or
+// "" when it does, with its bound then and the age of its oldest sample.
+// Call with n.mu held.
+func (n *NTS) check(now int64) (bound, age time.Duration, why string) {
+	r := n.result
+	if r == nil {
+		return 0, 0, fmt.Sprintf("no quorum yet: %v", n.lastErr)
+	}
+	// AddBound saturates, and a negative bound is refused as well: a bound
+	// that wrapped around once let a quorum months old serve time again
+	// (TIME-BOUND-01).
+	bound = nts.AddBound(r.bound, nts.Drift(time.Duration(now-r.at)))
+	age = time.Duration(now - r.sampled)
+	switch {
+	case bound < 0 || bound > n.maxBound():
+		why = fmt.Sprintf("error bound %v over %v (last quorum %v ago): %v",
+			bound, n.maxBound(), time.Duration(now-r.at).Round(time.Second), n.lastErr)
+	case age > n.maxAge():
+		why = fmt.Sprintf("samples of the last quorum %v old, over %v (no fresh quorum): %v",
+			age.Round(time.Millisecond), n.maxAge(), n.lastErr)
+	}
+	return bound, age, why
 }
 
 // Now is Bounded without the bound.
@@ -495,14 +549,15 @@ type NTSStatus struct {
 	Members []string
 	Bound   time.Duration // of the last quorum, at its time
 	// BoundNow is Bound grown by rho since the last quorum, AgeOfQuorum
-	// that time. OffsetFromHost is the NTS time minus the host clock (for
+	// that time, SampleAge the age of its oldest sample. OffsetFromHost is the NTS time minus the host clock (for
 	// logs; the host clock is not used for anything else).
 	BoundNow       time.Duration
 	AgeOfQuorum    time.Duration
+	SampleAge      time.Duration
 	OffsetFromHost time.Duration
 	Lo, Hi         int64
 	// DriftPPM is the local clock's rate error against NTS, measured from
-	// a baseline quorum to the last quorum, DriftBaseline apart (up to 32
+	// a baseline quorum to the last quorum, DriftBaseline apart (up to 64
 	// Intervals, about 17 minutes). DriftErrPPM is the sum of the two
 	// quorums' bounds over DriftBaseline: the real rate error is within
 	// DriftPPM +- DriftErrPPM, so on a short baseline a reading over rho
@@ -519,7 +574,7 @@ type NTSStatus struct {
 	// truncated to the second); the check allows -MaxCoarseDiff to
 	// MaxCoarseDiff + NTSCoarseResolution.
 	CoarseDiff time.Duration
-	Refusals   int64 // Now calls refused for the bound
+	Refusals   int64 // Now calls refused for the bound or the sample age
 	LastError  string
 	Peers      map[string]NTSPeerStatus
 }
@@ -538,18 +593,19 @@ type NTSPeerStatus struct {
 // NTSSummary is the state for HEALTH. Unlike Status it does not wait for a
 // running Refresh (which can take seconds while a server is slow): it reads
 // the last quorum. Quorum is true when the clock answers now: a quorum is
-// in force and its bound is within MaxBound.
+// in force, its bound is within MaxBound and its samples within MaxAge.
+// Refused says why not.
 func (n *NTS) NTSSummary() NTSSummary {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	s := NTSSummary{MaxBound: n.maxBound(), Refusals: n.refusals.Load(), DriftPPM: n.drift.ppm, DriftErrPPM: n.drift.errPPM,
-		DriftBaseline: n.drift.baseline, RhoViolations: n.violations, CoarseDiff: n.coarseDiff}
+	s := NTSSummary{MaxBound: n.maxBound(), MaxSampleAge: n.maxAge(), Refusals: n.refusals.Load(), DriftPPM: n.drift.ppm,
+		DriftErrPPM: n.drift.errPPM, DriftBaseline: n.drift.baseline, RhoViolations: n.violations, CoarseDiff: n.coarseDiff}
+	now := n.local()
+	s.BoundNow, s.SampleAge, s.Refused = n.check(now)
+	s.Quorum = s.Refused == ""
 	if r := n.result; r != nil {
-		now := n.local()
 		s.Members = append([]string(nil), r.members...)
 		s.AgeOfQuorum = time.Duration(now - r.at)
-		s.BoundNow = nts.AddBound(r.bound, nts.Drift(s.AgeOfQuorum))
-		s.Quorum = s.BoundNow <= s.MaxBound
 		s.OffsetFromHost = time.Duration(now + r.offset - time.Now().UnixNano())
 	}
 	return s
@@ -568,6 +624,7 @@ func (n *NTS) Status() NTSStatus {
 		now := n.local()
 		st.Members, st.Bound, st.Lo, st.Hi = r.members, r.bound, r.lo, r.hi
 		st.AgeOfQuorum = time.Duration(now - r.at)
+		st.SampleAge = time.Duration(now - r.sampled)
 		st.BoundNow = nts.AddBound(r.bound, nts.Drift(st.AgeOfQuorum))
 		st.OffsetFromHost = time.Duration(now + r.offset - time.Now().UnixNano())
 	}

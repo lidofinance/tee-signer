@@ -3,13 +3,14 @@
 # architecture, as an unprivileged user, with no network. Not for the host.
 #
 # In: NTS_TARGET (Rust target), NTS_CROOT (where the sources are mounted),
-# NTS_RUSTC_COMMIT (the compiler this build is pinned to), NTS_TEST (1: run the
+# NTS_RUSTC_COMMIT (the compiler this build is pinned to), NTS_STD_SHA256 (the
+# standard library of NTS_TARGET this build is pinned to), NTS_TEST (1: run the
 # tests of signer-nts and signer-nts-core first, on x86_64 only).
 # Out, in /out: libsigner_nts.a, and the no_std checks of the core:
 # core-features.txt (cargo tree -e features) and libsigner_nts_nostd_check.a.
 set -euo pipefail
 umask 022
-: "${NTS_TARGET:?}" "${NTS_CROOT:?}" "${NTS_RUSTC_COMMIT:?}" "${CARGO_HOME:?}" "${CARGO_TARGET_DIR:?}"
+: "${NTS_TARGET:?}" "${NTS_CROOT:?}" "${NTS_RUSTC_COMMIT:?}" "${NTS_STD_SHA256:?}" "${CARGO_HOME:?}" "${CARGO_TARGET_DIR:?}"
 
 mkdir -p "$HOME" "$CARGO_HOME"
 
@@ -17,7 +18,8 @@ mkdir -p "$HOME" "$CARGO_HOME"
 # Only the lock's .crate archives are copied out of it, and the copies are
 # checked against the sha256 in Cargo.lock. Each checked archive is unpacked
 # into $VENDOR, a directory source whose .cargo-checksum.json names the same
-# sha256 (cargo compares it with the lock). cargo builds from $VENDOR alone:
+# sha256 (cargo compares it with the lock) and the sha256 of each unpacked file
+# (cargo checks these before the build). cargo builds from $VENDOR alone:
 # no registry index, no extracted source and no other file of the host cache
 # is read, so dependency features come from the crates' own Cargo.toml.
 VENDOR=/tmp/vendor
@@ -28,7 +30,16 @@ for archive in "$CARGO_HOME"/registry/cache/*/*.crate; do
   [ ! -e "$VENDOR/$crate" ] || continue
   tar -xzf "$archive" -C "$VENDOR" --no-same-owner
   [ -f "$VENDOR/$crate/Cargo.toml" ] || { echo "$archive does not unpack to $crate/" >&2; exit 1; }
-  printf '{"files":{},"package":"%s"}\n' "$(sha256sum "$archive" | cut -d' ' -f1)" >"$VENDOR/$crate/.cargo-checksum.json"
+  # .cargo-checksum.json: the archive's sha256 and that of each unpacked file.
+  # A file name that sha256sum escapes or that JSON would need escaped stops
+  # the build.
+  sums="$(cd "$VENDOR/$crate" && find . -type f -printf '%P\0' | LC_ALL=C sort -z | xargs -0 sha256sum --)"
+  if grep -q -v '^[0-9a-f]\{64\}  ' <<<"$sums" || grep -q '["[:cntrl:]]' <<<"$sums"; then
+    echo "$archive holds a file name this script does not handle" >&2
+    exit 1
+  fi
+  files="$(awk '{ s = $1; sub(/^[0-9a-f]+  /, ""); printf "%s\"%s\":\"%s\"", (NR > 1 ? "," : ""), $0, s }' <<<"$sums")"
+  printf '{"files":{%s},"package":"%s"}\n' "$files" "$(sha256sum "$archive" | cut -d' ' -f1)" >"$VENDOR/$crate/.cargo-checksum.json"
 done
 rm -rf "$CARGO_HOME/registry"
 
@@ -36,6 +47,14 @@ got="$(rustc -vV | sed -n 's/^commit-hash: //p')"
 [ "$got" = "$NTS_RUSTC_COMMIT" ] || { echo "rustc is $got, this build is pinned to $NTS_RUSTC_COMMIT" >&2; exit 1; }
 installed="$(rustup target list --installed)"
 grep -qx "$NTS_TARGET" <<<"$installed" || { echo "the standard library for $NTS_TARGET is not installed" >&2; exit 1; }
+# rustup checked the aarch64 rust-std only against the release manifest it
+# downloaded from the same server; this checks the installed files against
+# the pin.
+nts_std_sum() {
+  (cd "$(rustc --print sysroot)/lib/rustlib/$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+}
+got="$(nts_std_sum "$NTS_TARGET")"
+[ "$got" = "$NTS_STD_SHA256" ] || { echo "the standard library for $NTS_TARGET sums to $got, this build is pinned to $NTS_STD_SHA256" >&2; exit 1; }
 
 # Every absolute path the compiler or cargo could write into the archive is
 # mapped to a fixed one: the mount point of the sources, the crates, the cargo
