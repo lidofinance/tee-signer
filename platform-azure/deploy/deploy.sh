@@ -18,7 +18,7 @@
 # Azure commands. Each one creates or changes something in Azure, prints
 # what it would do and refuses to run unless CONFIRM=yes is set:
 #   rg-create                 resource group
-#   vault-create              Key Vault Premium, RBAC authorization
+#   vault-create              Key Vault Premium, RBAC authorization, purge protection
 #   vault-operator-role       you get Key Vault Crypto Officer on the vault
 #   identity-create N         user-assigned managed identity of signer N
 #   key-create N              exportable RSA-HSM key signer-kek-N with the release policy
@@ -297,9 +297,12 @@ cmd_rg_create() {
 
 cmd_vault_create() {
   need VAULT
-  gate "create Key Vault $VAULT (Premium, RBAC authorization) in $(signer_location 1), group $RG"
+  gate "create Key Vault $VAULT (Premium, RBAC authorization, purge protection) in $(signer_location 1), group $RG"
+  # Purge protection: a deleted key stays recoverable for the retention
+  # period, and nobody can purge it before. It cannot be turned off, and
+  # the runner's lock check refuses a key without it.
   az keyvault create -n "$VAULT" -g "$RG" -l "$(signer_location 1)" --sku premium \
-    --enable-rbac-authorization true -o none
+    --enable-rbac-authorization true --enable-purge-protection true -o none
 }
 
 cmd_vault_operator_role() {

@@ -570,11 +570,21 @@ one under an approver-signed handover order (HANDOVER,
   azure-compliant-uvm`, `x-ms-sevsnpvm-hostdata` = policy hash,
   `x-ms-sevsnpvm-is-debuggable = false`, `x-ms-sevsnpvm-vmpl = 0`. It does
   not ask for `x-ms-attestation-type`: the example does not have it, and a
-  claim missing from the token fails the release.
+  claim missing from the token fails the release. The runner reads the
+  policy back with Get Key and counts it as locked only if it has this
+  shape: one authority, exactly `https://<maa_endpoint>` of the setup (no
+  trailing slash), and these four claims with `equals`. is-debuggable is a
+  boolean in the token; the template's string `"false"` released keys on a
+  live vault in October 2026, and the runner also takes a JSON `false`. An immutable policy
+  with a second authority, another claim or another operator reports
+  `key_lock: not_locked`, and a mainnet setup does not start on it. Edit
+  the template only together with `checkReleasePolicy` in
+  `platform-azure/azure/releasepolicy.go`.
 - `KEY_IMMUTABLE` defaults to `false`. An immutable release policy cannot be
   corrected, and every change of the image changes the hash. Set
   `KEY_IMMUTABLE=true` for anything beyond tests. A runner whose setup is on
-  mainnet refuses to start with a key that is not immutable
+  mainnet refuses to start with a key that is not immutable, or whose
+  policy is not the template's shape
   (`signer-protocol/docs/protocol.md`, "Key rule lock"). Keys are RSA-HSM,
   2048 bit by default (`KEY_SIZE`), enough to wrap one data key in a test.
   Use 3072 in production.
@@ -672,7 +682,14 @@ In order. Each needs `CONFIRM=yes` and refuses without it. The costs are
 retail price estimates for West Europe.
 
 1. `rg-create`. Free. The resource group is `RG` (default `signer-poc-rg`).
-2. `vault-create`. Premium vault, billed per operation and key.
+2. `vault-create`. Premium vault, billed per operation and key, with
+   purge protection: a deleted key can be recovered for the retention
+   period (90 days by default), and nobody can purge it before. Purge
+   protection cannot be turned off, so the vault and its name stay for
+   that period after a delete. The runner's lock check reads
+   `attributes.recoveryLevel` of the key and counts a key that can be
+   purged as not locked. For a vault made without it, run
+   `az keyvault update -n $VAULT --enable-purge-protection true`.
 3. `vault-operator-role`. Free. You need it to create keys.
 4. `acr-create`. Registry Basic, a daily fee.
 5. `image-push`. Runs `az acr login`, then `docker push`, and compares the
