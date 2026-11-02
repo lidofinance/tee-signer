@@ -119,6 +119,8 @@ type Server struct {
 	handedOver atomic.Bool
 	// lostLogged: the loss of the mark log is in the log (lostRefusal).
 	lostLogged atomic.Bool
+	// sources is the device source alarm (sourcewatch.go).
+	sources sourceWatch
 	// sharesMu orders share additions (read) against the handover's read
 	// of every share and its tombstone (write): no share is added between
 	// the two, so none is left behind.
@@ -731,6 +733,11 @@ func (s *Server) sign(req backend.SignRequest) (backend.Signature, error) {
 		s.Log.Info("refused", "kind", kind, "pubkey", req.Pubkey.String()[:18], "msg", describe(req.Message), "err", err)
 		return sig, err
 	}
+	if a, ok := req.Message.(*backend.AttestationData); ok && s.Signer.Config().DeviceMark {
+		if alarm := s.sources.note(req.Pubkey, a.Source.Epoch, a.Target.Epoch); alarm != "" {
+			s.Log.Error("device source alarm: " + alarm)
+		}
+	}
 	if repeat {
 		s.Log.Info("signed (exact repeat, same signature)", "kind", kind, "pubkey", req.Pubkey.String()[:18], "msg", describe(req.Message))
 		return sig, nil
@@ -1184,6 +1191,7 @@ func (s *Server) health() (*backend.Health, error) {
 	if why := s.panicked.Load(); why != nil {
 		h.Ready, h.RequestPanic = false, *why
 	}
+	h.DeviceSourceAlarm = s.sources.status()
 	if s.Image != nil {
 		var refused bool
 		if h.Image, refused = s.Image.Status(s.Updates); refused {

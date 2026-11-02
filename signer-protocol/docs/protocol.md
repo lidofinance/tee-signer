@@ -53,6 +53,12 @@ body  = version:u8  type:u8  id:u32  payload
   and `request_panic` with the request type and the panic. A panic in one of those four only closes its
   connection. A panic that leaves a lock of the server held for 5 minutes
   stops the runner, and its supervisor starts it again.
+- HEALTH's `device_source_alarm` says that a signed vote raised the
+  device mark's source bound by more than one epoch above the votes of
+  the epoch before. After a restart every key would refuse votes below
+  that source until the chain justifies it
+  (`slashing-log/docs/marklog.md`, "What it does not cover"). `ready`
+  stays true; the alarm clears at a restart.
 
 ## Responses
 

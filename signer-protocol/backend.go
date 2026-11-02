@@ -110,6 +110,12 @@ type Health struct {
 	// check passes). Ready is then false. Empty otherwise, and from runners
 	// before it.
 	MarkLogLost string `json:"mark_log_lost,omitempty"`
+	// DeviceSourceAlarm says that a vote raised the source bound of the
+	// device mark by more than one epoch above the votes of the epoch
+	// before (tee-signer/server sourceWatch). After a restart every key
+	// refuses votes below that source until the chain justifies it.
+	// Ready stays true. Empty otherwise, and from runners before it.
+	DeviceSourceAlarm string `json:"device_source_alarm,omitempty"`
 	// RequestPanic says which state-changing request panicked; the
 	// runner then signs and changes nothing until it restarts, and Ready
 	// is false. Empty otherwise, and from runners before it.
