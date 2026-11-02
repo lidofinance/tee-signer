@@ -4,7 +4,10 @@
 # off). The end-to-end tests of the tests module need the runner binaries;
 # scripts/test.sh runs them.
 #
-#   scripts/test-modules.sh [module ...]     default: every module
+#   scripts/test-modules.sh [module ...]     default: CI_MODULES, else every module
+#
+# CI_MODULES (scripts/ci-scope.sh): unset or ALL for every module, none for
+# no module, else the modules to test, separated by spaces.
 #
 # Tags: the runner modules test with all four platform tags at once, as the
 # platform packages need; tee-signer also with each tag alone (package main),
@@ -78,7 +81,18 @@ checks() {
 }
 
 mods=("$@")
-[ ${#mods[@]} -gt 0 ] || mods=("${GO_MODULES[@]}")
+if [ ${#mods[@]} -eq 0 ]; then
+  case "${CI_MODULES:-ALL}" in
+    ALL) mods=("${GO_MODULES[@]}") ;;
+    none) log "test-modules: CI_MODULES=none, no module to test"; exit 0 ;;
+    *)
+      read -r -a mods <<<"$CI_MODULES"
+      for m in "${mods[@]}"; do
+        [[ " ${GO_MODULES[*]} " == *" $m "* ]] || { echo "CI_MODULES: $m is not a Go module of this repo" >&2; exit 1; }
+      done
+      log "test-modules: only ${mods[*]} (CI_MODULES)" ;;
+  esac
+fi
 for m in "${mods[@]}"; do
   start=$SECONDS
   if (checks "$m") >"$LOGS/test-$m.log" 2>&1; then

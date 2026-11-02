@@ -32,10 +32,13 @@ Every commit is signed (GPG or SSH, with a key on your GitHub account).
   how you tested it. Note any checks you could not run.
 - Run `make check` and `make test-modules`; also run `make test` for runner
   build changes. All required CI checks must pass.
-  On a pull request CI fuzzes only the modules the change touches and
-  the modules that depend on them (`scripts/affected.sh`); a docs-only
-  change fuzzes nothing. A push to main fuzzes everything, and a nightly
-  run (`fuzz-nightly.yml`) fuzzes every target for 30 s.
+  On a pull request CI tests and fuzzes only the modules the change
+  touches and the modules that depend on them (`scripts/ci-scope.sh`).
+  A docs-only change runs only the guards. The e2e tests run when code
+  that goes into a runner changes, or `tests/`; the signer-core suites
+  when `signer-core/` or `markformat/` changes. A change to a shared
+  input (`Makefile`, `scripts/`, `.github/`, `devkit/`, C or Rust code)
+  tests everything. So do a push to main and a manual run. A nightly run (`fuzz-nightly.yml`) fuzzes every target for 30 s.
 - Get at least one reviewer approval. The author does not count.
 - Squash when merging; the final commit follows the rules above.
 

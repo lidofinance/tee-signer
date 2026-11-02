@@ -15,7 +15,7 @@
 #   FUZZ_INPUT_LIMIT  time one input may take (fuzzcheck.Watch), default 2s
 #   FUZZ_MODULES  the modules to fuzz, separated by spaces: unset or ALL for
 #               every module, none for no module. On a pull request CI sets
-#               it from scripts/affected.sh: the changed modules and those
+#               it from scripts/ci-scope.sh: the changed modules and those
 #               that depend on them, nothing for a docs-only change.
 #
 # Every target calls fuzzcheck.Watch(t) first; this script refuses one

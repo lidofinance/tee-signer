@@ -26,25 +26,36 @@
 #
 # Every go test runs with -race (RACE= turns it off). NO_NETWORK=1 skips
 # the tests that need public HTTPS.
+#
+# The variables of scripts/ci-scope.sh narrow the run; unset, everything
+# runs. CI_MODULES picks the modules, CI_E2E=0 skips the runner builds and
+# everything that needs them or checks them (release gate, chains, e2e,
+# PCR3, deploy names, clock check), CI_CORE=0 skips the signer-core suites.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 mkdir -p "$LOGS"
 RACE="${RACE--race}"
 export RACE
+e2e="${CI_E2E:-1}"
+core="${CI_CORE:-1}"
 
 log "guards: module boundaries, forbidden names and markers"
 bash "$ROOT/scripts/check-imports.sh"
 bash "$ROOT/scripts/check-forbidden.sh"
 
-bash "$ROOT/scripts/build-runner.sh"
+if [ "$e2e" = 1 ]; then
+  bash "$ROOT/scripts/build-runner.sh"
 
-log "release gate: self-test, and this tree's history holds no forbidden commit"
-bash "$ROOT/scripts/release-gate-test.sh"
-bash "$ROOT/scripts/release-gate.sh" tree "$ROOT"
+  log "release gate: self-test, and this tree's history holds no forbidden commit"
+  bash "$ROOT/scripts/release-gate-test.sh"
+  bash "$ROOT/scripts/release-gate.sh" tree "$ROOT"
 
-log "chains: governance/chains/chain.sh and the chain checks of the image builds and deploy steps"
-bash "$ROOT/scripts/chain-test.sh" >"$LOGS/test-chain.log" 2>&1 || { cat "$LOGS/test-chain.log"; exit 1; }
-tail -n 1 "$LOGS/test-chain.log"
+  log "chains: governance/chains/chain.sh and the chain checks of the image builds and deploy steps"
+  bash "$ROOT/scripts/chain-test.sh" >"$LOGS/test-chain.log" 2>&1 || { cat "$LOGS/test-chain.log"; exit 1; }
+  tail -n 1 "$LOGS/test-chain.log"
+else
+  log "CI_E2E=0: no runner code changed: skipped the runner builds, release gate, chains and e2e"
+fi
 
 net=0
 if [ "${NO_NETWORK:-0}" != 1 ] && curl -sfI --max-time 10 https://www.cloudflare.com/ >/dev/null; then
@@ -66,28 +77,30 @@ bin_env() {
     "RUNNER_GCP_BIN=$d/runner-gcp" "RUNNER_GCP_DEBUG_BIN=$d/runner-gcp-debugimport"
 }
 
-log "e2e: static $HOST_ARCH runners"
-# shellcheck disable=SC2046 # the variables of bin_env, split on purpose
-(cd "$ROOT/tests" && env E2E_NETWORK="$net" $(bin_env "$HOST_ARCH") go test $RACE -count=1 -v -timeout 40m -tags platform_aws ./e2e/) \
-  >"$LOGS/e2e-$HOST_ARCH.log" 2>&1 || { tail -80 "$LOGS/e2e-$HOST_ARCH.log"; exit 1; }
-summary "$LOGS/e2e-$HOST_ARCH.log" | grep -E '^(ok|FAIL)'
-grep -q -- "--- PASS: TestE2EHandoverGate " "$LOGS/e2e-$HOST_ARCH.log" && ! grep -q -- "--- SKIP: TestE2EHandoverGate" "$LOGS/e2e-$HOST_ARCH.log" ||
-  { echo "TestE2EHandoverGate did not run and pass in the e2e set" >&2; exit 1; }
-
-log "e2e: the Nitro runner's NTS clock through udprelay ($HOST_ARCH)"
-# shellcheck disable=SC2046 # the variables of bin_env, split on purpose
-(cd "$ROOT/tests" && env $(bin_env "$HOST_ARCH") UDPRELAY_BIN="$BUILD/$HOST_ARCH/bin/udprelay" \
-  go test $RACE -count=1 -v -tags platform_aws,nts -run 'TestE2ENTS' ./e2e/) \
-  >"$LOGS/e2e-nts-$HOST_ARCH.log" 2>&1 || { tail -80 "$LOGS/e2e-nts-$HOST_ARCH.log"; exit 1; }
-summary "$LOGS/e2e-nts-$HOST_ARCH.log" | grep -E '^(ok|FAIL)'
-
-if [ "$HOST_ARCH" = x86_64 ] && command -v qemu-aarch64 >/dev/null && [ -x "$BUILD/aarch64/bin/runner-dev" ]; then
-  log "e2e: static aarch64 runners under qemu-aarch64"
+if [ "$e2e" = 1 ]; then
+  log "e2e: static $HOST_ARCH runners"
   # shellcheck disable=SC2046 # the variables of bin_env, split on purpose
-  (cd "$ROOT/tests" && env RUNNER_WRAPPER=qemu-aarch64 $(bin_env aarch64) \
-    go test $RACE -count=1 -v -tags platform_aws -run 'TestE2E$|TestE2EClockSkewBreaksFloor|TestE2ESealedImport|TestE2EMutualTLS|TestE2EClientCertificateUsesTheRunnerClock|TestE2EVsockListenerIsTLS|TestE2ECloneSharedRecord|TestE2ECloudFlagChecks|TestE2EEachBinaryHasItsOwnPlatformOnly' ./e2e/) \
-    >"$LOGS/e2e-aarch64-qemu.log" 2>&1 || { tail -80 "$LOGS/e2e-aarch64-qemu.log"; exit 1; }
-  summary "$LOGS/e2e-aarch64-qemu.log" | grep -E '^(ok|FAIL)'
+  (cd "$ROOT/tests" && env E2E_NETWORK="$net" $(bin_env "$HOST_ARCH") go test $RACE -count=1 -v -timeout 40m -tags platform_aws ./e2e/) \
+    >"$LOGS/e2e-$HOST_ARCH.log" 2>&1 || { tail -80 "$LOGS/e2e-$HOST_ARCH.log"; exit 1; }
+  summary "$LOGS/e2e-$HOST_ARCH.log" | grep -E '^(ok|FAIL)'
+  grep -q -- "--- PASS: TestE2EHandoverGate " "$LOGS/e2e-$HOST_ARCH.log" && ! grep -q -- "--- SKIP: TestE2EHandoverGate" "$LOGS/e2e-$HOST_ARCH.log" ||
+    { echo "TestE2EHandoverGate did not run and pass in the e2e set" >&2; exit 1; }
+
+  log "e2e: the Nitro runner's NTS clock through udprelay ($HOST_ARCH)"
+  # shellcheck disable=SC2046 # the variables of bin_env, split on purpose
+  (cd "$ROOT/tests" && env $(bin_env "$HOST_ARCH") UDPRELAY_BIN="$BUILD/$HOST_ARCH/bin/udprelay" \
+    go test $RACE -count=1 -v -tags platform_aws,nts -run 'TestE2ENTS' ./e2e/) \
+    >"$LOGS/e2e-nts-$HOST_ARCH.log" 2>&1 || { tail -80 "$LOGS/e2e-nts-$HOST_ARCH.log"; exit 1; }
+  summary "$LOGS/e2e-nts-$HOST_ARCH.log" | grep -E '^(ok|FAIL)'
+
+  if [ "$HOST_ARCH" = x86_64 ] && command -v qemu-aarch64 >/dev/null && [ -x "$BUILD/aarch64/bin/runner-dev" ]; then
+    log "e2e: static aarch64 runners under qemu-aarch64"
+    # shellcheck disable=SC2046 # the variables of bin_env, split on purpose
+    (cd "$ROOT/tests" && env RUNNER_WRAPPER=qemu-aarch64 $(bin_env aarch64) \
+      go test $RACE -count=1 -v -tags platform_aws -run 'TestE2E$|TestE2EClockSkewBreaksFloor|TestE2ESealedImport|TestE2EMutualTLS|TestE2EClientCertificateUsesTheRunnerClock|TestE2EVsockListenerIsTLS|TestE2ECloneSharedRecord|TestE2ECloudFlagChecks|TestE2EEachBinaryHasItsOwnPlatformOnly' ./e2e/) \
+      >"$LOGS/e2e-aarch64-qemu.log" 2>&1 || { tail -80 "$LOGS/e2e-aarch64-qemu.log"; exit 1; }
+    summary "$LOGS/e2e-aarch64-qemu.log" | grep -E '^(ok|FAIL)'
+  fi
 fi
 
 if fuzz_everything; then
@@ -97,23 +110,29 @@ else
   export FUZZ=0
 fi
 
-log "signer-core: its own suites"
-bash "$ROOT/signer-core/scripts/test.sh" >"$LOGS/test-signer-core-c.log" 2>&1 || { tail -40 "$LOGS/test-signer-core-c.log"; exit 1; }
-grep -E '^(PASS|FAIL)' "$LOGS/test-signer-core-c.log"
+if [ "$core" = 1 ]; then
+  log "signer-core: its own suites"
+  bash "$ROOT/signer-core/scripts/test.sh" >"$LOGS/test-signer-core-c.log" 2>&1 || { tail -40 "$LOGS/test-signer-core-c.log"; exit 1; }
+  grep -E '^(PASS|FAIL)' "$LOGS/test-signer-core-c.log"
+else
+  log "CI_CORE=0: signer-core, markformat and the shared inputs did not change: skipped the signer-core suites"
+fi
 
-bash "$ROOT/scripts/kms-policy.sh" self-test
-bash "$ROOT/scripts/side-by-side-test.sh"
+if [ "$e2e" = 1 ]; then
+  bash "$ROOT/scripts/kms-policy.sh" self-test
+  bash "$ROOT/scripts/side-by-side-test.sh"
+fi
 
 if [ "${FUZZ_TIME:-3s}" != 0 ]; then
   FUZZ_TIME="${FUZZ_TIME:-3s}" bash "$ROOT/scripts/fuzz.sh"
 fi
 
-if [ "$net" = 1 ]; then
+if [ "$net" = 1 ] && [ "$e2e" = 1 ]; then
   log "clock check: HTTPS Date quorum"
   "$BUILD/$HOST_ARCH/bin/runner-dev" -platform dev -state-dir "$BUILD/clock-check" -clock https-date \
     -clock-urls https://www.cloudflare.com/,https://www.google.com/,https://github.com/,https://kms.eu-west-1.amazonaws.com/,https://sts.googleapis.com/ \
     -clock-check 2>&1 | tee "$LOGS/clock-check.log" | tail -1
-else
+elif [ "$net" != 1 ]; then
   log "no network: skipped HTTPS Date tests"
 fi
 log "ALL TESTS PASSED"
