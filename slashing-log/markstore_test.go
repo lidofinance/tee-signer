@@ -502,3 +502,156 @@ func TestBodiesKeptUntilNamed(t *testing.T) {
 		t.Fatalf("a body below the active version is kept: %v", err)
 	}
 }
+
+// lockedMem is a memLog whose lock the test sets.
+type lockedMem struct {
+	*memLog
+	lock Lock
+	err  error // a lock read that fails, as when the host blocks it
+}
+
+func (l *lockedMem) Lock(context.Context) (Lock, error) { return l.lock, l.err }
+
+// The start's lock check holds only while nothing changes the lock: on S3
+// the admin can remove the bucket's default retention later. Refresh
+// checks it again, and a lock that is gone stops every later write, so
+// the runner signs nothing above the mark it committed while locked.
+func TestRefreshChecksTheLock(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_800_000_000, 0)
+	l := &lockedMem{memLog: &memLog{objs: map[string][][]byte{}},
+		lock: Lock{Kind: "s3 object lock", Mode: "COMPLIANCE", Compliance: true, Retention: 30 * 24 * time.Hour}}
+	m, err := New(l, "signer-1", testKey(1), Options{Setup: testSetup("signer-1"), Clock: clockAt(&now), LockDays: 30, Log: quiet})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := m.Claim(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Raise(ctx, mark(10)); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Refresh(ctx); err != nil {
+		t.Fatalf("refresh with the lock in place: %v", err)
+	}
+	l.lock = Lock{Kind: "s3 object lock"}
+	if err := m.Refresh(ctx); !errors.Is(err, ErrNoLock) {
+		t.Fatalf("refresh after the lock was removed: %v", err)
+	}
+	if err := m.Raise(ctx, mark(11)); !errors.Is(err, ErrNoLock) {
+		t.Fatalf("a write after the lock was removed: %v", err)
+	}
+	if got, _ := m.Mark(); got != mark(10) {
+		t.Fatalf("mark %+v, want the one committed while locked", got)
+	}
+	if !strings.Contains(m.Status(), "NOT-LOCKED") {
+		t.Fatalf("status %s", m.Status())
+	}
+	// The lock back does not undo the stop: only a restart, with its own
+	// check, writes again.
+	l.lock.Compliance, l.lock.Retention = true, 30*24*time.Hour
+	if err := m.Raise(ctx, mark(11)); !errors.Is(err, ErrNoLock) {
+		t.Fatalf("a write once the lock is back: %v", err)
+	}
+}
+
+// The start checks the lock before the claim reads the log, and the store
+// can change in between. Claim checks it again after the read and refuses
+// on any error, before it writes its claim record.
+func TestClaimChecksTheLockAfterTheRead(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_800_000_000, 0)
+	locked := Lock{Kind: "s3 object lock", Mode: "COMPLIANCE", Compliance: true, Retention: 30 * 24 * time.Hour}
+	for _, c := range []struct {
+		name string
+		lock Lock
+		err  error
+		want error
+	}{
+		{"not locked", Lock{Kind: "s3 object lock"}, nil, ErrNoLock},
+		{"lock not readable", locked, errors.New("connection refused"), ErrLockUnchecked},
+	} {
+		l := &lockedMem{memLog: &memLog{objs: map[string][][]byte{}}, lock: c.lock, err: c.err}
+		m, err := New(l, "signer-1", testKey(1), Options{Setup: testSetup("signer-1"), Clock: clockAt(&now), LockDays: 30, Log: quiet})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := m.Claim(ctx, false); !errors.Is(err, c.want) {
+			t.Errorf("%s: claim: %v, want %v", c.name, err, c.want)
+		}
+		if n := len(l.memLog.objs); n != 0 {
+			t.Errorf("%s: claim wrote %d objects before the refusal", c.name, n)
+		}
+	}
+}
+
+// A lock check that cannot read the lock (the host can block the store's
+// management API) stops every write until a check passes, so the runner
+// signs nothing above its committed mark meanwhile. It does not latch: a
+// later check that passes lets writes go on without a restart.
+func TestUnreadableLockStopsWritesUntilACheckPasses(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_800_000_000, 0)
+	l := &lockedMem{memLog: &memLog{objs: map[string][][]byte{}},
+		lock: Lock{Kind: "s3 object lock", Mode: "COMPLIANCE", Compliance: true, Retention: 30 * 24 * time.Hour}}
+	m, err := New(l, "signer-1", testKey(1), Options{Setup: testSetup("signer-1"), Clock: clockAt(&now), LockDays: 30, Log: quiet})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := m.Claim(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Raise(ctx, mark(10)); err != nil {
+		t.Fatal(err)
+	}
+	l.err = errors.New("connection refused")
+	if err := m.Refresh(ctx); !errors.Is(err, ErrLockUnchecked) || errors.Is(err, ErrNoLock) {
+		t.Fatalf("refresh with the lock read blocked: %v", err)
+	}
+	if err := m.Raise(ctx, mark(11)); !errors.Is(err, ErrLockUnchecked) {
+		t.Fatalf("a write after a blocked lock read: %v", err)
+	}
+	if got, _ := m.Mark(); got != mark(10) {
+		t.Fatalf("mark %+v, want the one committed before the blocked read", got)
+	}
+	if !strings.Contains(m.Status(), "LOCK-UNCHECKED") || m.Lost() != nil {
+		t.Fatalf("status %s, lost %v", m.Status(), m.Lost())
+	}
+	// The read works again, but a write right after the failed read does
+	// not read the lock again yet.
+	l.err = nil
+	if err := m.Raise(ctx, mark(11)); !errors.Is(err, ErrLockUnchecked) {
+		t.Fatalf("a write right after a blocked lock read: %v", err)
+	}
+	if err := m.Refresh(ctx); err != nil {
+		t.Fatalf("refresh once the lock reads again: %v", err)
+	}
+	if err := m.Raise(ctx, mark(11)); err != nil {
+		t.Fatalf("a write after a check passed: %v", err)
+	}
+
+	// Past lockRecheckGap a write reads the lock itself.
+	defer func(g time.Duration) { lockRecheckGap = g }(lockRecheckGap)
+	lockRecheckGap = 0
+	l.err = errors.New("connection refused")
+	if err := m.Refresh(ctx); !errors.Is(err, ErrLockUnchecked) {
+		t.Fatalf("refresh with the lock read blocked: %v", err)
+	}
+	if err := m.Raise(ctx, mark(12)); !errors.Is(err, ErrLockUnchecked) {
+		t.Fatalf("a write while the lock read is blocked: %v", err)
+	}
+	l.err = nil
+	if err := m.Raise(ctx, mark(12)); err != nil {
+		t.Fatalf("a write once the lock reads again: %v", err)
+	}
+	if strings.Contains(m.Status(), "LOCK-UNCHECKED") {
+		t.Fatalf("status %s", m.Status())
+	}
+	// A store found unlocked by the write's own check stops the log.
+	l.err = errors.New("connection refused")
+	_ = m.Refresh(ctx)
+	l.err, l.lock = nil, Lock{Kind: "s3 object lock"}
+	if err := m.Raise(ctx, mark(13)); !errors.Is(err, ErrNoLock) || !errors.Is(m.Lost(), ErrNoLock) {
+		t.Fatalf("a write that finds the store unlocked: %v, lost %v", err, m.Lost())
+	}
+}

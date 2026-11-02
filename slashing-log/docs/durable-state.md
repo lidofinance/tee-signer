@@ -106,10 +106,17 @@ and a chunk must hash to the name its commit holds.
 The names are created once (S3 `If-None-Match: *`, GCS
 `ifGenerationMatch=0`, Azure `If-None-Match: *`) through the mark log's
 clients (`markstore.Log`), so the copy works on the locked bucket of the
-mark log as well as on a plain one. A commit name taken by a valid commit
-of another process means a clone: that process changes no durable state
-from then on (`ErrLost`). Objects that are not commits cost a skip each,
-as in the mark log.
+mark log as well as on a plain one. On the setup path the runner refuses
+a store that keeps overwritten objects as previous versions the client
+does not read, or that can append to an object (`markstore.CheckVersions`:
+an Azure account or container with version-level immutability, or a
+policy with protected append writes), since an admin could hide or change
+the newest commits there and the restore would take an older one. It
+checks before and again after the read, so a store that changes in
+between stops the start too. A commit name taken by a
+valid commit of another process means a clone: that process changes no
+durable state from then on (`ErrLost`). Objects that are not commits cost
+a skip each, as in the mark log.
 
 ### All or nothing
 
@@ -190,8 +197,11 @@ the same value as `-mark-store`; `platform-gcp/deploy` `STATE_STORE="$MARK_STORE
 `platform-azure/deploy` `STATE_STORE_N="$MARK_STORE_N"`). The runner needs no new
 role, and the lock keeps every object for the retention period, so the
 admin cannot delete the newest commit or a chunk it needs. A plain bucket
-also works; then the admin can delete objects, which the next section is
-about.
+also works off mainnet, with a warning at start; then the admin can delete
+objects, which the next section is about. On mainnet the runner runs the
+mark log's lock check on the copy's store and does not start if it
+fails: where the local store does not last, the copy is the only copy of
+the sealed shares.
 
 The runner deletes nothing in the store. It holds what the runner wrote over
 the retention period: one object or more per change, plus the whole state

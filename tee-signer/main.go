@@ -549,25 +549,15 @@ func waitFirstReading(ctx context.Context, a *clock.Anchored, wait time.Duration
 // With a setup (st) the log is the setup's (markstore.SetupOf: names and
 // records carry setup_hash, record times come from the platform's clock),
 // and outside dev the store's lock is checked first against the setup's
-// slashing_log_min_lock_days. The shares are listed once, before the claim; the
+// slashing_log_min_lock_days, and again by the claim once it has read the
+// log (markstore.Options.LockDays). The shares are listed once, before the claim; the
 // setup path loads only that list.
 func setupMarkLog(ctx context.Context, plat *platform.Platform, hooks *state.Hooks, platformName, spec, signerID string,
 	create bool, st *setup.Setup, log *slog.Logger) (markClaim, error) {
 	if signerID == "" {
 		return markClaim{}, errors.New("-mark-store needs -mark-signer (or -record-key)")
 	}
-	env := markstore.Env{HTTP: plat.HTTPClient, AWSCreds: plat.RecordCredentials}
-	if plat.StorageToken != nil {
-		c := markstore.NewTokenCache(plat.StorageToken, markstore.TokenRefreshAfter, markstore.TokenMaxAge)
-		env.Token, env.TokenRefused = c.Token, c.Invalidate
-	}
-	if plat.ManagementToken != nil {
-		c := markstore.NewTokenCache(plat.ManagementToken, markstore.TokenRefreshAfter, markstore.TokenMaxAge)
-		env.ARMToken, env.ARMTokenRefused = c.Token, c.Invalidate
-	}
-	if platformName == "dev" && env.AWSCreds == nil {
-		env.AWSCreds = record.EnvCredentials()
-	}
+	env := markLogEnv(plat, platformName, st)
 	if plat.Keys == nil {
 		return markClaim{}, fmt.Errorf("platform %s has no key release for the mark log", platformName)
 	}
@@ -588,6 +578,7 @@ func setupMarkLog(ctx context.Context, plat *platform.Platform, hooks *state.Hoo
 			if err != nil {
 				return markClaim{}, err
 			}
+			opts.LockDays = st.Wire.SlashingLogMinLockDays
 		}
 	}
 	m, err := markstore.New(l, signerID, plat.Keys, opts)
@@ -609,6 +600,44 @@ func setupMarkLog(ctx context.Context, plat *platform.Platform, hooks *state.Hoo
 		"mark_key", fmt.Sprintf("%x", m.PublicKey()), "had_mark", found, "shares_stored", len(stored),
 		"log_id", fmt.Sprintf("%x", m.LogID()))
 	return markClaim{log: m, logID: m.LogID(), shares: stored}, nil
+}
+
+// markLogEnv is the env the mark log's store opens with: storeEnv with the
+// setup's retention (retainDays).
+func markLogEnv(plat *platform.Platform, platformName string, st *setup.Setup) markstore.Env {
+	return storeEnv(plat, platformName, retainDays(platformName, st))
+}
+
+// storeEnv is the env of a store the runner opens by spec (the mark log,
+// the state copy): the platform's HTTP client, credentials and tokens, and
+// retain as RetainDays. Dev falls back to the AWS credentials of the
+// environment.
+func storeEnv(plat *platform.Platform, platformName string, retain uint32) markstore.Env {
+	env := markstore.Env{HTTP: plat.HTTPClient, AWSCreds: plat.RecordCredentials, RetainDays: retain}
+	if plat.StorageToken != nil {
+		c := markstore.NewTokenCache(plat.StorageToken, markstore.TokenRefreshAfter, markstore.TokenMaxAge)
+		env.Token, env.TokenRefused = c.Token, c.Invalidate
+	}
+	if plat.ManagementToken != nil {
+		c := markstore.NewTokenCache(plat.ManagementToken, markstore.TokenRefreshAfter, markstore.TokenMaxAge)
+		env.ARMToken, env.ARMTokenRefused = c.Token, c.Invalidate
+	}
+	if platformName == "dev" && env.AWSCreds == nil {
+		env.AWSCreds = record.EnvCredentials()
+	}
+	return env
+}
+
+// retainDays is the retention each object the runner writes to the mark
+// log's store must carry by itself (markstore.Env.RetainDays): the setup's
+// slashing_log_min_lock_days wherever the store's lock is checked (a setup,
+// not the dev platform), else 0. On S3 the bucket's default retention can be
+// lowered after the check; an object's own compliance retention cannot.
+func retainDays(platformName string, st *setup.Setup) uint32 {
+	if st == nil || platformName == "dev" {
+		return 0
+	}
+	return st.Wire.SlashingLogMinLockDays
 }
 
 // markClaim is what the mark log's claim leaves for the server: the log
