@@ -93,6 +93,13 @@ type Env struct {
 	ARMToken func(ctx context.Context) (string, error)
 	// ARMTokenRefused is TokenRefused for ARMToken.
 	ARMTokenRefused func(token string)
+	// RetainDays, if not 0, is the retention in days each object the store
+	// creates must get by itself (slashing_log_min_lock_days). S3: every
+	// PUT names compliance mode and a date at least this far ahead, because
+	// the bucket's default retention is a setting its admin can lower or
+	// remove after the lock check. GCS and Azure lock the policy itself and
+	// ignore it.
+	RetainDays uint32
 }
 
 // opener opens one store kind. The platform builds register theirs

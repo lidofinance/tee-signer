@@ -102,8 +102,13 @@ type Health struct {
 	// out.
 	Image *ImageCheck `json:"image,omitempty"`
 	// MarkLogLost says why a runner signs nothing after another instance
-	// took its mark log over (markstore.ErrLost); Ready is then false.
-	// Empty otherwise, and from runners before it.
+	// took its mark log over (markstore.ErrLost), or why its mark log
+	// stopped writing: "mark log stopped: store lock lost: ..." when the
+	// store was no longer locked at a refresh (markstore.ErrNoLock), or
+	// "mark log paused: store lock unchecked: ..." while its last lock check
+	// could not read the lock (markstore.ErrLockUnchecked; cleared once a
+	// check passes). Ready is then false. Empty otherwise, and from runners
+	// before it.
 	MarkLogLost string `json:"mark_log_lost,omitempty"`
 	// RequestPanic says which state-changing request panicked; the
 	// runner then signs and changes nothing until it restarts, and Ready

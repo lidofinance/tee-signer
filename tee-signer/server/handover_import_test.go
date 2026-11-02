@@ -71,6 +71,29 @@ type tgtEnv struct {
 	upd      *Updates
 	signer   *core.Signer
 	srv      *Server
+	// lockDays: markstore.Options.LockDays of the next start. The log
+	// then reports a compliance lock of that many days until lockGone.
+	lockDays uint32
+	lockGone bool
+	// lockErr, if set, fails the log's lock read, as a host that blocks
+	// the store's management API.
+	lockErr error
+}
+
+// lockedFileLog is the test env's file log with the lock it reports.
+type lockedFileLog struct {
+	*markstore.FileLog
+	e *tgtEnv
+}
+
+func (l lockedFileLog) Lock(context.Context) (markstore.Lock, error) {
+	if l.e.lockErr != nil {
+		return markstore.Lock{}, l.e.lockErr
+	}
+	if l.e.lockGone {
+		return markstore.Lock{Kind: "test lock", Mode: "none"}, nil
+	}
+	return markstore.Lock{Kind: "test lock", Mode: "locked", Compliance: true, Retention: time.Duration(l.e.lockDays) * 24 * time.Hour}, nil
 }
 
 // newTgtEnv starts a target with the single-mode dev sample setup
@@ -131,7 +154,11 @@ func (e *tgtEnv) start() {
 	if e.fl, err = markstore.NewFileLog(filepath.Join(e.dir, "marks")); err != nil {
 		t.Fatal(err)
 	}
-	m, err := markstore.New(e.fl, e.setup.SignerName, dev.NewDevKeys("handover import test"), markstore.Options{Setup: ms, Clock: e.clock.Now, Log: quiet})
+	var l markstore.Log = e.fl
+	if e.lockDays > 0 {
+		l = lockedFileLog{FileLog: e.fl, e: e}
+	}
+	m, err := markstore.New(l, e.setup.SignerName, dev.NewDevKeys("handover import test"), markstore.Options{Setup: ms, Clock: e.clock.Now, Log: quiet, LockDays: e.lockDays})
 	if err != nil {
 		t.Fatal(err)
 	}

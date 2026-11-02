@@ -1104,6 +1104,10 @@ func (s *Server) health() (*backend.Health, error) {
 	}
 	if s.lostRefusal() != nil {
 		h.Ready, h.MarkLogLost = false, s.Hooks.MarkLogLost().Error()
+	} else if err := s.Hooks.MarkLogStopped(); err != nil {
+		h.Ready, h.MarkLogLost = false, "mark log stopped: store lock lost: "+err.Error()
+	} else if err := s.Hooks.MarkLogUnchecked(); err != nil {
+		h.Ready, h.MarkLogLost = false, "mark log paused: store lock unchecked: "+err.Error()
 	}
 	if why := s.panicked.Load(); why != nil {
 		h.Ready, h.RequestPanic = false, *why

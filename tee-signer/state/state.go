@@ -386,6 +386,31 @@ func (h *Hooks) MarkLogLost() error {
 	return nil
 }
 
+// MarkLogStopped is the error the mark log latched when its store was no
+// longer locked at a refresh (markstore.ErrNoLock), nil otherwise. The
+// log then writes no more records, so the runner signs nothing above the
+// mark it committed.
+func (h *Hooks) MarkLogStopped() error {
+	if h.marks == nil {
+		return nil
+	}
+	if err := h.marks.Lost(); errors.Is(err, markstore.ErrNoLock) {
+		return err
+	}
+	return nil
+}
+
+// MarkLogUnchecked is the error of the mark log's last lock check that
+// could not read the lock (markstore.ErrLockUnchecked), nil once a check
+// passes and for a log that does not report it. The log writes no records
+// meanwhile, so the runner signs nothing above the mark it committed.
+func (h *Hooks) MarkLogUnchecked() error {
+	if u, ok := h.marks.(interface{ LockUnchecked() error }); ok {
+		return u.LockUnchecked()
+	}
+	return nil
+}
+
 // HandedOver reports a mark log that ends with a handover's tombstone.
 func (h *Hooks) HandedOver() bool {
 	if h.marks == nil {

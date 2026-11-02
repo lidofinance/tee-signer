@@ -43,6 +43,15 @@ var ErrTooOld = errors.New("markstore: the newest record is older than half the 
 // ErrBodyMissing: no readable copy of an update body the config state names.
 var ErrBodyMissing = errors.New("markstore: no readable copy of the update body")
 
+// ErrLockUnchecked: the last lock check (Options.LockDays) could not read
+// the store's lock. The log writes no record until a check passes, so the
+// runner signs nothing above its committed mark meanwhile.
+var ErrLockUnchecked = errors.New("markstore: the store's lock could not be checked; no records are written until a check passes")
+
+// lockRecheckGap is how long a write waits after a failed lock read before
+// it reads the lock again itself. Refresh reads it at every call.
+var lockRecheckGap = 30 * time.Second
+
 // Tombstone is the mark of the record that ends a log at a handover: every
 // bound at its maximum, so the core refuses every slashable message under
 // it, a runner of any version that reads the log included.
@@ -126,8 +135,17 @@ type Options struct {
 	// the log lost records or the listing is stale: Claim refuses.
 	HintStore  platform.Store
 	HintSealer platform.Sealer
-	Now        func() time.Time
-	Log        *slog.Logger
+	// LockDays: Claim runs CheckLock with this minimum after it read the
+	// log, and Refresh runs it again. A store that is no longer locked
+	// stops every later write (ErrNoLock latches). A check that cannot read
+	// the lock stops writes until a later check passes (ErrLockUnchecked).
+	// 0: no check (the dev platform, the flag path). An S3 bucket's
+	// default retention can be removed after the start; on Azure the check
+	// also refuses version-level immutability, which a migration can turn
+	// on while the runner reads the log.
+	LockDays uint32
+	Now      func() time.Time
+	Log      *slog.Logger
 }
 
 // bodyKey names an update body.
@@ -177,13 +195,17 @@ type MarkLog struct {
 	exits   *ExitDay // the day's exits the newest record carries
 	// gate is the source gate the next record carries (SetSourceGate); at
 	// Claim the newest record's.
-	gate    *uint64
-	state   ConfigState
-	bodies  map[bodyKey]*bodyEntry
-	found   bool // a record with a mark existed at Claim
-	lost    error
-	skipped int
-	writes  uint64
+	gate   *uint64
+	state  ConfigState
+	bodies map[bodyKey]*bodyEntry
+	found  bool // a record with a mark existed at Claim
+	lost   error
+	// unchecked is the error of the last lock check that could not read
+	// the lock, at uncheckedAt; nil once a check passes.
+	unchecked   error
+	uncheckedAt time.Time
+	skipped     int
+	writes      uint64
 	// handedOver: the log ends with a tombstone. handoverMark is the mark
 	// before it, the one a handover gives the next image (known when the
 	// record before the tombstone was read or written by this process).
@@ -544,12 +566,18 @@ func (m *MarkLog) Claim(ctx context.Context, expect bool) (backend.Watermark, bo
 		if err != nil {
 			return backend.Watermark{}, false, fmt.Errorf("mark log %s: the record before the tombstone: %w", m.log, err)
 		}
+		if err := m.checkLockAfterRead(ctx); err != nil {
+			return backend.Watermark{}, false, err
+		}
 		m.handedOver, m.handoverMark, m.hasHandover = true, prev, ok
 		m.lost, m.claimed = ErrHandedOver, true
 		m.opt.Log.Warn("mark log: this signer was handed over to another image; nothing is signed", "store", m.log.String(),
 			"signer", m.signer, "tombstone_version", r.Version, "mark_before_known", ok,
 			"target", prev.TargetEpoch, "source", prev.SourceEpoch, "block", prev.BlockSlot)
 		return m.mark, true, nil
+	}
+	if err := m.checkLockAfterRead(ctx); err != nil {
+		return backend.Watermark{}, false, err
 	}
 	if m.key == nil {
 		seed, blob, err := m.keys.NewKey(ctx, KeyAAD(m.setup, m.signer))
@@ -570,6 +598,47 @@ func (m *MarkLog) Claim(ctx context.Context, expect bool) (backend.Watermark, bo
 	m.opt.Log.Info("mark log: claimed", "store", m.log.String(), "signer", m.signer, "version", m.version,
 		"owner", hex.EncodeToString(m.owner[:4]), "log_id", hex.EncodeToString(m.logID[:8]), "first_start", r == nil, "had_mark", m.found)
 	return m.mark, m.found, nil
+}
+
+// checkLockAfterRead runs the lock check once the claim has read the log.
+// The start's check runs before the read, and the store can change in
+// between: on Azure a migration to version-level immutability lets an admin
+// hide the newest records from the read. Any error stops the claim.
+func (m *MarkLog) checkLockAfterRead(ctx context.Context) error {
+	if m.opt.LockDays == 0 {
+		return nil
+	}
+	if err := m.checkLockLocked(ctx); err != nil {
+		return fmt.Errorf("mark log %s: lock check after the read: %w", m.log, err)
+	}
+	return nil
+}
+
+// checkLockLocked runs CheckLock with Options.LockDays. A store that is not
+// locked stops the log for good (ErrNoLock latches in lost): records
+// written now could be deleted later. A check that cannot read the lock
+// (the host can block the store's management API) stops writes until a
+// later check passes (unchecked): Refresh reads the lock again, and so
+// does the next write once lockRecheckGap has passed.
+func (m *MarkLog) checkLockLocked(ctx context.Context) error {
+	err := CheckLock(ctx, m.log, m.opt.LockDays)
+	switch {
+	case err == nil:
+		if m.unchecked != nil {
+			m.opt.Log.Info("mark log: the store's lock check passes again; writes resume")
+		}
+		m.unchecked = nil
+		return nil
+	case errors.Is(err, ErrNoLock):
+		m.lost = err
+		m.opt.Log.Error("mark log: the store is no longer locked; this runner writes no more records and signs nothing above its committed mark", "err", err)
+		return err
+	}
+	if m.unchecked == nil {
+		m.opt.Log.Error("mark log: the store's lock could not be checked; no records are written, and nothing is signed above the committed mark, until a check passes", "err", err)
+	}
+	m.unchecked, m.uncheckedAt = err, time.Now()
+	return fmt.Errorf("%w: %w", ErrLockUnchecked, err)
 }
 
 // readBodies keeps the copy numbers r names and reads one copy of every
@@ -795,6 +864,14 @@ func sameTarget(a, b *[32]byte) bool {
 func (m *MarkLog) appendLocked(ctx context.Context, wm backend.Watermark, target *[32]byte) error {
 	if m.lost != nil {
 		return m.lost
+	}
+	if m.unchecked != nil {
+		if time.Since(m.uncheckedAt) < lockRecheckGap {
+			return fmt.Errorf("%w: %w", ErrLockUnchecked, m.unchecked)
+		}
+		if err := m.checkLockLocked(ctx); err != nil {
+			return err
+		}
 	}
 	now, err := m.now()
 	if err != nil {
@@ -1189,8 +1266,9 @@ func keepAlive(retention time.Duration) time.Duration { return min(retention/8, 
 // Refresh keeps the log readable for a restart (section 5): a body copy
 // older than half the retention gets a new copy, and the log gets a new
 // record (same mark and state, the new copies) when a copy was written or
-// the newest record is older than keepAlive. Without a setup, and after a
-// handover, it does nothing.
+// the newest record is older than keepAlive. With Options.LockDays it
+// checks the store's lock first (checkLockLocked). Without a setup, and after a handover, it
+// does nothing.
 func (m *MarkLog) Refresh(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1199,6 +1277,11 @@ func (m *MarkLog) Refresh(ctx context.Context) error {
 	}
 	if m.lost != nil {
 		return m.lost
+	}
+	if m.opt.LockDays > 0 {
+		if err := m.checkLockLocked(ctx); err != nil {
+			return err
+		}
 	}
 	now, err := m.now()
 	if err != nil {
@@ -1260,6 +1343,15 @@ func (m *MarkLog) Lost() error {
 	return m.lost
 }
 
+// LockUnchecked is the error of the last lock check that could not read
+// the lock, nil once a check passes. Meanwhile the log writes no records
+// (ErrLockUnchecked).
+func (m *MarkLog) LockUnchecked() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.unchecked
+}
+
 // Status describes the log for HEALTH and logs.
 func (m *MarkLog) Status() string {
 	m.mu.Lock()
@@ -1276,8 +1368,12 @@ func (m *MarkLog) Status() string {
 	switch {
 	case m.handedOver:
 		s += " HANDED-OVER"
+	case errors.Is(m.lost, ErrNoLock):
+		s += " NOT-LOCKED"
 	case m.lost != nil:
 		s += " LOST"
+	case m.unchecked != nil:
+		s += " LOCK-UNCHECKED"
 	}
 	return s
 }

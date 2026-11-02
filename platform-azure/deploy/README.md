@@ -36,9 +36,10 @@ operator. The signer's values are in its setup: chain config, client CA,
 MAA host, vault and key (`sealing_key_release`), mark log (required) and
 state copy, signer name and optional network entry names. An Azure store
 names `account`, `container`, `subscription` and `resource_group`, because
-the lock check reads the container's immutability policy from the
-management plane, which addresses the account by its subscription and
-group. `signer-config setup` (the signing client's tool) makes the setups of a
+the lock check reads the storage account and the container with its
+immutability policy from the management plane, which addresses the
+account by its subscription and group. `signer-config setup` (the
+signing client's tool) makes the setups of a
 cluster with one `cluster_id`. `signer-admin/cmd/setup-tool encode` makes one
 binary setup from a human `key = value` file
 (`governance/setuptext/testdata/setup-azure.conf` is an example), and
@@ -499,7 +500,21 @@ This tree implements none of these.
 
 `-mark-store azblob:account=A,container=C` keeps the runner's mark in a
 Blob Storage container with a locked time-based retention policy
-(`slashing-log/docs/marklog.md`). The client takes a token for
+(`slashing-log/docs/marklog.md`). Use container-level immutability: do not
+enable version-level immutability on the account or the container, and do
+not migrate the container to it. Create the policy without protected
+append writes (no `--allow-protected-append-writes` or
+`--allow-protected-append-writes-all`), then lock it:
+
+```sh
+az storage container immutability-policy create --account-name A -c C -g G --period DAYS
+etag=$(az storage container immutability-policy show --account-name A -c C -g G --query etag -o tsv)
+az storage container immutability-policy lock --account-name A -c C -g G --if-match "$etag"
+```
+
+The lock check refuses a container or account with version-level
+immutability and a policy that allows appends. None of these can be
+undone, so the signer then needs a new container (or account) and setup. The client takes a token for
 `https://storage.azure.com/` from the container group's managed identity
 (the same identity as for Key Vault) and sends `x-ms-version: 2021-08-06`
 and `If-None-Match: *`. The identity needs the data action to create and
@@ -509,7 +524,12 @@ storage account through the group's outbound path, not through the
 network entry. The setup's `slashing_log_store` (account, container,
 subscription and resource group) and `signer_name` name the log. The lock
 check takes a token for `https://management.azure.com/` from the same
-identity and needs Reader on the container (`deploy.sh store-role N`).
+identity, reads the storage account and the container with its policy,
+and needs Reader on the account (`deploy.sh store-role N`). A custom role
+without `storageAccounts/read` and `containers/read` is not enough: the
+runner stops on the 403. With a setup, the container of the state copy
+gets the same checks at start; an account or container the management
+plane does not find stops it too.
 
 ## State copy and handover
 
@@ -662,10 +682,10 @@ retail price estimates for West Europe.
    (RSA 3072 is about 5 USD). It runs `policy` again and uses that hash.
 8. `key-role 1`, `2`, `3`. Free.
 9. `acr-role 1`, `2`, `3`. Free. Then `store-role 1`, `2`, `3` (needs
-   `SETUP_FILE_N`): Storage Blob Data Contributor and Reader on the
-   setup's containers, free. Reader is for the lock check, which reads the
-   container's immutability policy at every start; without it the runner
-   stops.
+   `SETUP_FILE_N`): Storage Blob Data Contributor on the containers of
+   the setup and Reader on their storage accounts, free. Reader is for
+   the lock check, which reads the account and the container at every
+   start; without it the runner stops.
 10. `group-deploy 1`, `2`, `3`, with the network entry's settings. It re-runs
     `policy` and stops if the hash is not the one in the key's release
     policy. About 0.10 USD per hour per group (1.5 CPUs at 0.0579 USD and
