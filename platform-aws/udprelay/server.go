@@ -1,3 +1,7 @@
+// Package udprelay is the parent-instance side of the UDP relay
+// (cmd/udprelay): the server and its allowlist. The enclave's client and
+// the protocol are in package relayclient; the runner links that one only.
+// The relay is not trusted (relayclient says why that is safe).
 package udprelay
 
 import (
@@ -9,6 +13,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/lidofinance/tee-signer/platform-aws/udprelay/relayclient"
 )
 
 // Server is the relay. It reads a destination, checks it against Allow,
@@ -136,7 +142,7 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 			s.Counter.Busy.Add(1)
 			go func() {
 				_ = c.SetDeadline(time.Now().Add(time.Second))
-				_ = writeFrame(c, append([]byte{1}, "busy"...))
+				_ = relayclient.WriteFrame(c, append([]byte{1}, "busy"...))
 				c.Close()
 			}()
 			s.logf(slog.LevelWarn, "udprelay: busy, session refused", "max", cap(s.slots))
@@ -185,14 +191,14 @@ func (s *Server) handle(ctx context.Context, c net.Conn) {
 		return end
 	}
 	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
-	buf := make([]byte, MaxDatagram)
-	d, err := readFrame(c, buf, MaxDest)
+	buf := make([]byte, relayclient.MaxDatagram)
+	d, err := relayclient.ReadFrame(c, buf, relayclient.MaxDest)
 	if err != nil {
 		s.Counter.BadFrames.Add(1)
 		s.logf(slog.LevelWarn, "udprelay: no destination", "err", err)
 		return
 	}
-	dest := printable(d, MaxDest)
+	dest := relayclient.Printable(d, relayclient.MaxDest)
 	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	ap, err := s.Allow.Check(cctx, string(d))
 	cancel()
@@ -202,22 +208,22 @@ func (s *Server) handle(ctx context.Context, c net.Conn) {
 	if err != nil {
 		s.Counter.Refused.Add(1)
 		reason := err.Error()
-		if len(reason) > maxReason {
-			reason = reason[:maxReason]
+		if len(reason) > relayclient.MaxReason {
+			reason = reason[:relayclient.MaxReason]
 		}
-		_ = writeFrame(c, append([]byte{1}, reason...))
+		_ = relayclient.WriteFrame(c, append([]byte{1}, reason...))
 		s.logf(slog.LevelWarn, "udprelay: destination refused", "dest", dest, "reason", reason)
 		return
 	}
 	u, err := s.dialUDP(ap)
 	if err != nil {
 		s.Counter.Refused.Add(1)
-		_ = writeFrame(c, append([]byte{1}, "cannot open UDP"...))
+		_ = relayclient.WriteFrame(c, append([]byte{1}, "cannot open UDP"...))
 		s.logf(slog.LevelWarn, "udprelay: UDP", "dest", dest, "addr", ap, "err", err)
 		return
 	}
 	defer u.Close()
-	if err := writeFrame(c, []byte{0}); err != nil {
+	if err := relayclient.WriteFrame(c, []byte{0}); err != nil {
 		return
 	}
 	var out, in, dropped atomic.Int64
@@ -226,7 +232,7 @@ func (s *Server) handle(ctx context.Context, c net.Conn) {
 	// passes only datagrams from ap.
 	go func() {
 		defer close(done)
-		rb := make([]byte, MaxDatagram+1)
+		rb := make([]byte, relayclient.MaxDatagram+1)
 		for {
 			_ = u.SetReadDeadline(deadline())
 			n, err := u.Read(rb)
@@ -240,7 +246,7 @@ func (s *Server) handle(ctx context.Context, c net.Conn) {
 				c.Close()
 				return
 			}
-			if n > MaxDatagram {
+			if n > relayclient.MaxDatagram {
 				s.Counter.DroppedLarge.Add(1)
 				continue
 			}
@@ -248,7 +254,7 @@ func (s *Server) handle(ctx context.Context, c net.Conn) {
 			s.Counter.In.Add(1)
 			s.Counter.OctetsIn.Add(int64(n))
 			_ = c.SetWriteDeadline(time.Now().Add(5 * time.Second))
-			if err := writeFrame(c, rb[:n]); err != nil {
+			if err := relayclient.WriteFrame(c, rb[:n]); err != nil {
 				return
 			}
 		}
@@ -256,9 +262,9 @@ func (s *Server) handle(ctx context.Context, c net.Conn) {
 	perSession := int64(orInt(s.PerSession, 8))
 	for {
 		_ = c.SetReadDeadline(deadline())
-		p, err := readFrame(c, buf, MaxDatagram)
+		p, err := relayclient.ReadFrame(c, buf, relayclient.MaxDatagram)
 		if err != nil {
-			if errors.Is(err, errFrame) {
+			if errors.Is(err, relayclient.ErrFrame) {
 				s.Counter.BadFrames.Add(1)
 				s.logf(slog.LevelWarn, "udprelay: bad frame, session closed", "dest", dest, "err", err)
 			}

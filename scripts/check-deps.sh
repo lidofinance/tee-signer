@@ -26,7 +26,9 @@
 #   3. The build's own platform package is there, so a tag that stopped
 #      working does not pass as a clean build.
 #   4. The NTS clock (github.com/lidofinance/tee-signer/trusted-time/nts, tag nts) is in the cloud builds
-#      and not in the dev builds; the UDP relay's package only in AWS builds.
+#      and not in the dev builds; the UDP relay's client only in AWS builds,
+#      no other package below platform-aws/udprelay, the relay server
+#      included, in a runner.
 #   5. Development and operator packages stay out of runners (signer-admin,
 #      governance/setuptext and the others in package_cloud). The dev platform
 #      requires platform_dev. Protocol, core and time packages stay independent
@@ -93,8 +95,12 @@ package_cloud() {
     # agent itself included, is in no runner.
     github.com/lidofinance/tee-signer/platform-aws/hostagent/agentclient|github.com/lidofinance/tee-signer/platform-aws/hostagent/agentwire) echo aws ;;
     github.com/lidofinance/tee-signer/platform-aws/hostagent|github.com/lidofinance/tee-signer/platform-aws/hostagent/*) echo none ;;
-    # The UDP relay: its client is the Nitro enclave's NTP path.
-    github.com/lidofinance/tee-signer/platform-aws/nitro|github.com/lidofinance/tee-signer/platform-aws/nitro/*|github.com/lidofinance/tee-signer/platform-aws/udprelay) echo aws ;;
+    # The UDP relay's server runs on the parent instance. Its client is the
+    # Nitro enclave's NTP path; every other package below udprelay is in no
+    # runner.
+    github.com/lidofinance/tee-signer/platform-aws/udprelay/relayclient) echo aws ;;
+    github.com/lidofinance/tee-signer/platform-aws/udprelay|github.com/lidofinance/tee-signer/platform-aws/udprelay/*) echo none ;;
+    github.com/lidofinance/tee-signer/platform-aws/nitro|github.com/lidofinance/tee-signer/platform-aws/nitro/*) echo aws ;;
     # The human form of setups and updates: for the operator tools only.
     github.com/lidofinance/tee-signer/governance/setuptext|github.com/lidofinance/tee-signer/governance/setuptext/*) echo none ;;
     # NTS test servers never belong in a binary.
