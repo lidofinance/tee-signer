@@ -1,6 +1,6 @@
 //go:build !verifierselect || platform_azure || platform_gcp
 
-package runnerclient
+package verify
 
 import (
 	"context"
@@ -11,18 +11,17 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/attestation-verify"
+	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/internal/optset"
 )
 
 // Key set cache: a fetch is reused for keyTTL. A token under an unknown key
-// id triggers one new fetch, but not more often than every keyRefreshGap, so
-// a runner that sends random key ids cannot make the client hammer the
-// provider. After keyTTL the keys are fetched again, and a failed fetch
+// id triggers one new fetch, but not more often than every
+// optset.KeyRefreshGap, so a runner that sends random key ids cannot make
+// the client hammer the provider. After keyTTL the keys are fetched again, and a failed fetch
 // fails the verification (a key the provider removed is not trusted for
 // longer than that). A pinned key set (pinned) is used as it is and never
 // fetched.
 const keyTTL = time.Hour
-
-var keyRefreshGap = 30 * time.Second
 
 type keySource struct {
 	name   string // "MAA" or "Confidential Space", for error messages
@@ -63,7 +62,7 @@ func (s *keySource) get(ctx context.Context, unknownKey bool) (*attest.KeySet, e
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	age := time.Since(s.at)
-	if s.ks != nil && age < keyTTL && !(unknownKey && age >= keyRefreshGap) {
+	if s.ks != nil && age < keyTTL && !(unknownKey && age >= optset.KeyRefreshGap) {
 		return s.ks, nil
 	}
 	ks, err := attest.DiscoverJWKS(ctx, s.http, s.issuer)

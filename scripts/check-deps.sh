@@ -31,8 +31,11 @@
 #      included, in a runner.
 #   5. Development and operator packages stay out of runners (signer-admin,
 #      governance/setuptext and the others in package_cloud). The dev platform
-#      requires platform_dev. Protocol, core and time packages stay independent
-#      of the runner and cloud integrations.
+#      requires platform_dev, and so does signer-protocol/remote (the dev
+#      verifier's). Of attestation-verify/runnerclient, runners link
+#      runnerclient/verify and its option set only, not the tools' client,
+#      and no file of tool_files. Protocol, core and time packages stay
+#      independent of the runner and cloud integrations.
 #
 # With a binary, also: its -tags setting is the expected one, and the modules
 # it links (go version -m) are on the same lists as in 1.
@@ -112,10 +115,22 @@ package_cloud() {
     github.com/lidofinance/tee-signer/platform-aws/s3log) echo aws ;;
     github.com/lidofinance/tee-signer/platform-gcp/gcslog) echo gcp ;;
     github.com/lidofinance/tee-signer/platform-azure/azlog) echo azure ;;
+    # The runner client (dialing, TLS, client certificates) is for the tools.
+    # A runner checks attestations with runnerclient/verify and its option
+    # set; every other package below runnerclient is in no runner. The
+    # remote client only with the dev verifier (verify/dev.go).
+    github.com/lidofinance/tee-signer/attestation-verify/runnerclient/verify|github.com/lidofinance/tee-signer/attestation-verify/runnerclient/internal/optset) ;;
+    github.com/lidofinance/tee-signer/attestation-verify/runnerclient|github.com/lidofinance/tee-signer/attestation-verify/runnerclient/*) echo none ;;
+    github.com/lidofinance/tee-signer/signer-protocol/remote) echo dev ;;
     # Test fakes and the shared test suite never belong in a binary.
     github.com/lidofinance/tee-signer/slashing-log/wormfake|github.com/lidofinance/tee-signer/slashing-log/logtest) echo none ;;
   esac
 }
+
+# tool_files: "package file" lines of tool-only files in packages a runner
+# links. A build tag keeps each out of the runner builds; check_source checks
+# that it does.
+tool_files="github.com/lidofinance/tee-signer/attestation-verify/runnerclient/verify order_draft.go"
 
 # audit_layer_ok <package> <import>: first-party dependencies of the inner layers.
 audit_layer_ok() {
@@ -138,7 +153,7 @@ linked() { awk -v w="$2" '$1 == w { found = 1 } END { exit !found }' "$1"; }
 
 # check_source <name> <goarch>
 check_source() {
-  local name="$1" goarch="$2" tags clouds list viol pkg mod imports dep cloud c want n
+  local name="$1" goarch="$2" tags clouds list viol pkg mod imports dep cloud c want n files file
   tags="netgo,osusergo,$(runner_tags "$name")"
   clouds="$(clouds_of "$tags")"
   list="$(mktemp)"
@@ -170,6 +185,15 @@ check_source() {
          $1 == "github.com/lidofinance/tee-signer/attestation-verify" || ($1 in v) { next }
          { for (i = 3; i <= NF; i++) if ($i in v) print $1 " CBOR-outside-github.com/lidofinance/tee-signer/attestation-verify" }' "$list" "$list" >>"$viol"
   fi
+  # The files of a package in this build: Go and cgo files, one per line.
+  files='{{range .GoFiles}}{{println .}}{{end}}{{range .CgoFiles}}{{println .}}{{end}}'
+  while read -r pkg file; do
+    linked "$list" "$pkg" || continue
+    if (cd "$ROOT/tee-signer" && GOOS=linux GOARCH="$goarch" CGO_ENABLED=1 go list -tags "$tags" -f "$files" "$pkg") |
+      grep -qxF "$file"; then
+      echo "$pkg/$file tool-only-file" >>"$viol"
+    fi
+  done <<<"$tool_files"
   if [ -s "$viol" ]; then
     n="$(wc -l <"$viol")"
     bad "$name ($goarch): $n packages that a build for ($clouds) must not link, from: $(awk '{ print $2 }' "$viol" | sort -u | tr '\n' ' ')"

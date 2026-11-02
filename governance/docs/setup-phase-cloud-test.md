@@ -113,7 +113,7 @@ testnet values and `allow_testnet_build` in every connection.
 ### Nitro peer endpoints (handover)
 
 A runner checks the other image of a handover with the attestation
-verifier of its own platform (`attestation-verify/runnerclient`, build tag
+verifier of its own platform (`attestation-verify/runnerclient/verify`, build tag
 `verifierselect`, which `scripts/common.sh` sets for every runner build). A
 Nitro signer hands over to a Nitro signer and checks it with `aws-nitro`,
 whose root certificate is in the binary, so it fetches no key set. The

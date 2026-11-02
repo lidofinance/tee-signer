@@ -1,6 +1,6 @@
 //go:build !verifierselect || platform_azure
 
-package runnerclient
+package verify
 
 import (
 	"context"
@@ -12,19 +12,19 @@ import (
 
 	"github.com/lidofinance/tee-signer/attestation-verify"
 	"github.com/lidofinance/tee-signer/attestation-verify/azureid"
+	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/internal/optset"
 	"github.com/lidofinance/tee-signer/signer-protocol"
-	"github.com/lidofinance/tee-signer/signer-protocol/remote"
 )
 
 func init() {
-	verifierFactories[VerifierAzureMAA] = func(a *Attestation, o *options) (remote.VerifyFunc, error) {
+	verifierFactories[VerifierAzureMAA] = func(a *Attestation, o *optset.Options) (VerifyFunc, error) {
 		m, err := a.newMAA(o)
 		if err != nil {
 			return nil, err
 		}
 		return m.verify, nil
 	}
-	documentFactories[VerifierAzureMAA] = func(a *Attestation, o *options) (DocumentVerifier, error) {
+	documentFactories[VerifierAzureMAA] = func(a *Attestation, o *optset.Options) (DocumentVerifier, error) {
 		m, err := a.newMAA(o)
 		if err != nil {
 			return nil, err
@@ -33,14 +33,14 @@ func init() {
 	}
 }
 
-func (a *Attestation) newMAA(o *options) (*maaVerifier, error) {
+func (a *Attestation) newMAA(o *optset.Options) (*maaVerifier, error) {
 	s, err := a.maa()
 	if err != nil {
 		return nil, err
 	}
 	return &maaVerifier{
 		opts: attest.MAAOptions{Issuer: s.issuer, ComplianceStatus: s.compliance, HostData: []string{s.hostData}},
-		keys: &keySource{name: "MAA", issuer: s.issuer, http: o.http},
+		keys: &keySource{name: "MAA", issuer: s.issuer, http: o.HTTP},
 	}, nil
 }
 

@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
+	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/verify"
 	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/platform"
@@ -92,7 +92,7 @@ func newShareTgtEnv(t *testing.T, platName string, change func(s *setupwire.Setu
 // newTgtEnvOf is newTgtEnv with the dev sample setup of that name.
 func newTgtEnvOf(t *testing.T, sample, platName string, change func(s *setupwire.Setup)) *tgtEnv {
 	t.Helper()
-	if !runnerclient.Available(runnerclient.VerifierDev) {
+	if !verify.Available(verify.VerifierDev) {
 		t.Skip("the made-up source has a dev document: build with platform_dev and verifierselect, or without verifierselect")
 	}
 	raw, err := os.ReadFile(filepath.Join("..", "..", "governance", "setupwire", "testdata", sample+".bin"))

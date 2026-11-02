@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
+	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/verify"
 	"github.com/lidofinance/tee-signer/governance/flavor"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	admincluster "github.com/lidofinance/tee-signer/signer-admin/cluster"
@@ -165,7 +166,7 @@ func hex8(h [32]byte) string { return hex.EncodeToString(h[:4]) }
 func fullHex(h [32]byte) string { return hex.EncodeToString(h[:]) }
 
 // when writes Unix seconds as RFC 3339 UTC.
-func when(sec uint64) string { return runnerclient.UnixTime(sec) }
+func when(sec uint64) string { return verify.UnixTime(sec) }
 
 // left is the time from now to sec, or "due" when it has passed.
 func left(sec uint64, t time.Time) string {

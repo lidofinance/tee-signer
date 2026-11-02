@@ -11,15 +11,15 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
+	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/verify"
 	"github.com/lidofinance/tee-signer/platform/setup"
 	"github.com/lidofinance/tee-signer/tee-signer/server"
 )
 
 // enableHandover turns HANDOVER_ORDER, HANDOVER and IMPORT_HANDOVER on for a
 // runner with a setup and the mark log. The verifier of the other image
-// is this build's own platform verifier (attestation-verify/runnerclient,
-// tag verifierselect); on a runner that reaches only its setup's hosts (a
+// is this build's own platform verifier
+// (attestation-verify/runnerclient/verify, tag verifierselect); on a runner that reaches only its setup's hosts (a
 // Nitro enclave), the hosts that verifier fetches key sets from must be
 // among them (setup.AttestationEgress).
 func enableHandover(srv *server.Server) error {
@@ -27,9 +27,9 @@ func enableHandover(srv *server.Server) error {
 		return nil
 	}
 	plat, u := srv.Platform, srv.Updates
-	var opts []runnerclient.Option
+	var opts []verify.Option
 	if plat.HTTPClient != nil {
-		opts = append(opts, runnerclient.WithHTTPClient(plat.HTTPClient))
+		opts = append(opts, verify.WithHTTPClient(plat.HTTPClient))
 	}
 	endpoints, limited := setup.AttestationEgress(u.SetupWire())
 	// The source side goes first: it tells its own pending order in the

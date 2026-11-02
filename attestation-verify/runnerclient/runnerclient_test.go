@@ -33,6 +33,8 @@ import (
 
 	"github.com/lidofinance/tee-signer/attestation-verify"
 	"github.com/lidofinance/tee-signer/attestation-verify/internal/testgen"
+	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/internal/optset"
+	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/verify"
 	"github.com/lidofinance/tee-signer/governance/flavor"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
@@ -655,7 +657,7 @@ func TestRelayWithItsOwnKeyRefused(t *testing.T) {
 			f := startFakeRunner(t, ca, att)
 			real := sha256.Sum256([]byte("the real runner's TLS key"))
 			f.claimedKey = real[:]
-			wantErr(t, health(t, mk(f), WithHTTPClient(env.srv.Client())), "attested identity names")
+			wantErr(t, health(t, mk(f), verify.WithHTTPClient(env.srv.Client())), "attested identity names")
 		})
 	}
 }
@@ -682,7 +684,7 @@ func TestMAARunnerConnects(t *testing.T) {
 	env := newMAAEnv(t, mainKeySet(t))
 	f := startFakeRunner(t, ca, env.attest(tokenSpec{}))
 	c := maaConn(t, ca, f, env)
-	cl, err := c.New(WithTimeout(5*time.Second), WithHTTPClient(env.srv.Client()))
+	cl, err := c.New(WithTimeout(5*time.Second), verify.WithHTTPClient(env.srv.Client()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -700,7 +702,7 @@ func TestMAARunnerConnects(t *testing.T) {
 	}
 	// Upper case in the configured hash and host still matches.
 	c.Attestation.CCEPolicySHA256 = strings.ToUpper(goodHostData)
-	if err := health(t, c, WithHTTPClient(env.srv.Client())); err != nil {
+	if err := health(t, c, verify.WithHTTPClient(env.srv.Client())); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -726,7 +728,7 @@ func TestMAATokenRefusals(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			f := startFakeRunner(t, ca, env.attest(tc.spec))
-			err := health(t, maaConn(t, ca, f, env), WithHTTPClient(env.srv.Client()))
+			err := health(t, maaConn(t, ca, f, env), verify.WithHTTPClient(env.srv.Client()))
 			if err == nil {
 				t.Fatal("connected")
 			}
@@ -747,13 +749,13 @@ func TestMAAIdentityOfAnotherRunnerRefused(t *testing.T) {
 	env := newMAAEnv(t, mainKeySet(t))
 	runner2 := startFakeRunner(t, ca, env.attest(tokenSpec{hostData: strings.Repeat("22", 32)}))
 	c := maaConn(t, ca, runner2, env) // expects goodHostData (runner 1)
-	err := health(t, c, WithHTTPClient(env.srv.Client()))
+	err := health(t, c, verify.WithHTTPClient(env.srv.Client()))
 	if !errors.Is(err, attest.ErrMeasurement) {
 		t.Fatalf("got %v", err)
 	}
 	// Configured for runner 2, it connects.
 	c.Attestation.CCEPolicySHA256 = strings.Repeat("22", 32)
-	if err := health(t, c, WithHTTPClient(env.srv.Client())); err != nil {
+	if err := health(t, c, verify.WithHTTPClient(env.srv.Client())); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -776,10 +778,10 @@ func TestMAATokenForAnotherNonceRefused(t *testing.T) {
 		return &backend.Attestation{Platform: old.Platform, Format: old.Format, UserData: fresh.UserData, Document: old.Document}
 	})
 	c := maaConn(t, ca, f, env)
-	if err := health(t, c, WithHTTPClient(env.srv.Client())); err != nil {
+	if err := health(t, c, verify.WithHTTPClient(env.srv.Client())); err != nil {
 		t.Fatal(err)
 	}
-	err := health(t, c, WithHTTPClient(env.srv.Client()))
+	err := health(t, c, verify.WithHTTPClient(env.srv.Client()))
 	if !errors.Is(err, attest.ErrNonce) {
 		t.Fatalf("got %v", err)
 	}
@@ -790,7 +792,7 @@ func TestMAADevDocumentRefused(t *testing.T) {
 	ca := newTestCA(t)
 	env := newMAAEnv(t, mainKeySet(t))
 	f := startFakeRunner(t, ca, devAttest)
-	err := health(t, maaConn(t, ca, f, env), WithHTTPClient(env.srv.Client()))
+	err := health(t, maaConn(t, ca, f, env), verify.WithHTTPClient(env.srv.Client()))
 	wantErr(t, err, "not an Azure MAA token")
 	if env.fetchCount() != 0 {
 		t.Fatal("the client fetched the provider's keys for a document that is not an Azure token")
@@ -799,8 +801,8 @@ func TestMAADevDocumentRefused(t *testing.T) {
 
 func TestMAAKeyRotation(t *testing.T) {
 	ca := newTestCA(t)
-	oldRefresh := keyRefreshGap
-	t.Cleanup(func() { keyRefreshGap = oldRefresh })
+	oldRefresh := optset.KeyRefreshGap
+	t.Cleanup(func() { optset.KeyRefreshGap = oldRefresh })
 
 	// The provider serves its old key first and a set with the new key
 	// from the second fetch on. The runner's token is under the new key.
@@ -808,10 +810,10 @@ func TestMAAKeyRotation(t *testing.T) {
 	newSet := testgen.JWKS(t, "maa-2", newKey, true)
 
 	t.Run("refetch on an unknown key id", func(t *testing.T) {
-		keyRefreshGap = 0
+		optset.KeyRefreshGap = 0
 		env := newMAAEnv(t, mainKeySet(t), newSet)
 		f := startFakeRunner(t, ca, env.attest(tokenSpec{key: newKey, kid: "maa-2"}))
-		if err := health(t, maaConn(t, ca, f, env), WithHTTPClient(env.srv.Client())); err != nil {
+		if err := health(t, maaConn(t, ca, f, env), verify.WithHTTPClient(env.srv.Client())); err != nil {
 			t.Fatal(err)
 		}
 		if env.fetchCount() != 2 {
@@ -819,10 +821,10 @@ func TestMAAKeyRotation(t *testing.T) {
 		}
 	})
 	t.Run("no refetch inside the gap", func(t *testing.T) {
-		keyRefreshGap = time.Hour
+		optset.KeyRefreshGap = time.Hour
 		env := newMAAEnv(t, mainKeySet(t), newSet)
 		f := startFakeRunner(t, ca, env.attest(tokenSpec{key: newKey, kid: "maa-2"}))
-		err := health(t, maaConn(t, ca, f, env), WithHTTPClient(env.srv.Client()))
+		err := health(t, maaConn(t, ca, f, env), verify.WithHTTPClient(env.srv.Client()))
 		if !errors.Is(err, attest.ErrUnknownKey) {
 			t.Fatalf("got %v", err)
 		}
@@ -835,6 +837,6 @@ func TestMAAKeyRotation(t *testing.T) {
 		f := startFakeRunner(t, ca, env.attest(tokenSpec{}))
 		c := maaConn(t, ca, f, env)
 		env.srv.Close()
-		wantErr(t, health(t, c, WithHTTPClient(env.srv.Client())), "MAA key set")
+		wantErr(t, health(t, c, verify.WithHTTPClient(env.srv.Client())), "MAA key set")
 	})
 }
