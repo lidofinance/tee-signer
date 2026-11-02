@@ -153,6 +153,13 @@ type shareRecord struct {
 	// from the source gate (state.Hooks.NoteHistory). The host can roll
 	// the record back to one without it, which only gates the key again.
 	History bool `json:"history,omitempty"`
+	// SourceFloor: the import came without vote history, and the key signs
+	// no vote with a source below this epoch, the restart floor epoch at the
+	// import (state.Hooks.ImportFloor, SLBOUND-01). A restart sets it again.
+	// The host stores the record and can put back an older one with a lower
+	// floor or none; only a follow-up change anchors the floor in the mark
+	// log.
+	SourceFloor uint64 `json:"source_floor,omitempty"`
 }
 
 func shareKey(pk backend.Pubkey) string { return "shares/" + hex.EncodeToString(pk[:]) }
@@ -233,6 +240,9 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 		copy(sec[:], rec.Secret)
 		clear(rec.Secret)
 		s.Hooks.ExpectRecord(pk)
+		if rec.SourceFloor != 0 && !rec.History {
+			s.Hooks.NoteImportFloor(pk, rec.SourceFloor)
+		}
 		_, err = s.Signer.AddValidator(pk, sec, rec.Index, nil)
 		clear(sec[:])
 		if err != nil {
@@ -572,7 +582,7 @@ func (s *Server) sign(req backend.SignRequest) (backend.Signature, error) {
 	blocked := s.blocked[req.Pubkey]
 	s.blockedMu.Unlock()
 	if blocked {
-		return backend.Signature{}, backend.Refused(backend.StatusStorage, "the import's interchange maxima did not reach the core; restart the runner")
+		return backend.Signature{}, backend.Refused(backend.StatusStorage, "the import's bounds (interchange maxima or import floor) did not reach the core; restart the runner")
 	}
 	kind := req.Message.Kind().String()
 	if o := s.importing(); o != nil {
@@ -584,7 +594,7 @@ func (s *Server) sign(req backend.SignRequest) (backend.Signature, error) {
 	if a, ok := req.Message.(*backend.AttestationData); ok && s.Hooks != nil {
 		if f, on := s.Hooks.SourceFloor(req.Pubkey); on && a.Source.Epoch < f {
 			err := backend.Refused(backend.StatusSlashSource,
-				"attestation source %d below the source gate's floor epoch %d: the mark log held no vote when this runner started on it, and no import carried this validator's vote history", a.Source.Epoch, f)
+				"attestation source %d below the source floor epoch %d: no import carried this validator's vote history, and the mark log held no vote when this runner started on it or the share came in later", a.Source.Epoch, f)
 			s.Log.Info("refused", "kind", kind, "pubkey", req.Pubkey.String()[:18], "msg", describe(req.Message), "err", err)
 			return backend.Signature{}, err
 		}
@@ -633,7 +643,11 @@ func (s *Server) sign(req backend.SignRequest) (backend.Signature, error) {
 		var r *backend.RefusedError
 		if errors.As(err, &r) && r.Code.IsSlashing() {
 			if f, ok := s.Hooks.Floor(req.Pubkey); ok && atOrBelowFloor(req.Message, f, s.Signer.Config().SlotsPerEpoch) {
-				r.Detail += fmt.Sprintf(" (at or below restart floor epoch %d)", f)
+				kind := "restart"
+				if lf, ok := s.Hooks.LoadFloor(req.Pubkey); ok && lf == f {
+					kind = "import"
+				}
+				r.Detail += fmt.Sprintf(" (at or below %s floor epoch %d)", kind, f)
 			}
 		}
 		s.Log.Info("refused", "kind", kind, "pubkey", req.Pubkey.String()[:18], "msg", describe(req.Message), "err", err)
@@ -751,15 +765,42 @@ func (s *Server) addShareOf(pk backend.Pubkey, secret *[32]byte, index uint64, i
 			return backend.ValidatorKey{}, backend.Refused(backend.StatusStorage, "raise the mark log to the interchange maxima: %v", err)
 		}
 	}
-	blob, err := s.sealRecord(shareRecord{Pubkey: pk, Secret: secret[:], Index: index,
-		History: interchange != nil && interchange.HasAttestation})
+	rec := shareRecord{Pubkey: pk, Secret: secret[:], Index: index,
+		History: interchange != nil && interchange.HasAttestation}
+	if !rec.History && s.Hooks != nil {
+		// No vote history: the key may have voted elsewhere up to now, past
+		// the log's gate (SLBOUND-01). Gate it from now on, before it can
+		// sign; the record keeps the floor for a restart.
+		f, on, err := s.Hooks.ImportFloor()
+		if err != nil {
+			return backend.ValidatorKey{}, backend.Refused(backend.StatusPlatform, "%v", err)
+		}
+		if on {
+			rec.SourceFloor = f
+			s.Hooks.NoteImportFloor(pk, f)
+		}
+	}
+	// Every key added now, with history or not, gets the floor's block and
+	// target bounds in its own mark (loadShare): it may have proposed
+	// elsewhere after its interchange was exported.
+	loadFloor := rec.SourceFloor
+	if loadFloor == 0 && s.Hooks != nil {
+		f, on, err := s.Hooks.ImportFloor()
+		if err != nil {
+			return backend.ValidatorKey{}, backend.Refused(backend.StatusPlatform, "%v", err)
+		}
+		if on {
+			loadFloor = f
+		}
+	}
+	blob, err := s.sealRecord(rec)
 	if err != nil {
 		return backend.ValidatorKey{}, err
 	}
 	if err := s.Platform.Store.Put(shareKey(pk), blob); err != nil {
 		return backend.ValidatorKey{}, backend.Refused(backend.StatusPlatform, "store share: %v", err)
 	}
-	return s.loadShare(pk, secret, index, interchange, how)
+	return s.loadShare(pk, secret, index, interchange, loadFloor, how)
 }
 
 // reserve marks pk as being added; false if it is already.
@@ -868,21 +909,41 @@ func (s *Server) sealRecord(rec shareRecord) ([]byte, error) {
 }
 
 // loadShare loads a stored share into the signer.
-func (s *Server) loadShare(pk backend.Pubkey, secret *[32]byte, index uint64, interchange *backend.Watermark, how string) (backend.ValidatorKey, error) {
-	k, err := s.Signer.AddValidator(pk, *secret, index, interchange)
+//
+// floor is the restart floor epoch at the import. With the device mark the
+// core starts a key added now from the device's bounds, which hold only
+// what keys here signed, and the key may have proposed elsewhere up to
+// that epoch. The floor's block and target bounds (source 0: the source
+// bound is SourceFloor's, and the device's stays as it is) go into the
+// watermark the core imports with the key, under the same lock hold, so
+// the key never signs without them: blocks, PTC votes and envelopes up to
+// the last slot of that epoch, and targets up to it.
+func (s *Server) loadShare(pk backend.Pubkey, secret *[32]byte, index uint64, interchange *backend.Watermark, floor uint64, how string) (backend.ValidatorKey, error) {
+	imp := interchange
+	if floor != 0 {
+		fw := state.FloorWatermark(s.Signer.Config(), floor)
+		fw.SourceEpoch = 0
+		if interchange != nil {
+			fw = state.Merge(*interchange, fw)
+		}
+		imp = &fw
+		s.Hooks.NoteLoadFloor(pk, floor)
+	}
+	k, err := s.Signer.AddValidator(pk, *secret, index, imp)
 	if err != nil {
 		// A duplicate loaded nothing: the validator keeps its share and
 		// its bounds (APSTATE-02).
-		if interchange != nil && s.Hooks.Mode().MarkLog && backend.StatusOf(err) != backend.StatusDuplicate {
+		if imp != nil && s.Hooks.Mode().MarkLog && backend.StatusOf(err) != backend.StatusDuplicate {
 			// The validator may be loaded under the core's older device
-			// mark; the log holds the raised one. Keep it from signing.
+			// mark (the core refuses it as unready); the log holds the
+			// raised one. Keep it from signing until a restart.
 			s.blockedMu.Lock()
 			if s.blocked == nil {
 				s.blocked = map[backend.Pubkey]bool{}
 			}
 			s.blocked[pk] = true
 			s.blockedMu.Unlock()
-			s.Log.Error("imported share blocked until a restart: the core did not take the interchange maxima", "pubkey", pk.String()[:18], "err", err)
+			s.Log.Error("imported share blocked until a restart: the core did not take the import's bounds", "pubkey", pk.String()[:18], "err", err)
 		}
 		return k, err
 	}

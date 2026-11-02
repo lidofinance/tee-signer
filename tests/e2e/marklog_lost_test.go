@@ -16,6 +16,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -75,7 +76,12 @@ func lastClaim(t *testing.T, text string) string {
 // run signs three epochs with source s0, stops, wipes the state directory,
 // starts again and checks: the claim continues the log, the share is gone,
 // after a new import a vote with a source below s0 (a surround of the
-// votes before) is refused at every epoch while one with source s0 signs.
+// votes before) is refused at every epoch. The source an honest node sends
+// is s0, or the epoch before the target once that is higher. A new import
+// without history gates sources below its import's restart floor epoch
+// (SLBOUND-01): the first such vote must be refused below that floor, and
+// each one at or above it must sign. A share restored from the state copy
+// keeps its old floor and signs at once.
 // It returns s0 and the last target signed before the restart.
 func (ls lostState) run(t *testing.T, pk backend.Pubkey) (uint64, uint64) {
 	t.Helper()
@@ -127,23 +133,57 @@ func (ls lostState) run(t *testing.T, pk backend.Pubkey) (uint64, uint64) {
 		ls.load(cl)
 	}
 	start := c.stableEpoch(t)
-	surround, signed := 0, 0
+	surround, signed, belowFloor := 0, 0, 0
+	var floor uint64
 	for e := start; e < start+6; e++ {
 		c.waitEpoch(t, e)
 		errS := sign(cl, att(s0-2, e, 0x30))
-		errN := sign(cl, att(s0, e, 0x20))
-		t.Logf("after the restart, target %d: source %d (below the log's) %s | source %d %s", e, s0-2, short(errS), s0, short(errN))
+		ns := max(s0, e-1)
+		errN := sign(cl, att(ns, e, 0x20))
+		t.Logf("after the restart, target %d: source %d (below the log's) %s | source %d %s", e, s0-2, short(errS), ns, short(errN))
 		if errS == nil {
 			surround++
 		}
-		if errN == nil {
+		// A restored share gets no source floor refusal, but the restart
+		// floor's target bound may refuse its first epochs.
+		f, isFloor := sourceFloorRefusal(errN)
+		switch {
+		case isFloor && (ls.restored || ns >= f):
+			t.Fatalf("target %d: source %d refused below the source floor %d", e, ns, f)
+		case isFloor:
+			floor = f
+			belowFloor++
+		case !ls.restored && e == start:
+			t.Fatalf("target %d, right after the import without history: source %d %s, want a refusal below the source floor", e, ns, short(errN))
+		case errN != nil && floor != 0:
+			t.Fatalf("target %d: source %d at or above the source floor %d: %v", e, ns, floor, errN)
+		case errN == nil:
 			signed++
 		}
 	}
 	if surround != 0 || signed == 0 {
-		t.Fatalf("after the restart: %d votes with a lower source signed, %d with the log's source", surround, signed)
+		t.Fatalf("after the restart: %d votes with a lower source signed, %d with an honest source", surround, signed)
 	}
+	t.Logf("after the restart: %d votes refused below the source floor %d, %d signed", belowFloor, floor, signed)
 	return s0, last
+}
+
+var floorRE = regexp.MustCompile(`below the source floor epoch (\d+)`)
+
+// sourceFloorRefusal returns the floor epoch if err refuses a vote whose
+// source is below a validator's source floor.
+func sourceFloorRefusal(err error) (uint64, bool) {
+	var r *backend.RefusedError
+	if !errors.As(err, &r) || r.Code != backend.StatusSlashSource {
+		return 0, false
+	}
+	m := floorRE.FindStringSubmatch(r.Detail)
+	if m == nil {
+		return 0, false
+	}
+	var f uint64
+	fmt.Sscanf(m[1], "%d", &f)
+	return f, true
 }
 
 // surroundControl: a runner on an empty log, which is what a restart with

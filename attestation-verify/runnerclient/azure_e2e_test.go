@@ -709,9 +709,11 @@ const (
 // reads its mark log (a file log here; the WORM fakes of the three stores
 // run in runner/e2e and runner/markstore). Its share is gone with the
 // state; after a sealed import it continues from the newest mark: a vote
-// with a source below the log's is refused, one with the log's source
-// signs. A group whose Key Vault key is another one (a new key version)
-// does not open the records' keys and does not start.
+// with a source below the log's is refused. The import carries no history,
+// so it sets the share's own source floor at the import: the first honest
+// vote is refused below it, and each one at or above it signs. A group
+// whose Key Vault key is another one (a new key version) does not open the
+// records' keys and does not start.
 func TestE2EAzureRunnerMarkLogLostState(t *testing.T) {
 	bin := os.Getenv("RUNNER_AZURE_DEBUG_BIN")
 	if bin == "" {
@@ -827,22 +829,37 @@ func TestE2EAzureRunnerMarkLogLostState(t *testing.T) {
 	t.Logf("state wiped: Key Vault released the key %d times in all, the log was read, health %q", released, h.Record)
 	load(r, cl)
 	start := stableEpoch()
-	lower, signed := 0, 0
+	lower, signed, belowFloor := 0, 0, 0
+	var floor uint64
 	for e := start; e < start+6; e++ {
 		waitEpoch(e)
 		errL := sign(cl, vote(s0-2, e, 0x30))
-		errN := sign(cl, vote(s0, e, 0x20))
-		t.Logf("after the restart, target %d: source %d (below the log's): %v | source %d: %v", e, s0-2, errL, s0, errN)
+		// An honest node's source: s0, or the epoch before the target.
+		ns := max(s0, e-1)
+		errN := sign(cl, vote(ns, e, 0x20))
+		t.Logf("after the restart, target %d: source %d (below the log's): %v | source %d: %v", e, s0-2, errL, ns, errN)
 		if errL == nil {
 			lower++
 		}
-		if errN == nil {
+		f, isFloor := sourceFloorRefusal(errN)
+		switch {
+		case isFloor && ns >= f:
+			t.Fatalf("target %d: source %d refused below the source floor %d", e, ns, f)
+		case isFloor:
+			floor = f
+			belowFloor++
+		case e == start:
+			t.Fatalf("target %d, right after the import without history: source %d: %v, want a refusal below the source floor", e, ns, errN)
+		case errN != nil:
+			t.Fatalf("target %d: source %d at or above the source floor %d: %v", e, ns, floor, errN)
+		default:
 			signed++
 		}
 	}
 	if lower != 0 || signed == 0 {
-		t.Fatalf("after the restart: %d votes with a lower source signed, %d with the log's source", lower, signed)
+		t.Fatalf("after the restart: %d votes with a lower source signed, %d with an honest source", lower, signed)
 	}
+	t.Logf("after the restart: %d votes refused below the source floor %d, %d signed", belowFloor, floor, signed)
 	stop(r)
 
 	// Another Key Vault key (newAzureFakes makes a new one): another
@@ -859,4 +876,22 @@ func TestE2EAzureRunnerMarkLogLostState(t *testing.T) {
 		t.Fatalf("the runner with another Key Vault key:\n%s", olog)
 	}
 	t.Logf("another Key Vault key: refused to start")
+}
+
+var floorRE = regexp.MustCompile(`below the source floor epoch (\d+)`)
+
+// sourceFloorRefusal returns the floor epoch if err refuses a vote whose
+// source is below a validator's source floor.
+func sourceFloorRefusal(err error) (uint64, bool) {
+	var r *backend.RefusedError
+	if !errors.As(err, &r) || r.Code != backend.StatusSlashSource {
+		return 0, false
+	}
+	m := floorRE.FindStringSubmatch(r.Detail)
+	if m == nil {
+		return 0, false
+	}
+	var f uint64
+	fmt.Sscanf(m[1], "%d", &f)
+	return f, true
 }
