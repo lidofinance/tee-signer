@@ -9,9 +9,9 @@
  *     holding the clock floor and the device mark, store_due_floor after
  *     every command, the TA clock with bounded steps (do_sync_clock);
  *   - the cloud runner (tee-signer/state/state.go,
- *     tee-signer/record/record.go, trusted-time/clock/clock.go): restart floor at
- *     clock epoch + margin, the external single-writer record (claim, cover),
- *     the Anchored clock;
+ *     trusted-time/clock/clock.go): restart floor at clock epoch + margin,
+ *     the external single-writer record of the removed DynamoDB clone guard
+ *     (claim, cover), the Anchored clock;
  *   - the cloud runner with the mark log (slashing-log): one device mark
  *     in an external locked log (profile cloud-ext), claim at start with the
  *     sealed hint, write-once records, a raise for E+1 at slot 24, the floor
@@ -114,12 +114,12 @@ static const prof_t PROFS[] = {
     {"ta", DV, {32, 0, 0}, 1, 1, 0, 0, 0, 0, CLK_TA, 0, 0, 0, 0, 0},
     /* Board with the older booking of 2 target epochs. */
     {"ta-b2", DV, {32, 0, 2}, 1, 1, 0, 0, 0, 0, CLK_TA, 0, 0, 0, 0, 0},
-    /* Cloud runner as built for Nitro/Azure/GCP (chain.json 32,2,2, max 2),
+    /* Cloud runner with the removed DynamoDB clone guard (chain.json 32,2,2, max 2),
      * floor only, margin 3, record with ahead 0. */
     {"cloud", PV, {32, 2, 2}, 2, 0, 1, 3, 1, 0, CLK_ANCH, 1, 1, 0, 0, 0},
     /* Cloud runner with cloud/chain.testnet.json (32,1,1, max 1), margin 2. */
     {"cloud-t", PV, {32, 1, 1}, 1, 0, 1, 2, 1, 0, CLK_ANCH, 1, 1, 0, 0, 0},
-    /* Cloud runner with -record none (GCP and Azure today): clones are out
+    /* Cloud runner without a clone guard: clones are out
      * of its threat model, rollback is not. */
     {"cloud-norec", PV, {32, 2, 2}, 2, 0, 1, 3, 0, 0, CLK_ANCH, 1, 0, 0, 0, 0},
     /* Persisted per-validator marks only (-persist-watermarks
@@ -281,7 +281,7 @@ typedef struct {
     /* Anchored clock (clock.go) */
     int a_has;
     uint64_t a_reading_ms, a_fetched_ms, a_highest_ms;
-    /* clone guard (record.go) */
+    /* clone guard (the removed tee-signer/record) */
     uint64_t g_owner, g_version, g_epoch, g_prior;
     int g_has_prior, g_lost;
     /* mark log (markstore.MarkLog) */
@@ -703,7 +703,7 @@ static void ta_sync(inst_t *in, uint64_t t)
     }
 }
 
-/* ---- clone guard (record.go) ---------------------------------------------------------- */
+/* ---- clone guard (the removed tee-signer/record) ---------------------------------------- */
 
 static void guard_claim(inst_t *in)
 {
@@ -754,8 +754,8 @@ static int guard_cover(inst_t *in, uint64_t e)
     g.m.record_writes++;
     if (act == ACT_LANDED)
         crash_now(in);
-    /* ACT_LANDED_ERR: the reply was lost; record.go reads the record back,
-     * finds its own write and carries on. */
+    /* ACT_LANDED_ERR: the reply was lost; the guard read the record back,
+     * found its own write and carried on. */
     in->g_version = r->version;
     in->g_epoch = target;
     return 0;

@@ -42,7 +42,6 @@
                 "-listen", "tcp:127.0.0.1:7100",
                 "-state-dir", "/var/lib/signer",
                 "-restart-floor=true", "-persist-watermarks=false",
-                "-record", "none",
                 "-nts-clock",
                 "-nts-coarse-urls", "https://login.microsoftonline.com/,https://management.azure.com/,https://www.cloudflare.com/",
                 "-log-json"

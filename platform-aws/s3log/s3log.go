@@ -6,16 +6,15 @@
 // ListObjectVersions. Nothing else of the S3 API is used.
 //
 // Requests are signed with credentials only the enclave holds
-// (platform.Platform.RecordCredentials, the same path as the clone guard's
-// DynamoDB record). The bucket's default retention is a bucket setting: the
-// account admin can lower or remove it after the start's lock check, and
-// compliance mode only fixes the retention of versions already written. So
-// with RetainDays set (markstore.Env, from slashing_log_min_lock_days) every
-// PUT names its own retention: compliance mode until RetainDays from now, or
-// the default the lock check read if that is longer. Nobody can shorten it
-// afterwards, whatever happens to the default. The writer needs
-// s3:PutObjectRetention for that. S3 requires Content-MD5 on a put to an
-// Object Lock bucket, which the client sends.
+// (platform.Platform.RecordCredentials). The bucket's default retention is a
+// bucket setting: the account admin can lower or remove it after the start's
+// lock check, and compliance mode only fixes the retention of versions
+// already written. So with RetainDays set (markstore.Env, from
+// slashing_log_min_lock_days) every PUT names its own retention: compliance
+// mode until RetainDays from now, or the default the lock check read if that
+// is longer. Nobody can shorten it afterwards, whatever happens to the
+// default. The writer needs s3:PutObjectRetention for that. S3 requires
+// Content-MD5 on a put to an Object Lock bucket, which the client sends.
 // Every header the client sets is signed, as the AWS SDKs do (the S3 SigV4
 // rules require host, x-amz-*, and Content-Type and Content-MD5 when
 // present). A request that fails before an answer (connection reset) is

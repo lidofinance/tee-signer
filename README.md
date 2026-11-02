@@ -35,7 +35,7 @@ every module builds and tests on its own.
 | [signer-core](signer-core) | The C signing core: SSZ, BLS (blst, vendored), EIP-3076 slashing protection, signing policy; its Go binding, fuzz targets and simulator |
 | [signer-protocol](signer-protocol) | The runner's wire protocol: request types, frames, transports, client connection |
 | [governance](governance) | The setup format, approver sets and signed updates, approved orders (handover, import, exit), chain configs |
-| [tee-signer](tee-signer) | The runner that runs in the TEE: server, state, clone guard, attested TLS, handover |
+| [tee-signer](tee-signer) | The runner that runs in the TEE: server, state, mark log, attested TLS, handover |
 | [slashing-log](slashing-log) | The mark log and the encrypted state copy on host storage |
 | [platform](platform) | The platform interface of the runner, setup loading, the dev platform |
 | [platform-aws](platform-aws) | Nitro Enclaves: attestation, KMS key release, S3 mark log, the parent instance tools, deploy files |
