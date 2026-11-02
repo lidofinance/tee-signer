@@ -44,7 +44,7 @@ const lockedPolicy = `{
      "Action": ["kms:DescribeKey", "kms:GetKeyPolicy", "kms:ListGrants"], "Resource": "*"},
     {"Sid": "AdminReads", "Effect": "Allow",
      "Principal": {"AWS": "arn:aws:iam::111122223333:role/admin"},
-     "Action": ["kms:Describe*", "kms:Get*", "kms:List*", "kms:ScheduleKeyDeletion"], "Resource": "*"},
+     "Action": ["kms:Describe*", "kms:Get*", "kms:List*", "kms:CancelKeyDeletion"], "Resource": "*"},
     {"Sid": "NoOneElse", "Effect": "Deny", "Principal": "*", "Action": "kms:*", "Resource": "*"}
   ]
 }`
@@ -77,10 +77,14 @@ func TestPolicyLock(t *testing.T) {
 		{"UpdateAlias", allow(`"kms:UpdateAlias"`), "AWS_KMS", false, backend.KeyLockNotLocked, "allows kms:UpdateAlias"},
 		{"DeleteAlias", allow(`"kms:DeleteAlias"`), "AWS_KMS", false, backend.KeyLockNotLocked, "allows kms:DeleteAlias"},
 		{"alias wildcard", allow(`"kms:*Alias"`), "AWS_KMS", false, backend.KeyLockNotLocked, "allows kms:CreateAlias"},
-		{"admin alias actions next to the locked policy", strings.Replace(lockedPolicy, `"kms:ScheduleKeyDeletion"`,
-			`"kms:ScheduleKeyDeletion", "kms:UpdateAlias", "kms:CreateAlias", "kms:DeleteAlias"`, 1), "AWS_KMS", false, backend.KeyLockNotLocked, "AdminReads allows kms:"},
+		{"ScheduleKeyDeletion", allow(`"kms:ScheduleKeyDeletion"`), "AWS_KMS", false, backend.KeyLockNotLocked, "allows kms:ScheduleKeyDeletion"},
+		{"DisableKey", allow(`"kms:DisableKey"`), "AWS_KMS", false, backend.KeyLockNotLocked, "allows kms:DisableKey"},
+		{"admin deletion next to the locked policy", strings.Replace(lockedPolicy, `"kms:CancelKeyDeletion"`,
+			`"kms:CancelKeyDeletion", "kms:ScheduleKeyDeletion"`, 1), "AWS_KMS", false, backend.KeyLockNotLocked, "AdminReads allows kms:ScheduleKeyDeletion"},
+		{"admin alias actions next to the locked policy", strings.Replace(lockedPolicy, `"kms:CancelKeyDeletion"`,
+			`"kms:CancelKeyDeletion", "kms:UpdateAlias", "kms:CreateAlias", "kms:DeleteAlias"`, 1), "AWS_KMS", false, backend.KeyLockNotLocked, "AdminReads allows kms:"},
 		{"NotAction", `{"Statement":[{"Effect":"Allow","Principal":"*","NotAction":["kms:Decrypt"]}]}`, "AWS_KMS", false, backend.KeyLockNotLocked, "number 1 allows kms:PutKeyPolicy"},
-		{"NotAction covering all lock actions", `{"Statement":[{"Effect":"Allow","Principal":"*","NotAction":["kms:PutKeyPolicy","kms:CreateGrant","kms:ImportKeyMaterial","kms:ReplicateKey","kms:*Alias"]}]}`, "AWS_KMS", false, backend.KeyLockNotLocked, "number 1 allows kms:Decrypt"},
+		{"NotAction covering all lock actions", `{"Statement":[{"Effect":"Allow","Principal":"*","NotAction":["kms:PutKeyPolicy","kms:CreateGrant","kms:ImportKeyMaterial","kms:ReplicateKey","kms:*Alias","kms:ScheduleKeyDeletion","kms:DisableKey"]}]}`, "AWS_KMS", false, backend.KeyLockNotLocked, "number 1 allows kms:Decrypt"},
 		{"Deny only takes away", `{"Statement":[{"Effect":"Deny","Principal":"*","Action":"kms:*"}]}`, "AWS_KMS", false, backend.KeyLockLocked, ""},
 		{"imported key", lockedPolicy, "EXTERNAL", false, backend.KeyLockNotLocked, "origin EXTERNAL"},
 		{"custom key store", lockedPolicy, "AWS_CLOUDHSM", false, backend.KeyLockNotLocked, "origin AWS_CLOUDHSM"},
@@ -119,7 +123,7 @@ func TestKeyRuleLock(t *testing.T) {
 	if err != nil || r.Lock != backend.KeyLockLocked || r.Hash == ([32]byte{}) {
 		t.Fatalf("locked policy: %+v %v", r, err)
 	}
-	f.policy = strings.Replace(lockedPolicy, `"kms:ScheduleKeyDeletion"`, `"kms:ScheduleKeyDeletion", "kms:PutKeyPolicy"`, 1)
+	f.policy = strings.Replace(lockedPolicy, `"kms:CancelKeyDeletion"`, `"kms:CancelKeyDeletion", "kms:PutKeyPolicy"`, 1)
 	if r, _, err = keys.KeyRule(context.Background()); err != nil || r.Lock != backend.KeyLockNotLocked || !strings.Contains(r.Why, "AdminReads allows kms:PutKeyPolicy") {
 		t.Fatalf("policy with PutKeyPolicy: %+v %v", r, err)
 	}
@@ -156,7 +160,7 @@ func TestPolicyLockWhoMayDecrypt(t *testing.T) {
      "Condition": {"StringEquals": {"kms:RecipientAttestation:ImageSha384": ""}}}`), backend.KeyLockNotLocked, "not 96 hex digits"},
 		{"second enclave statement", withStmt(`{"Sid": "A", "Effect": "Allow", ` + admin + `, "Action": "kms:Decrypt",
      "Condition": ` + enclaveCond + `}`), backend.KeyLockLocked, ""},
-		{"NotAction", withStmt(`{"Sid": "A", "Effect": "Allow", ` + admin + `, "NotAction": ["kms:PutKeyPolicy", "kms:CreateGrant", "kms:ImportKeyMaterial", "kms:ReplicateKey", "kms:*Alias"]}`), backend.KeyLockNotLocked, "A allows kms:Decrypt"},
+		{"NotAction", withStmt(`{"Sid": "A", "Effect": "Allow", ` + admin + `, "NotAction": ["kms:PutKeyPolicy", "kms:CreateGrant", "kms:ImportKeyMaterial", "kms:ReplicateKey", "kms:*Alias", "kms:ScheduleKeyDeletion", "kms:DisableKey"]}`), backend.KeyLockNotLocked, "A allows kms:Decrypt"},
 		{"one statement, not a list", `{"Statement":{"Effect":"Allow","Principal":"*","Action":"kms:Decrypt"}}`, backend.KeyLockNotLocked, "number 1 allows kms:Decrypt"},
 	} {
 		got, why := policyLock(c.policy, "AWS_KMS", false)
@@ -352,7 +356,7 @@ func TestKeyRuleGrants(t *testing.T) {
 
 	// A policy that is not locked says why; the grants are not read.
 	f.grantCalls = 0
-	f.policy = strings.Replace(lockedPolicy, `"kms:ScheduleKeyDeletion"`, `"kms:ScheduleKeyDeletion", "kms:PutKeyPolicy"`, 1)
+	f.policy = strings.Replace(lockedPolicy, `"kms:CancelKeyDeletion"`, `"kms:CancelKeyDeletion", "kms:PutKeyPolicy"`, 1)
 	if r, _, err = keys.KeyRule(ctx); err != nil || r.Lock != backend.KeyLockNotLocked || !strings.Contains(r.Why, "PutKeyPolicy") || f.grantCalls != 0 {
 		t.Fatalf("open policy: %+v %v, %d ListGrants calls", r, err, f.grantCalls)
 	}

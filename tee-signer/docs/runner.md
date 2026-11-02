@@ -548,7 +548,10 @@ the key-release policy.
   `SOURCE_DATE_EPOCH=0`, `rewrite-timestamp=true` and no provenance
   attestations in the image build. An arm64 (Graviton) EIF builds on x86_64
   through qemu-user (`ARCH=aarch64`, `platform-aws/deploy/README.md`).
-  `scripts/eif-check.sh` recomputes the PCRs from the EIF.
+  Take PCR0/1/2 for the setup and the KMS policy only from your own
+  rebuild. `scripts/eif-check.sh` recomputes the PCRs from an EIF and
+  checks the files it knows in it, as an extra sanity check, not as a
+  replacement for the rebuild.
   `scripts/kms-policy.sh` renders the KMS policy with PCR0 to PCR3.
 - Azure: `platform-azure/deploy/build-image.sh` builds the image and
   computes its CCE policy hash; the image digest does not depend on the

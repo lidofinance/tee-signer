@@ -155,6 +155,16 @@ type Platform struct {
 	// backend.KeyLockNone. nil: nothing read (the flag path, or a platform
 	// without the read).
 	KeyRule *KeyRule
+	// SealingKeyStored: the Sealer's key came from a blob in the host's
+	// store that the key release opened, and nothing shows who chose the
+	// key. On Nitro a key admin could encrypt a key it knows under the
+	// sealing context before the key policy was locked (AWS-KMS-02). The
+	// runner then uses the key only once every stored share opens under
+	// it, and seals no new share before that (tee-signer
+	// server.ProveSealingKey). false: the key is new at this start, or the
+	// platform does not set it (Azure derives the key inside the TEE; GCP
+	// and dev have no lock to plant before).
+	SealingKeyStored bool
 }
 
 // KeyRule is the rule of the key that releases the sealing key, as the

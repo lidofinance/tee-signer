@@ -18,6 +18,7 @@
 #   signer-core      its own suites (signer-core/scripts/test.sh: unit, SSZ and
 #                    BLS vectors, EIP-3076, symbols, fuzz replay)
 #   PCR3             scripts/kms-policy.sh self-test
+#   EIF check        scripts/eif-check-test.sh
 #   deploy names     scripts/side-by-side-test.sh
 #   fuzz             scripts/fuzz.sh: every Go fuzz target for FUZZ_TIME (3s),
 #                    or those of FUZZ_MODULES; the C fuzz targets of markformat
@@ -29,8 +30,9 @@
 #
 # The variables of scripts/ci-scope.sh narrow the run; unset, everything
 # runs. CI_MODULES picks the modules, CI_E2E=0 skips the runner builds and
-# everything that needs them or checks them (release gate, chains, e2e,
-# PCR3, deploy names, clock check), CI_CORE=0 skips the signer-core suites.
+# everything that needs them or checks them (release gate, EIF check,
+# chains, e2e, PCR3, deploy names, clock check), CI_CORE=0 skips the
+# signer-core suites.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 mkdir -p "$LOGS"
@@ -49,6 +51,9 @@ if [ "$e2e" = 1 ]; then
   log "release gate: self-test, and this tree's history holds no forbidden commit"
   bash "$ROOT/scripts/release-gate-test.sh"
   bash "$ROOT/scripts/release-gate.sh" tree "$ROOT"
+
+  log "eif-check: self-test on made-up EIF files"
+  bash "$ROOT/scripts/eif-check-test.sh"
 
   log "chains: governance/chains/chain.sh and the chain checks of the image builds and deploy steps"
   bash "$ROOT/scripts/chain-test.sh" >"$LOGS/test-chain.log" 2>&1 || { cat "$LOGS/test-chain.log"; exit 1; }

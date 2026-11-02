@@ -21,10 +21,12 @@ import (
 // grant, put in key material they know, or copy the key to another
 // region. The alias actions are here too: a setup may name the key by
 // alias, and a principal that can point that alias at another key moves
-// the runner's next start to a key with another policy. A wildcard that
-// covers one of them (kms:*, *, kms:Put*) counts too.
+// the runner's next start to a key with another policy. So are
+// ScheduleKeyDeletion and DisableKey: once the policy is locked nobody
+// can enable the key again, so either one loses every share sealed under
+// it. A wildcard that covers one of them (kms:*, *, kms:Put*) counts too.
 var lockActions = []string{"kms:PutKeyPolicy", "kms:CreateGrant", "kms:ImportKeyMaterial", "kms:ReplicateKey",
-	"kms:CreateAlias", "kms:UpdateAlias", "kms:DeleteAlias"}
+	"kms:CreateAlias", "kms:UpdateAlias", "kms:DeleteAlias", "kms:ScheduleKeyDeletion", "kms:DisableKey"}
 
 // keyActions are the KMS actions that give out key material or move it
 // under another key (RBRNIT-01). A locked policy allows them only to a
