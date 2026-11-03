@@ -35,7 +35,8 @@ Every commit is signed (GPG or SSH, with a key on your GitHub account).
   On a pull request CI tests and fuzzes only the modules the change
   touches and the modules that depend on them (`scripts/ci-scope.sh`).
   A docs-only change runs only the guards. The e2e tests run when code
-  that goes into a runner changes, or `tests/`; the signer-core suites
+  that goes into a runner changes, or `tests/`; the gateway e2e test
+  when `gateway/` or `web3signer-api/` changes; the signer-core suites
   when `signer-core/` or `markformat/` changes. A change to a shared
   input (`Makefile`, `scripts/`, `.github/`, `devkit/`, C or Rust code)
   tests everything. So do a push to main and a manual run. A nightly run (`fuzz-nightly.yml`) fuzzes every target for 30 s.

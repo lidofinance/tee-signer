@@ -45,7 +45,7 @@ affected() {
 }
 
 # scope <case> <file>...: as affected, but prints the values ci-scope.sh
-# sets: CI_MODULES CI_CORE CI_E2E CI_TESTS, separated by "|".
+# sets: CI_MODULES CI_CORE CI_E2E CI_E2E_GATEWAY CI_TESTS, separated by "|".
 scope() {
   local name="$1" f
   shift
@@ -57,7 +57,7 @@ scope() {
   git -C "$tmp" add -A
   git -C "$tmp" commit -q -m "$name"
   (cd "$tmp" && CI_ALL="${CI_ALL:-0}" GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME:-}" bash scripts/ci-scope.sh main 2>/dev/null) |
-    sed -n 's/^\(CI_MODULES\|CI_CORE\|CI_E2E\|CI_TESTS\)=//p' | paste -sd '|'
+    sed -n 's/^\(CI_MODULES\|CI_CORE\|CI_E2E\|CI_E2E_GATEWAY\|CI_TESTS\)=//p' | paste -sd '|'
   git -C "$tmp" checkout -q main
 }
 
@@ -118,16 +118,19 @@ has slashing-log "$(affected slashing-log slashing-log/record.go)" \
 has governance-transitive "$(affected governance governance/x.go)" \
   "governance signer-protocol markformat tee-signer" "devkit trusted-time web3signer-api"
 
-# ci-scope.sh: CI_MODULES|CI_CORE|CI_E2E|CI_TESTS.
-expect scope-docs-only "none|0|0|0" "$(scope docs-only README.md docs/new.md LICENSE .github/CODEOWNERS)"
-expect scope-leaf "web3signer-api gateway|0|0|1" "$(scope leaf web3signer-api/api.go)"
-expect scope-tests "tests|0|1|1" "$(scope tests tests/e2e/x_test.go)"
-expect scope-signer-core "ALL|1|1|1" "$(scope signer-core signer-core/src/sign.c)"
-expect scope-markformat "ALL|1|1|1" "$(scope markformat markformat/markformat.go)"
-expect scope-makefile "ALL|1|1|1" "$(scope makefile Makefile)"
-expect scope-ci-all "ALL|1|1|1" "$(CI_ALL=1 scope ci-all README.md)"
-expect scope-push "ALL|1|1|1" "$(GITHUB_EVENT_NAME=push scope push README.md)"
-expect scope-pull-request "none|0|0|0" "$(GITHUB_EVENT_NAME=pull_request scope pull-request docs/x.md)"
+# ci-scope.sh: CI_MODULES|CI_CORE|CI_E2E|CI_E2E_GATEWAY|CI_TESTS.
+expect scope-docs-only "none|0|0|0|0" "$(scope docs-only README.md docs/new.md LICENSE .github/CODEOWNERS)"
+# web3signer-api and gateway: no runner holds them, the gateway e2e test runs.
+expect scope-leaf "web3signer-api gateway|0|0|1|1" "$(scope leaf web3signer-api/api.go)"
+expect scope-gateway "gateway|0|0|1|1" "$(scope gateway gateway/cmd/gateway/main.go)"
+expect scope-gateway-docs "none|0|0|0|0" "$(scope gateway-docs gateway/README.md)"
+expect scope-tests "tests|0|1|1|1" "$(scope tests tests/e2e/x_test.go)"
+expect scope-signer-core "ALL|1|1|1|1" "$(scope signer-core signer-core/src/sign.c)"
+expect scope-markformat "ALL|1|1|1|1" "$(scope markformat markformat/markformat.go)"
+expect scope-makefile "ALL|1|1|1|1" "$(scope makefile Makefile)"
+expect scope-ci-all "ALL|1|1|1|1" "$(CI_ALL=1 scope ci-all README.md)"
+expect scope-push "ALL|1|1|1|1" "$(GITHUB_EVENT_NAME=push scope push README.md)"
+expect scope-pull-request "none|0|0|0|0" "$(GITHUB_EVENT_NAME=pull_request scope pull-request docs/x.md)"
 has scope-slashing-log "$(scope slashing-log slashing-log/record.go | tr '|' ' ')" "slashing-log tee-signer tests 0 1" "web3signer-api ALL"
 
 if [ "$fails" -ne 0 ]; then

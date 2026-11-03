@@ -51,7 +51,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      # Sets CI_MODULES, FUZZ_MODULES, CI_CORE, CI_E2E and CI_TESTS.
+      # Sets CI_MODULES, FUZZ_MODULES, CI_CORE, CI_E2E, CI_E2E_GATEWAY and CI_TESTS.
       - name: scope
         # shell: bash runs with pipefail, so a failing ci-scope.sh fails the step.
         shell: bash
@@ -92,7 +92,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      # Sets CI_MODULES, FUZZ_MODULES, CI_CORE, CI_E2E and CI_TESTS.
+      # Sets CI_MODULES, FUZZ_MODULES, CI_CORE, CI_E2E, CI_E2E_GATEWAY and CI_TESTS.
       - name: scope
         # shell: bash runs with pipefail, so a failing ci-scope.sh fails the step.
         shell: bash
@@ -119,7 +119,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      # Sets CI_MODULES, FUZZ_MODULES, CI_CORE, CI_E2E and CI_TESTS.
+      # Sets CI_MODULES, FUZZ_MODULES, CI_CORE, CI_E2E, CI_E2E_GATEWAY and CI_TESTS.
       - name: scope
         # shell: bash runs with pipefail, so a failing ci-scope.sh fails the step.
         shell: bash
@@ -136,7 +136,7 @@ jobs:
         run: bash scripts/deps.sh
       - if: env.CI_TESTS == '1'
         run: bash signer-core/scripts/fetch.sh
-      # Runs the parts CI_MODULES, CI_E2E and CI_CORE call for.
+      # Runs the parts CI_MODULES, CI_E2E, CI_E2E_GATEWAY and CI_CORE call for.
       - if: env.CI_TESTS == '1'
         run: make test
       - if: env.CI_E2E == '1'
