@@ -10,6 +10,10 @@
 #                               files of this repo that go list -deps picks for
 #                               its tags, plus the C core, plus the Rust NTS
 #                               crate for the builds with the tag nts
+#   scripts/loc.sh scope        the rows of SECURITY-SCOPE.md: the files the
+#                               AWS release runner links, per row, and the
+#                               share-import tool with its verifier, then any linked file no
+#                               row covers
 #   scripts/loc.sh files MOD    the counted files of one module
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
@@ -74,5 +78,57 @@ case "${1:-modules}" in
       all="$(cloc --quiet --list-file="$tmp/b.list" --csv 2>/dev/null | awk -F, '$2 == "SUM" { print $5 }')"
       printf '%-34s Go %6s, with the C core%s %6s\n' "$name" "$go" "$(has_nts "$name" && echo ' and NTS' || echo '        ')" "$all"
     done ;;
-  *) echo "usage: loc.sh [modules|builds|files MODULE]" >&2; exit 2 ;;
+  scope)
+    # The rows of SECURITY-SCOPE.md, in its order: a label, then the Go
+    # package directories (dir/... takes the packages under it too). @core is
+    # the C signer core, @rust the Rust NTS core, @shareimport the share-import
+    # tool and the attestation-verify code it checks the runner with (without
+    # the GCP and dev verifiers), which the runner does not link.
+    rows=(
+      "1  signer-core|signer-core/core signer-core/threshold @core"
+      "2  markformat|markformat"
+      "3  tee-signer/attls|tee-signer/attls"
+      "4  slashing-log, tee-signer/state|slashing-log tee-signer/state"
+      "5  slashing-log/statestore, platform-aws/s3log|slashing-log/statestore platform-aws/s3log"
+      "6  platform-aws/nitro|platform-aws/nitro"
+      "7  tee-signer/server|tee-signer/server"
+      "8  trusted-time: clock, nts, Rust NTS core|trusted-time/clock trusted-time/nts @rust"
+      "9  governance/setupwire, importorder|governance/setupwire governance/importorder"
+      "10 tee-signer root package|tee-signer"
+      "11 signer-protocol|signer-protocol/..."
+      "12 platform, platform/setup|platform platform/setup"
+      "13 enclave side of the parent links|platform-aws/hostagent/agentclient platform-aws/hostagent/agentwire platform-aws/udprelay/relayclient"
+      "14 share-import, attestation-verify|@shareimport"
+    )
+    files signer-core | grep -E '\.(c|h)$' >"$tmp/core.list"
+    files trusted-time | grep -E '\.(rs|h)$' >"$tmp/rust.list"
+    tags="netgo,osusergo,$(runner_tags runner-aws)"
+    (cd tee-signer && GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go list -deps -tags "$tags"       -f '{{if .Module}}{{range .GoFiles}}{{println $.Module.Path $.Dir .}}{{end}}{{range .CgoFiles}}{{println $.Module.Path $.Dir .}}{{end}}{{range .CFiles}}{{println $.Module.Path $.Dir .}}{{end}}{{range .HFiles}}{{println $.Module.Path $.Dir .}}{{end}}{{end}}' .) |
+      awk '$1 ~ /^github.com[/]lidofinance[/]tee-signer[/]/ { print $2 "/" $3 }' | sed "s#^$ROOT/##" >"$tmp/go.list"
+    : >"$tmp/seen.list"
+    for row in "${rows[@]}"; do
+      for p in ${row#*|}; do
+        case "$p" in
+          @core) cat "$tmp/core.list" ;;
+          @rust) cat "$tmp/rust.list" ;;
+          @shareimport)
+            for d in signer-admin/cmd/share-import attestation-verify attestation-verify/azureid attestation-verify/runnerclient \
+              attestation-verify/runnerclient/verify attestation-verify/runnerclient/internal/optset; do
+              find "$d" -maxdepth 1 -name '*.go' -not -name '*_test.go'
+            done | grep -vxE 'attestation-verify/gcp\.go|attestation-verify/runnerclient/verify/(gcp_cs|dev)\.go' ;;
+          */...) awk -v b="${p%/...}" '{ d = $0; sub(/[/][^/]*$/, "", d) } d == b || index(d, b "/") == 1' "$tmp/go.list" ;;
+          *) awk -v b="$p" '{ d = $0; sub(/[/][^/]*$/, "", d) } d == b' "$tmp/go.list" ;;
+        esac
+      done >"$tmp/row.list"
+      cat "$tmp/row.list" >>"$tmp/seen.list"
+      n=0
+      [ ! -s "$tmp/row.list" ] || n="$(cloc --quiet --list-file="$tmp/row.list" --csv 2>/dev/null | awk -F, '$2 == "SUM" { print $5 }')"
+      printf '%-48s %7s
+' "${row%%|*}" "${n:-0}"
+    done
+    echo "in scope, by language:"
+    count "$tmp/seen.list"
+    left="$(grep -vxF -f "$tmp/seen.list" "$tmp/go.list" || true)"
+    [ -z "$left" ] || { echo "linked, but in no row of SECURITY-SCOPE.md:"; echo "$left" | sed 's/^/  /'; } ;;
+  *) echo "usage: loc.sh [modules|builds|scope|files MODULE]" >&2; exit 2 ;;
 esac
