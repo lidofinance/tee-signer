@@ -17,9 +17,7 @@
 //	    (setupwire.CheckSingleKeyProd), as signer-admin setup does.
 //	setup-tool check [-platform P] [-chain CHAIN_JSON] FILE
 //	    Decode FILE strictly and print setup_sha256, platform, signer,
-//	    signing_mode, policy_root and platform_commitment, and one
-//	    peer_attestation_hosts line per host (on nitro
-//	    "peer_attestation_hosts none" without any). With
+//	    signing_mode, policy_root and platform_commitment. With
 //	    -platform, refuse a setup for another platform. With -chain, refuse
 //	    a setup whose chain or first fork schedule differs from the runner
 //	    chain.json (cloud/chains/chain.sh picks that file by chain name).
@@ -211,12 +209,6 @@ func check(args []string) error {
 	pr, _ := s.PolicyRoot()
 	pc, _ := s.PlatformCommitment()
 	fmt.Printf("setup_sha256 %x\nplatform %s\nsigner %s\nsigning_mode %s\npolicy_root %x\nplatform_commitment %x\n", h, s.Platform.Platform, s.SignerName, s.SigningMode, pr, pc)
-	for _, e := range s.Platform.PeerAttestationHosts {
-		fmt.Printf("peer_attestation_hosts %s\n", e)
-	}
-	if len(s.Platform.PeerAttestationHosts) == 0 && s.Platform.Platform == setupwire.PlatformNitro {
-		fmt.Println("peer_attestation_hosts none")
-	}
 	warnSingleKey(s)
 	return nil
 }

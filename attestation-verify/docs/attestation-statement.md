@@ -1,4 +1,4 @@
-# Attestation statement: setup format 3
+# Attestation statement: setup format 4
 
 This file gives the exact bytes. The golden vectors are in `attestation-verify/docs/attestation-statement-vectors.json`; `governance/setupwire` makes them (`go test -run TestStatementVectors -update`), except the human forms, which `governance/setuptext` makes (`go test -run TestStatementHuman -update`), and `TestStatementVectors` recomputes every value in the file from the formulas below without the package's helpers.
 
@@ -49,7 +49,7 @@ Each leaf has its own 32-byte salt. A salt of 32 zero bytes is refused everywher
 
 | # | Name | Value |
 | --- | --- | --- |
-| 0 | `setup_format_version` | u8, 3 |
+| 0 | `setup_format_version` | u8, 4 |
 | 1 | `cluster_id` | 32 bytes, not zero |
 | 2 | `handover_generation` | u64, 1 or more |
 | 3 | `genesis_validators_root` | 32 bytes |
@@ -122,7 +122,6 @@ The private part is the rest of the platform part, in this order:
 ```
 private  = signer_name:str platform:u8 ca_count:u8 {der_len:u16 der}
            slashing_log_store has:u8 [encrypted_state_store] sealing_key_release
-           host_count:u8 {host_port:str}
 store    = nitro: bucket:str region:str
          | azure: account:str container:str subscription:str resource_group:str
          | gcp:   bucket:str
@@ -134,7 +133,7 @@ sealing_key_release = nitro: region:str kms_key_id:str
          | dev:   (nothing)
 ```
 
-`platform` is 1 nitro, 2 azure, 3 gcp, 4 dev. `ca_count` is 1 to 4 DER CA certificates (`allowed_client_ca`), sorted by their bytes. `host_count` is 0 to 16 (`peer_attestation_hosts`, Nitro and dev only), sorted. `no_lock_accepted` (`sealing_key_release.no_lock_accepted`) and `unsafe_single_key_accepted` (`sealing_key_release.unsafe_single_key_accepted`, the setup accepts that the signer holds keys alone, 1 of 1) are GCP only, 0 or 1.
+`platform` is 1 nitro, 2 azure, 3 gcp, 4 dev. `ca_count` is 1 to 4 DER CA certificates (`allowed_client_ca`), sorted by their bytes. `no_lock_accepted` (`sealing_key_release.no_lock_accepted`) and `unsafe_single_key_accepted` (`sealing_key_release.unsafe_single_key_accepted`, the setup accepts that the signer holds keys alone, 1 of 1) are GCP only, 0 or 1.
 
 The private part is at most 2560 bytes (`MaxPlatformPrivate`). The attestation circuits hash it with that fixed bound (`MAX_PRIVATE` in `circuits/lib/src/platform.nr`), so a longer one could never be proven, and `signer-config setup` and the decoder refuse it. Four P-256 CA certificates take about 2.07 KB of it.
 
@@ -159,7 +158,7 @@ setup = 'S' public_values public_salts locked_values locked_salts open_values op
         platform_salt[32] private
 ```
 
-`X_values` is the concatenation of the leaf values of group X in leaf order (section 1), and `X_salts` the concatenation of its salts in the same order (17, 19 and 2 salts). `public_values` is 147 bytes and starts with the format byte 2, so the setup's first two bytes are `0x53 0x02`. The decoder refuses trailing bytes, counts above a cap, presence bytes other than 0 or 1, unknown enum values, unsorted lists, any value the rules refuse, a zero salt, and any input that does not encode back to the same bytes. A setup larger than 64 KiB is refused, and so is one whose private part is above 2560 bytes (section 2).
+`X_values` is the concatenation of the leaf values of group X in leaf order (section 1), and `X_salts` the concatenation of its salts in the same order (17, 19 and 2 salts). `public_values` is 147 bytes and starts with the format byte 4, so the setup's first two bytes are `0x53 0x04`. The decoder refuses trailing bytes, counts above a cap, presence bytes other than 0 or 1, unknown enum values, unsorted lists, any value the rules refuse, a zero salt, and any input that does not encode back to the same bytes. A setup larger than 64 KiB is refused, and so is one whose private part is above 2560 bytes (section 2).
 
 
 ## 4. Config updates
@@ -315,7 +314,7 @@ For GCP the audience is a private value (it is in the private part), and the tok
 - `attest`: the nonce (a sample beacon block root), two loaded keys, keys_hash, the exact input of attest_user_data, attest_user_data, the GCP `eat_nonce` string, the Azure runtime data and report data, and the Nitro nonce and user data.
 - `public_outputs`: challenge_root, policy_root, platform_commitment, config_state and key_origin as section 5 cuts them from the setup state; `private_inputs`: keys_hash.
 - `azure_setup`, `azure_attest`, `azure_public_outputs`: a second sample signer, on Azure, in the same cluster. Its public values and salts are the GCP sample's, so it has the same policy_root; its private part (MAA host `sharedneu.neu.attest.azure.net`), platform salt, platform_commitment and setup_hash are its own. `azure_attest` is its ATTEST user data for the same nonce, setup state (bytes 32 to 352 as above, its own setup_hash) and keys, with the runtime data and report data of section 6. The Azure circuit's vectors use this signer. The sample lists only a GCP image in `allowed_image_measurements`, which the circuits do not check.
-- `nitro_setup`, `nitro_attest`, `nitro_public_outputs`: a third sample signer, on AWS Nitro, in the same cluster: the same public values and salts, its own private part (bucket and KMS key in eu-central-1, one peer attestation host), platform salt, platform_commitment and setup_hash. `nitro_attest` is its ATTEST user data for the same nonce, setup state and keys: the NSM document's `user_data`, with `nonce` the challenge root. The Nitro circuit's vectors use this signer.
+- `nitro_setup`, `nitro_attest`, `nitro_public_outputs`: a third sample signer, on AWS Nitro, in the same cluster: the same public values and salts, its own private part (bucket and KMS key in eu-central-1), platform salt, platform_commitment and setup_hash. `nitro_attest` is its ATTEST user data for the same nonce, setup state and keys: the NSM document's `user_data`, with `nonce` the challenge root. The Nitro circuit's vectors use this signer.
 - `measurement`: the measurement output for the sample's allowed GCP image, a sample CCE policy hash and three sample PCRs: platform, value, input and hash.
 
 The approver keys are the Ed25519 keys from the seeds 0x01..01, 0x02..02 and 0x03..03 (32 bytes each), as in `governance/setupwire/helpers_test.go`. The client CA is `governance/setupwire/testdata/client-ca.der`.
@@ -332,4 +331,4 @@ The design fixes the split and the field names. This file adds these points, and
 6. Key origin counts are u32 and are part of the setup state, so they are in IDENTITY and ATTEST alike. Every byte of the setup state is a public output; keys_hash is the one private input from the signer.
 7. The slot time rule compares the new changes with the ones in force and is checked at arrival with T the effective activation time; the core takes the new slot times at T. The fork rule counts epochs under the slot times in force and those pending, in both orders of arrival (section 4).
 8. The ranges: `max_sign_epochs_ahead_of_clock` 1 to 16, `slashing_mark_prewrite.block_slots` 0 to 64, `source_epochs` and `target_epochs` 0 to 8 (the design's proposed numbers, lower bounds this file's).
-9. `signing_mode` is a public leaf (format 2), the last of `public`, so the leaf numbers of format 1 stay. Format 3 dropped the exit approval leaves of `locked` (`exit_allowed_validators`, `exit_stake_cap_per_day`, `exit_approvals_needed`); the later `locked` leaves moved up by three. A verifier who gets the published leaves reads whether the signer holds shares or whole keys, checked against the attested policy_root, and the mode cannot change without a new setup.
+9. `signing_mode` is a public leaf (format 2), the last of `public`, so the leaf numbers of format 1 stay. Format 3 dropped the exit approval leaves of `locked` (`exit_allowed_validators`, `exit_stake_cap_per_day`, `exit_approvals_needed`); the later `locked` leaves moved up by three. Format 4 dropped `peer_attestation_hosts`, the last field of the private part; the leaves did not change. A verifier who gets the published leaves reads whether the signer holds shares or whole keys, checked against the attested policy_root, and the mode cannot change without a new setup.

@@ -68,8 +68,7 @@ func goldens[T any](t testing.TB, kind string, decode func([]byte) (T, error)) m
 }
 
 // setups are setupwire's sample setups: setup-nitro, setup-azure,
-// setup-gcp, setup-gcp-single, setup-dev-single, setup-dev-threshold and
-// setup-nitro-peers.
+// setup-gcp, setup-gcp-single, setup-dev-single and setup-dev-threshold.
 func setups(t testing.TB) map[string]*setupwire.Setup {
 	return goldens(t, "setup", setupwire.DecodeSetup)
 }

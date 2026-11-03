@@ -18,7 +18,7 @@
 // count and a cap. An optional field has a presence byte, 0 or 1. Lists
 // without an order of their own (CA certificates, tags, images, fee
 // recipients, deposit amounts, BuilderRequestAuth data
-// roots, peer attestation hosts) are
+// roots) are
 // sorted and hold no duplicates, forks and slot time changes are in
 // ascending epoch order, and the approver list keeps its order, because
 // signatures name positions in it. Enum values start at 1, so a zero byte
@@ -26,7 +26,7 @@
 //
 //	setup    = 'S' public public_salts locked locked_salts open open_salts
 //	           platform_salt[32] private
-//	public   = setup_format_version:u8(3) cluster_id[32] handover_generation:u64
+//	public   = setup_format_version:u8(4) cluster_id[32] handover_generation:u64
 //	           chain safety max_keys:u32 slashing_log_min_lock_days:u32
 //	           signing_mode:u8
 //	chain    = genesis_validators_root[32] genesis_fork_version[4] genesis_time:u64
@@ -46,7 +46,6 @@
 //	X_salts  = salt[32] for each leaf of group X, in leaf order (policy.go)
 //	private  = signer_name:str platform:u8 ca_count:u8 {der_len:u16 der}
 //	           slashing_log_store has:u8 [encrypted_state_store] sealing_key_release
-//	           host_count:u8 {host_port:str}
 //	store    = nitro: bucket:str region:str
 //	           | azure: account:str container:str subscription:str resource_group:str
 //	           | gcp: bucket:str | dev: dir:str
@@ -62,11 +61,11 @@
 // the CONFIG_UPDATE layout.
 //
 // The dev platform is for local runners and tests (the runner's -platform
-// dev). It protects nothing. A dev setup differs from a cloud one in three
+// dev). It protects nothing. A dev setup differs from a cloud one in two
 // places: its stores are local directories (dir, an absolute path that the
-// runner opens as a file: store), it has no key release fields (the dev
-// platform's key is fixed in the binary), and it may list peer attestation
-// hosts for a local test. A cloud image refuses it (CheckPlatform).
+// runner opens as a file: store), and it has no key release fields (the dev
+// platform's key is fixed in the binary). A cloud image refuses it
+// (CheckPlatform).
 package setupwire
 
 import (
@@ -92,7 +91,9 @@ const (
 	// Format 3 dropped the exit approval fields of the locked group
 	// (exit_allowed_validators, exit_stake_cap_per_day,
 	// exit_approvals_needed).
-	FormatVersion = 3
+	// Format 4 dropped peer_attestation_hosts, the last field of the
+	// private part.
+	FormatVersion = 4
 
 	kindSetup  = 'S'
 	kindBody   = 'B'
@@ -117,7 +118,6 @@ const (
 	MaxForks           = 16 // SC_MAX_FORKS
 	MaxFeeRecipients   = 64 // SC_MAX_FEE_RECIPIENTS
 	MaxDepositAmounts  = 8
-	MaxPeerHosts       = 16  // the Nitro port map's block for them (runner/setup)
 	MaxSignerName      = 128 // markstore.CheckSigner
 	MaxSlotTimeChanges = 16  // SC_MAX_SLOT_TIME_CHANGES
 	// MaxBuilderRequestAuthDataRoots caps allowed_builder_request_auth_data_roots.
@@ -327,12 +327,6 @@ type PlatformConfig struct {
 	SlashingLogStore    Store
 	EncryptedStateStore *Store // Azure, GCP and dev only; nil: none
 	SealingKeyRelease   KeyRelease
-	// PeerAttestationHosts are host:port names the runner's HTTP client
-	// may reach over HTTPS besides its fixed routes.
-	// Nitro and dev only: a Nitro enclave reaches no host but the routes of
-	// its setup, and on dev the list limits the runner the same way, for
-	// tests. Sorted, without repeats.
-	PeerAttestationHosts []string
 }
 
 // Store names a bucket. The platform decides the fields: Nitro (S3) Bucket
@@ -795,10 +789,6 @@ func writePlatform(w *writer, p *PlatformConfig) {
 		writeStore(w, p.Platform, p.EncryptedStateStore)
 	}
 	writeKeyRelease(w, p.Platform, &p.SealingKeyRelease)
-	w.u8(uint8(len(p.PeerAttestationHosts)))
-	for _, h := range p.PeerAttestationHosts {
-		w.str(h)
-	}
 }
 
 func readPlatform(r *reader, p *PlatformConfig) {
@@ -816,9 +806,6 @@ func readPlatform(r *reader, p *PlatformConfig) {
 		readStore(r, p.Platform, p.EncryptedStateStore, "encrypted_state_store")
 	}
 	readKeyRelease(r, p.Platform, &p.SealingKeyRelease)
-	for range r.count("peer_attestation_hosts", MaxPeerHosts, false) {
-		p.PeerAttestationHosts = append(p.PeerAttestationHosts, r.str("peer_attestation_hosts"))
-	}
 }
 
 func writeStore(w *writer, p Platform, s *Store) {
@@ -1049,24 +1036,7 @@ var (
 	// resolves in the account of the parent's credentials. As
 	// platform-aws/nitro checkKeyID.
 	kmsKeyARNRE = regexp.MustCompile(`^arn:(aws|aws-cn|aws-us-gov):kms:([a-z0-9-]+):[0-9]{12}:(key|alias)/[A-Za-z0-9/_-]+$`)
-	// A peer attestation host: a lower-case host name and a port, the form
-	// the runner's HTTP client dials (host:port of the URL, port 443 for
-	// https).
-	endpointRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]*[a-z0-9])?:[1-9][0-9]{0,4}$`)
 )
-
-// CheckEndpoint is the rule for one peer attestation host:
-// host:port with a lower-case host name and a port from 1 to 65535 without
-// leading zeros.
-func CheckEndpoint(e string) error {
-	if err := checkRE("peer_attestation_hosts", e, endpointRE); err != nil {
-		return fmt.Errorf("%w (want host:port, for example sharedneu.neu.attest.azure.net:443)", err)
-	}
-	if _, port, _ := strings.Cut(e, ":"); len(port) == 5 && port > "65535" {
-		return fmt.Errorf("peer_attestation_hosts: %q: port above 65535", e)
-	}
-	return nil
-}
 
 // checkText is the rule for strings without a pattern of their own: 1 to
 // 255 bytes of printable ASCII without space and '#', so every value can be
@@ -1261,26 +1231,7 @@ func (p *PlatformConfig) Check() error {
 			return err
 		}
 	}
-	if err := p.SealingKeyRelease.check(p.Platform); err != nil {
-		return err
-	}
-	if n := len(p.PeerAttestationHosts); n > 0 {
-		if p.Platform != PlatformNitro && p.Platform != PlatformDev {
-			return fmt.Errorf("platform: peer_attestation_hosts is for nitro and dev; a %s runner reaches its peers' key sets without routes", p.Platform)
-		}
-		if n > MaxPeerHosts {
-			return fmt.Errorf("platform: %d peer_attestation_hosts, at most %d", n, MaxPeerHosts)
-		}
-		for i, e := range p.PeerAttestationHosts {
-			if err := CheckEndpoint(e); err != nil {
-				return fmt.Errorf("platform: %w", err)
-			}
-			if i > 0 && p.PeerAttestationHosts[i-1] >= e {
-				return errors.New("platform: peer_attestation_hosts must be sorted, without repeats")
-			}
-		}
-	}
-	return nil
+	return p.SealingKeyRelease.check(p.Platform)
 }
 
 func (s *Store) check(p Platform, what string) error {

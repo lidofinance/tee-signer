@@ -41,8 +41,6 @@
 #   8002  www.cloudflare.com:443 (the third coarse-time host)
 #   8004  BUCKET.s3.REGION.amazonaws.com:443 (the mark bucket)
 #   8005 to 8008  NTS-KE, TCP 4460, of the four operators of runner/nts.PublicServers
-#   8010 to 8025  the setup's peer_attestation_hosts in their order, at most
-#                 16
 #
 # The three HTTPS-date URLs are the NTS clock's coarse check; {region} is
 # the one value the runner fills in, with the setup's key release region.

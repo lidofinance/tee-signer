@@ -69,11 +69,6 @@ func Load(raw []byte, image string) (*Setup, error) {
 	if err := s.CheckPlatform(want); err != nil {
 		return nil, fmt.Errorf("setup refused: %w", err)
 	}
-	if want == setupwire.PlatformNitro {
-		if _, err := NitroRoutes(&s.Platform); err != nil {
-			return nil, fmt.Errorf("setup refused: %w", err)
-		}
-	}
 	h, err := s.Hash()
 	if err != nil {
 		return nil, fmt.Errorf("setup refused: %w", err)
@@ -137,26 +132,18 @@ func (s *Setup) ClientCAPEM() []byte {
 // Options are the platform options (the -platform-opt values of the flag
 // path) that follow from the setup. On Nitro they add the values fixed in
 // the image: the host agent's address, the UDP relay, the store key of the
-// record credentials and the proxy routes over the fixed port map, the
-// setup's peer endpoints included. On dev a setup with peer_attestation_hosts
-// limits the runner's HTTP client to them (option egress).
+// record credentials and the proxy routes over the fixed port map.
 func (s *Setup) Options() map[string]string {
 	k := &s.Wire.Platform.SealingKeyRelease
 	switch s.Wire.Platform.Platform {
 	case setupwire.PlatformNitro:
-		// Load refused a setup whose routes fail.
-		routes, _ := NitroRoutes(&s.Wire.Platform)
 		return map[string]string{
 			"agent":        NitroAgent,
 			"region":       k.Region,
 			"kms_key_id":   k.KMSKeyID,
-			"proxy":        RouteOption(routes),
+			"proxy":        RouteOption(NitroRoutes(&s.Wire.Platform)),
 			"ntp_relay":    NitroNTPRelay,
 			"record_creds": NitroRecordCreds,
-		}
-	case setupwire.PlatformDev:
-		if e := s.Wire.Platform.PeerAttestationHosts; len(e) > 0 {
-			return map[string]string{"egress": strings.Join(e, ",")}
 		}
 	case setupwire.PlatformAzure:
 		return map[string]string{"maa_endpoint": k.MAAEndpoint, "akv_endpoint": k.AKVEndpoint, "kid": k.KID}

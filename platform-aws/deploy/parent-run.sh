@@ -18,7 +18,7 @@
 # The EIF is the same for every signer (scripts/nitro-eif.sh). What makes it
 # this signer is its setup: the binary file signer-config setup (or signer-admin/cmd/setup-tool)
 # makes, with the chain, the client CA, the KMS key and region, the mark
-# bucket, the signer name and the peer_attestation_hosts.
+# bucket and the signer name.
 # The host agent checks it with the runner's decoder and hands it to the
 # enclave at every start, before any KMS call. The vsock proxies follow
 # from the same file over the fixed port map of platform-aws/deploy/enclave/Dockerfile
@@ -61,13 +61,10 @@ sed -e "s/^cpu_count:.*/cpu_count: $CPU_COUNT/" -e "s/^memory_mib:.*/memory_mib:
 sudo systemctl enable --now nitro-enclaves-allocator.service
 
 # 2. vsock-proxy, one per route of the setup: KMS and STS of its region
-#    (8000, 8001), the third coarse-time host (8002), the mark bucket (8004),
-#    the NTS-KE servers of the NTS clock (8005 to 8008) and the setup's
-#    peer_attestation_hosts, the hosts the attestation verifier fetches key sets from
-#    (8010 up to 8025, in the setup's order). TLS ends in the enclave. The
-#    allowlist holds these destinations only (platform-aws/deploy/vsock-proxy.yaml is
-#    an example of what it gets). A peer endpoint on another port than 443
-#    also needs an egress rule in the security group (main.tf allows TCP 443).
+#    (8000, 8001), the third coarse-time host (8002), the mark bucket (8004)
+#    and the NTS-KE servers of the NTS clock (8005 to 8008). TLS ends in the
+#    enclave. The allowlist holds these destinations only
+#    (platform-aws/deploy/vsock-proxy.yaml is an example of what it gets).
 {
   echo "# Written by parent-run.sh from the setup's routes (hostagent -proxy-routes)."
   echo "allowlist:"

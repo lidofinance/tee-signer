@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/lidofinance/tee-signer/platform"
@@ -90,9 +89,7 @@ func (a Attester) Attest(_ context.Context, nonce, userData []byte) (*backend.At
 
 // New builds the dev platform. Params: clock_offset (Go duration, e.g.
 // "-30m"; simulates a host that moves the system clock), measurement (a
-// stand-in for the image measurement in the key release, see NewDevKeys),
-// egress (host:port list, from a setup's peer_attestation_hosts: the HTTP client
-// reaches only these, see EgressClient).
+// stand-in for the image measurement in the key release, see NewDevKeys).
 // The sealer and the key release take o.SetupHash (NewSetupSealer,
 // NewSetupKeys).
 func New(o platform.Options) (*platform.Platform, error) {
@@ -112,9 +109,6 @@ func New(o platform.Options) (*platform.Platform, error) {
 		Clock:    clock.System{Offset: off},
 		Attester: Attester{Measurement: o.Param("measurement", "")},
 		Keys:     NewSetupKeys(o.Param("measurement", ""), o.SetupHash),
-	}
-	if s := o.Param("egress", ""); s != "" {
-		p.HTTPClient = EgressClient(strings.Split(s, ","))
 	}
 	// No key release service, so no rule to lock.
 	if p.KeyRule, err = o.ReadKeyRule(context.Background(), platform.NoKeyRelease("the dev platform has no key release service and no real attestation; refused on a prod chain")); err != nil {

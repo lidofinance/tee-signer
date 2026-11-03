@@ -675,11 +675,7 @@ func (p *parser) platform(c *setupwire.PlatformConfig) {
 	if a := optional(p, "sealing_key_release.unsafe_single_key_accepted", parseBool); a != nil {
 		c.SealingKeyRelease.UnsafeSingleKeyAccepted = *a
 	}
-	c.PeerAttestationHosts = sortedSet(p, "peer_attestation_hosts",
-		listOf(p, "peer_attestation_hosts", parseEndpoint), strings.Compare)
 }
-
-func parseEndpoint(s string) (string, error) { return s, setupwire.CheckEndpoint(s) }
 
 func (p *parser) locked(l *setupwire.Locked) {
 	l.Approvers.Keys = values(listOf(p, "approvers", parse32))
@@ -847,12 +843,6 @@ func formatPlatform(w *printer, p *setupwire.PlatformConfig) {
 	if k.UnsafeSingleKeyAccepted {
 		w.note("UNSAFE: %s", setupwire.UnsafeSingleKeyWarning)
 		w.kv("sealing_key_release.unsafe_single_key_accepted", true)
-	}
-	if len(p.PeerAttestationHosts) > 0 {
-		w.note("hosts the handover verifier fetches key sets from; a nitro enclave reaches no other host besides its fixed routes")
-	}
-	for _, e := range p.PeerAttestationHosts {
-		w.kv("peer_attestation_hosts", e)
 	}
 }
 

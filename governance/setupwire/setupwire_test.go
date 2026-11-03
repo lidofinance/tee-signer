@@ -73,7 +73,7 @@ const (
 // are a wrong kind, format or size.
 func TestDecodeSetupBytes(t *testing.T) {
 	ss := samples(t)
-	for _, name := range []string{"setup-nitro", "setup-azure", "setup-gcp", "setup-gcp-single", "setup-dev-single", "setup-dev-threshold", "setup-nitro-peers"} {
+	for _, name := range []string{"setup-nitro", "setup-azure", "setup-gcp", "setup-gcp-single", "setup-dev-single", "setup-dev-threshold"} {
 		b, err := ss[name].Encode()
 		if err != nil {
 			t.Fatal(err)
@@ -110,10 +110,11 @@ func TestDecodeSetupBytes(t *testing.T) {
 		want string
 	}{
 		{"kind", set(0, 'X'), "not a setup"},
-		{"format 0", set(1, 0), "setup format 0, want 3"},
-		{"format 1 (before signing_mode)", set(1, 1), "setup format 1, want 3"},
-		{"format 2 (with the exit approval fields)", set(1, 2), "setup format 2, want 3"},
-		{"format 4", set(1, 4), "setup format 4, want 3"},
+		{"format 0", set(1, 0), "setup format 0, want 4"},
+		{"format 1 (before signing_mode)", set(1, 1), "setup format 1, want 4"},
+		{"format 2 (with the exit approval fields)", set(1, 2), "setup format 2, want 4"},
+		{"format 3 (with peer_attestation_hosts)", set(1, 3), "setup format 3, want 4"},
+		{"format 5", set(1, 5), "setup format 5, want 4"},
 		{"empty signer name", set(o.private, 0), "signer_name is empty"},
 		{"oversize", append(slices.Clone(b), make([]byte, MaxSetup)...), "at most 65536"},
 		{"empty", nil, "short"},
@@ -136,8 +137,6 @@ func TestDecodeSetupBytes(t *testing.T) {
 		{"approver count 9", set(o.locked, 9), "9 approvers, at most 8"},
 		{"change delay presence 2", set(o.locked+1+32*3+1, 2), "change_delay_seconds presence byte is 2"},
 		{"platform 9", set(o.private+1+len(s.SignerName), 9), "unknown platform 9"},
-		{"peer host count 17", set(len(b)-1, 17), "17 peer_attestation_hosts, at most 16"},
-		{"peer host empty", append(set(len(b)-1, 1), 0), "peer_attestation_hosts is empty"},
 	}
 	for _, c := range cases {
 		if _, err := DecodeSetup(c.b); err == nil || !strings.Contains(err.Error(), c.want) {
@@ -289,26 +288,7 @@ func setupRefusals(t testing.TB) []setupRefusal {
 		{"dev dir with space", "setup-dev-single", func(s *Setup) { s.Platform.SlashingLogStore.Dir = "/var/lib/my marks" }, "slashing_log_store.dir", ""},
 		{"bucket on dev", "setup-dev-single", func(s *Setup) { s.Platform.SlashingLogStore.Bucket = "b" }, "slashing_log_store.bucket does not apply to dev", "skip"},
 		{"key release on dev", "setup-dev-single", func(s *Setup) { s.Platform.SealingKeyRelease.Region = "eu-west-1" }, "sealing_key_release.region does not apply to dev", "skip"},
-		{"peer hosts on azure", "setup-azure", func(s *Setup) { s.Platform.PeerAttestationHosts = []string{"a.example:443"} }, "peer_attestation_hosts is for nitro and dev", ""},
-		{"peer hosts on gcp", "setup-gcp", func(s *Setup) { s.Platform.PeerAttestationHosts = []string{"a.example:443"} }, "peer_attestation_hosts is for nitro and dev", ""},
 		{"single key accepted on azure", "setup-azure", func(s *Setup) { s.Platform.SealingKeyRelease.UnsafeSingleKeyAccepted = true }, "unsafe_single_key_accepted does not apply to azure", "skip"},
-		{"17 peer hosts", "setup-nitro-peers", func(s *Setup) {
-			s.Platform.PeerAttestationHosts = nil
-			for i := range 17 {
-				s.Platform.PeerAttestationHosts = append(s.Platform.PeerAttestationHosts, fmt.Sprintf("h%02d.example:443", i))
-			}
-		}, "17 peer_attestation_hosts", "17 peer_attestation_hosts, at most 16"},
-		{"peer host without port", "setup-nitro-peers", func(s *Setup) { s.Platform.PeerAttestationHosts[0] = "a.example" }, "want host:port", ""},
-		{"peer host upper case", "setup-nitro-peers", func(s *Setup) { s.Platform.PeerAttestationHosts[0] = "A.example:443" }, "want host:port", ""},
-		{"peer host with scheme", "setup-nitro-peers", func(s *Setup) { s.Platform.PeerAttestationHosts[0] = "https://a.example:443" }, "want host:port", ""},
-		{"peer host with path", "setup-nitro-peers", func(s *Setup) { s.Platform.PeerAttestationHosts[0] = "a.example:443/certs" }, "want host:port", ""},
-		{"peer host port 0", "setup-nitro-peers", func(s *Setup) { s.Platform.PeerAttestationHosts[0] = "a.example:0" }, "want host:port", ""},
-		{"peer host port 0443", "setup-nitro-peers", func(s *Setup) { s.Platform.PeerAttestationHosts[0] = "a.example:0443" }, "want host:port", ""},
-		{"peer host port 65536", "setup-nitro-peers", func(s *Setup) { s.Platform.PeerAttestationHosts[0] = "a.example:65536" }, "above 65535", ""},
-		{"peer hosts unsorted", "setup-nitro-peers", func(s *Setup) { slices.Reverse(s.Platform.PeerAttestationHosts) }, "peer_attestation_hosts must be sorted", ""},
-		{"peer host repeated", "setup-nitro-peers", func(s *Setup) {
-			s.Platform.PeerAttestationHosts[1] = s.Platform.PeerAttestationHosts[0]
-		}, "peer_attestation_hosts must be sorted", ""},
 
 		{"1 approver", "", func(s *Setup) { s.Locked.Approvers = ApproverSet{Keys: keys(1), ApprovalsNeeded: 2} }, "1 keys, want 2 to 8", ""},
 		{"9 approvers", "", func(s *Setup) { s.Locked.Approvers = ApproverSet{Keys: keys(9), ApprovalsNeeded: 5} }, "9 keys", "9 approvers, at most 8"},
@@ -420,46 +400,6 @@ func TestGroupHashes(t *testing.T) {
 	s.Locked.ChangeDelaySeconds = u64p(0)
 	if s.Locked.ChangeDelay() != 0 {
 		t.Fatal("change delay 0")
-	}
-}
-
-// peer_attestation_hosts: setup_hash covers every host, through
-// platform_commitment only; the cap decodes back.
-func TestPeerAttestationHosts(t *testing.T) {
-	ss := samples(t)
-	plain := ss["setup-nitro"]
-	s := ss["setup-nitro-peers"]
-	pr0, _ := plain.PolicyRoot()
-	h0, _ := plain.Hash()
-	seen := map[[32]byte]string{h0: "none"}
-	for i := range s.Platform.PeerAttestationHosts {
-		c := *s
-		c.Platform.PeerAttestationHosts = slices.Delete(slices.Clone(s.Platform.PeerAttestationHosts), i, i+1)
-		h, err := c.Hash()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if prev, dup := seen[h]; dup {
-			t.Fatalf("without host %d: setup_hash of %s", i, prev)
-		}
-		seen[h] = fmt.Sprint("without ", i)
-		if pr, _ := c.PolicyRoot(); pr != pr0 {
-			t.Fatal("a host changes policy_root; hosts are private")
-		}
-	}
-	c := *s
-	c.Platform.PeerAttestationHosts = nil
-	for i := range MaxPeerHosts {
-		c.Platform.PeerAttestationHosts = append(c.Platform.PeerAttestationHosts, fmt.Sprintf("h%02d.example:443", i))
-	}
-	got, err := DecodeSetup(must(c.Encode()))
-	if err != nil || !reflect.DeepEqual(got.Platform.PeerAttestationHosts, c.Platform.PeerAttestationHosts) {
-		t.Fatalf("16 peer_attestation_hosts: %v", err)
-	}
-	d := ss["setup-dev-threshold"]
-	d.Platform.PeerAttestationHosts = []string{"127.0.0.1:8443"}
-	if _, err := DecodeSetup(must(d.Encode())); err != nil {
-		t.Fatalf("dev with peer_attestation_hosts: %v", err)
 	}
 }
 
