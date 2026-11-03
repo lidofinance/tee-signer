@@ -53,17 +53,15 @@ func rotationPending(t *testing.T) (*env, uint64) {
 
 // SSI-AUTH-01: a failed clock read does not hand out the approvers of a
 // view the clock has left. The rotation came into force while the last
-// view is older; the read fails; LockedInForce refuses instead of
-// returning the old set, and lockedNow returns the new set with the one
-// time it read.
-func TestLockedInForceRefusesOnClockError(t *testing.T) {
+// view is older; lockedNow returns the new set with the one time it read.
+func TestLockedNowAfterClockError(t *testing.T) {
 	e, at := rotationPending(t)
 	hc := &hookClock{fakeClock: e.clock}
 	e.upd.opt.Clock = hc
 	e.clock.add(at - e.now() + 1)
 	hc.fail = 1
-	if l, err := e.upd.LockedInForce(); err == nil {
-		t.Fatalf("clock down: LockedInForce gave approvers %x, want a refusal", l.Approvers.Hash())
+	if _, _, err := e.upd.lockedNow(); err == nil {
+		t.Fatal("clock down: lockedNow gave approvers, want a refusal")
 	}
 	newSet := approverSet(2, 4, 5, 6)
 	l, now, err := e.upd.lockedNow()

@@ -26,7 +26,8 @@ var (
 	// and the state in IDENTITY) is SHA-256 over this input, so it names
 	// exactly what the approvers signed.
 	CtxConfigUpdate = Context{"signer-config-update-v1"}
-	// Approvers: handover order.
+	// Approvers: handover order. Reserved: only an image with a handover
+	// signs or checks it; no other context may take the string.
 	CtxHandoverOrder = Context{"signer-handover-order-v1"}
 	// One approver: PAUSE.
 	CtxPause = Context{"signer-pause-v1"}
@@ -81,7 +82,7 @@ var (
 	// (backend.KeyReleaseHash).
 	CtxKeyRelease = Context{"signer-key-release-v1"}
 
-	// Handover (package handover).
+	// Handover. Reserved, as CtxHandoverOrder.
 	//
 	// The HPKE associated data of a handed-over share: over its header,
 	// which carries the mark and the share's key origin.
@@ -110,8 +111,8 @@ var (
 	CtxImportOrderHash    = Context{"signer-import-order-hash-v1"}
 	CtxTAExitApprovalHash = Context{"signer-ta-exit-approval-hash-v1"}
 
-	// The hash of what a handover source carries to its target besides
-	// the shares (package handover, carry.go). Each share's HPKE associated
+	// Reserved, as CtxHandoverOrder: the hash of what a handover source
+	// carries to its target besides the shares. Each share's HPKE associated
 	// data takes it after the header, so nobody can drop or change the
 	// carried part without every share failing to open.
 	CtxHandoverCarry = Context{"signer-handover-carry-v1"}

@@ -145,15 +145,6 @@ type Updates struct {
 	// stuck: the core refused values of the log; nothing is signed until a
 	// restart builds the core from the log.
 	stuck error
-
-	// sourceOrders are the handover orders that name this runner as their
-	// source (handover_source.go), by hash, with their not_after: one of
-	// them in the order slot is no import (importslot.go), and it leaves
-	// the slot at its not_after (compute). handedOver reports the
-	// tombstone, after which the order stays.
-	srcMu        namedMutex[updatesSrcMuName]
-	sourceOrders map[[32]byte]uint64
-	handedOver   func() bool
 }
 
 // NewUpdates returns the config updates of a runner with a setup. Call
@@ -164,6 +155,10 @@ func NewUpdates(o UpdatesOptions) (*Updates, error) {
 	}
 	if o.Logger == nil {
 		o.Logger = slog.Default()
+	}
+	if ord := o.Log.State().Order; ord != nil {
+		// Only a handover writes the order slot, and this image has none.
+		return nil, fmt.Errorf("config updates: the mark log holds a handover order (kind %d, %x); this image takes no handover", ord.Kind, ord.Hash[:8])
 	}
 	return &Updates{opt: o, bodies: map[bodyID]*setupwire.Update{}, coreLocked: unknownRef, coreOpen: unknownRef}, nil
 }
@@ -344,24 +339,12 @@ func (u *Updates) compute(st markstore.ConfigState, now uint64) view {
 		activate(&v.state.Locked)
 		if rotation {
 			// The new set replaces the old one: what the old set signed and
-			// is still pending goes (section 8, step 4). A handover import
-			// in progress stays in the slot (importslot.go): its source wrote
-			// its tombstone, and the runner signs nothing until every share
-			// is in.
+			// is still pending goes (section 8, step 4).
 			v.state.Open.Pending = nil
-			if o := v.state.Order; o == nil || o.Kind != markstore.OrderHandover {
-				v.state.Order = nil
-			}
 		}
 	}
 	if op := v.state.Open.Pending; op != nil && op.EffectiveAt <= now {
 		activate(&v.state.Open)
-	}
-	// A source order past its not_after leaves the slot: no handover can
-	// start under it, and IDENTITY would still show it. Sync writes the
-	// cleared slot to the log.
-	if na, ok := u.expiringSourceOrder(v.state.Order); ok && now >= na {
-		v.state.Order = nil
 	}
 	var err error
 	if v.locked, err = u.lockedValues(v.state.Locked); err != nil {
@@ -409,9 +392,6 @@ func (u *Updates) reconcileLocked(now uint64) {
 	u.logSt = u.opt.Log.State()
 	u.view = u.compute(u.logSt, now)
 	u.next = nextDue(u.view.state)
-	if na, ok := u.expiringSourceOrder(u.view.state.Order); ok {
-		u.next = min(u.next, na)
-	}
 	u.pruneLocked()
 	if u.signer == nil || u.stuck != nil {
 		return
@@ -530,9 +510,6 @@ func (u *Updates) stateLocked() backend.SetupState {
 	if v.locked != nil {
 		s.ApproverSetHash = v.locked.Approvers.Hash()
 	}
-	if o := v.state.Order; o != nil {
-		s.Order = backend.Order{Kind: uint8(o.Kind), Hash: o.Hash, ActAt: o.ActAt}
-	}
 	return s
 }
 
@@ -623,25 +600,6 @@ func (u *Updates) Run(ctx context.Context, every time.Duration) {
 // SetupWire is the runner's setup.
 func (u *Updates) SetupWire() *setupwire.Setup { return u.opt.Setup }
 
-// LockedInForce is the locked group in force now.
-// A failed clock read is a refusal: the view of the last read may be from
-// before a rotation that is in force by now (SSI-AUTH-01).
-func (u *Updates) LockedInForce() (*setupwire.Locked, error) {
-	t, err := u.opt.Clock.Now()
-	if err != nil {
-		return nil, backend.Refused(backend.StatusClock, "config: no time to tell the approvers in force: %v", err)
-	}
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	if now := unix(t); now >= u.next {
-		u.reconcileLocked(now)
-	}
-	if u.view.locked == nil {
-		return nil, backend.Refused(backend.StatusStorage, "config: the locked values in force are unknown: %v", u.view.missing)
-	}
-	return u.view.locked, nil
-}
-
 // lockedInForce is the locked group in force and its version, for the image
 // check (imagegate.go), which reports its allowed list in HEALTH too: on a
 // failed clock read it keeps the last view.
@@ -703,8 +661,7 @@ func refusedAs(err error, what string) error {
 // Accept takes a signed CONFIG_UPDATE (section 6). The checks, in order:
 // the strict decoder with the value rules (counts within caps, approver
 // keys, approvals_needed > n/2, change delay cap, withdrawal credentials,
-// gas limits, slot time changes); the cluster and the chain; the trusted clock; no handover
-// import in progress (importslot.go); version and prev_hash against
+// gas limits, slot time changes); the cluster and the chain; the trusted clock; version and prev_hash against
 // the group's state in force; k signatures of the approvers in force, and
 // for a rotation every key of the new set; activate_at within the wait plus
 // the activation horizon; the core's checks of the values, for an open
@@ -738,12 +695,6 @@ func (u *Updates) Accept(ctx context.Context, raw []byte) (uint8, backend.SetupS
 	now, err := u.trustedNow()
 	if err != nil {
 		return 0, none, err
-	}
-	if o := u.ImportOrder(); o != nil {
-		// The import's config is version 0 until every share is in
-		// (importslot.go); setImportOrder writes the slot under writeMu too.
-		return 0, none, backend.Refused(backend.StatusNotReady,
-			"config update: a handover import (order %x) is in progress; no update is taken until every handed-over share is in", o.Hash[:8])
 	}
 	u.mu.Lock()
 	u.reconcileLocked(now)

@@ -12,8 +12,7 @@
 #   chains           scripts/chain-test.sh
 #   modules          scripts/test-modules.sh: gofmt, vet and unit tests of every
 #                    Go module, under the race detector
-#   e2e (native)     tests/e2e against the static runners of build/<arch>/bin;
-#                    TestE2EHandoverGate must run and pass
+#   e2e (native)     tests/e2e against the static runners of build/<arch>/bin
 #   e2e (other arch) the static aarch64 runners under qemu-aarch64 (x86_64 hosts)
 #   signer-core      its own suites (signer-core/scripts/test.sh: unit, SSZ and
 #                    BLS vectors, EIP-3076, symbols, fuzz replay)
@@ -80,8 +79,6 @@ if [ "$e2e" = 1 ]; then
   (cd "$ROOT/tests" && env $(bin_env "$HOST_ARCH") go test $RACE -count=1 -v -timeout 40m -tags platform_aws ./e2e/) \
     >"$LOGS/e2e-$HOST_ARCH.log" 2>&1 || { tail -80 "$LOGS/e2e-$HOST_ARCH.log"; exit 1; }
   summary "$LOGS/e2e-$HOST_ARCH.log" | grep -E '^(ok|FAIL)'
-  grep -q -- "--- PASS: TestE2EHandoverGate " "$LOGS/e2e-$HOST_ARCH.log" && ! grep -q -- "--- SKIP: TestE2EHandoverGate" "$LOGS/e2e-$HOST_ARCH.log" ||
-    { echo "TestE2EHandoverGate did not run and pass in the e2e set" >&2; exit 1; }
 
   log "e2e: the Nitro runner's NTS clock through udprelay ($HOST_ARCH)"
   # shellcheck disable=SC2046 # the variables of bin_env, split on purpose

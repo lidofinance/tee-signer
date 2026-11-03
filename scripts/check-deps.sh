@@ -12,13 +12,9 @@
 #      or in a module the build's clouds may use. The AWS SDK, smithy-go,
 #      hf/nsm, mdlayher/vsock and socket and golang.org/x/{net,sync,sys} are
 #      for the AWS build only, fxamacker/cbor and x448/float16 too (the
-#      Nitro verifier's CBOR parser). The Azure, GCP and dev builds hold
+#      Nitro attestation document's CBOR). The Azure, GCP and dev builds hold
 #      nothing third-party but the embedded root certificates
 #      (x509roots/fallback).
-#   2b. The attestation verifier of the build's own platform only (tag
-#      verifierselect): attestation-verify/azureid with platform_azure,
-#      github.com/lidofinance/tee-signer/attestation-verify with any cloud
-#      platform, none in the dev build.
 #   2. No package of another cloud: the nitro platform and the host agent's
 #      client and messages (hostagent/agentclient, hostagent/agentwire) only
 #      in AWS builds, azure and gcp only in theirs. No other package below
@@ -30,12 +26,10 @@
 #      no other package below platform-aws/udprelay, the relay server
 #      included, in a runner.
 #   5. Development and operator packages stay out of runners (signer-admin,
-#      governance/setuptext and the others in package_cloud). The dev platform
-#      requires platform_dev, and so does signer-protocol/remote (the dev
-#      verifier's). Of attestation-verify/runnerclient, runners link
-#      runnerclient/verify and its option set only, not the tools' client,
-#      and no file of tool_files. Protocol, core and time packages stay
-#      independent of the runner and cloud integrations.
+#      governance/setuptext, attestation-verify and the others in
+#      package_cloud). The dev platform requires platform_dev. Protocol,
+#      core and time packages stay independent of the runner and cloud
+#      integrations.
 #
 # With a binary, also: its -tags setting is the expected one, and the modules
 # it links (go version -m) are on the same lists as in 1.
@@ -67,23 +61,13 @@ cloud_in() {
 module_ok() {
   case "$2" in
     github.com/lidofinance/tee-signer/*|golang.org/x/crypto/x509roots/fallback) return 0 ;;
-    # The Nitro verifier's CBOR parser: the AWS platform.
+    # The Nitro attestation document's CBOR: the AWS platform.
     github.com/fxamacker/cbor/*|github.com/x448/float16)
       cloud_in "$1" aws && return 0 ;;
     github.com/aws/*|github.com/hf/nsm|github.com/mdlayher/*|golang.org/x/net|golang.org/x/sync|golang.org/x/sys)
       cloud_in "$1" aws && return 0 ;;
   esac
   return 1
-}
-
-# verifier_package_ok <clouds> <import path>: verifier code only in the
-# builds whose platform needs it.
-verifier_package_ok() {
-  case "$2" in
-    github.com/lidofinance/tee-signer/attestation-verify/azureid) cloud_in "$1" azure ;;
-    github.com/lidofinance/tee-signer/attestation-verify) cloud_in "$1" "azure|aws|gcp" ;;
-    *) return 0 ;;
-  esac
 }
 
 # package_cloud <import path>: the cloud a package of ours belongs to, or
@@ -115,22 +99,15 @@ package_cloud() {
     github.com/lidofinance/tee-signer/platform-aws/s3log) echo aws ;;
     github.com/lidofinance/tee-signer/platform-gcp/gcslog) echo gcp ;;
     github.com/lidofinance/tee-signer/platform-azure/azlog) echo azure ;;
-    # The runner client (dialing, TLS, client certificates) is for the tools.
-    # A runner checks attestations with runnerclient/verify and its option
-    # set; every other package below runnerclient is in no runner. The
-    # remote client only with the dev verifier (verify/dev.go).
-    github.com/lidofinance/tee-signer/attestation-verify/runnerclient/verify|github.com/lidofinance/tee-signer/attestation-verify/runnerclient/internal/optset) ;;
-    github.com/lidofinance/tee-signer/attestation-verify/runnerclient|github.com/lidofinance/tee-signer/attestation-verify/runnerclient/*) echo none ;;
-    github.com/lidofinance/tee-signer/signer-protocol/remote) echo dev ;;
+    # The attestation verifiers and the runner client (dialing, TLS, client
+    # certificates) are for the tools and the tests: a runner checks no
+    # other runner's attestation. The remote client too.
+    github.com/lidofinance/tee-signer/attestation-verify|github.com/lidofinance/tee-signer/attestation-verify/*) echo none ;;
+    github.com/lidofinance/tee-signer/signer-protocol/remote) echo none ;;
     # Test fakes and the shared test suite never belong in a binary.
     github.com/lidofinance/tee-signer/slashing-log/wormfake|github.com/lidofinance/tee-signer/slashing-log/logtest) echo none ;;
   esac
 }
-
-# tool_files: "package file" lines of tool-only files in packages a runner
-# links. A build tag keeps each out of the runner builds; check_source checks
-# that it does.
-tool_files="github.com/lidofinance/tee-signer/attestation-verify/runnerclient/verify order_draft.go"
 
 # audit_layer_ok <package> <import>: first-party dependencies of the inner layers.
 audit_layer_ok() {
@@ -153,7 +130,7 @@ linked() { awk -v w="$2" '$1 == w { found = 1 } END { exit !found }' "$1"; }
 
 # check_source <name> <goarch>
 check_source() {
-  local name="$1" goarch="$2" tags clouds list viol pkg mod imports dep cloud c want n files file
+  local name="$1" goarch="$2" tags clouds list viol pkg mod imports dep cloud c want n
   tags="netgo,osusergo,$(runner_tags "$name")"
   clouds="$(clouds_of "$tags")"
   list="$(mktemp)"
@@ -167,8 +144,6 @@ check_source() {
     cloud="$(package_cloud "$pkg")"
     if ! module_ok "$clouds" "$mod"; then
       echo "$pkg $mod" >>"$viol"
-    elif ! verifier_package_ok "$clouds" "$pkg"; then
-      echo "$pkg verifier-of-another-cloud" >>"$viol"
     elif [ -n "$cloud" ] && ! cloud_in "$clouds" "$cloud"; then
       echo "$pkg code-of-$cloud" >>"$viol"
     fi
@@ -178,22 +153,6 @@ check_source() {
       fi
     done
   done <"$list"
-  # The CBOR modules off the AWS platform: only github.com/lidofinance/tee-signer/attestation-verify (and
-  # those modules' own packages) may import them.
-  if ! cloud_in "$clouds" aws; then
-    awk 'NR == FNR { if ($2 ~ /^github.com\/fxamacker\/cbor\// || $2 == "github.com/x448/float16") v[$1] = 1; next }
-         $1 == "github.com/lidofinance/tee-signer/attestation-verify" || ($1 in v) { next }
-         { for (i = 3; i <= NF; i++) if ($i in v) print $1 " CBOR-outside-github.com/lidofinance/tee-signer/attestation-verify" }' "$list" "$list" >>"$viol"
-  fi
-  # The files of a package in this build: Go and cgo files, one per line.
-  files='{{range .GoFiles}}{{println .}}{{end}}{{range .CgoFiles}}{{println .}}{{end}}'
-  while read -r pkg file; do
-    linked "$list" "$pkg" || continue
-    if (cd "$ROOT/tee-signer" && GOOS=linux GOARCH="$goarch" CGO_ENABLED=1 go list -tags "$tags" -f "$files" "$pkg") |
-      grep -qxF "$file"; then
-      echo "$pkg/$file tool-only-file" >>"$viol"
-    fi
-  done <<<"$tool_files"
   if [ -s "$viol" ]; then
     n="$(wc -l <"$viol")"
     bad "$name ($goarch): $n packages that a build for ($clouds) must not link, from: $(awk '{ print $2 }' "$viol" | sort -u | tr '\n' ' ')"

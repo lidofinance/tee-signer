@@ -1,5 +1,3 @@
-//go:build !verifierselect
-
 // Command attest-verify checks one attestation document from the cloud
 // runner and prints the verified fields as JSON.
 //

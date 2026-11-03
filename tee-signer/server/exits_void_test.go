@@ -53,7 +53,7 @@ func TestHeldExitApprovalVoidAfterLockedChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.clock.add(3601)
-	if l, err := e.upd.LockedInForce(); err != nil || l.ExitApprovalsNeeded != 3 {
+	if l, _, err := e.upd.lockedNow(); err != nil || l.ExitApprovalsNeeded != 3 {
 		t.Fatalf("the locked update is not in force: %v", err)
 	}
 	wantExitRefusal(t, e.signMsg(pk5, &backend.VoluntaryExit{Epoch: epoch, ValidatorIndex: 5}), "no exit approval")

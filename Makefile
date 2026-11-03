@@ -17,7 +17,7 @@ MODEL_RUNS ?= 500
 FUZZ_EVERYTHING := bash -c '. "$$1"; fuzz_everything' _ $(ROOT)/scripts/common.sh
 
 .DEFAULT_GOAL := help
-.PHONY: help deps check core nts build test test-modules e2e test-core test-rust fuzz fuzz-core model race release-gate handover-gate loc clean
+.PHONY: help deps check core nts build test test-modules e2e test-core test-rust fuzz fuzz-core model race release-gate loc clean
 
 help: ## list targets
 	@grep -E '^[a-z][a-z0-9-]+:.*## ' $(firstword $(MAKEFILE_LIST)) | \
@@ -81,9 +81,6 @@ release-gate: ## the release gate: its self-test, the tree check, and every runn
 	bash $(ROOT)/scripts/release-gate-test.sh
 	bash $(ROOT)/scripts/release-gate.sh tree $(ROOT)
 	bash $(ROOT)/scripts/build-runner.sh
-
-handover-gate: ## image N hands over to N+1, then N+1 to N+2 (writes the stamp image builds need)
-	bash $(ROOT)/scripts/handover-gate.sh
 
 loc: ## code lines per module and per runner build (cloc; not recorded in the repo)
 	bash $(ROOT)/scripts/loc.sh

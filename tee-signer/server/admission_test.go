@@ -10,13 +10,10 @@ import (
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
-	"github.com/lidofinance/tee-signer/tee-signer/handover"
 )
 
-// Share admission: sealed import and handover import go through
-// addShareOf. The handover import passes the key list it read once per
-// request, so two requests (or two entries of one page) for one validator
-// both passed the duplicate check on their own copy of that list.
+// Share admission: every import goes through addShare, one share per
+// validator at a time.
 
 // SSI-STORAGE-01: the second share of a validator replaced the first one's
 // stored record before the core refused it as a duplicate. The first
@@ -25,14 +22,14 @@ import (
 // that was reported.
 func TestSSIStorage01SecondShareDoesNotReplaceTheFirst(t *testing.T) {
 	e := newShareTgtEnv(t, "dev", nil)
-	stale := oneKey(t, e) // the list a request read before either share
+	oneKey(t, e)
 	pk := newPubkey(t)
 	a, b := newSecret(t), newSecret(t)
-	ka, err := e.srv.addShareOf(pk, &a, 7, nil, "handover", stale)
+	ka, err := e.srv.addShare(pk, &a, 7, nil, "sealed")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.srv.addShareOf(pk, &b, 8, nil, "handover", stale); err == nil {
+	if _, err := e.srv.addShare(pk, &b, 8, nil, "sealed"); err == nil {
 		t.Fatal("a second share of a loaded validator was taken")
 	}
 	e.restart()
@@ -47,7 +44,7 @@ func TestSSIStorage01SecondShareDoesNotReplaceTheFirst(t *testing.T) {
 // loaded share name the winner, and the key origin counts two keys.
 func TestShareAdmissionConcurrent(t *testing.T) {
 	e := newShareTgtEnv(t, "dev", nil)
-	stale := oneKey(t, e)
+	oneKey(t, e)
 	pk := newPubkey(t)
 	const n = 8
 	var wg sync.WaitGroup
@@ -57,7 +54,7 @@ func TestShareAdmissionConcurrent(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			sec := newSecret(t)
-			if k, err := e.srv.addShareOf(pk, &sec, uint64(i), &testMark, "handover", stale); err == nil {
+			if k, err := e.srv.addShare(pk, &sec, uint64(i), &testMark, "sealed"); err == nil {
 				won[i] = &k
 			}
 		}()
@@ -95,37 +92,19 @@ func TestShareAdmissionConcurrent(t *testing.T) {
 	check("after a restart")
 }
 
-// APSTATE-02: a page that names one validator twice. The second copy
-// passed the request's duplicate check, reached the core as a duplicate,
-// and the runner blocked the validator from signing until a restart. Now
-// such a page is refused, and the validator signs once the import ends.
-func TestAPSTATE02RepeatedShareInAPage(t *testing.T) {
-	e := newShareTgtEnv(t, "dev", nil)
-	src := newSource(t, 4, testMark)
-	order, hash := e.order([]byte{1, 2}, nil)
-	pages := src.pages(e.sealTo(), hash, 2)
-	e.mustImp(order, pages[0], 0)
-	dup := *pages[1]
-	dup.Shares = []handover.Share{pages[1].Shares[0], pages[1].Shares[0]}
-	_, _ = e.imp(order, &dup, 0) // refused, or taken without harm
-	if r := e.mustImp(order, pages[1], 0); !r.Done || r.Held != 4 {
-		t.Fatalf("the import: %+v", r)
-	}
-	e.clock.add(8 * testEpoch)
-	if err := e.attestNow(pages[1].Shares[0].Pubkey); err != nil {
-		t.Fatalf("the validator named twice does not sign: %v", err)
-	}
+// attestNow signs an attestation of pk for the epoch of the clock.
+func (e *tgtEnv) attestNow(pk backend.Pubkey) error {
+	ep := (e.now() - testGenesis) / testEpoch
+	return e.attest(pk, ep-1, ep)
 }
 
-// oneKey loads one imported key on e and returns the key list after it: a
-// request's list, read before the shares it adds.
-func oneKey(t *testing.T, e *tgtEnv) []backend.ValidatorKey {
+// oneKey loads one imported key on e.
+func oneKey(t *testing.T, e *tgtEnv) {
 	t.Helper()
 	sec := newSecret(t)
-	if _, err := e.srv.addShareOf(newPubkey(t), &sec, 1, nil, "sealed", nil); err != nil {
+	if _, err := e.srv.addShare(newPubkey(t), &sec, 1, nil, "sealed"); err != nil {
 		t.Fatal(err)
 	}
-	return e.signer.Keys()
 }
 
 func newSecret(t *testing.T) [32]byte {

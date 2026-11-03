@@ -1,5 +1,3 @@
-//go:build !verifierselect || platform_azure
-
 // Package azureid checks the MAA token in an Azure runner's IDENTITY
 // response. It turns the identity and the client's nonce into the runtime
 // data that attest.VerifyMAA wants, in one place, so identity.Config and

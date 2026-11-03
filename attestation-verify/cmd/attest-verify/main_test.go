@@ -1,5 +1,3 @@
-//go:build !verifierselect
-
 package main
 
 import (

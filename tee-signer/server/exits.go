@@ -60,8 +60,8 @@ func (s *Server) exitDay(now uint64) (*markstore.ExitDay, error) {
 	d := &markstore.ExitDay{Day: now / daySeconds}
 	switch {
 	case cur != nil && cur.Day > d.Day:
-		// A later day's ledger (carried in by a handover from a clock past
-		// midnight) stays until this clock gets there (SHH-02).
+		// A later day's ledger (from a clock past midnight) stays until
+		// this clock gets there (SHH-02).
 		return nil, backend.Refused(backend.StatusPolicyExit, "the exit ledger is of day %d, the clock's day is %d", cur.Day, d.Day)
 	case cur != nil && cur.Day == d.Day:
 		d = cur
@@ -177,8 +177,7 @@ func (s *Server) exitAllowed(pk backend.Pubkey, e *backend.VoluntaryExit) error 
 		loaded = loaded || k.Pubkey == pk
 	}
 	if !loaded {
-		// Recorded only for a key this runner holds, so an empty handover
-		// target has no ledger entry before its import (SHH-01).
+		// Recorded only for a key this runner holds (SHH-01).
 		return backend.Refused(backend.StatusUnknownValidator, "no share of validator %s is loaded", pk.String()[:18])
 	}
 	d, err := s.exitDay(now)
@@ -188,8 +187,7 @@ func (s *Server) exitAllowed(pk backend.Pubkey, e *backend.VoluntaryExit) error 
 	for _, x := range d.Exits {
 		// A repeat is the same key, index and epoch (OPTEE-EXIT-01): an
 		// approval that pairs another key with that index and epoch counts
-		// its own stake. Entries carried in from a handover have no key and
-		// match nothing.
+		// its own stake.
 		if x.Pubkey == pk && x.ValidatorIndex == e.ValidatorIndex && x.ExitEpoch == e.Epoch {
 			return nil
 		}

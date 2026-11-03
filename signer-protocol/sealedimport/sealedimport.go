@@ -65,8 +65,7 @@ func Seal(id *backend.Identity, req *backend.SealedImportRequest, secret *[32]by
 }
 
 // SealAAD is Seal with the associated data aad instead of a sealed
-// import's header: for a share in another message (handover), whose
-// header says more. The caller must have verified id first.
+// import's header. The caller must have verified id first.
 func SealAAD(id *backend.Identity, aad []byte, secret *[32]byte) ([]byte, error) {
 	k, d, a := Suite()
 	if id.ImportKEM != k || id.ImportKDF != d || id.ImportAEAD != a {

@@ -1,5 +1,3 @@
-//go:build !verifierselect
-
 package runnerclient
 
 // The Azure debug runner with the durable state copy
@@ -7,7 +5,7 @@ package runnerclient
 // container's file system. The runner releases its Key Vault key again,
 // restores the wrapped sealing key and the sealed share from the state copy
 // before the mark log claim, and signs on from the log's mark without a new
-// import. HANDOVER has its own tests (tee-signer/server, tests/e2e).
+// import.
 //
 //	RUNNER_AZURE_DEBUG_BIN=build/x86_64/bin/runner-azure-debugimport go test -run TestE2EAzureRunnerDurable ./runnerclient
 

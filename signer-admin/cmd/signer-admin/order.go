@@ -9,7 +9,7 @@ import (
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 )
 
-// orderActive is the locked group an order (handover, import, exit) is
+// orderActive is the locked group an order (import, exit) is
 // checked against: the setup of the order's cluster and chain, and the
 // active locked update, if any.
 type orderActive struct {

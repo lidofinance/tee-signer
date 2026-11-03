@@ -69,7 +69,7 @@ SUBNET_RANGE=10.10.0.0/24
 FW_RULE=signer-allow-7100
 NET_TAG=signer-node
 SIGNER_PORT=7100
-# A signer of its own next to a running one (a handover target) takes
+# A signer of its own next to a running one takes
 # its own VM, address, KMS key and WIF pool and provider by these
 # overrides, and shares the project, network, firewall rules, registry, key
 # ring and service account with the running one. Its own pool, because the

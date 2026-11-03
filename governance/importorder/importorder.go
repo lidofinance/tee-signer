@@ -5,8 +5,8 @@
 // validator, the hash of the split's public commitments (Feldman), so a
 // share the runner takes must be a point of that validator's polynomial.
 //
-// It follows package handoverorder: fixed binary form, strict decoder,
-// signatures over the body, verified against the approver set in force.
+// Fixed binary form, strict decoder, signatures over the body, verified
+// against the approver set in force.
 //
 //	body   = 'I' version:u8(1) cluster_id[32] chain_hash[32]
 //	         target_setup_hash[32] not_after:u64

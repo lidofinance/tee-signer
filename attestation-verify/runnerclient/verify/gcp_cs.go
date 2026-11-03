@@ -1,5 +1,3 @@
-//go:build !verifierselect || platform_gcp
-
 package verify
 
 import (
@@ -118,15 +116,6 @@ func (a *Attestation) gcpVerifier(o *optset.Options) (VerifyFunc, error) {
 	return g.verify, nil
 }
 
-// gcpDocumentVerifier returns the gcp-cs document verifier.
-func (a *Attestation) gcpDocumentVerifier(o *optset.Options) (DocumentVerifier, error) {
-	g, err := a.newGCP(o)
-	if err != nil {
-		return nil, err
-	}
-	return g.verifyDocument, nil
-}
-
 func (a *Attestation) newGCP(o *optset.Options) (*gcpVerifier, error) {
 	s, err := a.gcp()
 	if err != nil {
@@ -162,22 +151,6 @@ func (g *gcpVerifier) verify(ctx context.Context, nonce []byte, id *backend.Iden
 	})
 }
 
-// verifyDocument checks a Confidential Space token whose eat_nonce is
-// hex(userData).
-func (g *gcpVerifier) verifyDocument(ctx context.Context, _ []byte, userData []byte, a *backend.Attestation) error {
-	if err := checkUserData(userData, a, gcpPlatform, gcpFormat, "a Confidential Space token"); err != nil {
-		return err
-	}
-	return g.keys.verify(ctx, func(ks *attest.KeySet) error {
-		o := g.opts
-		o.Keys = ks
-		o.Nonces = []string{hex.EncodeToString(userData)}
-		_, err := attest.VerifyConfidentialSpace(string(a.Document), o)
-		return err
-	})
-}
-
 func init() {
 	verifierFactories[VerifierGCPCS] = (*Attestation).gcpVerifier
-	documentFactories[VerifierGCPCS] = (*Attestation).gcpDocumentVerifier
 }

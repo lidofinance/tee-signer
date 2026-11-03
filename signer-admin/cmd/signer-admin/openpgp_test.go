@@ -2,16 +2,11 @@ package main
 
 import (
 	"crypto/ed25519"
-	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/lidofinance/tee-signer/governance/handoverorder"
-	"github.com/lidofinance/tee-signer/governance/setupwire"
 	adminapprover "github.com/lidofinance/tee-signer/signer-admin/approver"
 	"github.com/lidofinance/tee-signer/signer-admin/approver/fakeagent"
 )
@@ -73,32 +68,7 @@ func TestOpenPGPApprover(t *testing.T) {
 	mustTool(t, "exit-draft", "-cluster", cl, "-pubkey", pk.String(), "-index", "7", "-epoch", "1000", "-balance", "32000000000", "-out", exit)
 	assemble(exit, fc.path("exit.signed"), "exit_approvals_needed 2")
 
-	// A handover order over s1's setup, whose locked group (version 0)
-	// holds the same approvers.
-	raw := mustRead(t, filepath.Join(fc.dir, "setups", "s1.setup"))
-	s, err := setupwire.DecodeSetup(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	notAfter := uint64(time.Now().Add(24 * time.Hour).Unix())
-	sh, err := setupwire.SetupHash(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var target [32]byte
-	rand.Read(target[:])
-	hb := &handoverorder.Body{ClusterID: s.ClusterID, ChainHash: s.Chain.Hash(), NotAfter: notAfter,
-		Source: handoverorder.Runner{Name: "s1", SetupHash: sh, Verifier: handoverorder.VerifierDev},
-		Target: handoverorder.Runner{Name: "s1b", SetupHash: target, Verifier: handoverorder.VerifierDev}}
-	enc, err := hb.Encode()
-	if err != nil {
-		t.Fatal(err)
-	}
-	handover := writeFile(t, fc.path("handover.bin"), string(enc))
-	writeJSONFile(t, handover+".active", activeFile{Setup: hex.EncodeToString(raw)})
-	assemble(handover, fc.path("handover.signed"), "approvers 0,1 of 3 (k 2)")
-
-	if _, _, n := agent.Last(); n != 4 {
+	if _, _, n := agent.Last(); n != 3 {
 		t.Fatalf("the card signed %d messages, want one per kind", n)
 	}
 }

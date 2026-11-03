@@ -33,8 +33,7 @@ const (
 type MsgType uint8
 
 // The signing and attestation message types. The admin types (imports,
-// config updates, exit approvals) are in package wire/admin, the key
-// handover types in tee-signer/handover.
+// config updates, exit approvals) are in package wire/admin.
 const (
 	TypeHealth     MsgType = 0x01
 	TypePublicKeys MsgType = 0x02
@@ -44,11 +43,10 @@ const (
 )
 
 // typeNames names every message type of the protocol, those of wire/admin
-// and handover too, so logs stay readable without those packages.
+// too, so logs stay readable without that package.
 var typeNames = map[MsgType]string{
 	0x01: "HEALTH", 0x02: "PUBLIC_KEYS", 0x03: "SIGN", 0x04: "ATTEST", 0x05: "IMPORT_SHARE",
 	0x06: "IDENTITY", 0x07: "IMPORT_SHARE_SEALED", 0x08: "CONFIG_UPDATE", 0x09: "APPROVE_EXIT",
-	0x31: "HANDOVER_ORDER", 0x32: "HANDOVER", 0x33: "IMPORT_HANDOVER",
 }
 
 func (t MsgType) String() string {
@@ -285,7 +283,6 @@ const MaxImportKey = 4096
 // EncodeIdentity: version:u8 (IdentityVersion) setup_state (see
 // backend.AppendSetupState) kem:u16 kdf:u16 aead:u16 import_key_len:u16
 // import_key tls_key_hash_len:u8 tls_key_hash attestation (as in ATTEST).
-// The handover messages carry an identity in this form too.
 func EncodeIdentity(id *backend.Identity) ([]byte, error) {
 	if len(id.ImportKey) > MaxImportKey || len(id.TLSKeyHash) > 255 || id.Attestation == nil {
 		return nil, errors.New("wire: bad identity")

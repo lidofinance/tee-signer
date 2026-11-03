@@ -1,4 +1,4 @@
-# A second Nitro signer next to a running one: a handover target.
+# A second Nitro signer next to a running one.
 #
 # Its own root module and state, so no plan here can change the running
 # signer's resources. It reads them by name (the parent role and its

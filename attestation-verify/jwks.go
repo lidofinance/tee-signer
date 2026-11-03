@@ -1,5 +1,3 @@
-//go:build !verifierselect || platform_azure || platform_gcp
-
 package attest
 
 import (
@@ -213,7 +211,7 @@ func FetchJWKS(ctx context.Context, client *http.Client, url string) (*KeySet, e
 // jwksOffHost lists the issuers whose key set lives on another host, with
 // the one jwks_uri each may name. Confidential Space's discovery document
 // names Google's service account key URL (ConfidentialSpaceJWKSURL in
-// gcp.go, not built into every peer build).
+// gcp.go).
 var jwksOffHost = map[string]string{
 	"https://confidentialcomputing.googleapis.com": "https://www.googleapis.com/service_accounts/v1/metadata/jwk/signer@confidentialspace-sign.iam.gserviceaccount.com",
 }

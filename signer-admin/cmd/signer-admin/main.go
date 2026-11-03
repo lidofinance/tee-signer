@@ -57,19 +57,12 @@
 //	    rotation, every new key) and write the signed update.
 //	signer-admin push -cluster cluster.json [-raise-min] update.signed
 //	    Send the signed update to every signer and print what each one says.
-//	signer-admin handover-draft -cluster cluster.json -signer NAME -target-cloud FILE
-//	                             [-target-setup-sha256 HEX] [-target-name NAME] [-not-after 12h] [-out handover.bin]
-//	    Draft a handover order (handoverdraft.go): the source signer NAME hands
-//	    its shares to the one target of FILE's settings and setup_sha256.
-//	    show, sign, assemble and push take it as they take an update;
-//	    push sends it to the source only.
-//
 //	signer-admin probe -cluster cluster.json [-signers NAME,...]
 //	    Tell, per signer, whether admin messages from its connection file's
 //	    certificate pass the runner's role check (adminops.go): a message
 //	    type no runner serves tells a role-checking image from an older
 //	    one, an empty CONFIG_UPDATE tells the admin role from the others.
-//	    Changes nothing. Run it before every order, handover or import.
+//	    Changes nothing. Run it before every order or import.
 //	signer-admin import-draft -cluster cluster.json -signer NAME -split FILE [-not-after 12h] [-allow-gcp-unsafe-single-key] [-out import.bin]
 //	    Draft an import order for one target signer: its setup_sha256, t, n,
 //	    its share index and, per validator, the hash of the t commitments.
@@ -101,8 +94,7 @@
 // and the runners take either form per signature.
 //
 // pin, status, draft and push take -signers NAME,... to work on part of the
-// cluster, and -timeout for each signer (default 30 s). handover-draft takes
-// -timeout; -signers there drafts an order of part of the cluster.
+// cluster, and -timeout for each signer (default 30 s).
 //
 // cluster.json lists the signers of one cluster, with paths relative to it:
 //
@@ -126,8 +118,8 @@
 // 2-minute default time lock, a 7-minute images minimum. The connection
 // refuses one unless its cloud.json sets "allow_testnet_build": true. status
 // and pin print each signer's build (build=default or build=testnet), draft
-// and handover-draft compute the waits with the signers' build and refuse signers
-// of two builds, and show and sign, which see no runner, name the testnet
+// computes the waits with the signers' build and refuses signers of two
+// builds, and show and sign, which see no runner, name the testnet
 // wait when it differs.
 package main
 
@@ -165,11 +157,10 @@ const usage = `usage:
   signer-admin status -cluster cluster.json [-signers NAME,...]
   signer-admin draft -cluster cluster.json -group locked|open [-margin 10m] [-out update.bin] FILE
   signer-admin show [-active FILE] FILE
-  signer-admin sign -key FILE|openpgp:KEYGRIP [-hashed] [-expect-sha256 HEX] [-out FILE] update.bin|handover.bin|import.bin|exit.bin
+  signer-admin sign -key FILE|openpgp:KEYGRIP [-hashed] [-expect-sha256 HEX] [-out FILE] update.bin|import.bin|exit.bin
   signer-admin approver-key -key FILE|openpgp:KEYGRIP | -openpgp FILE [-fingerprint HEX]
   signer-admin assemble [-active FILE] [-out update.signed] update.bin SIG...
-  signer-admin push -cluster cluster.json [-raise-min] [-signers NAME,...] update.signed|handover.signed
-  signer-admin handover-draft -cluster cluster.json -signer NAME -target-cloud FILE [-target-setup-sha256 HEX] [-target-name NAME] [-not-after 12h] [-out handover.bin]
+  signer-admin push -cluster cluster.json [-raise-min] [-signers NAME,...] update.signed|exit.signed
   signer-admin probe -cluster cluster.json [-signers NAME,...]
   signer-admin import-draft -cluster cluster.json -signer NAME -split FILE [-not-after 12h] [-allow-gcp-unsafe-single-key] [-out import.bin]
   signer-admin import -cluster cluster.json -signer NAME -order import.signed -shares FILE -commitments FILE
@@ -183,8 +174,7 @@ func run(args []string, out io.Writer) error {
 	cmds := map[string]func([]string, io.Writer) error{
 		"setup": cmdSetup, "pin": cmdPin, "status": cmdStatus, "draft": cmdDraft,
 		"show": cmdShow, "sign": cmdSign, "assemble": cmdAssemble, "push": cmdPush,
-		"handover-draft": cmdHandoverDraft,
-		"probe":          cmdProbe, "import-draft": cmdImportDraft, "import": cmdImport, "exit-draft": cmdExitDraft,
+		"probe": cmdProbe, "import-draft": cmdImportDraft, "import": cmdImport, "exit-draft": cmdExitDraft,
 		"issue-client-cert": cmdIssueClientCert, "approver-key": cmdApproverKey,
 	}
 	cmd, ok := cmds[args[0]]

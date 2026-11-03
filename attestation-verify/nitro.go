@@ -1,5 +1,3 @@
-//go:build !verifierselect || platform_aws
-
 package attest
 
 import (

@@ -46,7 +46,7 @@
 # generic image takes its own, for example signer-gkek, so a running
 # per-chain image keeps its key),
 # GROUP_NAME_N, KEY_NAME_N, IDENTITY_NAME_N (a second group of signer N
-# next to the running one, for example a handover target: group
+# next to the running one: group
 # signer-1b with a new key name and the running group's identity; build
 # files in $OUT/<group>; key-create refuses a key name that exists, since
 # that would add a version to the running group's key),

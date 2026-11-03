@@ -114,9 +114,9 @@ func newKey(t *testing.T) ([32]byte, backend.Pubkey) {
 // (no admin role) and no real share makes its own BLS secret, seals it to
 // the runner's import key with interchange maxima of 2^64-1 and imports it.
 // The runner must refuse the import and must never write a mark above the
-// clock horizon. Today it raises the mark log to the handover tombstone:
-// the honest key stops signing and after a restart the runner reads the log
-// as handed over.
+// clock horizon. Before the fix it raised the mark log to the tombstone
+// mark: the honest key stopped signing and a restart read the log as
+// handed over.
 func TestReview4F1SealedImportRaisesMarkBeyondClock(t *testing.T) {
 	e := newTgtEnv(t, "dev", nil)
 
@@ -157,11 +157,9 @@ func TestReview4F1SealedImportRaisesMarkBeyondClock(t *testing.T) {
 		t.Errorf("honest vote after the hostile import refused: %v", err)
 	}
 
-	// After a restart the runner is not handed over and the honest key signs.
+	// A restart claims the log (a log that ends with a tombstone is not
+	// claimed), and the honest key signs.
 	e.restart()
-	if e.srv.HandedOver() || e.hooks.HandedOver() {
-		t.Errorf("after a restart the runner reads its mark log as handed over")
-	}
 	e.clock.add(4 * testEpoch)
 	now = e.signer.EpochAt(e.now())
 	if err := e.signMsg(hpk, vote(now-1, now)); err != nil {
