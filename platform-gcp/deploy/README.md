@@ -253,6 +253,28 @@ finish the handshake after 10 seconds. The launcher runs the workload on the
 VM's own network, so the VM's other listeners, if any, share the NIC with
 port 7100. The custom VPC filters them.
 
+### Private entry
+
+`NETWORK_ENTRY=private` builds the same image (same digest) and gives the
+VM no external address. The operator's own entry in the VPC, for example a
+gateway instance or an internal load balancer, reaches port 7100 on the
+VM's subnet address:
+
+- `vm-create` passes `--no-address`, and `--private-network-ip=PRIVATE_IP`
+  when `PRIVATE_IP` is set (any entry may set it).
+- `firewall-create` opens TCP 7100 from `ENTRY_SOURCE_RANGES` (CIDR blocks,
+  private ones too) and `ENTRY_SOURCE_TAGS` (network tags of the entry's
+  instances), comma-separated. One of the two is required.
+- No `address-reserve`. The signing client's `address` is the entry's.
+- The VM's outbound path is the operator's: Cloud NAT on the subnet, or a
+  route through the gateway for the signer's tag (see "Outbound internet").
+
+`SUBNET`, `SUBNET_RANGE`, `NET_TAG`, `FW_RULE`, `FW_EGRESS_ALLOW` and
+`FW_EGRESS_DENY` name a subnet, tag and rules of the signer's own in the
+shared VPC `signer-net`. With the names of a second signer set as well, the
+plan adds `subnet-create`, `firewall-create` and `egress-create` for them,
+and the teardown list deletes them.
+
 ### Other network entries
 
 A build overlay (`SIGNER_BUILD_OVERLAY_DIR`) can add other entries through
@@ -282,6 +304,17 @@ A VM with neither an external IP nor Cloud NAT reaches no NTS server and no
 network entry, so the signer refuses to start (no trusted time). Choose NAT
 where a VM with a public address is not wanted.
 
+`egress-create` limits what the VM may send, for both entries of this
+folder: TCP 443, the NTS clock's TCP 4460 and UDP 123 and 4123, and TCP 80.
+The launcher fetches the issuer certificates of the VM's attestation key
+over HTTP (TCP 80, `privateca-content-*.storage.googleapis.com`), as
+certificate issuer links usually are. The certificates are signed, so plain
+HTTP is safe here, but blocking it stops the token fetch. A second rule
+denies the rest. The
+metadata server (DNS and tokens) is not subject to firewall rules. An
+overlay entry needs its own outbound rules, so the plan leaves the step out
+for one.
+
 ## Deploy plan
 
 `platform-gcp/deploy/deploy.sh plan` prints this with the exact `gcloud`
@@ -295,8 +328,10 @@ machine type, quota, and the newest Confidential Space image.
    `confidentialcomputing`, `iam`, `iamcredentials`, `sts`, `logging`.
 2. `network-create`: VPC `signer-net`, subnet `signer-subnet` (`10.10.0.0/24`,
    `europe-west4`).
-3. `address-reserve`: `signer-node-1-ip`.
-4. `firewall-create`: `signer-allow-7100` (needs `OPERATOR_IP`).
+3. `address-reserve`: `signer-node-1-ip` (not with `NETWORK_ENTRY=private`).
+4. `firewall-create`: `signer-allow-7100` (needs `OPERATOR_IP`, or with
+   `NETWORK_ENTRY=private` the entry's sources), then `egress-create`:
+   `signer-egress-allow` and `signer-egress-deny`.
 5. `registry-create`: Artifact Registry Docker repository `signer`.
 6. `image-push`: tag `IMAGE_TAG` (default `poc`), then compare the registry's
    digest with `runner.digest`. The login token goes through stdin into a

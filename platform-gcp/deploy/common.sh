@@ -63,11 +63,25 @@ fi
 KMS_RING=signer
 SA_NAME=signer-workload
 VPC=signer-net
-SUBNET=signer-subnet
-SUBNET_RANGE=10.10.0.0/24
-FW_RULE=signer-allow-7100
-NET_TAG=signer-node
 SIGNER_PORT=7100
+# The signer's subnet, network tag and firewall rules. A signer in a subnet
+# of its own in the same VPC (for example a private one next to a running
+# signer) sets them; the VPC stays shared.
+SUBNET="${SUBNET:-signer-subnet}"
+SUBNET_RANGE="${SUBNET_RANGE:-10.10.0.0/24}"
+NET_TAG="${NET_TAG:-signer-node}"
+FW_RULE="${FW_RULE:-signer-allow-7100}"
+FW_EGRESS_ALLOW="${FW_EGRESS_ALLOW:-signer-egress-allow}"
+FW_EGRESS_DENY="${FW_EGRESS_DENY:-signer-egress-deny}"
+for v in SUBNET NET_TAG FW_RULE FW_EGRESS_ALLOW FW_EGRESS_DENY; do
+  [[ "${!v}" =~ ^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$ ]] || die "$v=${!v} is not a Compute Engine name"
+done
+[[ "$SUBNET_RANGE" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$ ]] || die "SUBNET_RANGE=$SUBNET_RANGE is not an IPv4 CIDR block"
+# PRIVATE_IP: the VM's address in the subnet. Unset: GCP picks one.
+PRIVATE_IP="${PRIVATE_IP:-}"
+[ -z "$PRIVATE_IP" ] || [[ "$PRIVATE_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || die "PRIVATE_IP=$PRIVATE_IP is not one IPv4 address"
+own_subnet() { [ "$SUBNET" != signer-subnet ]; }
+own_rules() { [ "$NET_TAG" != signer-node ]; }
 # A signer of its own next to a running one takes
 # its own VM, address, KMS key and WIF pool and provider by these
 # overrides, and shares the project, network, firewall rules, registry, key
@@ -98,15 +112,33 @@ side_by_side() {
 # NETWORK_ENTRY: how the signing clients reach port 7100 (README, "Network entry").
 #   public     the VM's external address, firewall TCP 7100 from OPERATOR_IP
 #              (Dockerfile)
+#   private    no external address, the VM's subnet IP only (PRIVATE_IP),
+#              firewall TCP 7100 from ENTRY_SOURCE_RANGES and ENTRY_SOURCE_TAGS:
+#              the operator's own entry in the VPC, for example a gateway
+#              instance. The VM's outbound path (Cloud NAT or that gateway)
+#              is the operator's too. Same Dockerfile, so the same digest
 # The build overlay (SIGNER_BUILD_OVERLAY_DIR) adds its own
 # entries (devnet_gcp_network_entry sets DOCKERFILE and their settings).
 NETWORK_ENTRY="${NETWORK_ENTRY:-public}"
-if [ "$NETWORK_ENTRY" = public ]; then
+if [ "$NETWORK_ENTRY" = public ] || [ "$NETWORK_ENTRY" = private ]; then
   DOCKERFILE="$GCP_DIR/Dockerfile"
 elif devnet_has gcp_network_entry; then
   devnet_gcp_network_entry
 else
-  die "NETWORK_ENTRY must be public, got '$NETWORK_ENTRY' (other entries come from the build overlay)"
+  die "NETWORK_ENTRY must be public or private, got '$NETWORK_ENTRY' (other entries come from the build overlay)"
+fi
+# repo_entry: an entry of this folder (public or private), not of the overlay.
+repo_entry() { [ "$NETWORK_ENTRY" = public ] || [ "$NETWORK_ENTRY" = private ]; }
+# ENTRY_SOURCE_RANGES: comma-separated IPv4 CIDR blocks, private ones too.
+# ENTRY_SOURCE_TAGS: comma-separated network tags of the entry's instances.
+ENTRY_SOURCE_RANGES="${ENTRY_SOURCE_RANGES:-}"
+ENTRY_SOURCE_TAGS="${ENTRY_SOURCE_TAGS:-}"
+[ -z "$ENTRY_SOURCE_RANGES" ] || [[ "$ENTRY_SOURCE_RANGES" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}(,([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2})*$ ]] ||
+  die "ENTRY_SOURCE_RANGES=$ENTRY_SOURCE_RANGES is not a comma-separated list of IPv4 CIDR blocks"
+[ -z "$ENTRY_SOURCE_TAGS" ] || [[ "$ENTRY_SOURCE_TAGS" =~ ^[a-z]([-a-z0-9]{0,61}[a-z0-9])?(,[a-z]([-a-z0-9]{0,61}[a-z0-9])?)*$ ]] ||
+  die "ENTRY_SOURCE_TAGS=$ENTRY_SOURCE_TAGS is not a comma-separated list of network tags"
+if [ "$NETWORK_ENTRY" != private ] && { [ -n "$ENTRY_SOURCE_RANGES" ] || [ -n "$ENTRY_SOURCE_TAGS" ]; }; then
+  die "ENTRY_SOURCE_RANGES and ENTRY_SOURCE_TAGS are for NETWORK_ENTRY=private; public takes OPERATOR_IP"
 fi
 
 # MARK_STORE: the bucket of the runner's mark log (slashing-log/docs/marklog.md), for
