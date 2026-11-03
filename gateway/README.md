@@ -4,15 +4,15 @@
 > Not for production or mainnet funds. Interfaces and formats will change
 > without notice.
 
-The gateway lets a standard validator client sign through the TEE signers of this repo. It serves the Web3Signer eth2 signing API (EIP-3030) over HTTP, sends each request to every signer over mutual TLS, and combines their partial signatures into the validator signature. It holds no key and keeps no slashing state: each signer checks every message and applies its own slashing protection and policy.
+The gateway lets a standard validator client sign through the TEE signers of this repo. It serves the Web3Signer eth2 signing API (EIP-3030) over HTTPS with client certificates, or plain HTTP on loopback, sends each request to every signer over mutual TLS, and combines their partial signatures into the validator signature. It holds no key and keeps no slashing state: each signer checks every message and applies its own slashing protection and policy.
 
 ```
-validator client --HTTP (Web3Signer API)--> gateway --mutual TLS 1.3--> signer 1 (TEE runner)
-                                                                    +-> signer 2
-                                                                    +-> signer 3
+validator client --HTTPS, client certificate--> gateway --mutual TLS 1.3--> signer 1 (TEE runner)
+                  (Web3Signer API)                                     +-> signer 2
+                                                                       +-> signer 3
 ```
 
-**Outside the audit scope.** The gateway is a separate module for testing. No runner imports it, and it is not part of the audited code of this repo. It cannot sign anything the signers would refuse, but a bug in it can deny service: a validator client gets an error instead of a signature.
+**Not audited.** The gateway is a separate module; no runner imports it. It cannot get a signature the signers would refuse. A bug in it can only stop signing: the validator client gets an error instead of a signature.
 
 Module path `github.com/lidofinance/tee-signer/gateway`. The request parsing is the [web3signer-api](../web3signer-api) module, the connection to a signer is [attestation-verify/runnerclient](../attestation-verify/runnerclient), and the wire messages are [signer-protocol](../signer-protocol).
 
@@ -20,19 +20,115 @@ Module path `github.com/lidofinance/tee-signer/gateway`. The request parsing is 
 
 1. Build it: `gateway/scripts/build.sh` writes `gateway/bin/gateway`. It needs Go 1.26 and gcc.
 2. Get a client certificate of the signing role for the gateway, with its chain, from the CA the signers trust (`-tls-client-ca`; see "Client roles" in [signer-protocol/docs/protocol.md](../signer-protocol/docs/protocol.md)). An attest-only or admin certificate does not sign.
-3. Write `gateway.yml` (see [Configuration](#configuration)): the chain, the certificate, and one entry per signer with its address and the attestation pins the signer must show.
-4. Start it: `gateway/bin/gateway -config gateway.yml`. It logs `signer attested` for each signer it reaches and `listening` with its address. `curl http://127.0.0.1:19000/api/v1/eth2/publicKeys` lists the validator keys it can sign for.
-5. Point the validator client at it (next section).
+3. If the validator client runs on another host or in another container, make a server certificate for the gateway and a client certificate for each validator client (see [TLS](#tls)).
+4. Write `gateway.yml` (see [Configuration](#configuration)): the chain, the certificate, one entry per signer with its address and the attestation pins the signer must show, and the `tls` section if you use TLS.
+5. Start it: `gateway/bin/gateway -config gateway.yml`. It logs `signer attested` for each signer it reaches and `listening` with its address. `curl --cacert server-ca.pem --cert vc.pem --key vc-key.pem https://127.0.0.1:19000/api/v1/eth2/publicKeys` lists the validator keys it can sign for (`curl http://127.0.0.1:19000/...` without TLS).
+6. Point the validator client at it (next section).
 
-Keep `listen` on loopback, or on a private network only the validator client reaches. The HTTP listener has no TLS and no authentication: anything that reaches it can ask for signatures. The signers still refuse anything slashable and anything their policy forbids.
+Without TLS the API has no authentication, so `listen` must be a loopback address: the gateway refuses to start on any other address unless `insecure_plain_http_on_network: true` is set. With TLS, only a client with an accepted certificate gets an answer. Whoever gets in can ask for signatures; the signers still refuse anything slashable and anything their policy forbids, and the gateway refuses exits and fee recipients that are not on its allowlist.
 
 ## Point a validator client at it
 
-Set the validator client's Web3Signer URL to the gateway's `listen` address, for example `http://127.0.0.1:19000`. The client uses three endpoints: `GET /upcheck`, `GET /api/v1/eth2/publicKeys` and `POST /api/v1/eth2/sign/{pubkey}` (see [API](#api)).
+Set the validator client's Web3Signer URL to the gateway's `listen` address, for example `https://gateway.example:19000`, or `http://127.0.0.1:19000` without TLS. For the client's certificate settings see [TLS](#tls). The client uses three endpoints: `GET /upcheck`, `GET /api/v1/eth2/publicKeys` and `POST /api/v1/eth2/sign/{pubkey}` (see [API](#api)).
 
 Register each validator key with the client as a remote (Web3Signer) key at that URL, or let the client load the key list from `/api/v1/eth2/publicKeys` if it can. A key the signers do not hold gets a 404.
 
 The signers hold the slashing protection. A validator client's own slashing protection database can stay on: it refuses on top of the signers, never instead of them. Do not run the same keys through another signer at the same time.
+
+## TLS
+
+With `tls.cert` and `tls.key` set, the API is HTTPS and every client must show a certificate the gateway accepts. Two settings name the accepted clients; at least one is required, and with both, either one lets a client in:
+
+- `tls.client_ca`: a PEM bundle of CAs. A client certificate that chains to one of them is accepted if it allows client authentication (extended key usage `clientAuth`, or none at all). The client sends its intermediates.
+- `tls.client_fingerprints`: SHA-256 fingerprints of client certificates, accepted whoever issued them (Web3Signer calls these known clients). A self-signed client certificate works here.
+
+The certificate must be valid at the gateway's clock either way. A client without an accepted certificate fails the TLS handshake and gets no HTTP answer, and the gateway logs `TLS handshake error` with the reason. Plain HTTP to the TLS port gets a 400. `tls.insecure_no_client_auth: true` asks for no client certificate, so any client that reaches the port gets service; the gateway logs a warning at start, and refuses it together with `client_ca` or `client_fingerprints`.
+
+The minimum version is TLS 1.2 (`tls.min_version`, default `"1.2"`), because Teku offers only TLS 1.2 to its external signer. A client that offers TLS 1.3 gets it. TLS 1.2 uses ECDHE with AES-GCM or ChaCha20-Poly1305 only. Set `"1.3"` when every client offers it.
+
+The gateway reads `tls.cert`, `tls.key` and `tls.client_ca` at start, where a bad file stops the start, and again every `tls.reload_interval` (default 10s). New files take effect for new connections once all of them parse, the key belongs to the certificate and the certificate is valid at the gateway's clock; the gateway then logs `server TLS files reloaded`. Otherwise the files in force stay, and it logs `server TLS files on disk refused, keeping the ones in force` once for that content. Write new files to temporary names and rename them over the old ones. A change to `tls.client_fingerprints` needs a restart.
+
+### Make the certificates
+
+With openssl 3. The server certificate must name the address the validator client uses, as a DNS name or an IP address (`subjectAltName`).
+
+```sh
+# Server CA and the gateway's certificate
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 3650 \
+  -subj "/CN=gateway server CA" -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign \
+  -keyout server-ca-key.pem -out server-ca.pem
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=gateway" \
+  -keyout server-key.pem -out server.csr
+printf 'subjectAltName=DNS:gateway.example,IP:127.0.0.1\nextendedKeyUsage=serverAuth\nkeyUsage=critical,digitalSignature\n' >server.ext
+openssl x509 -req -in server.csr -CA server-ca.pem -CAkey server-ca-key.pem -CAcreateserial -days 365 \
+  -extfile server.ext -out server.pem
+
+# Client CA and one validator client's certificate
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 3650 \
+  -subj "/CN=validator client CA" -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign \
+  -keyout client-ca-key.pem -out client-ca.pem
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=validator client 1" \
+  -keyout vc-key.pem -out vc.csr
+printf 'extendedKeyUsage=clientAuth\nkeyUsage=critical,digitalSignature\n' >client.ext
+openssl x509 -req -in vc.csr -CA client-ca.pem -CAkey client-ca-key.pem -CAcreateserial -days 365 \
+  -extfile client.ext -out vc.pem
+
+# The client's certificate and key as PKCS#12, for Lighthouse and Teku
+openssl rand -hex 16 >vc.p12.pass
+openssl pkcs12 -export -in vc.pem -inkey vc-key.pem -name validator-client -out vc.p12 -passout file:vc.p12.pass
+
+# Its fingerprint, for tls.client_fingerprints instead of a client CA
+openssl x509 -in vc.pem -noout -fingerprint -sha256
+```
+
+Then in `gateway.yml`:
+
+```yaml
+listen: 0.0.0.0:19000
+tls:
+  cert: server.pem          # followed by its intermediates, if any
+  key: server-key.pem
+  client_ca: client-ca.pem
+  # client_fingerprints: ["83:1A:D2:...:6E:95"]
+```
+
+Keep the CA keys off the gateway host. The gateway needs `server.pem`, `server-key.pem` and `client-ca.pem` only.
+
+### Lighthouse
+
+One entry per validator key in `validator_definitions.yml`. Lighthouse reads the client certificate as PKCS#12 only.
+
+```yaml
+- enabled: true
+  voting_public_key: "0x..."
+  type: web3signer
+  url: "https://gateway.example:19000"
+  root_certificate_path: /path/to/server-ca.pem
+  client_identity_path: /path/to/vc.p12
+  client_identity_password: "<the content of vc.p12.pass>"
+```
+
+### Teku
+
+Teku takes the gateway's CA as a PKCS#12 truststore. Make it with keytool, which comes with Java and with the Teku image:
+
+```sh
+openssl rand -hex 16 >truststore.pass
+keytool -importcert -noprompt -alias gateway-ca -file server-ca.pem \
+  -keystore truststore.p12 -storetype PKCS12 -storepass:file truststore.pass
+```
+
+```sh
+teku validator-client ... \
+  --validators-external-signer-url=https://gateway.example:19000 \
+  --validators-external-signer-public-keys=external-signer \
+  --validators-external-signer-keystore=vc.p12 \
+  --validators-external-signer-keystore-password-file=vc.p12.pass \
+  --validators-external-signer-truststore=truststore.p12 \
+  --validators-external-signer-truststore-password-file=truststore.pass
+```
+
+`external-signer` loads the keys from `/api/v1/eth2/publicKeys`.
 
 ## How a request is signed
 
@@ -133,7 +229,14 @@ Both are refused with 412 and a message naming the rule, before any signer is co
 
 | Field | Default | Meaning |
 |---|---|---|
-| `listen` | `127.0.0.1:19000` | HOST:PORT of the Web3Signer API, plain HTTP |
+| `listen` | `127.0.0.1:19000` | HOST:PORT of the Web3Signer API: HTTPS with `tls.cert`, else plain HTTP on a loopback address only |
+| `insecure_plain_http_on_network` | `false` | allows plain HTTP on a `listen` address other than loopback; the gateway logs a warning at start. Refused with `tls` |
+| `tls.cert`, `tls.key` | off | PEM files of the server certificate (followed by its intermediates) and its key; set: the API is HTTPS (see [TLS](#tls)) |
+| `tls.client_ca` | none | PEM bundle of the CAs whose client certificates are accepted |
+| `tls.client_fingerprints` | none | SHA-256 fingerprints of accepted client certificates: 64 hex digits, colons and either case allowed |
+| `tls.insecure_no_client_auth` | `false` | asks for no client certificate; refused with `client_ca` or `client_fingerprints` |
+| `tls.min_version` | `"1.2"` | `"1.2"` or `"1.3"` |
+| `tls.reload_interval` | `10s` | how often `tls.cert`, `tls.key` and `tls.client_ca` are read again |
 | `metrics` | off | HOST:PORT of the Prometheus endpoint, plain HTTP (see [Metrics](#metrics)) |
 | `chain.preset` | `mainnet` | `mainnet` for every public network, `minimal` for spec tests |
 | `chain.genesis_fork_version` | `0x00000000` | the chain's `GENESIS_FORK_VERSION` |
@@ -169,7 +272,7 @@ The `attestation` block takes the fields of `runnerclient.Attestation` under the
 
 Settings of one verifier are refused with another, and a required one that is missing stops the start.
 
-The gateway refuses to start without `chain.genesis_validators_root`, with fork epochs out of order, without signers or a client certificate, and with an `allow_chain_build` that is not a non-prod chain. A new fork needs a config line before its epoch, as it does in the beacon node and in the signers.
+The gateway refuses to start without `chain.genesis_validators_root`, with fork epochs out of order, without signers or a client certificate, with an `allow_chain_build` that is not a non-prod chain, with plain HTTP on a `listen` address other than loopback (unless `insecure_plain_http_on_network`), and with `tls.cert` but neither `tls.client_ca` nor `tls.client_fingerprints` (unless `tls.insecure_no_client_auth`). A new fork needs a config line before its epoch, as it does in the beacon node and in the signers.
 
 A configuration for three Hoodi signers:
 
@@ -284,14 +387,16 @@ groups:
 | `scripts/test-unit.sh` | `go vet` and `go test ./...`. |
 | `scripts/update-spec-vectors.sh` | Regenerates the Web3Signer example vectors in `web3signer-api/signing/testdata` from the pinned Web3Signer tag. |
 
-From the repo root, `scripts/test-modules.sh gateway` runs gofmt, vet and the unit tests under the race detector. The unit tests run the combining against fake signers (2 of 3, a signer down, a slow signer, a partial that does not verify, refusals, all down) and the connections against a fake TLS signer (attestation on every new connection, a wrong `tls_key_pin`, a wrong chain mark, a non-prod build without its `allow_chain_build`, an attestation without the nonce). The reload tests write good and bad pairs in random order and check that the last good one stays in force, and swap the certificate under load against fake signers that accept only the old certificate and then only the new one, with no failed request. The metrics tests check the text format and that each counter moves on its event: calls by result, dials, connections up, each attestation failure reason against the fake TLS signer, rotations, combine failures, request results and reload results.
+From the repo root, `scripts/test-modules.sh gateway` runs gofmt, vet and the unit tests under the race detector. The unit tests run the combining against fake signers (2 of 3, a signer down, a slow signer, a partial that does not verify, refusals, all down) and the connections against a fake TLS signer (attestation on every new connection, a wrong `tls_key_pin`, a wrong chain mark, a non-prod build without its `allow_chain_build`, an attestation without the nonce). The reload tests write good and bad pairs in random order and check that the last good one stays in force, and swap the certificate under load against fake signers that accept only the old certificate and then only the new one, with no failed request. The metrics tests check the text format and that each counter moves on its event: calls by result, dials, connections up, each attestation failure reason against the fake TLS signer, rotations, combine failures, request results and reload results. The listener TLS tests check the config refusals and real handshakes: a client of the client CA or of an intermediate it sends, a listed fingerprint, and refusals for no certificate, another CA, an expired or not yet valid certificate, a certificate without client authentication, a listed fingerprint that expired, TLS 1.2 against a 1.3 minimum, TLS 1.2 with CBC suites only, and plain HTTP. They also reload a renewed server certificate and a new client CA, and keep the files in force when the files on disk are bad.
 
-`TestE2EGateway` in [tests/e2e](../tests/e2e) is the end-to-end test: three dev runners of `scripts/build-runner.sh` with mutual TLS, each with one share of a 2-of-3 key, and the gateway binary in front of them. It sends a validator client's HTTP requests (attestation, block, selection proof, aggregate), checks each signature under the validator key against the root the signer core computes, and checks a double vote, an aggregate with a bad selection proof, one signer down, two down, a new client certificate written mid-run while requests go on, and a signer that restarts with a new TLS key. It scrapes `/metrics` before and after the new certificate: 3 connections up to each signer, the requests by type and result, the expiry of the certificate in the file, one reload and 3 connections moved per signer:
+`TestE2EGateway` in [tests/e2e](../tests/e2e) is the end-to-end test: three dev runners of `scripts/build-runner.sh` with mutual TLS, each with one share of a 2-of-3 key, and the gateway binary in front of them. The test reaches the gateway over TLS with a client certificate of the client CA, checks that a client listed by fingerprint gets in too, and that no certificate, a certificate of another CA, and plain HTTP get no service. It sends a validator client's requests (attestation, block, selection proof, aggregate), checks each signature under the validator key against the root the signer core computes, and checks a double vote, an aggregate with a bad selection proof, one signer down, two down, a new client certificate written mid-run while requests go on, and a signer that restarts with a new TLS key. It scrapes `/metrics` before and after the new certificate: 3 connections up to each signer, the requests by type and result, the expiry of the certificate in the file, one reload and 3 connections moved per signer:
 
 ```sh
 make build
 cd tests && RUNNER_BIN="$PWD/../build/x86_64/bin/runner-dev" go test -race -count=1 -v -tags platform_aws -run TestE2EGateway ./e2e
 ```
+
+CI runs it for every change to `gateway/` or `web3signer-api/` (`CI_E2E_GATEWAY` in `scripts/ci-scope.sh`).
 
 ## Code
 
@@ -301,6 +406,7 @@ cmd/blsverify        independent verifier: hand-written SSZ on crypto/sha256 + b
 internal/config      gateway.yml: defaults, required keys, chain pin and fork schedule, signers
 internal/backend     the signers: connections (runnerclient), typed messages, share indices, fan-out, combining
 internal/certreload  the client certificate in force: reads it again, checks a new pair, swaps it in
+internal/servertls   the API listener's TLS: server certificate and client CA reloaded, client certificates by CA or fingerprint
 internal/metrics     Prometheus registry and text format, and the gateway's metrics
 internal/policy      exit and registration rules
 internal/server      HTTP handlers, content negotiation, error bodies
