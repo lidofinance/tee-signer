@@ -33,7 +33,7 @@ import (
 	"github.com/lidofinance/tee-signer/attestation-verify/internal/testgen"
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/internal/optset"
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/verify"
-	"github.com/lidofinance/tee-signer/governance/flavor"
+	"github.com/lidofinance/tee-signer/governance/runnerchain"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
 )
@@ -209,7 +209,7 @@ func (f *fakeRunner) seen(t wire.MsgType) int {
 
 func startFakeRunner(t *testing.T, ca *testCA, attest attestFn) *fakeRunner {
 	t.Helper()
-	return startFakeRunnerAs(t, ca, attest, flavor.DefaultCertName, "0.1.0")
+	return startFakeRunnerAs(t, ca, attest, runnerchain.MainnetCertName, "0.1.0")
 }
 
 // startFakeRunnerAs is a fake runner whose certificate has the subject

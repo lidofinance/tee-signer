@@ -95,10 +95,10 @@ type start struct {
 	cfg    core.Config  // the setup's chain config (the flag path loads -config later)
 	params map[string]string
 	caPEM  []byte // the setup's client CA (the flag path reads -tls-client-ca later)
-	// mainnet: the setup's chain has mainnet's genesis fork version
-	// (setupwire.IsMainnet), the same test as the threshold rule. The
-	// platform then refuses a key rule that is not locked.
-	mainnet bool
+	// prod: the setup's chain is a prod chain (setupwire.ProdChain), the
+	// same test as the threshold rule. The platform then refuses a key rule
+	// that is not locked.
+	prod bool
 	// noLockAccepted is the setup's sealing_key_release.no_lock_accepted:
 	// on mainnet a key rule without a lock (GCP) passes.
 	noLockAccepted bool
@@ -178,7 +178,7 @@ func fromSetup(ctx context.Context, a *startArgs, log *slog.Logger) (_ *start, e
 	if st.Wire.Platform.SealingKeyRelease.UnsafeSingleKeyAccepted {
 		log.Warn("UNSAFE: the setup accepts a key held alone on GCP (sealing_key_release.unsafe_single_key_accepted); a 1 of 1 import order is taken", "why", setupwire.UnsafeSingleKeyWarning)
 	}
-	return &start{setup: st, cfg: cfg, params: params, caPEM: st.ClientCAPEM(), mainnet: setupwire.IsMainnet(cfg.GenesisForkVersion),
+	return &start{setup: st, cfg: cfg, params: params, caPEM: st.ClientCAPEM(), prod: setupwire.ProdChain(cfg.GenesisForkVersion),
 		noLockAccepted: st.Wire.Platform.SealingKeyRelease.NoLockAccepted,
 		markSpec:       st.SlashingLogStore(), stateSpec: st.EncryptedStateStore(), signerID: st.SignerID(),
 		maxValidators: st.MaxKeys()}, nil
@@ -231,7 +231,7 @@ func startPlatform(ctx context.Context, a *startArgs, newPlatform platformFunc, 
 			}
 		}
 	}
-	opts := platform.Options{StateDir: a.stateDir, Params: s.params, Mainnet: s.mainnet, NoLockAccepted: s.noLockAccepted}
+	opts := platform.Options{StateDir: a.stateDir, Params: s.params, Prod: s.prod, NoLockAccepted: s.noLockAccepted}
 	if s.setup != nil {
 		// Every key-release call carries setup_hash.
 		opts.SetupHash = s.setup.SHA256
@@ -245,7 +245,7 @@ func startPlatform(ctx context.Context, a *startArgs, newPlatform platformFunc, 
 			copyStore.setupHash = s.setup.SHA256
 			copyStore.checkVersions = true
 			if a.platformName != "dev" {
-				copyStore.lockDays, copyStore.requireLock = s.setup.Wire.SlashingLogMinLockDays, s.mainnet
+				copyStore.lockDays, copyStore.requireLock = s.setup.Wire.SlashingLogMinLockDays, s.prod
 			}
 		}
 		if s.stateSpec == s.markSpec {

@@ -119,7 +119,7 @@ func sampleOpen() Open {
 func sampleChain() Chain {
 	return Chain{
 		GenesisValidatorsRoot:    backend.Root{0x4b, 0x36},
-		GenesisForkVersion:       backend.Version{0, 0, 0, 0x10},
+		GenesisForkVersion:       backend.Version{0, 0, 0, 0x01}, // the ci-test row's, a non-prod chain
 		GenesisTime:              1_760_000_000,
 		SecondsPerSlot:           6,
 		SlotsPerEpoch:            8,

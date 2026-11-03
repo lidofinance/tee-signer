@@ -11,7 +11,7 @@
 #
 # Tags: the runner modules test with all four platform tags at once, as the
 # platform packages need; tee-signer also with each tag alone (package main),
-# with testnet and with the tags of a release runner.
+# with the tags of each non-prod chain and with the tags of a release runner.
 # Logs: logs/test-<module>.log.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
@@ -19,13 +19,19 @@ mkdir -p "$LOGS"
 RACE="${RACE--race}"
 ALL_TAGS=platform_dev,platform_aws,platform_azure,platform_gcp
 
-# vet_builds: go vet with the tags of every runner build, both flavours.
+# NONPROD_CHAINS are the chains of the non-prod builds (common.sh).
+NONPROD_CHAINS=()
+for c in $CHAINS; do chain_is_prod "$c" || NONPROD_CHAINS+=("$c"); done
+
+# vet_builds: go vet with the tags of every runner build, of every chain.
 vet_builds() {
-  local name tags
+  local name tags c
   for name in "${RUNNER_BINS[@]}"; do go vet -tags "$(runner_tags "$name")" ./... || return 1; done
-  # shellcheck disable=SC2016 # the inner script's $1, expanded by the inner bash
-  for tags in $(IMAGE_FLAVOR=testnet bash -c '. "$1"; for n in "${RUNNER_BINS[@]}"; do runner_tags "$n"; done' _ "$ROOT/scripts/common.sh"); do
-    go vet -tags "$tags" ./... || return 1
+  for c in "${NONPROD_CHAINS[@]}"; do
+    # shellcheck disable=SC2016 # the inner script's $1, expanded by the inner bash
+    for tags in $(CHAIN="$c" bash -c '. "$1"; for n in "${RUNNER_BINS[@]}"; do runner_tags "$n"; done' _ "$ROOT/scripts/common.sh"); do
+      go vet -tags "$tags" ./... || return 1
+    done
   done
   go vet -tags "$ALL_TAGS" ./... && go vet -tags "$ALL_TAGS,debugimport" ./...
 }
@@ -45,7 +51,10 @@ checks() {
       go vet -tags platform_aws ./... && go test $RACE -count=1 -v -tags platform_aws ./transport || return 1 ;;
     governance)
       go test $RACE -count=1 -v ./... || return 1
-      go vet -tags testnet ./... && go test $RACE -count=1 -v -tags testnet ./setupwire ./setuptext ./flavor || return 1 ;;
+      local c
+      for c in "${NONPROD_CHAINS[@]}"; do
+        go vet -tags "$(chain_tags "$c")" ./... && go test $RACE -count=1 -v -tags "$(chain_tags "$c")" ./setupwire ./setuptext ./runnerchain || return 1
+      done ;;
     tee-signer)
       vet_builds || return 1
       local tags
@@ -53,8 +62,11 @@ checks() {
       go test $RACE -count=1 -tags platform_dev,platform_azure,platform_gcp ./attls || return 1
       go test $RACE -count=1 -v -tags "$ALL_TAGS" ./... || return 1
       go test $RACE -count=1 -tags "$ALL_TAGS,lockcheck" ./server ./state || return 1
-      go test $RACE -count=1 -v -tags platform_dev,testnet . ./attls || return 1
-      go test $RACE -count=1 -v -tags testnet -run 'Flavor|ImageCheck' ./server || return 1
+      local c
+      for c in "${NONPROD_CHAINS[@]}"; do
+        go test $RACE -count=1 -v -tags "platform_dev,$(chain_tags "$c")" . ./attls || return 1
+        go test $RACE -count=1 -v -tags "$(chain_tags "$c")" -run 'NamesTheBuild|ImageCheck|RoleTable' ./server || return 1
+      done
       # The tags a release runner is built with (scripts/common.sh runner_tags).
       go test $RACE -count=1 -tags "$(runner_tags runner-dev)" ./server . || return 1 ;;
     platform|slashing-log|platform-aws|platform-azure|platform-gcp|trusted-time|signer-admin)

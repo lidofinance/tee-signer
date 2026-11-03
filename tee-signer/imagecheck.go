@@ -40,7 +40,7 @@ func startImageCheck(ctx context.Context, plat *platform.Platform, updates *serv
 		return nil, false, err
 	}
 	if override {
-		log.Warn("image check override on (testnet build): this runner serves even when allowed_image_measurements in force does not name its image")
+		log.Warn("image check override on (non-prod build): this runner serves even when allowed_image_measurements in force does not name its image")
 	}
 	if err := g.Check(updates); err != nil {
 		g.Withhold()

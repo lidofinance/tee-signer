@@ -9,8 +9,9 @@
 # The image is generic: the runner (and what the build overlay
 # adds), nothing of an operator. The chain config and the client CA
 # are in each signer's setup (deploy.sh, "Setup"). The build stops if
-# CHAIN, CHAIN_JSON or CLIENT_CA of the per-chain images is set: those
-# values belong in the setup.
+# CLIENT_CA of the per-chain images is set: it belongs in the setup.
+# CHAIN picks the build (scripts/common.sh); its chain config is checked,
+# not put into the image.
 #
 # Output in build/azure/:
 #   runner.oci.tar   OCI archive, one image for linux/amd64
@@ -30,7 +31,7 @@ set -euo pipefail
 # shellcheck source=common.sh
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-for v in CHAIN CHAIN_JSON CLIENT_CA; do
+for v in CLIENT_CA; do
   [ -z "${!v:-}" ] || die "$v is set, but the image is generic: it goes into each signer's setup (signer-admin/cmd/setup-tool), not into the image"
 done
 
@@ -38,7 +39,7 @@ mkdir -p "$OUT"
 # The chain record of the per-chain images: a generic image has none.
 rm -f "$OUT/runner.chain"
 log "building the runners (scripts/build-runner.sh)"
-if ! IMAGE_FLAVOR="$IMAGE_FLAVOR" bash "$ROOT/scripts/build-runner.sh" x86_64 >"$OUT/build-runner.log" 2>&1; then
+if ! bash "$ROOT/scripts/build-runner.sh" x86_64 >"$OUT/build-runner.log" 2>&1; then
   tail -n 20 "$OUT/build-runner.log" >&2
   die "scripts/build-runner.sh failed (log: $OUT/build-runner.log)"
 fi

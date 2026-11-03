@@ -9,11 +9,12 @@
 // (docs/protocol.md, "Client roles"), so each connection file names an
 // admin certificate.
 //
-//	signer-admin setup [-build default|testnet] [-allow-gcp-unsafe-single-key] -out DIR FILE
+//	signer-admin setup [-build mainnet|hoodi|devnet|ci-test] [-allow-gcp-unsafe-single-key] -out DIR FILE
 //	    Read a human setup file with one [signer NAME] section per signer,
 //	    draw one random cluster_id, write DIR/NAME.setup for each signer and
-//	    print each setup_sha256. -build testnet: the runners are testnet
-//	    builds, so a time lock above their cap (1800 s) is refused.
+//	    print each setup_sha256. -build hoodi, devnet or ci-test: the
+//	    runners are non-prod builds, so a time lock above their cap
+//	    (1800 s) is refused.
 //	    The file says signing_mode: threshold (shares of t-of-n splits)
 //	    or single (one signer that holds whole keys); single with more
 //	    than one signer, and threshold with one, are refused. Every
@@ -109,14 +110,14 @@
 // "updates"); draft finds the active values there, because the runner has no
 // message that returns them.
 //
-// A runner of the testnet build (backend/buildflavor, research on
-// devnets and test networks) runs its governance time locks in minutes: a
-// 2-minute default time lock, a 7-minute images minimum. The connection
-// refuses one unless its cloud.json sets "allow_testnet_build": true. status
-// and pin print each signer's build (build=default or build=testnet), draft
+// A runner of a non-prod build (signer-protocol/buildchain: hoodi,
+// devnet or ci-test) runs its governance time locks in minutes: a 2-minute
+// default time lock, a 7-minute images minimum. The connection refuses one
+// unless its cloud.json sets "allow_chain_build" to its chain. status and
+// pin print each signer's build (build=mainnet, build=hoodi, ...), draft
 // computes the waits with the signers' build and refuses signers of two
-// builds, and show and sign, which see no runner, name the testnet
-// wait when it differs.
+// builds, and show and sign, which see no runner, name the short wait
+// when it differs.
 package main
 
 import (
@@ -148,7 +149,7 @@ var now = time.Now
 var toolRand io.Reader = rand.Reader
 
 const usage = `usage:
-  signer-admin setup [-build default|testnet] [-allow-gcp-unsafe-single-key] -out DIR FILE
+  signer-admin setup [-build mainnet|hoodi|devnet|ci-test] [-allow-gcp-unsafe-single-key] -out DIR FILE
   signer-admin pin -cluster cluster.json [-signers NAME,...]
   signer-admin status -cluster cluster.json [-signers NAME,...]
   signer-admin draft -cluster cluster.json -group locked|open [-margin 10m] [-out update.bin] FILE

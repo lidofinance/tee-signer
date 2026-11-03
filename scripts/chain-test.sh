@@ -10,6 +10,8 @@ set -euo pipefail
 CHAIN="$ROOT/governance/chains/chain.sh"
 SRC="$ROOT/governance/chains/hoodi.source.json"
 HOODI="$ROOT/governance/chains/hoodi.json"
+MAINNET="$ROOT/governance/chains/mainnet.json"
+CITEST="$ROOT/governance/chains/chain.ci-test.json"
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
 pass=0
@@ -33,17 +35,32 @@ else
 fi
 [ "$(jq -c '[.forks[] | .epoch]' "$HOODI")" = "[0,0,0,0,2048,50688,132352]" ] && ok "fork epochs Altair to Gloas" || bad "fork epochs: $(jq -c '[.forks[] | .epoch]' "$HOODI")"
 [ "$(jq -c .gloas_fork_epoch "$HOODI")" = 132352 ] && ok "gloas_fork_epoch 132352" || bad "gloas_fork_epoch: $(jq -c .gloas_fork_epoch "$HOODI")"
+bash "$CHAIN" build mainnet "$T/mainnet.json" 2>/dev/null
+if cmp -s "$T/mainnet.json" "$MAINNET"; then ok "mainnet.json rebuilds to the committed bytes"; else bad "mainnet.json differs from a fresh build"; fi
+[ "$(jq -c '[.forks[] | .epoch]' "$MAINNET")" = "[74240,144896,194048,269568,364032,411392]" ] && ok "mainnet fork epochs Altair to Fulu" || bad "mainnet fork epochs: $(jq -c '[.forks[] | .epoch]' "$MAINNET")"
+[ "$(jq -c '[.genesis_fork_version, .voluntary_exit_fork_version, .genesis_time, .genesis_validators_root, has("gloas_fork_epoch")]' "$MAINNET")" = \
+  '["0x00000000","0x03000000",1606824023,"0x4b363db94e286120d76eb905340fdd4e54bfe9f06bf33ff6cf5ad27f511bfe95",false]' ] &&
+  ok "mainnet genesis values and exit fork version" || bad "mainnet values: $(jq -c . "$MAINNET")"
 
 # ---- identify and verify ----
 [ "$(bash "$CHAIN" identify "$HOODI")" = hoodi ] && ok "identify hoodi.json" || bad "identify hoodi.json"
-[ "$(bash "$CHAIN" identify "$ROOT/governance/chains/chain.testnet.json")" = testnet ] && ok "identify chain.testnet.json" || bad "identify chain.testnet.json"
+[ "$(bash "$CHAIN" identify "$CITEST")" = ci-test ] && ok "identify chain.ci-test.json" || bad "identify chain.ci-test.json"
+[ "$(bash "$CHAIN" identify "$MAINNET")" = mainnet ] && ok "identify mainnet.json" || bad "identify mainnet.json"
+expect_ok "verify mainnet mainnet.json" bash "$CHAIN" verify mainnet "$MAINNET"
+expect_fail "verify hoodi refuses mainnet.json" bash "$CHAIN" verify hoodi "$MAINNET"
+expect_fail "verify mainnet refuses hoodi.json" bash "$CHAIN" verify mainnet "$HOODI"
+expect_fail "verify mainnet refuses chain.ci-test.json" bash "$CHAIN" verify mainnet "$CITEST"
+for mut in '.genesis_validators_root = "0x" + ("00" * 32)' '.genesis_time += 1' '.forks[5].epoch = 411393' '.voluntary_exit_fork_version = "0x04000000"' '.gloas_fork_epoch = 411392'; do
+  jq "$mut" "$MAINNET" >"$T/mut.json"
+  expect_fail "identify refuses mainnet.json with $mut" bash "$CHAIN" identify "$T/mut.json"
+done
 jq '.genesis_fork_version = "0x10000038" | .genesis_validators_root = "0x" + ("ab" * 32) | .forks = [{epoch: 0, version: "0x20000038"}] | .seconds_per_slot = 6 | .genesis_time = 1792157697 | del(.gloas_fork_epoch)' \
   "$HOODI" >"$T/devnet.json"
 [ "$(bash "$CHAIN" identify "$T/devnet.json")" = devnet ] && ok "identify a Kurtosis devnet file" || bad "identify devnet"
 expect_ok "verify hoodi hoodi.json" bash "$CHAIN" verify hoodi "$HOODI"
 expect_fail "verify hoodi refuses the devnet file" bash "$CHAIN" verify hoodi "$T/devnet.json"
 expect_fail "verify devnet refuses hoodi.json" bash "$CHAIN" verify devnet "$HOODI"
-expect_fail "verify hoodi refuses chain.testnet.json" bash "$CHAIN" verify hoodi "$ROOT/governance/chains/chain.testnet.json"
+expect_fail "verify hoodi refuses chain.ci-test.json" bash "$CHAIN" verify hoodi "$CITEST"
 for mut in '.genesis_validators_root = "0x" + ("00" * 32)' '.genesis_time += 1' '.forks[6].epoch = 132353' \
   '.forks |= .[:6]' '.seconds_per_slot = 6' '.voluntary_exit_fork_version = "0x50000910"'   'del(.gloas_fork_epoch)' '.gloas_fork_epoch = 132353' '.gloas_fork_epoch = 50688'; do
   jq "$mut" "$HOODI" >"$T/mut.json"
@@ -53,8 +70,8 @@ jq '.genesis_fork_version = "0x00000000"' "$HOODI" >"$T/mainnet.json"
 expect_fail "identify refuses a mainnet genesis fork version" bash "$CHAIN" identify "$T/mainnet.json"
 jq '.genesis_fork_version = "0x90000069"' "$HOODI" >"$T/sepolia.json"
 expect_fail "identify refuses Sepolia (not pinned)" bash "$CHAIN" identify "$T/sepolia.json"
-jq '.genesis_time += 1' "$ROOT/governance/chains/chain.testnet.json" >"$T/testnet-mut.json"
-expect_fail "identify refuses a changed test chain" bash "$CHAIN" identify "$T/testnet-mut.json"
+jq '.genesis_time += 1' "$CITEST" >"$T/ci-test-mut.json"
+expect_fail "identify refuses a changed test chain" bash "$CHAIN" identify "$T/ci-test-mut.json"
 echo '{"x": 1}' >"$T/notchain.json"
 expect_fail "identify refuses a file that is not a chain config" bash "$CHAIN" identify "$T/notchain.json"
 
@@ -184,8 +201,9 @@ cp "$HOODI" "$T/build-hoodi/chain.json"
 (CHAIN=hoodi; write_build_chain "$T/build-hoodi/runner.chain" "$T/build-hoodi/chain.json")
 expect_ok "deploy check: CHAIN=hoodi and a Hoodi build" env CHAIN=hoodi bash -c '. "$1/scripts/common.sh"; check_build_chain "$2/runner.chain" "$2/chain.json"' _ "$ROOT" "$T/build-hoodi"
 expect_fail "deploy check: CHAIN=devnet and a Hoodi build" env CHAIN=devnet bash -c '. "$1/scripts/common.sh"; check_build_chain "$2/runner.chain" "$2/chain.json"' _ "$ROOT" "$T/build-hoodi"
-expect_fail "deploy check: no CHAIN" env -u CHAIN bash -c '. "$1/scripts/common.sh"; check_build_chain "$2/runner.chain" "$2/chain.json"' _ "$ROOT" "$T/build-hoodi"
-expect_fail "deploy check: CHAIN=mainnet is not a chain name" env CHAIN=mainnet bash -c '. "$1/scripts/common.sh"; check_build_chain "$2/runner.chain" "$2/chain.json"' _ "$ROOT" "$T/build-hoodi"
+expect_fail "deploy check: no CHAIN (mainnet) and a Hoodi build" env -u CHAIN bash -c '. "$1/scripts/common.sh"; check_build_chain "$2/runner.chain" "$2/chain.json"' _ "$ROOT" "$T/build-hoodi"
+expect_fail "deploy check: CHAIN=mainnet and a Hoodi build" env CHAIN=mainnet bash -c '. "$1/scripts/common.sh"; check_build_chain "$2/runner.chain" "$2/chain.json"' _ "$ROOT" "$T/build-hoodi"
+expect_fail "deploy check: CHAIN=testnet is not a chain name" env CHAIN=testnet bash -c '. "$1/scripts/common.sh"; check_build_chain "$2/runner.chain" "$2/chain.json"' _ "$ROOT" "$T/build-hoodi"
 mkdir -p "$T/build-swap"
 cp "$T/devnet.json" "$T/build-swap/chain.json"
 cp "$T/build-hoodi/runner.chain" "$T/build-swap/runner.chain"
@@ -196,7 +214,29 @@ expect_fail "deploy check: a build without a chain record" env CHAIN=hoodi bash 
 expect_fail "build: CHAIN=devnet without CHAIN_JSON" env CHAIN=devnet bash -c 'unset CHAIN_JSON; . "$1/scripts/common.sh"; chain_select' _ "$ROOT"
 expect_fail "build: CHAIN=hoodi with a devnet CHAIN_JSON" env CHAIN=hoodi CHAIN_JSON="$T/devnet.json" bash -c '. "$1/scripts/common.sh"; chain_select' _ "$ROOT"
 expect_ok "build: CHAIN=hoodi takes governance/chains/hoodi.json" env CHAIN=hoodi bash -c 'unset CHAIN_JSON; . "$1/scripts/common.sh"; chain_select && [ "$CHAIN_JSON" = "$1/governance/chains/hoodi.json" ]' _ "$ROOT"
-expect_ok "build: CHAIN=testnet takes governance/chains/chain.testnet.json" env CHAIN=testnet bash -c 'unset CHAIN_JSON; . "$1/scripts/common.sh"; chain_select && [ "$CHAIN_JSON" = "$1/governance/chains/chain.testnet.json" ]' _ "$ROOT"
+expect_ok "build: CHAIN=ci-test takes governance/chains/chain.ci-test.json" env CHAIN=ci-test bash -c 'unset CHAIN_JSON; . "$1/scripts/common.sh"; chain_select && [ "$CHAIN_JSON" = "$1/governance/chains/chain.ci-test.json" ]' _ "$ROOT"
+expect_ok "build: no CHAIN is mainnet, with governance/chains/mainnet.json" env -u CHAIN bash -c 'unset CHAIN_JSON; . "$1/scripts/common.sh"; chain_select && [ "$CHAIN" = mainnet ] && [ "$CHAIN_JSON" = "$1/governance/chains/mainnet.json" ]' _ "$ROOT"
+expect_ok "build: CHAIN=devnet takes a devnet CHAIN_JSON" env CHAIN=devnet CHAIN_JSON="$T/devnet.json" bash -c '. "$1/scripts/common.sh"; chain_select' _ "$ROOT"
+expect_fail "build: CHAIN=mainnet with the Hoodi file" env CHAIN=mainnet CHAIN_JSON="$HOODI" bash -c '. "$1/scripts/common.sh"; chain_select' _ "$ROOT"
+for old in testnet default citest; do
+  expect_fail "build: CHAIN=$old is not a chain" env CHAIN="$old" bash -c '. "$1/scripts/common.sh"' _ "$ROOT"
+done
+
+# ---- the build switch (scripts/common.sh) ----
+# buildinfo CHAIN: the runner names, their tags and the image suffix.
+buildinfo() {
+  env -u CHAIN ${1:+CHAIN="$1"} bash -c '. "$1/scripts/common.sh"; for n in "${RUNNER_BINS[@]}"; do printf "%s=%s " "$n" "$(runner_tags "$n")"; done; printf "suffix=%s\n" "$(image_suffix)"' _ "$ROOT"
+}
+want_main="runner-azure=platform_azure,nts runner-aws=platform_aws,nts runner-gcp=platform_gcp,nts runner-dev=platform_dev runner-dev-debugimport=platform_dev,debugimport runner-azure-debugimport=platform_azure,debugimport,nts runner-aws-debugimport=platform_aws,platform_dev,debugimport,nts runner-gcp-debugimport=platform_gcp,debugimport,nts suffix="
+[ "$(buildinfo "")" = "$want_main" ] && ok "no CHAIN: the mainnet runners, tags without nonprod, no suffix" || bad "no CHAIN: $(buildinfo "")"
+[ "$(buildinfo mainnet)" = "$want_main" ] && ok "CHAIN=mainnet: the same build as no CHAIN" || bad "CHAIN=mainnet: $(buildinfo mainnet)"
+for c in hoodi devnet ci-test; do
+  t="nonprod,chain_${c//-/_}"
+  want="runner-azure-$c=platform_azure,nts,$t runner-aws-$c=platform_aws,nts,$t runner-gcp-$c=platform_gcp,nts,$t runner-dev-$c=platform_dev,$t suffix=-$c"
+  [ "$(buildinfo "$c")" = "$want" ] && ok "CHAIN=$c: runners named and tagged for $c, suffix -$c" || bad "CHAIN=$c: $(buildinfo "$c")"
+done
+expect_fail "build: SIGNER_BUILD_OVERLAY_DIR with a mainnet build" env -u CHAIN SIGNER_BUILD_OVERLAY_DIR="$T" bash -c 'printf "true\n" >"$2/hooks.sh"; bash "$1/scripts/build-runner.sh" x86_64' _ "$ROOT" "$T"
+grep -q "build overlay goes into non-prod builds only" "$T/out" && ok "the refusal names the non-prod builds" || bad "overlay refusal: $(cat "$T/out")"
 
 echo "chain-test: $pass passed, $fail failed"
 [ "$fail" = 0 ]

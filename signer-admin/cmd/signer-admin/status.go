@@ -138,7 +138,7 @@ func describe(st *signerState) string {
 		}
 		fmt.Fprintf(&b, " clock=%s(%s)", trust, h.ClockSource)
 	}
-	fmt.Fprintf(&b, " build=%s", st.flavor)
+	fmt.Fprintf(&b, " build=%s", st.chain)
 	return b.String()
 }
 
@@ -146,7 +146,7 @@ func describe(st *signerState) string {
 // by name; differs compares them.
 func facets(st *signerState) map[string]string {
 	s := st.state
-	f := map[string]string{"approvers": hex8(s.ApproverSetHash), "build": string(st.flavor)}
+	f := map[string]string{"approvers": hex8(s.ApproverSetHash), "build": string(st.chain)}
 	for _, g := range groups {
 		gs := groupOf(s, g)
 		f[g.String()] = activeRef(gs).String()

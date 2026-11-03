@@ -55,13 +55,15 @@ These are test images. Production images differ in two settings, so they
 get their own measurements: Azure `STDIO=disable`, GCP `log_redirect`
 never.
 
-### Testnet images (research only)
+### Non-prod images (research and tests only)
 
-The testnet build is the same code built with `-tags testnet`
-(`signer-protocol/buildflavor`). Each governance time lock that is an image
-constant runs one minute for each day of the default build:
+`CHAIN` picks the build (`tee-signer/docs/runner.md`, "The chain switch").
+`hoodi`, `devnet` and `ci-test` are non-prod builds: the same code built
+with `-tags nonprod,chain_<chain>` (`signer-protocol/buildchain`). Each
+governance time lock that is an image constant runs one minute for each
+day of the mainnet build:
 
-| Image constant | Default build | Testnet build |
+| Image constant | Mainnet build | Non-prod build |
 | --- | --- | --- |
 | Default time lock (the setup names none) | 48 hours | 2 minutes |
 | Time lock cap (`change_delay_seconds` at most) | 30 days | 30 minutes |
@@ -70,43 +72,50 @@ constant runs one minute for each day of the default build:
 
 Use them while research changes images, when a week
 per step would stall the work. They never hold real keys: production, and
-every signer whose keys matter, runs the default build. What keeps the two
-apart:
+every signer whose keys matter, runs the mainnet build. What keeps the
+builds apart:
 
-- A testnet runner starts on a devnet, or on Hoodi, Sepolia or Chiado with
-  their exact genesis fork version and genesis validators root. It refuses
-  mainnet, Gnosis, Holesky and LUKSO, any chain with one of their values
-  or a test network's fork version with another root, and the flag path
-  (`governance/flavor/chains.go` names the source of each value).
-  The check runs before the platform starts, so before key release.
+- A non-prod runner starts on its own chain only: the hoodi build on Hoodi
+  with its exact genesis fork version and genesis validators root, the
+  ci-test build on the chain of `governance/chains/chain.ci-test.json`, the
+  devnet build on a chain with the devnet row's genesis fork version
+  (`0x10000038`, ethereum-package's) and a root of its own. A fork version
+  without a row in the chain table is prod. Each refuses
+  mainnet, Gnosis, Holesky, LUKSO, Sepolia and Chiado, the other builds'
+  chains, any chain with one of the public networks' values and not both,
+  and the flag path (`governance/runnerchain/chains.go` names the source of
+  each value). The check runs before the platform starts, so before key
+  release.
 - It says what it is: HEALTH's version and the start log say
-  `0.1.0+testnet`, and its TLS certificate is named
-  `signer-runner testnet`.
+  `0.1.0+hoodi` (`+devnet`, `+ci-test`), and its TLS certificate is named
+  `signer-runner hoodi` (and so on).
 - Every client refuses it in the TLS handshake unless the connection sets
-  `"allow_testnet_build": true`: cloud.json of the signing client and
+  `"allow_chain_build"` to its chain: cloud.json of the signing client and
   signer-admin's runner entries and identity-check;
-  `-allow-testnet-build` for cloud-import and share-import.
-  `platform-gcp/deploy/deploy.sh verifier-config` writes it for a testnet image.
+  `-allow-chain-build CHAIN` for cloud-import and share-import.
+  `platform-gcp/deploy/deploy.sh verifier-config` writes it for a non-prod
+  image. A runner whose certificate names no known build is refused.
 - Its measurements are its own, so key-release policies, `allowed_image_measurements`
-  and the verifier pins name the testnet values, never the default ones,
-  and the reverse.
-- Its setups keep `change_delay_seconds` at 1800 or less (the testnet cap);
-  without one, the 2-minute default holds. `signer-config setup -build
-  testnet` refuses more. signer-config reads each signer's build from
-  HEALTH and drafts with that build's waits.
+  and the verifier pins name the values of one build, and never another's.
+- Its setups keep `change_delay_seconds` at 1800 or less (the non-prod
+  cap); without one, the 2-minute default holds. `signer-admin setup -build
+  hoodi` (or `devnet`, `ci-test`) refuses more. signer-admin reads each
+  signer's build from HEALTH and drafts with that build's waits.
 
-Build, offline: `IMAGE_FLAVOR=testnet scripts/generic-images.sh build`. The
-flavour goes into every name: runners `runner-<cloud>-testnet`, folders
-`build/nitro-testnet` and `build/gcp-testnet`, local images
-`signer-cloud/{azure,gcp}-runner-testnet`, registry tags `generic-testnet-ts`
-(Azure) and `generic-testnet` (GCP), record `cloud/generic-images-testnet.txt`.
+Build, offline: `CHAIN=hoodi scripts/generic-images.sh build`
+(`CHAIN=devnet` also needs `CHAIN_JSON`). The chain goes into every name:
+runners `runner-<cloud>-hoodi`, folders `build/nitro-hoodi` and
+`build/gcp-hoodi`, local images `signer-cloud/{azure,gcp}-runner-hoodi`,
+registry tags `generic-hoodi-ts` (Azure) and `generic-hoodi` (GCP), record
+`cloud/generic-images-hoodi.txt`.
 
-The testnet tests: `tests/e2e` built with `-tags testnet` (from
-`tests/`: `go test -tags testnet -timeout 20m -run TestE2ETestnet -v ./e2e`)
-runs the chain refusals and a testnet dev runner whose allowed-images update
-stays pending past its 2-minute time lock and comes into force 7 minutes
-after it is sent. Deploying testnet images follows the steps below, with the
-testnet values and `allow_testnet_build` in every connection.
+The non-prod tests: `tests/e2e` built with `-tags nonprod,chain_ci_test`
+(from `tests/`: `go test -tags nonprod,chain_ci_test -timeout 20m -run
+TestE2ENonProd -v ./e2e`) runs the chain refusals of each non-prod build
+and a ci-test dev runner whose allowed-images update stays pending past
+its 2-minute time lock and comes into force 7 minutes after it is sent.
+Deploying non-prod images follows the steps below, with `CHAIN` set and
+`allow_chain_build` in every connection.
 
 ### Nitro peer endpoints
 

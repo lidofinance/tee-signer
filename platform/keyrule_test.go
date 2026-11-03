@@ -52,10 +52,10 @@ func TestReadKeyRule(t *testing.T) {
 		{"testnet unread", false, false, KeyRule{Hash: [32]byte{9}}, denied, backend.KeyLockUnread, ""},
 		{"testnet unread with a hash", false, false, KeyRule{Hash: [32]byte{9}, Lock: backend.KeyLockUnread, Why: "ListGrants"}, nil, backend.KeyLockUnread, ""},
 	} {
-		o := Options{SetupHash: setup, Mainnet: c.mainnet, NoLockAccepted: c.accept}
+		o := Options{SetupHash: setup, Prod: c.mainnet, NoLockAccepted: c.accept}
 		got, err := o.ReadKeyRule(context.Background(), read(c.r, c.err))
 		if c.refuse != "" {
-			if err == nil || !strings.Contains(err.Error(), c.refuse) || !strings.HasPrefix(err.Error(), "mainnet: ") {
+			if err == nil || !strings.Contains(err.Error(), c.refuse) || !strings.HasPrefix(err.Error(), "prod chain: ") {
 				t.Errorf("%s: %+v %v, want a refusal with %q", c.name, got, err, c.refuse)
 			}
 			continue
@@ -72,7 +72,7 @@ func TestReadKeyRule(t *testing.T) {
 		}
 	}
 	calls := 0
-	got, err := Options{Mainnet: true}.ReadKeyRule(context.Background(), func(context.Context) (KeyRule, error) { calls++; return open, nil })
+	got, err := Options{Prod: true}.ReadKeyRule(context.Background(), func(context.Context) (KeyRule, error) { calls++; return open, nil })
 	if got != nil || err != nil || calls != 0 {
 		t.Fatalf("flag path: %+v %v after %d reads", got, err, calls)
 	}
@@ -80,7 +80,7 @@ func TestReadKeyRule(t *testing.T) {
 
 // CheckKeyRule counts a platform that read nothing as unread.
 func TestCheckKeyRuleNil(t *testing.T) {
-	if err := (Options{Mainnet: true}).CheckKeyRule(nil); err == nil || !strings.Contains(err.Error(), "read no key rule") {
+	if err := (Options{Prod: true}).CheckKeyRule(nil); err == nil || !strings.Contains(err.Error(), "read no key rule") {
 		t.Fatalf("mainnet, nothing read: %v", err)
 	}
 	if err := (Options{}).CheckKeyRule(nil); err != nil {

@@ -55,9 +55,9 @@ func TestUnsafeSingleKeyAccepted(t *testing.T) {
 	}
 }
 
-// CheckSingleKeyMainnet refuses only the one case where a runner would
+// CheckSingleKeyProd refuses only the one case where a runner would
 // never start: mainnet, a key held alone accepted, no_lock_accepted unset.
-func TestCheckSingleKeyMainnet(t *testing.T) {
+func TestCheckSingleKeyProd(t *testing.T) {
 	for _, c := range []struct {
 		mainnet, single, noLock, refused bool
 	}{
@@ -72,7 +72,7 @@ func TestCheckSingleKeyMainnet(t *testing.T) {
 		if c.mainnet {
 			s.Chain.GenesisForkVersion = MainnetForkVersion
 		}
-		err := CheckSingleKeyMainnet(&s.Platform, s.Chain.GenesisForkVersion)
+		err := CheckSingleKeyProd(&s.Platform, s.Chain.GenesisForkVersion)
 		if refused := err != nil; refused != c.refused {
 			t.Errorf("mainnet %v single %v no_lock %v: err %v, want refused %v", c.mainnet, c.single, c.noLock, err, c.refused)
 		}

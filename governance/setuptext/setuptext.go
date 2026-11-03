@@ -23,7 +23,7 @@ import (
 
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-protocol"
-	"github.com/lidofinance/tee-signer/signer-protocol/buildflavor"
+	"github.com/lidofinance/tee-signer/signer-protocol/buildchain"
 )
 
 // The human form: "key = value" lines,
@@ -874,8 +874,8 @@ func formatLocked(w *printer, l *setupwire.Locked) {
 		w.kv("change_delay_seconds", *l.ChangeDelaySeconds)
 	} else {
 		// Both builds' values, so the text does not depend on the tool's build.
-		w.note("change_delay_seconds absent: the image default, %d in a default build, %d in a testnet build",
-			buildflavor.DefaultFlavorTimeLock, buildflavor.TestnetFlavorTimeLock)
+		w.note("change_delay_seconds absent: the image default, %d in a mainnet build, %d in a non-prod build",
+			buildchain.MainnetTimeLock, buildchain.ShortTimeLock)
 	}
 	for _, im := range l.AllowedImageMeasurements {
 		if im.Kind == setupwire.ImageNitro {

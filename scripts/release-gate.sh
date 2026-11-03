@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Release gate (T-127): a default build carries no bypass code.
+# Release gate (T-127): a mainnet build carries no bypass code.
 #
 #   release-gate.sh list <default|release>
 #       print the forbid list, one string per line
 #   release-gate.sh binary <file> <release|debug>
 #       fail if SIGNER_BUILD_OVERLAY_DIR (the build overlay) is
 #       set, or if the binary holds a string of the default list (any
-#       default-flavour build, debug builds too) or, for a release build,
+#       mainnet build, debug builds too) or, for a release build,
 #       of the release list. scripts/build-runner.sh runs it on every
-#       default-flavour runner it builds.
+#       mainnet runner it builds.
 #   release-gate.sh deps <module dir> <tags> <package>
 #       fail if the package links "testing", net/http/httptest or a
 #       test-only package (fakes, test helpers, fuzz oracles, the goroutine
@@ -42,14 +42,20 @@ extra() {
   done <"$f"
 }
 
-# Strings no default-flavour runner may hold, debug builds included.
+# Strings no mainnet runner may hold, debug builds included: the parts and
+# marks of the non-prod builds (signer-protocol/buildchain).
 default_list() {
   cat <<'L'
 admin-root-direct
 allow-unlisted-image
-imageoverride_testnet.go
-signer-runner testnet
-0.1.0+testnet
+imageoverride_nonprod.go
+tee-signer/runnerchain.go
+signer-runner hoodi
+signer-runner devnet
+signer-runner ci-test
+0.1.0+hoodi
+0.1.0+devnet
+0.1.0+ci-test
 signer-build-overlay
 net-state-dir
 L
@@ -91,14 +97,14 @@ FORBIDDEN_BRANCHES="${RELEASE_GATE_FORBIDDEN_BRANCHES-} $(extra branch)"
 check_binary() {
   local file="$1" kind="$2" s tags bad=0
   case "$kind" in release|debug) ;; *) echo "release gate: kind $kind, want release or debug" >&2; return 2 ;; esac
-  # The build overlay is for testnet builds only.
+  # The build overlay is for non-prod builds only.
   if [ -n "${SIGNER_BUILD_OVERLAY_DIR:-}" ]; then
-    echo "release gate: SIGNER_BUILD_OVERLAY_DIR is set; a default build takes no build overlay" >&2
+    echo "release gate: SIGNER_BUILD_OVERLAY_DIR is set; a mainnet build takes no build overlay" >&2
     return 1
   fi
   [ -f "$file" ] || { echo "release gate: no file $file" >&2; return 2; }
   while IFS= read -r s; do
-    if grep -qaF -- "$s" "$file"; then echo "release gate: $file holds \"$s\" (a default build carries no bypass code)" >&2; bad=1; fi
+    if grep -qaF -- "$s" "$file"; then echo "release gate: $file holds \"$s\" (a mainnet build carries no bypass code)" >&2; bad=1; fi
   done < <(default_list)
   if [ "$kind" = release ]; then
     tags="$(go version -m "$file" 2>/dev/null | awk '$1 == "build" && $2 ~ /^-tags=/ { sub(/^-tags=/, "", $2); print $2 }' || true)"

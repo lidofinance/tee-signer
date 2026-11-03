@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/signer-protocol"
-	"github.com/lidofinance/tee-signer/signer-protocol/buildflavor"
+	"github.com/lidofinance/tee-signer/signer-protocol/buildchain"
 )
 
 const makeTestCA = "../../scripts/make-test-ca.sh"
@@ -134,7 +134,7 @@ func TestTestPKIRoles(t *testing.T) {
 		t.Fatal(err)
 	}
 	rootDirect := RoleNone // the admin mark on a leaf straight under the root
-	if buildflavor.AdminRootDirect {
+	if buildchain.AdminRootDirect {
 		rootDirect = RoleAdminRootDirect
 	}
 	for name, want := range map[string]Role{"client": RoleSigning, "attest-client": RoleAttestOnly,
@@ -262,9 +262,9 @@ func TestRoleOf(t *testing.T) {
 	bothCA := roleCA(t, root, "admin and attest CA", ca, admin, attest)
 	adminSub := roleCA(t, roleCA(t, root, "admin CA that may issue CAs", ca, admin), "admin sub CA", ca)
 	// A leaf with the admin mark straight under the root: admin only in a
-	// testnet build, no role in a default build. Run under both tags.
+	// non-prod build, no role in a mainnet build. Run under each build's tags.
 	rootDirect := RoleNone
-	if buildflavor.AdminRootDirect {
+	if buildchain.AdminRootDirect {
 		rootDirect = RoleAdminRootDirect
 	}
 	cfg, _, err := ServerConfig(certPEM(root.cert), nil)

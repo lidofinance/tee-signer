@@ -28,7 +28,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/signer-protocol"
-	"github.com/lidofinance/tee-signer/signer-protocol/buildflavor"
+	"github.com/lidofinance/tee-signer/signer-protocol/buildchain"
 	"github.com/lidofinance/tee-signer/signer-protocol/transport"
 )
 
@@ -83,7 +83,7 @@ func ServerConfig(caPEM []byte, now func() (time.Time, error), opts ...Option) (
 	t0 := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: buildflavor.CertName}, // names a testnet build
+		Subject:               pkix.Name{CommonName: buildchain.CertName}, // names a non-prod build's chain
 		NotBefore:             t0.Add(-time.Hour),
 		NotAfter:              t0.Add(10 * 365 * 24 * time.Hour),
 		KeyUsage:              x509.KeyUsageDigitalSignature,
@@ -277,7 +277,7 @@ const (
 	// direct issuer, an intermediate with pathlen:0 that a pinned root
 	// signed.
 	RoleAdmin
-	// RoleAdminRootDirect: testnet builds only. backend.AdminClientOID on a
+	// RoleAdminRootDirect: non-prod builds only. backend.AdminClientOID on a
 	// leaf signed straight by a pinned root. Same rights as RoleAdmin.
 	RoleAdminRootDirect
 )
@@ -291,10 +291,10 @@ func (r Role) String() string {
 	case RoleAdmin:
 		return "admin"
 	case RoleAdminRootDirect:
-		// The name lives in the testnet flavour only, so a default
+		// The name lives in non-prod builds only, so a mainnet
 		// binary does not hold it (scripts/release-gate.sh).
-		if buildflavor.AdminRootDirect {
-			return buildflavor.AdminRootDirectRole
+		if buildchain.AdminRootDirect {
+			return buildchain.AdminRootDirectRole
 		}
 	}
 	return "none"
@@ -327,10 +327,10 @@ func hasEKU(c *x509.Certificate, oid asn1.ObjectIdentifier) bool {
 //     that reaches only an unmarked intermediate thus cannot mint an
 //     admin certificate, whatever path length that intermediate allows
 //     (ATTEST-ROLES-02).
-//  3. Testnet builds only (buildflavor.AdminRootDirect): admin-root-direct
+//  3. Non-prod builds only (buildchain.AdminRootDirect): admin-root-direct
 //     if, in some verified chain, the leaf lists backend.AdminClientOID and
 //     its issuer is the chain's self-signed root (not an intermediate of
-//     the CA file). Default builds skip this rule.
+//     the CA file). Mainnet builds skip this rule.
 //  4. RoleNone if the leaf lists backend.AdminClientOID: an admin
 //     certificate that fails rules 2 and 3 gets no rights, never the
 //     signing role. A CA file that also pins the admin intermediate
@@ -359,7 +359,7 @@ func RoleOf(cs *tls.ConnectionState) Role {
 			return RoleAdmin
 		}
 	}
-	if buildflavor.AdminRootDirect {
+	if buildchain.AdminRootDirect {
 		for _, chain := range cs.VerifiedChains {
 			if len(chain) == 2 && chain[0].Equal(cs.PeerCertificates[0]) && hasEKU(chain[0], backend.AdminClientOID) && selfSigned(chain[1]) {
 				return RoleAdminRootDirect

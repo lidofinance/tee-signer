@@ -1,8 +1,8 @@
-//go:build !testnet
+//go:build !nonprod
 
 package main
 
-// A default build has no -allow-unlisted-image: the image check
-// (imagecheck.go) always holds. imageoverride_testnet.go is the testnet
+// A mainnet build has no -allow-unlisted-image: the image check
+// (imagecheck.go) always holds. imageoverride_nonprod.go is the non-prod
 // build's counterpart.
 func imageOverride() bool { return false }

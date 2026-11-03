@@ -24,7 +24,7 @@ import (
 	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-protocol"
-	"github.com/lidofinance/tee-signer/signer-protocol/buildflavor"
+	"github.com/lidofinance/tee-signer/signer-protocol/buildchain"
 	"github.com/lidofinance/tee-signer/signer-protocol/sealedimport"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
 	wireadmin "github.com/lidofinance/tee-signer/signer-protocol/wire/admin"
@@ -33,7 +33,7 @@ import (
 	"github.com/lidofinance/tee-signer/trusted-time/clock"
 )
 
-const Version = "0.1.0" + buildflavor.VersionSuffix // HEALTH's version; "+testnet" in a testnet build
+const Version = "0.1.0" + buildchain.VersionSuffix // HEALTH's version; "+<chain>" in a non-prod build
 
 // handshakeTimeout is how long a TLS peer has to finish the handshake. A
 // variable so a test can shorten it.

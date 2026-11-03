@@ -15,7 +15,7 @@ const (
 	// ImageUnknown: the runner cannot tell its own image, or cannot read the
 	// list in force; it serves as for ImageNotAllowed.
 	ImageUnknown = "unknown"
-	// ImageOverride: not on the list, served anyway under the testnet
+	// ImageOverride: not on the list, served anyway under the non-prod
 	// build's -allow-unlisted-image.
 	ImageOverride = "override"
 	// ImageNotApplicable: the dev platform, which has no image kind.

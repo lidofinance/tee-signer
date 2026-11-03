@@ -83,7 +83,7 @@ import (
 	"strings"
 
 	"github.com/lidofinance/tee-signer/signer-protocol"
-	"github.com/lidofinance/tee-signer/signer-protocol/buildflavor"
+	"github.com/lidofinance/tee-signer/signer-protocol/buildchain"
 )
 
 const (
@@ -100,12 +100,12 @@ const (
 )
 
 // Image constants; the times are
-// the build flavour's (backend/buildflavor). MaxKeysCap is "above 5,000" there.
+// the build chain's (signer-protocol/buildchain). MaxKeysCap is "above 5,000" there.
 const (
-	DefaultTimeLock   = buildflavor.TimeLock // seconds, when the setup names no change delay
-	MaxTimeLock       = buildflavor.MaxTimeLock
-	ActivationHorizon = buildflavor.ActivationHorizon // past the required wait
-	ImagesMinTimeLock = buildflavor.ImagesMinTimeLock
+	DefaultTimeLock   = buildchain.TimeLock // seconds, when the setup names no change delay
+	MaxTimeLock       = buildchain.MaxTimeLock
+	ActivationHorizon = buildchain.ActivationHorizon // past the required wait
+	ImagesMinTimeLock = buildchain.ImagesMinTimeLock
 	MaxKeysCap        = 8192
 	MaxSetup          = 64 << 10 // bytes
 	MaxAllowedImages  = 32

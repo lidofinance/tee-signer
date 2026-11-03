@@ -14,7 +14,7 @@
 //	    on stderr (setupwire.UnsafeSingleKeyWarning); encode and check.
 //	    On mainnet such a setup also needs
 //	    sealing_key_release.no_lock_accepted, or encode refuses it
-//	    (setupwire.CheckSingleKeyMainnet), as signer-admin setup does.
+//	    (setupwire.CheckSingleKeyProd), as signer-admin setup does.
 //	setup-tool check [-platform P] [-chain CHAIN_JSON] FILE
 //	    Decode FILE strictly and print setup_sha256, platform, signer,
 //	    signing_mode, policy_root and platform_commitment, and one
@@ -109,7 +109,7 @@ func encode(human, out string) error {
 	if err != nil {
 		return err
 	}
-	if err := setupwire.CheckSingleKeyMainnet(&s.Platform, s.Chain.GenesisForkVersion); err != nil {
+	if err := setupwire.CheckSingleKeyProd(&s.Platform, s.Chain.GenesisForkVersion); err != nil {
 		return err
 	}
 	if !s.Salted() {

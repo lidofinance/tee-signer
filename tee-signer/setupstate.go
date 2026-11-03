@@ -48,11 +48,11 @@ func newConfigUpdates(st *setup.Setup, l server.UpdateLog, clk platform.Clock, p
 // verifier's pin is zero. The mainnet rule runs here once more for a platform that read
 // nothing (nil KeyRule), so no image starts on mainnet without the check.
 // The flag path (no setup) reads nothing and gives the zero rule.
-func keyRule(hasSetup, mainnet, noLockAccepted bool, plat *platform.Platform, log *slog.Logger) (platform.KeyRule, error) {
+func keyRule(hasSetup, prod, noLockAccepted bool, plat *platform.Platform, log *slog.Logger) (platform.KeyRule, error) {
 	if !hasSetup {
 		return platform.KeyRule{}, nil
 	}
-	if err := (platform.Options{Mainnet: mainnet, NoLockAccepted: noLockAccepted}).CheckKeyRule(plat.KeyRule); err != nil {
+	if err := (platform.Options{Prod: prod, NoLockAccepted: noLockAccepted}).CheckKeyRule(plat.KeyRule); err != nil {
 		return platform.KeyRule{}, err
 	}
 	r := plat.KeyRule
@@ -72,10 +72,10 @@ func keyRule(hasSetup, mainnet, noLockAccepted bool, plat *platform.Platform, lo
 			"key_lock", r.Lock.String(), "why", r.Why)
 	case backend.KeyLockNone:
 		log.Warn("key release self-check: the platform has no key-rule lock", "key_lock", r.Lock.String(), "why", r.Why,
-			"mainnet", mainnet)
+			"prod", prod)
 	default:
 		log.Info("key release self-check", "key_release_sha256", hex.EncodeToString(r.Hash[:]), "key_lock", r.Lock.String(),
-			"mainnet", mainnet)
+			"prod", prod)
 	}
 	out := *r
 	if out.Lock != backend.KeyLockLocked {

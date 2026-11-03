@@ -14,7 +14,7 @@ import (
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/verify"
-	"github.com/lidofinance/tee-signer/governance/flavor"
+	"github.com/lidofinance/tee-signer/governance/runnerchain"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	admincluster "github.com/lidofinance/tee-signer/signer-admin/cluster"
 	cloud "github.com/lidofinance/tee-signer/signer-protocol"
@@ -93,10 +93,10 @@ func loadConn(path string) (*runnerclient.Connection, error) { return adminclust
 type signerState struct {
 	state  *cloud.SetupState
 	health *cloud.Health
-	// flavor is the runner's build flavour, from HEALTH's version. A
-	// testnet runner's governance times run in minutes; the connection
-	// refuses one unless cloud.json sets allow_testnet_build.
-	flavor flavor.Flavor
+	// chain is the chain of the runner's build, from HEALTH's version. A
+	// non-prod runner's governance times run in minutes; the connection
+	// refuses one unless cloud.json sets allow_chain_build to its chain.
+	chain runnerchain.Chain
 }
 
 // readState connects with conn (TLS, attestation, setup pins), asks for
@@ -107,18 +107,18 @@ func readState(ctx context.Context, m *member, conn *runnerclient.Connection, ti
 	if err != nil {
 		return nil, nil, err
 	}
-	return &signerState{state: st.State, health: st.Health, flavor: st.Flavor}, cl, nil
+	return &signerState{state: st.State, health: st.Health, chain: st.Chain}, cl, nil
 }
 
-// clusterLimits are the governance times of the signers' build flavour,
-// which the waits of updates and orders follow. Signers of two flavours in
-// one draft are refused.
-func clusterLimits(c *cluster, states []*signerState) (flavor.Flavor, flavor.Limits, error) {
-	f := states[0].flavor
+// clusterLimits are the governance times of the signers' build, which the
+// waits of updates and orders follow. Signers of two builds in one draft
+// are refused.
+func clusterLimits(c *cluster, states []*signerState) (runnerchain.Chain, runnerchain.Limits, error) {
+	f := states[0].chain
 	for i, st := range states {
-		if st.flavor != f {
-			return "", flavor.Limits{}, fmt.Errorf("signer %s is a %s build and %s a %s build; draft for signers of one build flavour (-signers)",
-				c.members[0].name, f, c.members[i].name, st.flavor)
+		if st.chain != f {
+			return "", runnerchain.Limits{}, fmt.Errorf("signer %s is a %s build and %s a %s build; draft for signers of one build (-signers)",
+				c.members[0].name, f, c.members[i].name, st.chain)
 		}
 	}
 	return f, f.Limits(), nil

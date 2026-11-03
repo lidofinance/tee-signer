@@ -1,9 +1,9 @@
 // Command identity-check connects to one runner the way the signing
 // client does and checks its attestation, several times, each time on a new
 // connection. It sends no request but IDENTITY, and one HEALTH after the
-// first accepted run, whose version names the runner's build flavour
-// (default, or testnet: a testnet runner is refused unless the config sets
-// allow_testnet_build). It imports nothing.
+// first accepted run, whose version names the chain of the runner's build
+// (mainnet, or a non-prod build: hoodi, devnet or ci-test, refused unless
+// the config sets allow_chain_build to its chain). It imports nothing.
 //
 //	identity-check -config <secrets-dir>/gcp-signer.json -address tcp:HOST:7100
 //
@@ -38,7 +38,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
-	"github.com/lidofinance/tee-signer/governance/flavor"
+	"github.com/lidofinance/tee-signer/governance/runnerchain"
 	"github.com/lidofinance/tee-signer/platform/jwtclaims"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
@@ -100,9 +100,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "run %d: accepted (%s)\n", i, conn.Attestation.Verifier)
 		if accepted == 1 {
 			if h, err := healthOnce(&conn, *timeout); err != nil {
-				fmt.Fprintf(stdout, "flavour: %v\n", err)
+				fmt.Fprintf(stdout, "build: %v\n", err)
 			} else {
-				fmt.Fprintf(stdout, "flavour: %s build (version %s)\n", flavor.FromVersion(h.Version), h.Version)
+				fmt.Fprintf(stdout, "build: %s (version %s)\n", runnerchain.FromVersion(h.Version), h.Version)
 			}
 		}
 		if accepted == 1 && id.Attestation != nil && id.Attestation.Format == "gcp-confidential-space-jwt" {

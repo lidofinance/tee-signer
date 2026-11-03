@@ -61,7 +61,7 @@ set -euo pipefail
 
 die() { echo "nitro-eif: $*" >&2; exit 1; }
 
-for v in CHAIN CHAIN_JSON CLIENT_CA REGION KMS_KEY_ARN MARK_BUCKET MARK_SIGNER; do
+for v in CLIENT_CA REGION KMS_KEY_ARN MARK_BUCKET MARK_SIGNER; do
   [ -z "${!v:-}" ] || die "$v is set, but the image is generic now: it goes into the signer's setup (signer-admin/cmd/setup-tool), not into the image"
 done
 
@@ -73,8 +73,8 @@ case "$arch" in
 esac
 # One nitro-cli image per host arch. It builds EIFs for both arches.
 NITRO_IMAGE="signer-cloud/nitro-cli:$NITRO_CLI_TAG-$HOST_ARCH"
-# IMAGE_FLAVOR=testnet takes the testnet build (runner-aws-testnet,
-# build/nitro-testnet).
+# CHAIN picks the build (scripts/common.sh): a non-prod chain takes its own
+# runner and folder (runner-aws-hoodi, build/nitro-hoodi).
 SUFFIX="$(image_suffix)"
 TAGS="netgo,osusergo,$(runner_tags "runner-aws$SUFFIX")"
 ENCLAVE_IMAGE="signer-cloud/runner-enclave$SUFFIX:$arch"
@@ -92,7 +92,7 @@ if [ "${NITRO_CLI_REUSE:-}" = 1 ]; then
 else
   bash "$ROOT/scripts/nitro-cli-image.sh" >/dev/null
 fi
-IMAGE_FLAVOR="$IMAGE_FLAVOR" bash "$ROOT/scripts/build-runner.sh" "$arch" >/dev/null 2>&1
+bash "$ROOT/scripts/build-runner.sh" "$arch" >/dev/null 2>&1
 RUNNER="$BUILD/$arch/bin/runner-aws$SUFFIX"
 [ -x "$RUNNER" ] || die "$RUNNER was not built"
 if grep -qa -- "allow-import" "$RUNNER"; then

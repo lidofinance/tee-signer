@@ -8,30 +8,29 @@ import (
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/signer-protocol"
-	"github.com/lidofinance/tee-signer/signer-protocol/buildflavor"
+	"github.com/lidofinance/tee-signer/signer-protocol/buildchain"
 )
 
-// Release gate: only a testnet build has -allow-unlisted-image, so no
-// default build, and no cloud image of one, can serve an image the allowed
+// Release gate: only a non-prod build has -allow-unlisted-image, so no
+// mainnet build, and no cloud image of one, can serve an image the allowed
 // list in force does not name. scripts/build-runner.sh checks the built
-// binaries for the flag's name too. Run under both tags: go test, go test
-// -tags testnet.
-func TestImageOverrideOnlyInTestnetBuilds(t *testing.T) {
+// binaries for the flag's name too. Run under each build's tags: go test, go test
+// -tags nonprod,chain_<name>.
+func TestImageOverrideOnlyInNonProdBuilds(t *testing.T) {
 	f := flag.Lookup("allow-unlisted-image")
-	switch buildflavor.Name {
-	case "testnet":
+	if !buildchain.Prod {
 		if f == nil {
-			t.Fatal("a testnet build without -allow-unlisted-image")
+			t.Fatal("a non-prod build without -allow-unlisted-image")
 		}
 		if imageOverride() {
 			t.Fatal("the override is on without the flag")
 		}
-	default:
+	} else {
 		if f != nil {
-			t.Fatal("a default build has -allow-unlisted-image")
+			t.Fatal("a mainnet build has -allow-unlisted-image")
 		}
 		if imageOverride() {
-			t.Fatal("a default build turned the override on")
+			t.Fatal("a mainnet build turned the override on")
 		}
 	}
 }

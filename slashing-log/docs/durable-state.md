@@ -284,7 +284,7 @@ order in the slot.
 
 ## The network entry's node state
 
-The runner has no network entry code. A testnet build can add one through
+The runner has no network entry code. A non-prod build can add one through
 the build hook `SIGNER_BUILD_OVERLAY_DIR` (`scripts/common.sh`). Such an entry may keep its node
 state in the runner's store, sealed and bound to setup_hash like the
 shares, so the state copy holds it too. On AWS a network entry runs on the

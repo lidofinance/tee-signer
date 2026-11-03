@@ -99,7 +99,7 @@ func (d *durableCopy) checkStore(ctx context.Context, l markstore.Log, warn bool
 	cancel()
 	switch {
 	case err != nil && d.requireLock:
-		return fmt.Errorf("-state-store: mainnet: %w", err)
+		return fmt.Errorf("-state-store: prod chain: %w", err)
 	case err != nil:
 		d.log.Warn("state copy: the store is not locked; its admin can delete the copy, and with it the sealed shares where the local store does not last",
 			"err", err)

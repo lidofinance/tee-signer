@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lidofinance/tee-signer/governance/flavor"
+	"github.com/lidofinance/tee-signer/governance/runnerchain"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	cloud "github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
@@ -23,8 +23,8 @@ type configModel struct {
 	hash  [32]byte
 	// groups by setupwire.Group: index 1 locked, 2 open.
 	groups [3]groupModel
-	// limits are the governance times of the build flavour it plays.
-	limits flavor.Limits
+	// limits are the governance times of the build it plays.
+	limits runnerchain.Limits
 }
 
 type groupModel struct {
@@ -50,7 +50,7 @@ func newConfigModel(raw []byte) (*configModel, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &configModel{setup: s, hash: h, limits: flavor.Default.Limits()}
+	c := &configModel{setup: s, hash: h, limits: runnerchain.Mainnet.Limits()}
 	for _, g := range []setupwire.Group{setupwire.GroupLocked, setupwire.GroupOpen} {
 		if c.groups[g].hash, err = s.GroupHash(g); err != nil {
 			return nil, err
@@ -164,12 +164,12 @@ func unixNow() uint64 { return uint64(max(time.Now().Unix(), 0)) }
 // as a runner with that setup does, with its clock trusted.
 func StartSetup(t testing.TB, raw []byte) *Runner {
 	t.Helper()
-	return StartSetupAs(t, raw, flavor.Default)
+	return StartSetupAs(t, raw, runnerchain.Mainnet)
 }
 
-// StartSetupAs is StartSetup for a runner of build flavour f: its
-// certificate's name, its HEALTH version and its waits are that flavour's.
-func StartSetupAs(t testing.TB, raw []byte, f flavor.Flavor) *Runner {
+// StartSetupAs is StartSetup for a runner of the build of chain f: its
+// certificate's name, its HEALTH version and its waits are that build's.
+func StartSetupAs(t testing.TB, raw []byte, f runnerchain.Chain) *Runner {
 	t.Helper()
 	m, err := newConfigModel(raw)
 	if err != nil {

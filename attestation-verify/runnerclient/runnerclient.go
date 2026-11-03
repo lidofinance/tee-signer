@@ -7,8 +7,8 @@
 //
 //  1. TLS 1.3 handshake, with the client certificate. The runner's own
 //     certificate is self-signed inside the TEE, so it is not checked
-//     against a CA. A certificate that names a testnet build is refused
-//     unless allow_testnet_build is set (tlsConfig).
+//     against a CA. A certificate that names a non-prod build is
+//     refused unless allow_chain_build names its chain (tlsConfig).
 //  2. IDENTITY with a fresh nonce, over the new channel.
 //  3. The verifier checks the attestation document: "dev" for the dev
 //     platform's unsigned document, "azure-maa" for an MAA token (signature
@@ -44,9 +44,9 @@ import (
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/internal/optset"
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/verify"
+	"github.com/lidofinance/tee-signer/governance/runnerchain"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-protocol"
-	"github.com/lidofinance/tee-signer/signer-protocol/buildflavor"
 	"github.com/lidofinance/tee-signer/signer-protocol/remote"
 	"github.com/lidofinance/tee-signer/signer-protocol/transport"
 )
@@ -88,8 +88,10 @@ type Connection struct {
 	TLSKeyPin string `json:"tls_key_pin,omitempty"`
 	// Attestation says how to verify the runner's identity. Required.
 	Attestation Attestation `json:"attestation"`
-	// AllowTestnetBuild accepts a runner of a testnet build (tlsConfig). Default: refused.
-	AllowTestnetBuild bool `json:"allow_testnet_build,omitempty"`
+	// AllowChainBuild accepts a runner of the non-prod build of this
+	// chain: hoodi, devnet or ci-test (tlsConfig). Empty: mainnet runners
+	// only.
+	AllowChainBuild string `json:"allow_chain_build,omitempty"`
 }
 
 // ResolvePaths makes relative client_cert, client_key and gcp_jwks_file
@@ -129,7 +131,8 @@ func (c *Connection) Validate() error {
 }
 
 // New returns a client for the runner. It does not connect until the first
-// request. It refuses an invalid configuration, and testnet runners (tlsConfig).
+// request. It refuses an invalid configuration, and non-prod runners of
+// another chain than allow_chain_build (tlsConfig).
 func (c *Connection) New(opts ...Option) (*Client, error) {
 	o := optset.New(opts)
 	p, err := c.prepare(o)
@@ -177,6 +180,11 @@ func (c *Connection) prepare(o *optset.Options) (*prepared, error) {
 	if addr.Network != "tcp" {
 		return nil, fmt.Errorf("address: %q is not a tcp: address; connect to the runner's TCP port (on AWS, the forwarder in front of the enclave)", c.Address)
 	}
+	if c.AllowChainBuild != "" {
+		if ch, err := runnerchain.Parse(c.AllowChainBuild); err != nil || ch.Prod() {
+			return nil, fmt.Errorf("allow_chain_build: %q is not a chain of a non-prod build (hoodi, devnet or ci-test)", c.AllowChainBuild)
+		}
+	}
 	p := &prepared{}
 	if p.cert, err = loadPair(c.ClientCert, c.ClientKey); err != nil {
 		return nil, err
@@ -221,38 +229,32 @@ func loadPair(certPath, keyPath string) (tls.Certificate, error) {
 	return cert, nil
 }
 
-// The build flavour of a runner (backend/flavor). A testnet build runs its
-// governance time locks in minutes and starts on devnets and test networks
-// only, so a client takes one only when its connection says so:
-// allow_testnet_build. The check runs in the TLS handshake of every
+// The build of a runner (governance/runnerchain). A non-prod build runs
+// its governance time locks in minutes and starts on its own chain only,
+// so a client takes one only when its connection names that chain:
+// allow_chain_build. The check runs in the TLS handshake of every
 // connection, before IDENTITY and before any request: the runner's
-// certificate names its flavour. Only the runner holds the certificate's
+// certificate names its build. Only the runner holds the certificate's
 // key, and the attestation check after the handshake ties that key to the
-// attested identity, so the name comes from the runner's code.
+// attested identity, so the name comes from the runner's code. A name that
+// no build makes is refused.
 //
-// The verifier of a cloud image pins its measurement too, and a testnet
-// image has measurements of its own, so cloud.json names either a default
-// or a testnet image. The dev verifier pins no measurement; there this
-// check is what keeps the builds apart.
+// The verifier of a cloud image pins its measurement too, and each build
+// has measurements of its own, so cloud.json names an image of one build.
+// The dev verifier pins no measurement; there this check is what keeps the
+// builds apart.
 //
-// Tools print the flavour from HEALTH's version (backend/flavor
-// FromVersion).
-//
-// This code is at the end of the file, and the package imports only the
-// constants of backend/buildflavor for it, so that the runners, which
-// link this package, stay byte for byte as they were in
-// their default build: the functions above keep their lines, and no
-// package with code joins the binary.
+// Tools print the build from HEALTH's version (runnerchain.FromVersion).
 
 // tlsConfig is the client's TLS configuration: the client certificate,
-// TLS 1.3, and the flavour check.
+// TLS 1.3, and the build check.
 func (c *Connection) tlsConfig(cert tls.Certificate) *tls.Config {
-	allow, mainnet := c.AllowTestnetBuild, c.Attestation.Mainnet
+	allow, mainnet := runnerchain.Chain(c.AllowChainBuild), c.Attestation.Mainnet
 	return &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		MinVersion:   tls.VersionTLS13,
 		VerifyConnection: func(cs tls.ConnectionState) error {
-			if err := checkFlavor(cs, allow); err != nil {
+			if err := checkBuild(cs, allow); err != nil {
 				return err
 			}
 			return checkChain(cs, mainnet)
@@ -260,8 +262,9 @@ func (c *Connection) tlsConfig(cert tls.Certificate) *tls.Config {
 	}
 }
 
-// checkChain refuses a runner whose certificate says it signs for mainnet
-// when the settings do not say mainnet, and the reverse. The setting
+// checkChain refuses a runner whose certificate names a prod chain
+// (setupwire.ProdChain) when the settings do not say mainnet, and the
+// reverse. The setting
 // decides the mainnet rules of the client (key_release_sha256 for
 // azure-maa and aws-nitro), and the identity names no chain, so without
 // this a setting left out failed open. The certificate's key is the one
@@ -278,10 +281,10 @@ func checkChain(cs tls.ConnectionState, mainnet bool) error {
 		return err
 	case !ok:
 		return nil
-	case setupwire.IsMainnet(gfv) && !mainnet:
-		return fmt.Errorf("the runner signs for mainnet (genesis fork version %#x in its certificate); "+
+	case setupwire.ProdChain(gfv) && !mainnet:
+		return fmt.Errorf("the runner signs for a prod chain: mainnet or a chain without a row in the chain table (genesis fork version %#x in its certificate); "+
 			"set mainnet in its attestation settings, which makes key_release_sha256 mandatory for azure-maa and aws-nitro", gfv[:])
-	case !setupwire.IsMainnet(gfv) && mainnet:
+	case !setupwire.ProdChain(gfv) && mainnet:
 		return fmt.Errorf("the attestation settings say mainnet, but the runner signs for genesis fork version %#x", gfv[:])
 	}
 	return nil
@@ -304,14 +307,21 @@ func runnerChain(c *x509.Certificate) (gfv backend.Version, ok bool, err error) 
 	return gfv, false, nil
 }
 
-// checkFlavor refuses a testnet runner unless allow.
-func checkFlavor(cs tls.ConnectionState, allow bool) error {
+// checkBuild refuses a runner of a non-prod build unless allow is its
+// chain, and a runner whose certificate names no build.
+func checkBuild(cs tls.ConnectionState, allow runnerchain.Chain) error {
 	if len(cs.PeerCertificates) == 0 {
 		return nil // the dial refuses a runner without a certificate
 	}
-	if cs.PeerCertificates[0].Subject.CommonName == buildflavor.TestnetCertName && !allow {
-		return errors.New("the runner is a testnet build (governance time locks in minutes, test networks only); " +
-			"set allow_testnet_build in its connection settings to accept it")
+	cn := cs.PeerCertificates[0].Subject.CommonName
+	c, ok := runnerchain.FromCertName(cn)
+	switch {
+	case !ok:
+		return fmt.Errorf("the runner's certificate names %q, not a build this client knows (%q for mainnet, %q and the chain for a non-prod build)",
+			cn, runnerchain.MainnetCertName, runnerchain.MainnetCertName)
+	case !c.Prod() && c != allow:
+		return fmt.Errorf("the runner is a %s build (governance time locks in minutes, chain %s only); "+
+			"set allow_chain_build to %q in its connection settings to accept it", c, c, c)
 	}
 	return nil
 }

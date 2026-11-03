@@ -10,7 +10,7 @@ import (
 
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-protocol"
-	"github.com/lidofinance/tee-signer/signer-protocol/buildflavor"
+	"github.com/lidofinance/tee-signer/signer-protocol/buildchain"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
 	wireadmin "github.com/lidofinance/tee-signer/signer-protocol/wire/admin"
 )
@@ -248,18 +248,18 @@ func TestImageCheckUnknownAndNotApplicable(t *testing.T) {
 	}
 }
 
-// Release gate: a default build has no override. NewImageGate refuses one,
-// so no code path of a default build serves an image the list does not
-// name. The testnet build's override is tested in imagegate_testnet_test.go.
+// Release gate: a mainnet build has no override. NewImageGate refuses one,
+// so no code path of a mainnet build serves an image the list does not
+// name. The non-prod build's override is tested in imagegate_nonprod_test.go.
 func TestImageCheckDefaultBuildHasNoOverride(t *testing.T) {
-	if buildflavor.Name != "default" {
-		t.Skip("default build only")
+	if !buildchain.Prod {
+		t.Skip("mainnet build only")
 	}
 	_, err := NewImageGate(ctx, ImageGateOptions{Platform: "gcp", SelfImage: selfIs(testImage(setupwire.ImageGCP, 1)), Override: true, Log: quiet})
-	if !errors.Is(err, ErrOverrideInDefaultBuild) {
-		t.Fatalf("override in a default build: %v", err)
+	if !errors.Is(err, ErrOverrideInMainnetBuild) {
+		t.Fatalf("override in a mainnet build: %v", err)
 	}
-	if !strings.Contains(err.Error(), "only a testnet build") {
+	if !strings.Contains(err.Error(), "only a non-prod build") {
 		t.Fatalf("unclear refusal: %v", err)
 	}
 }

@@ -42,7 +42,7 @@ case "$arch" in amd64) arch=x86_64 ;; arm64) arch=aarch64 ;; esac
 TOOL="$work/build/$arch/bin/setup-tool"
 mkdir -p "$(dirname "$TOOL")"
 (cd "$ROOT/signer-admin" && CGO_ENABLED=0 go build -trimpath -buildvcs=false -o "$TOOL" ./cmd/setup-tool)
-"$TOOL" chain-lines "$ROOT/governance/chains/chain.testnet.json" >"$work/chain.lines"
+"$TOOL" chain-lines "$ROOT/governance/chains/chain.ci-test.json" >"$work/chain.lines"
 make_setup() { # make_setup SAMPLE OUT [KEY=VALUE...]
   local sample="$1" out="$2" kv
   shift 2
@@ -59,6 +59,9 @@ make_setup() { # make_setup SAMPLE OUT [KEY=VALUE...]
 mkdir -p "$work/build/gcp"
 digest="sha256:$(printf 'target' | sha256sum | cut -d' ' -f1)"
 echo "$digest" >"$work/build/gcp/runner.digest"
+# vm-create takes setups of the ci-test chain, so CHAIN=ci-test and its
+# build folder; the other steps run with the default chain.
+ln -s gcp "$work/build/gcp-ci-test"
 T3=(VM=signer-node-3b ADDRESS_NAME=signer-node-3b-ip KMS_KEY=sealing-3b WIF_POOL=signer-pool-3b WIF_PROVIDER=signer-attestation-3b)
 gcp() { env "$@" NETWORK_ENTRY=public MARK_STORE=gcs:bucket=signer-marks-3 bash "$work/platform-gcp/deploy/deploy.sh" "${GCP_CMD[@]}"; }
 GCP_CMD=(plan)
@@ -112,7 +115,7 @@ names="$(env "${T3[@]}" bash -c '. "$1/platform-gcp/deploy/common.sh" && printf 
 make_setup setup-gcp.conf "$work/gcp-3b.bin" "sealing_key_release.wif_provider=$(sed -n 1p <<<"$names")" "sealing_key_release.kms_key=$(sed -n 2p <<<"$names")"
 names0="$(bash -c '. "$1/platform-gcp/deploy/common.sh" && printf "%s\n%s\n" "$WIF_PROVIDER_RESOURCE" "$KMS_KEY_RESOURCE"' _ "$work")"
 make_setup setup-gcp.conf "$work/gcp-3.bin" "sealing_key_release.wif_provider=$(sed -n 1p <<<"$names0")" "sealing_key_release.kms_key=$(sed -n 2p <<<"$names0")"
-vm_create() { run_rc env "${T3[@]}" CHAIN=testnet NETWORK_ENTRY=public SETUP_FILE="$1" bash "$work/platform-gcp/deploy/deploy.sh" vm-create; }
+vm_create() { run_rc env "${T3[@]}" CHAIN=ci-test NETWORK_ENTRY=public SETUP_FILE="$1" bash "$work/platform-gcp/deploy/deploy.sh" vm-create; }
 vm_create "$work/gcp-3b.bin"
 [ "$rc" = 3 ] && grep -q 'step vm-create: signer-node-3b' <<<"$out" && grep -q 'external address signer-node-3b-ip' <<<"$out" &&
   ok "gcp vm-create of the target: its setup passes, VM and address are the target's" || bad "gcp vm-create target: rc $rc $out"
@@ -124,6 +127,7 @@ vm_create "$work/gcp-3.bin"
 out_az="$work/build/azure"
 mkdir -p "$out_az"
 echo "sha256:$(printf 'az' | sha256sum | cut -d' ' -f1)" >"$out_az/runner.digest"
+ln -s azure "$work/build/azure-ci-test"
 A1=(GROUP_NAME_1=signer-1b KEY_NAME_1=signer-1b-kek)
 az_env=(ACR_NAME=signeracr VAULT=signer-vault LOCATION_1=northeurope)
 # The render and group-deploy need a network entry, which only the build
@@ -151,7 +155,7 @@ grep -q 'key-create 1 *signer-1b-kek' <<<"$p" && grep -q 'group-deploy 1 *signer
 az_ok=("sealing_key_release.maa_endpoint=sharedneu.neu.attest.azure.net" "sealing_key_release.akv_endpoint=signer-vault.vault.azure.net")
 make_setup setup-azure.conf "$work/az-1b.bin" "${az_ok[@]}" "sealing_key_release.kid=signer-1b-kek"
 make_setup setup-azure.conf "$work/az-1.bin" "${az_ok[@]}" "sealing_key_release.kid=signer-kek-1"
-deploy() { run_rc env "${A1[@]}" "${az_env[@]}" CHAIN=testnet "SETUP_FILE_1=$1" bash "$work/platform-azure/deploy/deploy.sh" group-deploy 1; }
+deploy() { run_rc env "${A1[@]}" "${az_env[@]}" CHAIN=ci-test "SETUP_FILE_1=$1" bash "$work/platform-azure/deploy/deploy.sh" group-deploy 1; }
 if [ "$net" = 1 ]; then
 deploy "$work/az-1b.bin"
 [ "$rc" = 3 ] && grep -q 'deploy confidential container group signer-1b in northeurope' <<<"$out" &&

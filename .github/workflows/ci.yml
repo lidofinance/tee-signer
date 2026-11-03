@@ -23,6 +23,9 @@ concurrency:
 env:
   GOWORK: "off"
   GOTOOLCHAIN: local
+  # The build switch (scripts/common.sh): CI builds and tests the mainnet
+  # build. scripts/test.sh adds the non-prod dev runners' chain checks.
+  CHAIN: mainnet
 
 jobs:
   guards:

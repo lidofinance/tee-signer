@@ -103,41 +103,80 @@ cc_for() {
 RUNNER_RELEASE_BINS=(runner-azure runner-aws runner-gcp)
 RUNNER_BINS=(runner-azure runner-aws runner-gcp runner-dev runner-dev-debugimport runner-azure-debugimport runner-aws-debugimport runner-gcp-debugimport)
 
-# IMAGE_FLAVOR is the build flavour of the runners and images
-# (signer-protocol/buildflavor): default, or testnet, the same code built with
-# -tags testnet, whose governance times run in minutes (a 2-minute default
-# time lock, a 7-minute images minimum) and which starts on devnets, Hoodi,
-# Sepolia and Chiado only. With testnet the runner lists above hold the
-# release builds of that flavour instead (no debug builds):
-#   runner-azure-testnet, runner-aws-testnet, runner-gcp-testnet, runner-dev-testnet
-# and the image scripts put FLAVOR_SUFFIX (-testnet) into build folders,
-# local image names, registry tags and fingerprint files, so testnet and
-# default images never overwrite each other.
-IMAGE_FLAVOR="${IMAGE_FLAVOR:-default}"
-case "$IMAGE_FLAVOR" in
-  default) FLAVOR_SUFFIX="" ;;
-  testnet) FLAVOR_SUFFIX="-testnet" ;;
-  *) echo "IMAGE_FLAVOR=$IMAGE_FLAVOR: want default or testnet" >&2; exit 1 ;;
-esac
-if [ "$IMAGE_FLAVOR" = testnet ]; then
-  RUNNER_RELEASE_BINS=(runner-azure-testnet runner-aws-testnet runner-gcp-testnet)
-  RUNNER_BINS=("${RUNNER_RELEASE_BINS[@]}" runner-dev-testnet)
+# ---- chains -----------------------------------------------------------------
+# CHAIN is the one build switch: the chain the runners and images are built
+# for, and the chain the deploy steps take setups of. Unset is mainnet.
+#   mainnet  Ethereum mainnet, governance/chains/mainnet.json (pinned to the
+#            chain's published config). The prod build: the design's
+#            governance waits (a 2-day default time lock, a 7-day images
+#            minimum), the build for real keys.
+#   hoodi    the public testnet, governance/chains/hoodi.json (pinned to the
+#            chain's published config)
+#   devnet   a local Kurtosis devnet. Its genesis changes with every devnet,
+#            so CHAIN_JSON must name the file (platform-azure/deploy/chain-from-devnet.sh)
+#   ci-test  governance/chains/chain.ci-test.json, a test chain that no
+#            network runs, for tests and CI only
+# hoodi, devnet and ci-test are non-prod builds: the same code built with
+# -tags nonprod,chain_<name> (signer-protocol/buildchain), whose governance
+# times run in minutes (a 2-minute default time lock, a 7-minute images
+# minimum), and which start on their own chain only. Their runners carry
+# the chain in their names (runner-azure-hoodi, runner-dev-ci-test, no
+# debug builds), and the image scripts put "-<chain>" (image_suffix) into
+# build folders, local image names, registry tags and fingerprint files, so
+# images of two chains never overwrite each other. The mainnet names have
+# no suffix: they are the names of the builds before the switch.
+#
+# PROD_CHAINS are the prod chains; the chain table of the Go code
+# (governance/setupwire chains.go) has the same rows, and a test there
+# compares the two.
+CHAINS="mainnet hoodi devnet ci-test"
+PROD_CHAINS="mainnet"
+CHAIN_TOOL="$ROOT/governance/chains/chain.sh"
+
+# check_chain_name NAME: one of $CHAINS.
+check_chain_name() {
+  case " $CHAINS " in
+    *" ${1:-} "*) ;;
+    *) echo "CHAIN must be one of: $CHAINS (got '${1:-}')" >&2; return 1 ;;
+  esac
+}
+
+# chain_is_prod NAME: NAME is a prod chain (PROD_CHAINS).
+chain_is_prod() { case " $PROD_CHAINS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+
+# chain_tags NAME: the Go build tags of the chain's build: none for a prod
+# chain, nonprod and chain_<name> ("-" as "_") otherwise.
+chain_tags() {
+  if chain_is_prod "$1"; then echo ""; else echo "nonprod,chain_${1//-/_}"; fi
+}
+
+CHAIN="${CHAIN:-mainnet}"
+check_chain_name "$CHAIN" || exit 1
+export CHAIN
+
+if ! chain_is_prod "$CHAIN"; then
+  RUNNER_RELEASE_BINS=(runner-azure-"$CHAIN" runner-aws-"$CHAIN" runner-gcp-"$CHAIN")
+  RUNNER_BINS=("${RUNNER_RELEASE_BINS[@]}" runner-dev-"$CHAIN")
 fi
 
 # image_suffix: the suffix of an image's runner, folder, names and record:
-# the flavour (-testnet, or nothing).
-image_suffix() { echo "$FLAVOR_SUFFIX"; }
+# "-<chain>" for a non-prod chain, nothing for mainnet.
+image_suffix() { if chain_is_prod "$CHAIN"; then echo ""; else echo "-$CHAIN"; fi; }
 
 # runner_tags <binary name>: its platform tags, then debugimport for a debug
-# build, then nts for a cloud build, then testnet for that flavour. No
-# runner links an attestation verifier (scripts/check-deps.sh). The cloud runners (azure, aws,
-# gcp and their debug builds) link the Rust NTS library (trusted-time,
-# build/nts/<arch>/lib) and their images run the NTS clock (-nts-clock).
-# The dev builds stay without it.
+# build, then nts for a cloud build, then the chain tags of a non-prod
+# build. No runner links an attestation verifier (scripts/check-deps.sh).
+# The cloud runners (azure, aws, gcp and their debug builds) link the Rust
+# NTS library (trusted-time, build/nts/<arch>/lib) and their images run the
+# NTS clock (-nts-clock). The dev builds stay without it.
 runner_tags() { runner_base_tags "$1"; }
 runner_base_tags() {
+  local c
+  for c in $CHAINS; do
+    chain_is_prod "$c" && continue
+    case "$1" in runner-*-"$c") echo "$(runner_base_tags "${1%-"$c"}"),$(chain_tags "$c")"; return ;; esac
+  done
   case "$1" in
-    runner-*-testnet) echo "$(runner_base_tags "${1%-testnet}"),testnet" ;;
     runner-azure) echo platform_azure,nts ;;
     runner-aws) echo platform_aws,nts ;;
     runner-gcp) echo platform_gcp,nts ;;
@@ -152,46 +191,31 @@ runner_base_tags() {
 
 log() { printf '[cloud] %s\n' "$*" >&2; }
 
-# ---- chains -----------------------------------------------------------------
-# The images are generic: the chain config is in each signer's setup. The deploy steps name
-# the chain in CHAIN and refuse a setup of another chain (check_setup below,
-# with the chain config governance/chains/chain.sh verifies). write_build_chain
-# and check_build_chain are the record of the per-chain images before the
+# ---- chain configs ----------------------------------------------------------
+# The images hold no chain config: it is in each signer's setup. The build
+# checks CHAIN_JSON (chain_select), and the deploy steps refuse a setup of
+# another chain than CHAIN (check_setup below, with the chain config
+# governance/chains/chain.sh verifies). write_build_chain and
+# check_build_chain are the record of the per-chain images before the
 # setup; no image build writes it now.
-#   hoodi    the public testnet, governance/chains/hoodi.json (pinned to the chain's
-#            published config)
-#   devnet   the local Kurtosis devnet. Its genesis changes with every devnet,
-#            so CHAIN_JSON must name the file (platform-azure/deploy/chain-from-devnet.sh)
-#   testnet  governance/chains/chain.testnet.json, a test chain that no network runs
-CHAINS="hoodi devnet testnet"
-CHAIN_TOOL="$ROOT/governance/chains/chain.sh"
 
-# chain_suffix NAME: the suffix of the build folders and local image tags.
-# Empty for devnet and testnet, the folders used before chains had names.
+# chain_suffix NAME: the suffix of the deploy folders and local file names.
+# Empty for devnet and ci-test, the folders used before chains had names.
 chain_suffix() {
   case "$1" in
-    devnet | testnet) echo "" ;;
+    devnet | ci-test) echo "" ;;
     *) echo "-$1" ;;
   esac
 }
 
-# check_chain_name NAME: one of $CHAINS.
-check_chain_name() {
-  case " $CHAINS " in
-    *" ${1:-} "*) ;;
-    *) echo "CHAIN must be one of: $CHAINS (got '${1:-}')" >&2; return 1 ;;
-  esac
-}
-
-# chain_select: CHAIN must be set. Sets CHAIN_JSON to governance/chains/$CHAIN.json
-# (governance/chains/chain.testnet.json for testnet) when it is unset, and checks that the
+# chain_select: sets CHAIN_JSON to governance/chains/$CHAIN.json
+# (governance/chains/chain.ci-test.json for ci-test) when it is unset, and checks that the
 # file is a chain config of $CHAIN.
 chain_select() {
-  [ -n "${CHAIN:-}" ] || { echo "set CHAIN to the chain of the image: $CHAINS" >&2; return 1; }
   check_chain_name "$CHAIN" || return 1
   if [ -z "${CHAIN_JSON:-}" ]; then
     case "$CHAIN" in
-      testnet) CHAIN_JSON="$ROOT/governance/chains/chain.testnet.json" ;;
+      ci-test) CHAIN_JSON="$ROOT/governance/chains/chain.ci-test.json" ;;
       devnet) echo "CHAIN=devnet needs CHAIN_JSON (platform-azure/deploy/chain-from-devnet.sh writes it)" >&2; return 1 ;;
       *) CHAIN_JSON="$ROOT/governance/chains/$CHAIN.json" ;;
     esac
@@ -211,7 +235,6 @@ write_build_chain() {
 # $CHAIN, and CHAIN_FILE (the chain.json of that build) is still that file.
 check_build_chain() {
   local record="$1" file="$2" name sum
-  [ -n "${CHAIN:-}" ] || { echo "set CHAIN to the chain you deploy ($CHAINS)" >&2; return 1; }
   check_chain_name "$CHAIN" || return 1
   [ -s "$record" ] || { echo "no $record: build again with CHAIN=$CHAIN" >&2; return 1; }
   name="$(sed -n 's/^chain \(.*\)$/\1/p' "$record")"
@@ -286,9 +309,9 @@ has_nts() { case ",$(runner_tags "$1")," in *,nts,*) return 0 ;; *) return 1 ;; 
 
 # The build overlay. SIGNER_BUILD_OVERLAY_DIR names a folder outside this
 # repo whose hooks.sh adds parts to a build: runner files (go build
-# -overlay), its own programs, image and deploy parts. Testnet builds only: build-runner.sh and the release gate
-# (release-gate.sh) refuse a default build while it is set. Unset, this
-# tree builds nothing of it.
+# -overlay), its own programs, image and deploy parts. Non-prod builds only:
+# build-runner.sh and the release gate (release-gate.sh) refuse a mainnet
+# build while it is set. Unset, this tree builds nothing of it.
 OVERLAY_DIR="${SIGNER_BUILD_OVERLAY_DIR:-}"
 if [ -n "$OVERLAY_DIR" ]; then
   [ -r "$OVERLAY_DIR/hooks.sh" ] || { echo "SIGNER_BUILD_OVERLAY_DIR=$OVERLAY_DIR has no hooks.sh" >&2; exit 1; }

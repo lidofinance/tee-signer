@@ -10,7 +10,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/lidofinance/tee-signer/governance/flavor"
+	"github.com/lidofinance/tee-signer/governance/runnerchain"
 	"github.com/lidofinance/tee-signer/governance/setuptext"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 )
@@ -121,18 +121,18 @@ func buildSetups(name string, data []byte, clusterID [32]byte) ([]*setupwire.Set
 func cmdSetup(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
 	dir := fs.String("out", "", "folder for the binary setups, one NAME.setup per signer")
-	build := fs.String("build", string(flavor.Default), fmt.Sprintf("the runners' build flavour, default or testnet; a testnet runner refuses a time lock above %d s at start, so this refuses it here",
-		flavor.Testnet.Limits().MaxTimeLock))
+	build := fs.String("build", string(runnerchain.Mainnet), fmt.Sprintf("the chain of the runners' build: mainnet, hoodi, devnet or ci-test; a non-prod runner (all but mainnet) refuses a time lock above %d s at start, so this refuses it here",
+		runnerchain.Devnet.Limits().MaxTimeLock))
 	allowGCPSingle := fs.Bool("allow-gcp-unsafe-single-key", false, "accept, in the setup of a one-signer GCP cluster, that the signer holds keys alone (1 of 1); UNSAFE: "+setupwire.UnsafeSingleKeyWarning)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	fl := flavor.Flavor(*build)
-	if fl != flavor.Default && fl != flavor.Testnet {
-		return fmt.Errorf("-build %q: default or testnet", *build)
+	fl, err := runnerchain.Parse(*build)
+	if err != nil {
+		return fmt.Errorf("-build: %w", err)
 	}
 	if *dir == "" || fs.NArg() != 1 {
-		return errors.New("usage: signer-admin setup [-build default|testnet] [-allow-gcp-unsafe-single-key] -out DIR FILE")
+		return errors.New("usage: signer-admin setup [-build mainnet|hoodi|devnet|ci-test] [-allow-gcp-unsafe-single-key] -out DIR FILE")
 	}
 	data, err := os.ReadFile(fs.Arg(0))
 	if err != nil {
@@ -146,7 +146,7 @@ func cmdSetup(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	// The parser checks the default build's cap (30 days); a testnet
+	// The parser checks the mainnet build's cap (30 days); a non-prod
 	// build's is 30 minutes.
 	for _, s := range setups {
 		if err := fl.Limits().CheckTimeLock(&s.Locked); err != nil {
@@ -191,7 +191,7 @@ func cmdSetup(args []string, out io.Writer) error {
 		if err := setupwire.CheckThresholdOn(s, len(setups), len(setups)); err != nil {
 			return fmt.Errorf("signer %s: a cluster of %d signer(s) can hold no key: %w", s.SignerName, len(setups), err)
 		}
-		if err := setupwire.CheckSingleKeyMainnet(&s.Platform, s.Chain.GenesisForkVersion); err != nil {
+		if err := setupwire.CheckSingleKeyProd(&s.Platform, s.Chain.GenesisForkVersion); err != nil {
 			return fmt.Errorf("signer %s: %w in the signer's section (-allow-gcp-unsafe-single-key does not set it)", s.SignerName, err)
 		}
 		if k.NoLockAccepted {

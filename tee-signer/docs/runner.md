@@ -10,7 +10,7 @@ containers, plus a dev platform for local tests. Clients reach it over the
 wire protocol (`signer-protocol/docs/protocol.md`) inside mutual TLS bound to
 its attested identity.
 
-## Build flavours and binaries
+## Builds and binaries
 
 ### One runner per cloud
 
@@ -27,7 +27,7 @@ the platforms of the tags it was built with:
 | `platform_dev` | `dev` | nothing outside the standard library |
 | `nts` | | the NTS clock (`trusted-time`), which the cloud runners use |
 | `debugimport` | | plaintext `IMPORT_SHARE`, `-allow-import`, and the fake-hardware options of the Azure and Nitro tests. Never in an image. |
-| `testnet` | | the testnet flavour (below) |
+| `nonprod`, `chain_hoodi`, `chain_devnet`, `chain_ci_test` | | a non-prod build of that chain (below) |
 
 Every binary also holds the embedded root certificates
 (`golang.org/x/crypto/x509roots/fallback`), because the images have no CA
@@ -56,24 +56,59 @@ the Azure, GCP and dev builds that list holds the embedded roots only. It
 also reads the binaries (`go version -m`): their tags and linked modules
 must be the expected ones. `build-runner.sh` runs it.
 
-### Default and testnet flavour
+### The chain switch
 
-`IMAGE_FLAVOR=default` (the default) or `IMAGE_FLAVOR=testnet` picks the
-flavour of every runner and image build. A testnet build has the `testnet`
-tag, governance time locks in minutes, the version suffix `+testnet` in
-HEALTH, a TLS certificate name of its own (`governance/flavor`), and the
-`-allow-unlisted-image` override of the image check. Clients refuse a
-testnet runner unless their settings allow it. The binaries of a testnet
-build carry `-testnet` in their names.
+`CHAIN` picks the chain of every runner and image build: `mainnet` (when
+`CHAIN` is unset), `hoodi`, `devnet` or `ci-test`. One property follows the
+chain, `prod`, from the chain table in `governance/setupwire/chains.go`:
 
-The release gate (`scripts/release-gate.sh`) checks every default-flavour
-binary and its dependencies against a forbid list: no testnet role or
+| `CHAIN` | prod | Governance waits | Tags | Version | Certificate name |
+| --- | --- | --- | --- | --- | --- |
+| `mainnet` | yes | the design's: 2-day default time lock, 7-day images minimum | none | `0.1.0` | `signer-runner` |
+| `hoodi` | no | one minute per day: 2 minutes, 7 minutes | `nonprod,chain_hoodi` | `0.1.0+hoodi` | `signer-runner hoodi` |
+| `devnet` | no | the same | `nonprod,chain_devnet` | `0.1.0+devnet` | `signer-runner devnet` |
+| `ci-test` | no | the same | `nonprod,chain_ci_test` | `0.1.0+ci-test` | `signer-runner ci-test` |
+
+The table fails closed: a genesis fork version without a row is prod, so
+a setup of an unknown chain gets the strict checks (the threshold rule's
+2t - n >= 2, the key rule lock, the GCP single-key rule), and clients
+treat its runner as a mainnet one. The devnet row names the fork version
+of ethereum-package devnets, `0x10000038`, the one
+`governance/chains/chain.sh identify` takes as a devnet; a devnet with a
+fork version of its own counts as prod.
+
+The mainnet build is the build for real keys, with the checks and waits
+of the build before the switch. A non-prod build also has the
+`-allow-unlisted-image` override of the image check, and starts on its own
+chain only (`tee-signer/runnerchain.go`, `governance/runnerchain`): the
+hoodi build on Hoodi with its exact genesis fork version and genesis
+validators root, the ci-test build on the chain of
+`governance/chains/chain.ci-test.json`, the devnet build on a chain with
+the devnet row's fork version and a root of its own. Each refuses every
+prod chain (mainnet, and any fork version without a row), every other public
+network, and a chain with one of their genesis values and not both.
+Clients refuse a non-prod runner unless `allow_chain_build` in their
+settings names its chain. The binaries of a non-prod build carry the chain
+in their names (`runner-azure-hoodi`, `runner-dev-ci-test`).
+
+`scripts/build-runner.sh` checks the chain config `CHAIN_JSON`
+(`governance/chains/<chain>.json` when unset) with `governance/chains/chain.sh
+verify`. A devnet has no file in the tree, so a custom devnet build names
+its own:
+
+    CHAIN=devnet CHAIN_JSON=<file> scripts/build-runner.sh
+
+`platform-azure/deploy/chain-from-devnet.sh` writes that file from the
+devnet's beacon node.
+
+The release gate (`scripts/release-gate.sh`) checks every mainnet binary
+and its dependencies against a forbid list: no non-prod role, mark or
 override, no debug or test-only code. `RELEASE_GATE_FORBID_FILE` adds
 entries from a list kept outside the tree. `build-runner.sh`
 runs it on every binary, and `scripts/test.sh` runs its self-test.
 
 `SIGNER_BUILD_OVERLAY_DIR` names a folder outside this repo whose `hooks.sh`
-adds files to a testnet build; a default build refuses it.
+adds files to a non-prod build; a mainnet build refuses it.
 
 ### Plaintext import
 
@@ -181,7 +216,7 @@ With a setup the runner checks its own image against the setup's
 check before any share is unsealed, and again on every request that signs,
 hands over or imports. An image the list does not name stays up with its
 shares sealed and answers HEALTH (`image`), keys, attestation and
-CONFIG_UPDATE only. A default build cannot turn the check off; a testnet
+CONFIG_UPDATE only. A mainnet build cannot turn the check off; a non-prod
 build has `-allow-unlisted-image`.
 
 ### Start-up refusals
@@ -205,16 +240,17 @@ chose the KMS key could have shares sealed under a key it controls.
 
 ### Chains
 
-The images hold no chain: the chain config is in each signer's setup, and
-the runner puts setup_hash, which covers it, in its attested identity. The
-deploy steps name the chain in `CHAIN` and refuse a setup of another chain
-(`setup-tool check -chain`).
+The images hold no chain config: it is in each signer's setup, and the
+runner puts setup_hash, which covers it, in its attested identity. `CHAIN`
+picks the build (above), and the deploy steps refuse a setup of another
+chain than `CHAIN` (`setup-tool check -chain`).
 
 | Chain | `CHAIN` | Chain config |
 | --- | --- | --- |
+| Ethereum mainnet | `mainnet` (default) | `governance/chains/mainnet.json` |
 | Hoodi, the public testnet | `hoodi` | `governance/chains/hoodi.json` |
 | a local test chain | `devnet` | `CHAIN_JSON` from `platform-azure/deploy/chain-from-devnet.sh` |
-| the test chain of the tests | `testnet` | `governance/chains/chain.testnet.json` |
+| the test chain of the tests and CI, which no network runs | `ci-test` | `governance/chains/chain.ci-test.json` |
 
 A setup holds one fork per epoch. Where a chain config lists several forks
 at one epoch, the last is the one in force, and the setup holds that one

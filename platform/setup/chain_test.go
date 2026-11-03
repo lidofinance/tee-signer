@@ -81,8 +81,8 @@ func TestChainLinesAndCompare(t *testing.T) {
 		t.Fatalf("setup from hoodi.json: %+v %+v", s.Chain, s.Open)
 	}
 	// Another chain, or the same chain with one chain field changed.
-	if err := CompareChain(s, chainFile(t, "chain.testnet.json")); err == nil || !strings.Contains(err.Error(), "genesis_validators_root") {
-		t.Fatalf("testnet: %v", err)
+	if err := CompareChain(s, chainFile(t, "chain.ci-test.json")); err == nil || !strings.Contains(err.Error(), "genesis_validators_root") {
+		t.Fatalf("ci-test: %v", err)
 	}
 	for name, mutate := range map[string]func(c *ChainFile){
 		"genesis time":    func(c *ChainFile) { c.GenesisTime++ },

@@ -47,8 +47,9 @@
 #                 GCP setup of chain CHAIN, naming this project's WIF
 #                 provider, KMS key and identity audience) and puts it,
 #                 base64, into the instance metadata attribute signer-setup
-#   CHAIN         vm-create: the chain of the setup, hoodi, devnet or
-#                 testnet (governance/chains/chain.sh picks its chain config)
+#   CHAIN         the chain of the build and of the setup: mainnet (the
+#                 default), hoodi, devnet or ci-test (governance/chains/chain.sh
+#                 picks its chain config)
 #   OPERATOR_IP   public IPv4 address of the machine that runs the signing client
 #                 (firewall-create; one address, /32)
 #   HARDWARE      amd-sev (default, THIS TEST ONLY) or intel-tdx (production)
@@ -497,15 +498,15 @@ cmd_verifier_config() {
   chmod 700 "$dir"
   (
     umask 077
-    # A testnet image (IMAGE_FLAVOR=testnet): the client takes it only with
-    # allow_testnet_build.
+    # A non-prod image (CHAIN hoodi, devnet or ci-test): the client takes it
+    # only with allow_chain_build set to its chain.
     jq -n --arg addr "$addr" --arg cert "$cert" --arg key "$key" --arg digest "$digest" \
       --arg aud "$IDENTITY_AUDIENCE" --arg hw "$GCP_HWMODELS" --arg sa "$SERVICE_ACCOUNT" --arg project "$PROJECT_ID" \
-      --arg flavor "$IMAGE_FLAVOR" '{
+      --arg allow "$(chain_is_prod "$CHAIN" || echo "$CHAIN")" '{
         address: $addr, client_cert: $cert, client_key: $key,
         attestation: {verifier: "gcp-cs", gcp_image_digest: $digest, gcp_audience: $aud,
           gcp_hwmodels: [$hw], gcp_service_account: $sa, gcp_project_id: $project}
-      } + (if $flavor == "testnet" then {allow_testnet_build: true} else {} end)' >"$dir/gcp-signer$CHAIN_SUFFIX.json"
+      } + (if $allow != "" then {allow_chain_build: $allow} else {} end)' >"$dir/gcp-signer$CHAIN_SUFFIX.json"
   )
   chmod 600 "$dir/gcp-signer$CHAIN_SUFFIX.json"
   echo "wrote $dir/gcp-signer$CHAIN_SUFFIX.json (mode 600): the Connection of attestation-verify/runnerclient for this signer, chain $CHAIN" >&2

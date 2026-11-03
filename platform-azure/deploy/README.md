@@ -627,7 +627,7 @@ network the validator client signs for. The image has none.
 - The tests (`tests/e2e`, `signer-core/core`) build a made-up chain with
   `software.DevConfig`: a genesis validators root of
   `sha256("tee-signer dev chain")`, 12 s slots, one fork at epoch 10.
-  `governance/chains/chain.testnet.json` is the same chain as a file.
+  `governance/chains/chain.ci-test.json` is the same chain as a file.
 - `chain-from-devnet.sh [BEACON_URL [OUT]]` reads a local test chain's
   beacon node (default `http://127.0.0.1:33001`) the same way the signing
   client's local test mode does, and writes `chain.json`. It sets the policy

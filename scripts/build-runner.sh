@@ -19,11 +19,11 @@
 #                            the dev platform too, so the vsock tests run on it
 #   runner-gcp-debugimport   test build: the GCP runner with STS, IAM and KMS at a
 #                            test URL (tests/e2e mark log tests)
-#   with IMAGE_FLAVOR=testnet, instead of the runners above (common.sh):
-#   runner-<cloud>-testnet, runner-dev-testnet
-#                            release builds with -tags testnet: governance
-#                            times in minutes, devnets and test networks only
-#                            (signer-protocol/buildflavor)
+#   with CHAIN=hoodi, devnet or ci-test, instead of the runners above (common.sh):
+#   runner-<cloud>-<chain>, runner-dev-<chain>
+#                            release builds with -tags nonprod,chain_<chain>:
+#                            governance times in minutes, that chain only
+#                            (signer-protocol/buildchain)
 #   hostagent                pure Go (Nitro parent side, tag platform_aws for vsock)
 #   forwarder                pure Go (Nitro parent side): TCP to vsock, no TLS
 #   udprelay                 pure Go (Nitro parent side): the NTS clock's NTP datagrams
@@ -37,17 +37,24 @@
 #
 # Only the three release binaries named after a cloud go into images; the
 # debug builds never do. The script checks that every binary is static and of
-# the arch asked for, that every default-flavour binary passes the release
-# gate (scripts/release-gate.sh: no testnet role, legacy or
+# the arch asked for, that every mainnet binary passes the release
+# gate (scripts/release-gate.sh: no non-prod role, legacy or
 # debug code, no test-only package in a release build), that no
-# default-flavour binary has the image check
-# override -allow-unlisted-image and every testnet one has it, that no
+# mainnet binary has the image check
+# override -allow-unlisted-image and every non-prod one has it, that no
 # release binary has the -allow-import flag or a
 # test option (test_nsm_url, test_snp_hostdata, test_imds_url, test_google_url) and that the
 # debug builds have them, that a build without a platform tag refuses to
 # start, and, through scripts/check-deps.sh, that no binary links the code of
 # a cloud it does not run on. hostagent and forwarder need no C compiler, so
 # the aarch64 ones (the parent side of a Graviton instance) build on any host.
+#
+# CHAIN (common.sh) picks the build: mainnet when unset. The chain config
+# CHAIN_JSON (governance/chains/<chain>.json when unset; a devnet has none
+# in the tree) must be a config of that chain; the build checks it and
+# does not put it into the binaries. A custom devnet build:
+#
+#   CHAIN=devnet CHAIN_JSON=<file> scripts/build-runner.sh
 #
 # Usage: build-runner.sh [x86_64|aarch64 ...]   default: same arch list as build-core.sh
 set -euo pipefail
@@ -77,11 +84,13 @@ has_string() {
   fi
 }
 
-# The build overlay is for testnet builds only (release gate).
-if [ -n "$OVERLAY_DIR" ] && [ "$IMAGE_FLAVOR" != testnet ]; then
-  echo "SIGNER_BUILD_OVERLAY_DIR is set: the build overlay goes into testnet builds only, unset it for IMAGE_FLAVOR=$IMAGE_FLAVOR" >&2
+# The build overlay is for non-prod builds only (release gate).
+if [ -n "$OVERLAY_DIR" ] && chain_is_prod "$CHAIN"; then
+  echo "SIGNER_BUILD_OVERLAY_DIR is set: the build overlay goes into non-prod builds only (CHAIN=hoodi, devnet or ci-test), unset it for CHAIN=$CHAIN" >&2
   exit 1
 fi
+chain_select
+log "chain $CHAIN, chain config $CHAIN_JSON$(chain_is_prod "$CHAIN" || echo ", non-prod build (-tags $(chain_tags "$CHAIN"))")"
 mapfile -t OVERLAY_FLAGS < <(go_overlay_flags)
 
 bash "$ROOT/scripts/check-deps.sh"
@@ -119,9 +128,9 @@ for arch in "${archs[@]}"; do
         has_string "$out/$name" allow-import no "a release build has no plaintext import flag" ;;
     esac
     # The release gate's forbid lists (scripts/release-gate.sh): every
-    # default-flavour build, and the release list for the builds that are
-    # not debug builds, with their dependencies.
-    if [ "$IMAGE_FLAVOR" = default ]; then
+    # mainnet build, and the release list for the builds that are not debug
+    # builds, with their dependencies.
+    if chain_is_prod "$CHAIN"; then
       case "$name" in
         *-debugimport) bash "$ROOT/scripts/release-gate.sh" binary "$out/$name" debug ;;
         *)
@@ -129,22 +138,25 @@ for arch in "${archs[@]}"; do
           GOOS=linux GOARCH="$(goarch_of "$arch")" CGO_ENABLED=1             bash "$ROOT/scripts/release-gate.sh" deps "$ROOT/tee-signer" "netgo,osusergo,$(runner_tags "$name")" . ;;
       esac
     fi
-    # The flavour shows in HEALTH's version and the TLS certificate's name.
-    case "$name" in
-      *-testnet)
-        if [ -n "$OVERLAY_DIR" ]; then
-          has_string "$out/$name" signer-build-overlay yes "a testnet build with SIGNER_BUILD_OVERLAY_DIR has the overlay"
-        else
-          has_string "$out/$name" signer-build-overlay no "a testnet build without SIGNER_BUILD_OVERLAY_DIR has no overlay"
-        fi
-        has_string "$out/$name" "signer-runner testnet" yes "a testnet build names its flavour in its certificate"
-        has_string "$out/$name" "0.1.0+testnet" yes "a testnet build names its flavour in its version"
-        has_string "$out/$name" allow-unlisted-image yes "a testnet build has the image check override" ;;
-      *)
-        has_string "$out/$name" "signer-runner testnet" no "a default build is not a testnet build"
-        has_string "$out/$name" "0.1.0+testnet" no "a default build is not a testnet build"
-        has_string "$out/$name" allow-unlisted-image no "a default build always holds the image check (signer-protocol/docs/protocol.md, Image check)" ;;
-    esac
+    # The chain of a non-prod build shows in HEALTH's version and the TLS
+    # certificate's name.
+    if ! chain_is_prod "$CHAIN"; then
+      if [ -n "$OVERLAY_DIR" ]; then
+        has_string "$out/$name" signer-build-overlay yes "a non-prod build with SIGNER_BUILD_OVERLAY_DIR has the overlay"
+      else
+        has_string "$out/$name" signer-build-overlay no "a non-prod build without SIGNER_BUILD_OVERLAY_DIR has no overlay"
+      fi
+      has_string "$out/$name" "signer-runner $CHAIN" yes "a non-prod build names its chain in its certificate"
+      has_string "$out/$name" "0.1.0+$CHAIN" yes "a non-prod build names its chain in its version"
+      has_string "$out/$name" allow-unlisted-image yes "a non-prod build has the image check override"
+    else
+      for c in $CHAINS; do
+        chain_is_prod "$c" && continue
+        has_string "$out/$name" "signer-runner $c" no "a mainnet build is not a $c build"
+        has_string "$out/$name" "0.1.0+$c" no "a mainnet build is not a $c build"
+      done
+      has_string "$out/$name" allow-unlisted-image no "a mainnet build always holds the image check (signer-protocol/docs/protocol.md, Image check)"
+    fi
     for opt in test_nsm_url test_snp_hostdata test_imds_url test_google_url; do
       case "$name:$opt" in
         runner-aws-debugimport:test_nsm_url|runner-azure-debugimport:test_snp_hostdata|runner-azure-debugimport:test_imds_url|runner-gcp-debugimport:test_google_url)
@@ -171,8 +183,8 @@ for arch in "${archs[@]}"; do
   done
   # The old file name of the dev debug runner, as a copy that replaces the
   # old file in one step (a process that runs the old one keeps it). A
-  # testnet run builds no debug runner.
-  if [ "$IMAGE_FLAVOR" = default ]; then
+  # non-prod run builds no debug runner.
+  if chain_is_prod "$CHAIN"; then
     cp "$out/runner-dev-debugimport" "$out/.runner-debugimport.$$"
     mv -f "$out/.runner-debugimport.$$" "$out/runner-debugimport"
   fi
@@ -208,7 +220,7 @@ for arch in "${archs[@]}"; do
   for name in "${RUNNER_BINS[@]}" "${RUNNER_DKG_BINS[@]}" hostagent forwarder udprelay setup-tool; do
     license_bins+=("$out/$name")
   done
-  [ "$IMAGE_FLAVOR" != default ] || license_bins+=("$out/runner-debugimport")
+  ! chain_is_prod "$CHAIN" || license_bins+=("$out/runner-debugimport")
   python3 "$ROOT/scripts/bundle-licenses.py" "${license_bins[@]}"
 done
 
