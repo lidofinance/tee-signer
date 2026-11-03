@@ -1,19 +1,22 @@
 #!/usr/bin/env bash
 # UNTESTED ON AZURE. The Azure deployment: three signers, each one confidential
-# container group (the runner, which does the attestation and the key
-# release itself, plus the network entry container).
+# container group with the runner alone, which does the attestation and the
+# key release itself and listens on port 7100.
 #
 #   deploy.sh <command> [N]        N is the signer index 1, 2 or 3
 #
 # Local commands. They never touch an Azure account:
 #   plan             list the Azure steps in order, with the names they would use
-#   render N         fill aci-template.json for signer N and add the network part
+#   render N         fill aci-template.json for signer N (and add the network
+#                    part, when NETWORK names one)
 #   policy [N]       render, then run az confcom acipolicygen on this machine and
 #                    print the CCE policy SHA-256 (all three signers without N).
-#                    For a network entry whose command holds nothing of a
-#                    signer, with no N it checks that the three are one policy and writes it to $OUT/policy.sha256:
+#                    When the command holds nothing of a signer (the runner
+#                    alone, or such a network entry), with no N it checks that
+#                    the three are one policy and writes it to $OUT/policy.sha256:
 #                    the hash every release policy and verifier pins, for any
-#                    signer and any chain
+#                    signer and any chain. The subnet and the log workspace
+#                    are deploy parameters and do not change it
 #
 # Azure commands. Each one creates or changes something in Azure, prints
 # what it would do and refuses to run unless CONFIRM=yes is set:
@@ -39,8 +42,14 @@
 # default), RG (default signer-poc-rg), SUBSCRIPTION_ID (the identity's
 # resource ID in the template; when set, group-deploy and store-role check
 # that the setup's stores name it), LOCATION_N, MAA_ENDPOINT_N,
-# NETWORK (the network entry; this tree has none, the build overlay
-# SIGNER_BUILD_OVERLAY_DIR adds its own, with their settings), STDIO=enable|disable (default enable),
+# SUBNET_ID_N (optional: the resource ID of a subnet delegated to
+# Microsoft.ContainerInstance/containerGroups; the group of signer N gets a
+# private IP there, port 7100 open; unset, the group has no IP address),
+# LOG_WORKSPACE_ID and LOG_WORKSPACE_KEY_FILE (optional, both or neither:
+# a Log Analytics workspace ID and a file with its shared key; the group
+# sends its logs there), NETWORK (optional, unset for the runner alone:
+# a network entry part of the build overlay SIGNER_BUILD_OVERLAY_DIR, with
+# its settings), STDIO=enable|disable (default enable),
 # KEY_IMMUTABLE=true|false (default false), KEY_SIZE (default 2048),
 # KEY_NAME_PREFIX (default signer-kek: the keys are signer-kek-N; the
 # generic image takes its own, for example signer-gkek, so a running
@@ -56,8 +65,8 @@
 # The hash of the CCE policy decides which code gets the key. Any change to
 # the runner image, the container commands or the network image changes it,
 # so run `policy` again and create the keys after the last change. Secrets
-# never appear on a command line: a network part's secret goes to ARM in a
-# mode 600 parameters file.
+# never appear on a command line: the workspace key and a network part's
+# secret go to ARM in a mode 600 parameters file.
 #
 # Setup: the image and the command hold no chain config, client CA, vault,
 # key, attestation provider or mark log. Each signer's setup holds them, made with
@@ -91,66 +100,75 @@ gate() {
 }
 
 # ---- the network entry part -----------------------------------------------
-# The network entry is not trusted and can be replaced; nothing but the
-# runner's port 7100 may listen inside the group. This tree has none of its
-# own. The build overlay (SIGNER_BUILD_OVERLAY_DIR) adds its
-# network entries: each entry is a template part (network_file) and the
-# functions below, which call the overlay's devnet_azure_network_<name>.
+# By default the group holds the runner alone. A build overlay
+# (SIGNER_BUILD_OVERLAY_DIR) may add a network entry with NETWORK: a
+# template part (network_file) and the functions below, which call the
+# overlay's devnet_azure_network_<name>. The entry is not trusted and can be
+# replaced; nothing but the runner's port 7100 may listen inside the group.
+# Without NETWORK each function gives the runner-alone answer.
 
 network_fn() {
   local f="azure_network_$1"
   shift
-  devnet_has "$f" || die "NETWORK=${NETWORK:-unset}: no network entry (this tree has none; the build overlay adds its own)"
+  devnet_has "$f" || die "NETWORK=${NETWORK:-unset}: no network entry part (this tree has none)"
   "devnet_$f" "$@"
 }
-# network_file: the template part, a JSON file (see aci-template.json).
-network_file() { network_fn file; }
+# network_part: the template part as JSON (see aci-template.json); for the
+# runner alone, no container and no parameters.
+network_part() { if has_network; then cat "$(network_fn file)"; else echo '{"parameters": {}}'; fi; }
 # network_images: "local name|public name" of each image of the part that the
 # policy tool needs in the local Docker daemon.
-network_images() { network_fn images; }
+network_images() { has_network || return 0; network_fn images; }
 # network_need: the settings group-deploy needs from the environment.
-network_need() { network_fn need; }
+network_need() { has_network || return 0; network_fn need; }
 # network_check_secrets: stop unless the secret files of the part are usable.
-network_check_secrets() { network_fn check_secrets; }
+network_check_secrets() { has_network || return 0; network_fn check_secrets; }
 # network_parameters N: the deployment parameters of the part, as a JSON
 # object on stdout. They may hold a secret, so the caller writes them to a
 # mode 600 file.
-network_parameters() { network_fn parameters "$1"; }
+network_parameters() { if has_network; then network_fn parameters "$1"; else echo '{}'; fi; }
 # network_describe N: one line for `plan`.
-network_describe() { network_fn describe "$1"; }
+network_describe() {
+  local s
+  if has_network; then network_fn describe "$1"; return; fi
+  s="$(subnet_id "$1")"
+  if [ -n "$s" ]; then echo "runner alone, private IP in subnet ${s##*/}"; else echo "runner alone, no IP address"; fi
+}
 # network_vars N: NAME=VALUE lines; render replaces @NAME@ in the template.
-network_vars() { network_fn vars "$1"; }
+network_vars() { has_network || return 0; network_fn vars "$1"; }
 # network_one_policy: true when the command holds nothing of one signer,
-# so the three signers' policies must be one.
-network_one_policy() { network_fn one_policy; }
+# so the three signers' policies must be one. Always so for the runner alone.
+network_one_policy() { has_network || return 0; network_fn one_policy; }
 
 # ---- local steps ----------------------------------------------------------
 
 # render N: build/azure/signer-N/template.json from aci-template.json and
-# the network part. The per-signer values land in the runner's measured
-# command line.
+# the network part, if any. The subnet and the log workspace are not
+# rendered: group-deploy passes them as parameters, so the rendered
+# template is the same whatever subnet or workspace an operator uses.
 render() {
-  local n="$1" dir digest vars
+  local n="$1" dir digest vars net
   check_signer "$n"
   check_network
-  need ACR_NAME VAULT
+  need ACR_NAME
   [ -s "$OUT/runner.digest" ] || die "no $OUT/runner.digest: run platform-azure/deploy/build-image.sh first"
   digest="$(cat "$OUT/runner.digest")"
   vars="$(network_vars "$n" | jq -Rn '[inputs | select(length > 0) | capture("^(?<k>[A-Z_]+)=(?<v>.*)$")] | map({(.k): .v}) | add // {}')" || exit 1
+  net="$(network_part)" || exit 1
   dir="$(signer_dir "$n")"
   mkdir -p "$dir"
   jq \
-    --slurpfile net "$(network_file)" \
+    --argjson net "$net" \
     --arg group "$(group_name "$n")" --arg loc "$(signer_location "$n")" \
     --arg runner "$(registry_server)/signer-runner@$digest" \
     --arg ident "/subscriptions/${SUBSCRIPTION_ID:-$ZERO_GUID}/resourceGroups/$RG/providers/Microsoft.ManagedIdentity/userAssignedIdentities/$(identity_name "$n")" \
     --arg reg "$(registry_server)" --argjson vars "$vars" '
-    .parameters += $net[0].parameters
-    | if $net[0].container then .resources[0].properties.containers += [$net[0].container] else . end
-    | if $net[0].runner then
+    .parameters += $net.parameters
+    | if $net.container then .resources[0].properties.containers += [$net.container] else . end
+    | if $net.runner then
         .resources[0].properties.containers[0].properties |=
-          (.command = $net[0].runner.commandPrefix + .command[0:1] + $net[0].runner.runnerFlags + .command[1:]
-           | .environmentVariables = ((.environmentVariables // []) + $net[0].runner.environmentVariables))
+          (.command = $net.runner.commandPrefix + .command[0:1] + $net.runner.runnerFlags + .command[1:]
+           | .environmentVariables = ((.environmentVariables // []) + $net.runner.environmentVariables))
       else . end
     | walk(if type == "string" then reduce ($vars | to_entries[]) as $e (.; gsub("@" + $e.key + "@"; $e.value)) else . end)
     | walk(if type == "string" then
@@ -177,6 +195,22 @@ render() {
     "$dir/template.json" >/dev/null || die "the runner in $dir/template.json does not take its setup from SIGNER_SETUP alone"
   jq -e '.parameters.signerSetup | has("defaultValue") | not' "$dir/template.json" >/dev/null ||
     die "signerSetup has a default in $dir/template.json: the CCE policy would pin one setup"
+  # The runner listens on port 7100 of every interface and declares it.
+  jq -e '.resources[0].properties.containers[0] | .name == "runner"
+    and (.properties.command | index("-listen") as $i | $i != null and .[$i + 1] == "tcp:0.0.0.0:7100")
+    and .properties.ports == [{port: 7100, protocol: "TCP"}]' \
+    "$dir/template.json" >/dev/null || die "the runner in $dir/template.json does not listen on tcp:0.0.0.0:7100 with port 7100 declared"
+  # The subnet and the log workspace are optional group properties. No
+  # container may use them, or they would be in the CCE policy.
+  jq -e '(.parameters | .subnetId.defaultValue == "" and .logWorkspaceId.defaultValue == ""
+      and .logWorkspaceKey.defaultValue == "" and .logWorkspaceId.type == "securestring"
+      and .logWorkspaceKey.type == "securestring")
+    and ([.resources[0].properties.containers[] | tostring | test("subnetId|logWorkspace")] | any | not)' \
+    "$dir/template.json" >/dev/null || die "subnetId or a logWorkspace parameter in $dir/template.json is not optional, or a container uses it"
+  if ! has_network; then
+    jq -e '.resources[0].properties.containers | length == 1' "$dir/template.json" >/dev/null ||
+      die "$dir/template.json holds more than the runner"
+  fi
 }
 
 # The policy tool reads images from the local Docker daemon. Pull the pinned
@@ -240,12 +274,13 @@ cmd_policy() {
     hashes+=("$h")
     echo "signer $n  $h"
   done
-  # A network entry whose command holds nothing of a signer: the three
-  # renders must give one policy. That hash is the image's, set once in the
-  # release policies, whatever setup a group gets.
+  # The runner alone, or a network entry whose command holds nothing of a
+  # signer: the three renders must give one policy. That hash is the
+  # image's, set once in the release policies, whatever setup, subnet or
+  # log workspace a group gets.
   if network_one_policy; then
     if [ "${hashes[0]}" != "${hashes[1]}" ] || [ "${hashes[0]}" != "${hashes[2]}" ]; then
-      die "the three signers have different CCE policies; with NETWORK=$NETWORK they must be one"
+      die "the three signers have different CCE policies; with NETWORK=${NETWORK:-unset} they must be one"
     fi
     echo "${hashes[0]}" >"$OUT/policy.sha256"
     echo "one policy for every signer: ${hashes[0]} ($OUT/policy.sha256)"
@@ -260,7 +295,7 @@ Azure steps in order. Each one needs CONFIRM=yes. Local steps first:
   build-image.sh, then deploy.sh policy (all three signers, no Azure), and a
   setup per signer (SETUP_FILE_N: signer-config setup for a cluster, or
   signer-admin/cmd/setup-tool encode)
-Resource group $RG, registry $ACR_NAME, vault $VAULT, network entry $NETWORK.
+Resource group $RG, registry $ACR_NAME, vault $VAULT, network entry ${NETWORK:-none (the runner alone)}.
 Build folder $OUT, image tag signer-runner:$IMAGE_TAG, setups of chain ${CHAIN:-unset (set CHAIN)}.
 EOF
   printf '  %-22s %s\n' rg-create "group in $(signer_location 1)"
@@ -423,15 +458,37 @@ cmd_image_push() {
   [ "$pushed" = "$digest" ] || die "the registry reports digest '$pushed', build-image.sh made $digest; render again before deploying"
 }
 
+# check_log_workspace: LOG_WORKSPACE_ID and LOG_WORKSPACE_KEY_FILE are both
+# set or both unset, the ID is a GUID and the key file is not empty.
+check_log_workspace() {
+  local id="${LOG_WORKSPACE_ID:-}" key="${LOG_WORKSPACE_KEY_FILE:-}"
+  [ -z "$id" ] && [ -z "$key" ] && return 0
+  [ -n "$id" ] && [ -n "$key" ] || die "set both LOG_WORKSPACE_ID and LOG_WORKSPACE_KEY_FILE, or neither"
+  [[ "$id" =~ ^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$ ]] || die "LOG_WORKSPACE_ID=$id: not a workspace ID (a GUID)"
+  [ -s "$key" ] && [ -r "$key" ] || die "LOG_WORKSPACE_KEY_FILE=$key: no such readable, non-empty file"
+}
+
+# optional_parameters N: the subnet and log workspace parameters of signer
+# N, as a JSON object on stdout. It holds the workspace key, so the caller
+# writes it to a mode 600 file. Unset settings give no parameter: the
+# template's empty defaults leave the property out.
+optional_parameters() {
+  jq -n --arg subnet "$(subnet_id "$1")" --arg ws "${LOG_WORKSPACE_ID:-}" \
+    --rawfile key "${LOG_WORKSPACE_KEY_FILE:-/dev/null}" '
+    (if $subnet == "" then {} else {subnetId: {value: $subnet}} end)
+    + (if $ws == "" then {} else {logWorkspaceId: {value: $ws}, logWorkspaceKey: {value: ($key | rtrimstr("\n"))}} end)'
+}
+
 cmd_group_deploy() {
   local n="$1" dir hash expected identity setup_hash
   check_signer "$n"
   need VAULT ACR_NAME
   network_need
+  check_log_workspace
   # Once on its own: inside $(...) a failed check would not stop the step.
   need_setup "$n" >/dev/null
   setup_hash="$(need_setup "$n")"
-  gate "deploy confidential container group $(group_name "$n") in $(signer_location "$n"), group $RG, setup $(setup_file "$n") (setup_sha256 $setup_hash); it bills per second while it runs"
+  gate "deploy confidential container group $(group_name "$n") in $(signer_location "$n"), group $RG, $(network_describe "$n"), logs $([ -n "${LOG_WORKSPACE_ID:-}" ] && echo "to workspace $LOG_WORKSPACE_ID" || echo "not sent to a workspace"), setup $(setup_file "$n") (setup_sha256 $setup_hash); it bills per second while it runs"
   network_check_secrets
   dir="$(signer_dir "$n")"
   # The deployed policy must be the one the key's release policy names.
@@ -441,17 +498,19 @@ cmd_group_deploy() {
   [ "$hash" = "$expected" ] ||
     die "CCE policy hash $hash is not the one in the release policy of $(key_name "$n") ($expected): create a new key"
   identity="$(az identity show -g "$RG" -n "$(identity_name "$n")" --query id -o tsv)"
-  # The parameters file may hold a secret (the network part's): mode 600
-  # in a mode 700 directory, removed on exit. The secret never reaches a
-  # command line or a log.
+  # The parameters file may hold secrets (the workspace key, the network
+  # part's): mode 600 in a mode 700 directory, removed on exit. A secret
+  # never reaches a command line or a log.
   TMP_DIR="$(umask 077 && mktemp -d)"
   (umask 077 && network_parameters "$n" >"$TMP_DIR/network.json")
+  (umask 077 && optional_parameters "$n" >"$TMP_DIR/optional.json")
   # The setup is not secret; it goes in the same file.
   base64 -w0 <"$(setup_file "$n")" >"$TMP_DIR/setup.b64"
-  (umask 077 && jq -n --arg id "$identity" --rawfile setup "$TMP_DIR/setup.b64" --slurpfile net "$TMP_DIR/network.json" '{
+  (umask 077 && jq -n --arg id "$identity" --rawfile setup "$TMP_DIR/setup.b64" \
+    --slurpfile net "$TMP_DIR/network.json" --slurpfile opt "$TMP_DIR/optional.json" '{
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
     contentVersion: "1.0.0.0",
-    parameters: ({identityId: {value: $id}, signerSetup: {value: $setup}} + $net[0])
+    parameters: ({identityId: {value: $id}, signerSetup: {value: $setup}} + $opt[0] + $net[0])
   }' >"$TMP_DIR/parameters.json")
   az deployment group create -g "$RG" -n "$(group_name "$n")-$(date -u +%Y%m%d%H%M%S)" \
     --template-file "$dir/template.json" --parameters "@$TMP_DIR/parameters.json" -o none

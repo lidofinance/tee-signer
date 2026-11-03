@@ -12,13 +12,9 @@
 #   Azure  GROUP_NAME_N, KEY_NAME_N, IDENTITY_NAME_N: the plan takes the new
 #          key name, key-create refuses a key name that exists (a new
 #          version would take the running group's key) and one whose
-#          existence it cannot read. With the build overlay
-#          (SIGNER_BUILD_OVERLAY_DIR, which has the network entries)
-#          also: the render goes to the
-#          group's own folder with the running group's identity, the plan
-#          and group-deploy take the new key name, key-create refuses a key
-#          name that exists (a new version would take the running group's
-#          key) and one whose existence it cannot read
+#          existence it cannot read. The render goes to the group's own
+#          folder with the running group's identity, and group-deploy
+#          takes the new key name and refuses the running group's
 #
 # The scripts run in a copy of the repo's scripts and cloud folders, with a
 # fake image digest and a fake az for key-create, so build/ of this checkout
@@ -130,24 +126,15 @@ echo "sha256:$(printf 'az' | sha256sum | cut -d' ' -f1)" >"$out_az/runner.digest
 ln -s azure "$work/build/azure-ci-test"
 A1=(GROUP_NAME_1=signer-1b KEY_NAME_1=signer-1b-kek)
 az_env=(ACR_NAME=signeracr VAULT=signer-vault LOCATION_1=northeurope)
-# The render and group-deploy need a network entry, which only the build
-# overlay has.
-net=0
-if [ -n "${SIGNER_BUILD_OVERLAY_DIR:-}" ]; then
-  net=1
-  # The overlay's azure_network_defaults hook picks NETWORK when unset.
-  [ -z "${NETWORK:-}" ] || az_env+=(NETWORK="$NETWORK")
-fi
-if [ "$net" = 1 ]; then
+# With the build overlay, its azure_network_defaults hook picks NETWORK
+# when unset. Without it the group is the runner alone.
+if [ -n "${SIGNER_BUILD_OVERLAY_DIR:-}" ] && [ -n "${NETWORK:-}" ]; then az_env+=(NETWORK="$NETWORK"); fi
 env "${A1[@]}" "${az_env[@]}" bash "$work/platform-azure/deploy/deploy.sh" render 1 >/dev/null 2>&1 || bad "azure render of signer-1b failed"
 t="$out_az/signer-1b/template.json"
 if [ -f "$t" ] && [ "$(jq -r .parameters.name.defaultValue "$t")" = signer-1b ] &&
   jq -r .parameters.identityId.defaultValue "$t" | grep -q '/userAssignedIdentities/signer-id-1$' && [ ! -e "$out_az/signer-1" ]; then
   ok "azure render: group signer-1b in its own folder, identity signer-id-1"
 else bad "azure render of signer-1b: $(ls "$out_az")"; fi
-else
-  echo "skip azure render and group-deploy: no network entry without the build overlay"
-fi
 p="$(env "${A1[@]}" "${az_env[@]}" bash "$work/platform-azure/deploy/deploy.sh" plan 2>&1)"
 grep -q 'key-create 1 *signer-1b-kek' <<<"$p" && grep -q 'group-deploy 1 *signer-1b in northeurope' <<<"$p" &&
   grep -q 'key-role 1 *signer-id-1 releases and reads signer-1b-kek' <<<"$p" && grep -q 'key-create 2 *signer-kek-2' <<<"$p" &&
@@ -156,14 +143,12 @@ az_ok=("sealing_key_release.maa_endpoint=sharedneu.neu.attest.azure.net" "sealin
 make_setup setup-azure.conf "$work/az-1b.bin" "${az_ok[@]}" "sealing_key_release.kid=signer-1b-kek"
 make_setup setup-azure.conf "$work/az-1.bin" "${az_ok[@]}" "sealing_key_release.kid=signer-kek-1"
 deploy() { run_rc env "${A1[@]}" "${az_env[@]}" CHAIN=ci-test "SETUP_FILE_1=$1" bash "$work/platform-azure/deploy/deploy.sh" group-deploy 1; }
-if [ "$net" = 1 ]; then
 deploy "$work/az-1b.bin"
 [ "$rc" = 3 ] && grep -q 'deploy confidential container group signer-1b in northeurope' <<<"$out" &&
   ok "azure group-deploy of signer-1b: its setup passes" || bad "azure group-deploy signer-1b: rc $rc $out"
 deploy "$work/az-1.bin"
 [ "$rc" != 0 ] && [ "$rc" != 3 ] && grep -q 'names key signer-kek-1, this deploy signer-1b-kek' <<<"$out" &&
   ok "azure group-deploy of signer-1b refuses the running group's key" || bad "azure group-deploy signer-1b, old key: rc $rc $out"
-fi
 run_rc env GROUP_NAME_1=signer_1b "${az_env[@]}" bash "$work/platform-azure/deploy/deploy.sh" plan
 [ "$rc" != 0 ] && grep -q 'GROUP_NAME_1=signer_1b' <<<"$out" && ok "azure refuses GROUP_NAME_1=signer_1b" || bad "azure GROUP_NAME_1=signer_1b: rc $rc $out"
 
@@ -186,7 +171,9 @@ EOF
   chmod +x "$work/bin/az"
   : >"$work/az.log"
 }
-key_create() { run_rc env PATH="$work/bin:$PATH" CONFIRM=yes "${A1[@]}" "${az_env[@]}" bash "$work/platform-azure/deploy/deploy.sh" key-create 1; }
+# IMAGE_TAG names no local image, so key-create stops at ensure_images
+# before az confcom on any machine.
+key_create() { run_rc env PATH="$work/bin:$PATH" CONFIRM=yes IMAGE_TAG=no-such-local-image "${A1[@]}" "${az_env[@]}" bash "$work/platform-azure/deploy/deploy.sh" key-create 1; }
 fake_az exists
 key_create
 [ "$rc" != 0 ] && grep -q 'key signer-1b-kek exists in signer-vault' <<<"$out" && [ "$(wc -l <"$work/az.log")" = 1 ] &&

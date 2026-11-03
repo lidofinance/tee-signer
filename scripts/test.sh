@@ -19,6 +19,8 @@
 #   PCR3             scripts/kms-policy.sh self-test
 #   EIF check        scripts/eif-check-test.sh
 #   deploy names     scripts/side-by-side-test.sh
+#   Azure template   scripts/azure-template-test.sh: the rendered group and
+#                    its CCE policy with and without the optional parameters
 #   fuzz             scripts/fuzz.sh: every Go fuzz target for FUZZ_TIME (3s),
 #                    or those of FUZZ_MODULES; the C fuzz targets of markformat
 #                    and signer-core run only when FUZZ_MODULES is unset or ALL
@@ -28,7 +30,7 @@
 # The variables of scripts/ci-scope.sh narrow the run; unset, everything
 # runs. CI_MODULES picks the modules, CI_E2E=0 skips the runner builds and
 # everything that needs them or checks them (release gate, EIF check,
-# chains, e2e, PCR3, deploy names), CI_CORE=0 skips the signer-core suites.
+# chains, e2e, PCR3, deploy names, Azure template), CI_CORE=0 skips the signer-core suites.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 mkdir -p "$LOGS"
@@ -120,6 +122,7 @@ fi
 if [ "$e2e" = 1 ]; then
   bash "$ROOT/scripts/kms-policy.sh" self-test
   bash "$ROOT/scripts/side-by-side-test.sh"
+  bash "$ROOT/scripts/azure-template-test.sh"
 fi
 
 if [ "${FUZZ_TIME:-3s}" != 0 ]; then

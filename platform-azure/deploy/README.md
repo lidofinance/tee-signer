@@ -1,9 +1,10 @@
 # Azure confidential containers backend (ACI)
 
 Each signer is one confidential container group in Azure Container
-Instances. The group holds the runner and, optionally, the operator's
-network entry. Clients reach the runner's port 7100 through that entry, with
-mutual TLS 1.3 on top. The runner does its own attestation and key release
+Instances. The group holds the runner alone, which listens on port 7100
+with mutual TLS 1.3. With `SUBNET_ID_N` the group gets a private IP in that
+subnet and clients reach port 7100 over the private network (see
+"Network"). The runner does its own attestation and key release
 in process (`platform-azure/azure/`): it requests the SNP report, calls
 Microsoft Azure Attestation (MAA), gets the managed identity token and
 releases its key from Key Vault. No Microsoft container runs in the group.
@@ -17,10 +18,10 @@ signers up the two closest ones set the signing time.
 | --- | --- |
 | `Dockerfile` | runner image, `FROM scratch`: the runner with mode 0555 (`COPY --chmod`) and `ENTRYPOINT ["/runner"]`. One image for every signer and every chain |
 | `build-image.sh` | builds that image twice from the Azure release runner (`runner-azure`) and checks that both digests match. The context file gets an explicit mode, so the digest does not depend on the builder's umask |
-| `aci-template.json` | container group template with placeholders: the runner and its fixed command, no IP address, `sku: Confidential` |
-| network entry part | optional (`NETWORK`): a template part with its container and parameters. This tree has none. A build overlay (`SIGNER_BUILD_OVERLAY_DIR`) supplies one, and `deploy.sh render` merges it in |
+| `aci-template.json` | container group template with placeholders: the runner alone with its fixed command and port 7100, `sku: Confidential`, an optional subnet with a private IP and optional log diagnostics |
+| network entry part | optional (`NETWORK`, unset by default): a template part with its container and parameters. This tree has none. A build overlay (`SIGNER_BUILD_OVERLAY_DIR`) may supply one, and `deploy.sh render` merges it in |
 | `skr-policy.json.tmpl` | Key Vault release policy pinned to the CCE policy hash |
-| `common.sh` | regional MAA hosts, names per signer index, `NETWORK` |
+| `common.sh` | regional MAA hosts, names per signer index, `SUBNET_ID_N`, `NETWORK` |
 | `deploy.sh` | one command per step: local `plan`, `render` and `policy`, then one command per Azure step |
 | `make-test-ca.sh` | local test CA and one client certificate for the signing client |
 | `chain-from-devnet.sh` | writes a `chain.json` for a local test chain from its beacon node |
@@ -102,9 +103,9 @@ between the two containers is an estimate.
 
 ## What listens in the group
 
-Only the runner listens on a TCP port of its own: `127.0.0.1:7100`. It does
-the attestation and the key release in its own process and opens no port
-for them.
+Only the runner listens on a TCP port of its own: `0.0.0.0:7100`, the port
+the template declares. It does the attestation and the key release in its
+own process and opens no port for them.
 
 A network entry in the group may open sockets for its own transport, but
 it must not expose a service. The end-to-end test `TestE2EAzureRunner`
@@ -114,26 +115,38 @@ confidential group allows it.
 
 ## Network
 
-The group has no `ipAddress` block: no public IP, no VNet, no NAT gateway.
-The runner uses ACI's default outbound access for its NTS clock
-(`-nts-clock`: TCP 4460 and UDP 123 and 4123 to the four NTS operators,
-HTTPS to the three coarse-check URLs), and for MAA, Key Vault and the
-managed identity endpoint. The runner's `nts: key exchange` and
-`nts: status` log lines show whether the NTS traffic gets out.
+The template has three optional parameters. They set group properties
+only, so they do not change the CCE policy hash (see "CCE policy and
+secrets"):
 
-Inbound TCP to port 7100 comes through the operator's network entry (see
-"Network entry"). The runner listens on `127.0.0.1:7100` only, so the entry
-forwards to the loopback address. The entry runs in the same confidential
-VM, so its image is measured. Its credential and per-signer names come in
-as ARM parameters without a default, which `az confcom` turns into wildcard
-rules, so they do not change the policy hash. A peer on the network can
-reach any local port of the group that the entry forwards, so nothing but
-the runner may listen.
+- `subnetId` (`SUBNET_ID_N` for `group-deploy N`): a subnet delegated to
+  `Microsoft.ContainerInstance/containerGroups`. The group gets a private
+  IP there with TCP 7100 open. There is never a public IP.
+- `logWorkspaceId` and `logWorkspaceKey` (`LOG_WORKSPACE_ID` and
+  `LOG_WORKSPACE_KEY_FILE`, both or neither): the group sends its logs to
+  that Log Analytics workspace. Both are secure parameters. The key goes to
+  ARM in the mode 600 parameters file, never on a command line.
 
-The host that starts the groups passes the entry's parameters, so it can
-attach a signer to a network of its own. It cannot read the traffic: the
-runner's TLS key is bound to the attested identity and the clients check
-it. It can refuse service.
+Without `subnetId` the group has no `ipAddress` block and uses ACI's default
+outbound access. Clients then need another way in, such as a network entry
+part (see "Network entry").
+
+The runner needs outbound access for its NTS clock (`-nts-clock`: TCP 4460
+and UDP 123 and 4123 to the four NTS operators, HTTPS to the three
+coarse-check URLs), and for MAA, Key Vault and the managed identity
+endpoint. The runner's `nts: key exchange` and `nts: status` log lines show
+whether the NTS traffic gets out. In a subnet, give the subnet outbound
+access (a NAT on the subnet) and set a network security group:
+
+- In: TCP 7100 from the clients' subnet only. Deny the rest.
+- Out: TCP 443, TCP 4460, UDP 123 and UDP 4123, DNS to 168.63.129.16, and
+  TCP 80 to 169.254.169.254. Deny the rest.
+
+The network is not trusted. The runner serves mutual TLS 1.3 only, with
+client certificates from the setup's CA, and its TLS key is bound to the
+attested identity, which the clients check. Whoever runs the network can
+refuse service. It cannot read the traffic or pose as a signer. The
+security group is a second layer.
 
 ## CCE policy and secrets
 
@@ -161,6 +174,14 @@ file for them. The deployment passes them in a parameters file. The policy
 holds the parameter-backed variables as `re2` rules and every literal
 variable as an exact string.
 
+The policy covers the containers only. `subnetId`, `ipAddress`,
+`diagnostics` and their parameters are group properties, and `deploy.sh
+render` checks that no container uses them. So the hash
+is the same with and without a subnet or a log workspace, and anyone can
+recompute it from this tree with `deploy.sh policy` (any `ACR_NAME`).
+`scripts/azure-template-test.sh` (in `make test`) checks this on the
+template and parameters file that `group-deploy` hands to ARM.
+
 What does change the hash: the runner image, the runner's command line, the
 network entry's image, the container names and `command`s, the stdio
 setting, and the confcom version (it bundles the policy API version and the
@@ -174,9 +195,9 @@ on stdout, one line of 64 hex digits, and nothing else. Progress bars and
 warnings go to stderr. If the template already has a `ccePolicy`, it asks
 before it overwrites it, so `deploy.sh` always renders a fresh template and
 closes stdin. `deploy.sh policy` also decodes the policy from the template
-and checks that its SHA-256 equals the printed one. With a network entry
-whose command holds nothing of one signer, it also checks that the three
-signers have one policy.
+and checks that its SHA-256 equals the printed one. For the runner alone,
+or a network entry whose command holds nothing of one signer, it also
+checks that the three signers have one policy.
 
 ## One image for every signer
 
@@ -436,9 +457,10 @@ update changes the hash and needs new keys.
 
 ## Network entry
 
-The network entry is how the signing clients reach port 7100 of each signer. It is
-an optional part that can be replaced. This tree has no implementation. This
-section is the contract and the options.
+The network entry is how the signing clients reach port 7100 of each signer.
+This tree deploys the runner alone, with an optional private IP in a subnet
+(see "Network"). A network entry part in the group is optional and can be
+replaced; this tree has none. This section is the contract and the options.
 
 ### Contract
 
@@ -460,7 +482,9 @@ entry part" in `deploy.sh`). `deploy.sh` stops with an error for any
 
 ### Options
 
-This tree implements none of these.
+This tree implements the last one: `SUBNET_ID_N` gives the group a private
+IP and only 7100, and anything that carries clients to that address runs
+outside the group.
 
 - An overlay network. A container of an overlay network in the group, in
   userspace mode, and the operator's side on the same overlay. Watch: the
@@ -703,14 +727,15 @@ retail price estimates for West Europe.
    the setup and Reader on their storage accounts, free. Reader is for
    the lock check, which reads the account and the container at every
    start; without it the runner stops.
-10. `group-deploy 1`, `2`, `3`, with the network entry's settings. It re-runs
+10. `group-deploy 1`, `2`, `3`, with `SUBNET_ID_N` and the log workspace
+    settings, if any (see "Network"). It re-runs
     `policy` and stops if the hash is not the one in the key's release
     policy. About 0.10 USD per hour per group (1.5 CPUs at 0.0579 USD and
     1.5 GB at 0.0064 USD per hour), about 7 USD a day for three. Stop the
     groups when a test ends.
 
 Role assignments may need a few minutes to apply before `group-deploy`
-works. A network entry credential never goes on a command line or into the
+works. The workspace key never goes on a command line or into the
 template.
 
 ### A new image for a running signer
