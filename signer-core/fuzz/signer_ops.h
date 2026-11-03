@@ -7,6 +7,9 @@
 #define F_NO_GLOAS 0x04   /* gloas_scheduled = 0 */
 #define F_VERIFY 0x08     /* verify attestation and block signatures */
 #define F_SLOT_TIMES 0x10 /* slot time changes follow the patches */
+#define F_HOSTILE 0x20    /* the host loses, rolls back and garbles marks, lies
+                             about writes and sets the clock back by up to an
+                             epoch (target_signer.c) */
 
 /* Header block (HEADER_LEN bytes): flags, patch count (% 6), max validators,
  * hash cache entries, clock offset, patches, [slot times]. Then each
@@ -42,6 +45,9 @@ enum {
     OP_QUERY,
     OP_COUNT
 };
+
+/* OP_FAIL bit of a store that answers SC_OK and writes nothing (F_HOSTILE). */
+#define FAIL_LIE 0x10
 
 /* Bytes of the header block and of each operation's argument block. */
 #define HEADER_LEN 64

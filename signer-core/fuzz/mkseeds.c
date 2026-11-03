@@ -399,6 +399,47 @@ static void signer_seeds(void)
             put("signer", name, in, n);
         }
     }
+    /* F_HOSTILE: votes and a block, then the host loses them (a store that
+     * lies, a played-back copy, or both with the clock an epoch back), a
+     * restart, and the same requests again. */
+    static const uint8_t ahead4[] = {0x40, 4}, back1[] = {0x40, 0xff}, lie[] = {FAIL_LIE},
+                         ok[] = {0}, snap[] = {0x20}, replay[] = {0x10};
+    for (int dev = 0; dev < 2; dev++) {
+        for (int how = 0; how < 3; how++) {
+            uint8_t in[HEADER_LEN + 16 * (2 + ARGS_LEN)];
+            size_t n = HEADER_LEN;
+            char name[64];
+            memset(in, 0, HEADER_LEN);
+            in[0] = (uint8_t)(F_HOSTILE | (dev ? F_DEVICE : 0));
+            in[2] = 3;
+            in[3] = 2;
+            in[4] = 7;
+            n = op_block(in, n, OP_ADD, 0, add, sizeof add);
+            n = op_block(in, n, OP_TIME, 0, ahead4, sizeof ahead4);
+            if (how == 1)
+                n = op_block(in, n, dev ? OP_PRELOAD_DEVICE : OP_PRELOAD_MARK, 0, snap, sizeof snap);
+            else
+                n = op_block(in, n, OP_FAIL, 0, lie, sizeof lie);
+            n = op_block(in, n, OP_ATTESTATION, 0, NULL, 0);
+            n = op_block(in, n, OP_BLOCK, 0, NULL, 0);
+            n = op_block(in, n, OP_TIME, 0, next, sizeof next);
+            n = op_block(in, n, OP_ATTESTATION, 0, NULL, 0);
+            if (how == 1)
+                n = op_block(in, n, dev ? OP_PRELOAD_DEVICE : OP_PRELOAD_MARK, 0, replay,
+                             sizeof replay);
+            if (how == 2)
+                n = op_block(in, n, OP_TIME, 0, back1, sizeof back1);
+            n = op_block(in, n, OP_FAIL, 0, ok, sizeof ok);
+            n = op_block(in, n, OP_RESTART, 0, NULL, 0);
+            n = op_block(in, n, OP_ATTESTATION, 0, NULL, 0);
+            n = op_block(in, n, OP_BLOCK, 0, NULL, 0);
+            n = op_block(in, n, OP_TIME, 0, next, sizeof next);
+            n = op_block(in, n, OP_ATTESTATION, 0, NULL, 0);
+            snprintf(name, sizeof name, "hostile-d%d-%s", dev,
+                     how == 0 ? "lie" : how == 1 ? "replay" : "clock-back");
+            put("signer", name, in, n);
+        }
+    }
 }
 
 int main(int argc, char **argv)

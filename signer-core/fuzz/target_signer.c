@@ -20,6 +20,15 @@
  *    share key over the signing root sc_signer_signing_root gives.
  * Stored records only change through the core, so rollback is out of scope;
  * preloaded marks come only before a validator's first signature.
+ *
+ * With flag F_HOSTILE the host works against the core, and the same oracles
+ * must hold: a preload may come at any time (an old, empty or damaged mark,
+ * or a snapshot of the store taken earlier, played back), a store may answer
+ * SC_OK and write nothing (FAIL_LIE), and the clock may go back, but never
+ * to an epoch more than one below the highest it read (the bound of the
+ * trusted clock). Imported maxima stay within the clock horizon at the
+ * import, as a signer under the same clock would have signed them. Slot
+ * time changes persist across restarts, as the runner keeps them.
  */
 #include "../tests/markformat_host.h"
 #include "base_config.h"
@@ -43,9 +52,13 @@ typedef struct {
     int has_device;
     uint64_t now;
     uint8_t fail; /* FAIL_* bits */
+    /* F_HOSTILE: a copy of the store to play back later. */
+    record_t snap_rec[NV];
+    uint8_t snap_device[SC_WATERMARK_ENCODED_LEN];
+    int snap_has_device, has_snap;
 } host_t;
 
-enum { FAIL_STORE = 1, FAIL_CLOCK = 2, FAIL_LOAD = 4, FAIL_DEVICE = 8 };
+enum { FAIL_STORE = 1, FAIL_CLOCK = 2, FAIL_LOAD = 4, FAIL_DEVICE = 8 }; /* FAIL_LIE: signer_ops.h */
 
 typedef struct {
     uint64_t a, b; /* attestation: source, target; others: slot */
@@ -76,6 +89,8 @@ typedef struct {
     int any_signed;
     history_t hist[NV];
     int verify;
+    int hostile;        /* F_HOSTILE */
+    uint64_t max_epoch; /* F_HOSTILE: highest clock epoch read */
 } world_t;
 
 static world_t W;
@@ -125,6 +140,8 @@ static int h_store(void *ctx, const uint8_t pk[48], const sc_watermark *wm)
     FUZZ_CHECK(i >= 0);
     if (h->fail & FAIL_STORE)
         return SC_ERR_STORAGE;
+    if (h->fail & FAIL_LIE)
+        return SC_OK;
     test_watermark_encode(wm, h->rec[i].enc);
     h->rec[i].has_wm = 1;
     return SC_OK;
@@ -145,6 +162,8 @@ static int h_store_dev(void *ctx, const sc_watermark *wm)
     host_t *h = ctx;
     if (h->fail & (FAIL_STORE | FAIL_DEVICE))
         return SC_ERR_STORAGE;
+    if (h->fail & FAIL_LIE)
+        return SC_OK;
     test_watermark_encode(wm, h->device);
     h->has_device = 1;
     return SC_OK;
@@ -167,7 +186,8 @@ static int start_signer(void)
     if (!W.mem)
         abort();
     W.cfg = W.cfg0;
-    W.times = W.times0;
+    if (!W.hostile)
+        W.times = W.times0;
     rc = sc_signer_init_ext(W.mem, need, W.maxv, W.cache, &W.cfg, &W.times, &ops, &W.s);
     FUZZ_CHECK(rc == SC_OK || rc == SC_ERR_ARG);
     if (rc != SC_OK) {
@@ -198,7 +218,7 @@ static void add(int v, int secret, uint64_t index)
     if (g_trace)
         fprintf(stderr, "  add v%d secret %d: %s\n", v, secret, sc_status_name(rc));
     FUZZ_CHECK(rc == SC_OK || rc == SC_ERR_DUPLICATE || rc == SC_ERR_NOMEM ||
-               rc == SC_ERR_BAD_KEY || rc == SC_ERR_STORAGE);
+               rc == SC_ERR_BAD_KEY || rc == SC_ERR_STORAGE || rc == SC_ERR_CLOCK);
     if (W.loaded[v])
         FUZZ_CHECK(rc == SC_ERR_DUPLICATE);
     if (secret >= NV)
@@ -671,6 +691,18 @@ static void op_import(fz_in *in, int v)
     wm.block_slot = pick_slot(in);
     wm.source_epoch = pick_epoch(in);
     wm.target_epoch = pick_epoch(in);
+    if (W.hostile) {
+        /* History signed under the same clock: within its horizon now. */
+        uint64_t lim = clock_epoch() + W.cfg.max_epochs_ahead, spe = W.cfg.slots_per_epoch;
+        if (lim < clock_epoch())
+            lim = UINT64_MAX;
+        if (wm.source_epoch > lim)
+            wm.source_epoch = lim;
+        if (wm.target_epoch > lim)
+            wm.target_epoch = lim;
+        if (spe && lim < UINT64_MAX / spe && wm.block_slot > (lim + 1) * spe - 1)
+            wm.block_slot = (lim + 1) * spe - 1;
+    }
     rc = sc_signer_import(W.s, g_pk[v], gvr, &wm);
     check_status(rc);
     if (rc != SC_OK)
@@ -769,8 +801,49 @@ static void op_query(fz_in *in, int v)
     check_status(sc_signer_signing_root(W.s, domain, pick_epoch(in), obj, root));
 }
 
+/* F_HOSTILE: sel 0x20 copies the store, sel 0x10 plays the copy back. */
+static int hostile_snapshot(uint8_t sel)
+{
+    host_t *h = &W.host;
+    if (sel & 0x20) {
+        memcpy(h->snap_rec, h->rec, sizeof h->rec);
+        memcpy(h->snap_device, h->device, sizeof h->device);
+        h->snap_has_device = h->has_device;
+        h->has_snap = 1;
+        return 1;
+    }
+    if (sel & 0x10) {
+        if (h->has_snap) {
+            memcpy(h->rec, h->snap_rec, sizeof h->rec);
+            memcpy(h->device, h->snap_device, sizeof h->device);
+            h->has_device = h->snap_has_device;
+        }
+        return 1;
+    }
+    return 0;
+}
+
 static void op_preload(fz_in *in, int v, int what)
 {
+    if (W.hostile) {
+        uint8_t sel = fz_u8(in);
+        sc_watermark wm;
+        uint8_t *dst = what == OP_PRELOAD_DEVICE ? W.host.device : W.host.rec[v].enc;
+        if (hostile_snapshot(sel))
+            return;
+        wm.flags = sel & 3;
+        wm.block_slot = pick_slot(in);
+        wm.source_epoch = pick_epoch(in);
+        wm.target_epoch = pick_epoch(in);
+        test_watermark_encode(&wm, dst);
+        if (sel & 0x80)
+            dst[fz_u8(in) % SC_WATERMARK_ENCODED_LEN] = fz_u8(in);
+        if (what == OP_PRELOAD_DEVICE)
+            W.host.has_device = !(sel & 0x40);
+        else
+            W.host.rec[v].has_wm = !(sel & 0x40);
+        return;
+    }
     if (W.loaded[v])
         return;
     if (what == OP_PRELOAD_DEVICE) {
@@ -843,6 +916,11 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
         if (flags & F_NO_GLOAS)
             W.cfg0.gloas_scheduled = 0;
         W.verify = flags & F_VERIFY ? 1 : 0;
+#ifdef SC_RESTART_FLOOR_EPOCHS
+        W.hostile = flags & F_HOSTILE ? 1 : 0;
+#else
+        W.hostile = 0; /* the core has no restart floor yet */
+#endif
         for (uint8_t i = 0; i < npatch; i++)
             fz_patch_config(&W.cfg0, &h);
         if (flags & F_SLOT_TIMES)
@@ -851,6 +929,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 
     if (start_signer() != SC_OK)
         return 0;
+    W.max_epoch = clock_epoch();
 
     /* Each operation: opcode, validator, then an argument block of ARGS_LEN
      * bytes (zeros past the end). Bulk data (raw SSZ, auth data, proofs)
@@ -871,10 +950,18 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
         switch (op) {
         case OP_TIME: {
             uint8_t sel = fz_u8(&a);
+            uint64_t was = W.host.now;
             if (sel & 0x80)
                 W.host.now = fz_u64(&a);
             else
                 W.host.now += (uint64_t)((int64_t)(int8_t)fz_u8(&a) * (sel & 0x40 ? 384 : 12));
+            if (W.hostile) {
+                uint64_t e = clock_epoch();
+                if (e < W.max_epoch && W.max_epoch - e > 1)
+                    W.host.now = was; /* past the trusted clock's bound */
+                else if (e > W.max_epoch)
+                    W.max_epoch = e;
+            }
             break;
         }
         case OP_ADD: {
@@ -884,7 +971,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
             break;
         }
         case OP_RESTART: restart(); break;
-        case OP_FAIL: W.host.fail = fz_u8(&a) & 0xf; break;
+        case OP_FAIL: W.host.fail = fz_u8(&a) & (W.hostile ? 0x1f : 0xf); break;
         case OP_PRELOAD_MARK:
         case OP_PRELOAD_DEVICE: op_preload(&a, v, op); break;
         case OP_ATTESTATION: op_attestation(&a, v); break;

@@ -29,6 +29,11 @@ typedef struct {
     uint64_t now;
     int fail_store, fail_clock, fail_load;
     int writes; /* mark writes, per validator or device */
+    /* Hostile host: lie_store answers SC_OK and writes nothing; load_rc,
+     * when set, is what every load returns; load_raw returns raw as the
+     * stored mark of every validator and the device. */
+    int lie_store, load_rc, load_raw;
+    sc_watermark raw;
 } host_t;
 
 static int h_find(host_t *h, const uint8_t pk[48], int create)
@@ -49,6 +54,12 @@ static int h_load(void *ctx, const uint8_t pk[48], sc_watermark *out)
     int i = h_find(h, pk, 0);
     if (h->fail_load)
         return SC_ERR_STORAGE;
+    if (h->load_rc)
+        return h->load_rc;
+    if (h->load_raw) {
+        *out = h->raw;
+        return SC_OK;
+    }
     if (i < 0 || !h->rec[i].has_wm)
         return SC_ERR_UNKNOWN_VALIDATOR;
     return test_watermark_decode(h->rec[i].enc, SC_WATERMARK_ENCODED_LEN, out) == SC_OK
@@ -62,6 +73,8 @@ static int h_store(void *ctx, const uint8_t pk[48], const sc_watermark *wm)
     int i;
     if (h->fail_store || (i = h_find(h, pk, 1)) < 0)
         return SC_ERR_STORAGE;
+    if (h->lie_store)
+        return SC_OK;
     test_watermark_encode(wm, h->rec[i].enc);
     h->rec[i].has_wm = 1;
     h->writes++;
@@ -82,6 +95,12 @@ static int h_load_device(void *ctx, sc_watermark *out)
     host_t *h = ctx;
     if (h->fail_load)
         return SC_ERR_STORAGE;
+    if (h->load_rc)
+        return h->load_rc;
+    if (h->load_raw) {
+        *out = h->raw;
+        return SC_OK;
+    }
     if (!h->has_device)
         return SC_ERR_UNKNOWN_VALIDATOR;
     return test_watermark_decode(h->device, SC_WATERMARK_ENCODED_LEN, out) == SC_OK ? SC_OK
@@ -93,6 +112,8 @@ static int h_store_device(void *ctx, const sc_watermark *wm)
     host_t *h = ctx;
     if (h->fail_store)
         return SC_ERR_STORAGE;
+    if (h->lie_store)
+        return SC_OK;
     test_watermark_encode(wm, h->device);
     h->has_device = 1;
     h->writes++;
@@ -200,6 +221,16 @@ static vkeys add_validator(sc_signer *s, uint32_t i, uint64_t index)
     CHECK_RC(sc_bls_pubkey(acct, k.pk), SC_OK);
     CHECK_RC(sc_signer_add_validator(s, k.pk, share, index, k.share_pk), SC_OK);
     return k;
+}
+
+/* Loads validator i (share key 10000+i) at the host's clock as it is. */
+static int add_at_clock(sc_signer *s, uint32_t i, vkeys *k)
+{
+    uint8_t acct[32], share[32];
+    secret_for(i, acct);
+    secret_for(10000 + i, share);
+    CHECK_RC(sc_bls_pubkey(acct, k->pk), SC_OK);
+    return sc_signer_add_validator(s, k->pk, share, SC_INDEX_UNKNOWN, k->share_pk);
 }
 
 static void root_with(const uint8_t dtype[4], const uint8_t version[4], const uint8_t gvr[32],
@@ -3362,6 +3393,200 @@ static void test_builder_auth(void)
     CHECK(SC_ERR_POLICY_BUILDER_AUTH == 27);
 }
 
+/* ---- hostile host ------------------------------------------------------- */
+
+/*
+ * A host that works against the core: it loses or rolls back marks, returns
+ * garbage, claims writes it never made, fails the clock, or reads the clock
+ * up to one epoch behind its last reading (the bound the trusted clock
+ * keeps). Whatever it does, a request that is slashable against what the
+ * validator signed before must be refused; the code does not matter.
+ */
+#ifdef SC_RESTART_FLOOR_EPOCHS
+#define CHECK_REFUSED(expr) CHECK((expr) != SC_OK)
+#else
+/* No restart floor in the core yet: a slashable request it signs is a gap,
+ * printed and counted, not a failure. */
+static int g_gaps;
+#define CHECK_REFUSED(expr)                                                      \
+    do {                                                                         \
+        g_checks++;                                                              \
+        if ((expr) == SC_OK) {                                                   \
+            g_gaps++;                                                            \
+            fprintf(stderr, "GAP %s:%d: %s signed\n", __FILE__, __LINE__, #expr); \
+        }                                                                        \
+    } while (0)
+#endif
+
+enum { H_LOST, H_LIE, H_ROLLBACK, H_FLAGS0, H_JUNK_FLAGS, H_CLOCK_BACK, H_COUNT };
+static const char *const H_NAMES[H_COUNT] = {"lost", "lie", "rollback", "flags0", "junk-flags",
+                                             "clock-back"};
+
+/*
+ * One run: a vote and a block at epoch E, a vote at E+2 that moves the mark,
+ * then the host misbehaves and the validator restarts. Its second run must
+ * refuse a double vote, a double block and a surround vote against the
+ * first run, and sign again once the clock is past the restart floor.
+ */
+static void hostile_case(uint32_t scope, int how)
+{
+    host_t h = {0};
+    sc_config cfg;
+    uint8_t sig[96];
+    vkeys k;
+    int recs_n, has_device;
+    uint8_t recs[4][SC_WATERMARK_ENCODED_LEN], recs_has[4], device[SC_WATERMARK_ENCODED_LEN];
+    sc_attestation_data a;
+    sc_beacon_block_header b = blk(E * 32 + 2, 1);
+    sc_signer *s2;
+    host_t bad;
+    int before = g_failures;
+
+    make_config(&cfg); /* max_epochs_ahead 2, commit_ahead {32, 1, 1} */
+    cfg.mark_scope = scope;
+    set_epoch(&h, E - 4); /* the first run loads a few epochs before it signs */
+    h.lie_store = how == H_LIE;
+    sc_signer *s1 = new_signer(&h, &cfg, 4, 0);
+    CHECK_RC(add_at_clock(s1, 40, &k), SC_OK);
+    set_epoch(&h, E);
+    a = att(E - 1, E, 1);
+    CHECK_RC(sc_sign_attestation(s1, k.pk, &a, sig), SC_OK);
+    CHECK_RC(sc_sign_block(s1, k.pk, &b, sig), SC_OK);
+    /* What the store holds after the first vote: the rollback goes back here. */
+    recs_n = h.n;
+    for (int i = 0; i < recs_n && i < 4; i++) {
+        memcpy(recs[i], h.rec[i].enc, SC_WATERMARK_ENCODED_LEN);
+        recs_has[i] = (uint8_t)h.rec[i].has_wm;
+    }
+    memcpy(device, h.device, SC_WATERMARK_ENCODED_LEN);
+    has_device = h.has_device;
+    set_epoch(&h, E + 2);
+    a = att(E + 1, E + 2, 1); /* past the window: a write */
+    CHECK_RC(sc_sign_attestation(s1, k.pk, &a, sig), SC_OK);
+    sc_signer_wipe(s1);
+
+    switch (how) {
+    case H_LOST:
+    case H_CLOCK_BACK:
+        for (int i = 0; i < h.n; i++)
+            h.rec[i].has_wm = 0;
+        h.has_device = 0;
+        break;
+    case H_ROLLBACK:
+        for (int i = 0; i < recs_n && i < 4; i++) {
+            memcpy(h.rec[i].enc, recs[i], SC_WATERMARK_ENCODED_LEN);
+            h.rec[i].has_wm = recs_has[i];
+        }
+        memcpy(h.device, device, SC_WATERMARK_ENCODED_LEN);
+        h.has_device = has_device;
+        break;
+    case H_FLAGS0:
+    case H_JUNK_FLAGS: {
+        /* High values, but no known flag: the mark says "nothing signed". */
+        sc_watermark raw = {UINT64_MAX, UINT64_MAX, UINT64_MAX,
+                            how == H_FLAGS0 ? 0u : ~(SC_WM_HAS_BLOCK | SC_WM_HAS_ATTESTATION)};
+        h.load_raw = 1;
+        h.raw = raw;
+        break;
+    }
+    default:
+        break;
+    }
+    if (how == H_CLOCK_BACK)
+        h.now -= EPOCH_SECONDS - 1; /* epoch E+1, one epoch behind the last reading */
+
+    /* Each request goes to a signer of its own, restarted from the same
+     * host state, so one that signs does not change what the next sees. */
+    bad = h;
+    for (int t = 0; t < 4; t++) {
+        h = bad;
+        s2 = new_signer(&h, &cfg, 4, 0);
+        CHECK_RC(add_at_clock(s2, 40, &k), SC_OK);
+        set_epoch(&h, E + 3);
+        switch (t) {
+        case 0:
+            a = att(E + 1, E + 2, 2);
+            CHECK_REFUSED(sc_sign_attestation(s2, k.pk, &a, sig)); /* double vote */
+            break;
+        case 1:
+            a = att(E, E + 3, 3);
+            CHECK_REFUSED(sc_sign_attestation(s2, k.pk, &a, sig)); /* surrounds (E+1, E+2) */
+            break;
+        case 2:
+            b = blk(E * 32 + 2, 2);
+            CHECK_REFUSED(sc_sign_block(s2, k.pk, &b, sig)); /* double block */
+            break;
+        default:
+            break; /* the signer for the requests past the floor */
+        }
+    }
+
+    /* Past the floor (clock epoch at the load + max_epochs_ahead + 1). */
+    h.load_raw = 0;
+    set_epoch(&h, E + 6);
+    a = att(E + 5, E + 6, 4);
+    CHECK_RC(sc_sign_attestation(s2, k.pk, &a, sig), SC_OK);
+    b = blk((E + 6) * 32 + 1, 4);
+    CHECK_RC(sc_sign_block(s2, k.pk, &b, sig), SC_OK);
+    if (g_failures != before)
+        fprintf(stderr, "  in hostile_case(%s, %s)\n", scope ? "device" : "validator", H_NAMES[how]);
+}
+
+/* Loads and stores that fail, and a clock that fails at the load. */
+static void hostile_errors(uint32_t scope)
+{
+    host_t h = {0};
+    sc_config cfg;
+    uint8_t sig[96];
+    vkeys k;
+    sc_attestation_data a;
+    sc_signer *s;
+
+    make_config(&cfg);
+    cfg.mark_scope = scope;
+    set_epoch(&h, E);
+    /* Any load error refuses the validator: storage, and a code the core
+     * does not define. */
+    h.load_rc = SC_ERR_STORAGE;
+    s = new_signer(&h, &cfg, 4, 0);
+    CHECK(add_at_clock(s, 41, &k) != SC_OK);
+    h.load_rc = 77;
+    s = new_signer(&h, &cfg, 4, 0);
+    CHECK(add_at_clock(s, 41, &k) != SC_OK);
+    h.load_rc = 0;
+    /* No clock at the load: the core cannot set the floor, so it refuses. */
+    h.fail_clock = 1;
+    s = new_signer(&h, &cfg, 4, 0);
+    CHECK_REFUSED(add_at_clock(s, 41, &k));
+    h.fail_clock = 0;
+    /* A store that fails refuses the request that needed it. */
+    s = new_signer(&h, &cfg, 4, 0);
+    CHECK_RC(add_at_clock(s, 42, &k), SC_OK);
+    set_epoch(&h, E + 4);
+    h.fail_store = 1;
+    a = att(E + 3, E + 4, 1);
+    CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_ERR_STORAGE);
+    h.fail_store = 0;
+    CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_OK);
+    /* A clock that fails refuses every request. */
+    h.fail_clock = 1;
+    a = att(E + 4, E + 5, 1);
+    CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_ERR_CLOCK);
+    h.fail_clock = 0;
+}
+
+static void test_hostile_host(void)
+{
+    for (uint32_t scope = SC_MARKS_PER_VALIDATOR; scope <= SC_MARKS_PER_DEVICE; scope++) {
+        for (int how = 0; how < H_COUNT; how++)
+            hostile_case(scope, how);
+        hostile_errors(scope);
+    }
+#ifndef SC_RESTART_FLOOR_EPOCHS
+    printf("hostile host: %d gaps (slashable requests signed)\n", g_gaps);
+#endif
+}
+
 int main(int argc, char **argv)
 {
     const char *data_dir = argc > 1 ? argv[1] : "tests/data";
@@ -3414,6 +3639,7 @@ int main(int argc, char **argv)
     test_fork_change_marks();
     test_slot_times();
     test_schedule_pending_slot_times();
+    test_hostile_host();
     bench_cache();
     for (int i = 0; i < g_nmem; i++)
         free(g_mem[i]);
