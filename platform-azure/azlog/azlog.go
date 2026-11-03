@@ -185,13 +185,11 @@ func (l *Log) container(ctx context.Context) (*armContainer, error) {
 	if !found {
 		return nil, notFound("container", u)
 	}
-	// A container read without the field could hide a migration to
-	// version-level immutability, so the check refuses it.
-	if c.Properties.VersionLevel == nil {
-		return nil, fmt.Errorf("%w: azlog: the management plane gave no immutableStorageWithVersioning for container %s; the client cannot rule out version-level immutability",
-			markstore.ErrNoLock, l.Container)
-	}
-	if v := c.Properties.VersionLevel; v.Enabled || v.MigrationState != "" {
+	// Azure leaves immutableStorageWithVersioning out of a container that
+	// never had version-level immutability; it shows up once version-level
+	// immutability is enabled or a migration to it starts. So no field means
+	// off, as the account check above reads it too.
+	if v := c.Properties.VersionLevel; v != nil && (v.Enabled || v.MigrationState != "") {
 		return nil, fmt.Errorf("%w: azlog: container %s has version-level immutability (enabled %v, migration %q); the client reads current blob versions only and needs a container with a locked container-level policy",
 			markstore.ErrNoLock, l.Container, v.Enabled, v.MigrationState)
 	}

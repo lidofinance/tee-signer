@@ -117,7 +117,7 @@ func TestAzureLockContainerRead(t *testing.T) {
 		noLock             bool   // a failure is ErrNoLock
 		want               string // in the error of a failure
 	}{
-		{"no versioning property", 0, "", 200, `{"properties":{"hasImmutabilityPolicy":true,` + pol + `}}`, false, false, true, "no immutableStorageWithVersioning"},
+		{"no versioning property", 0, "", 200, `{"properties":{"hasImmutabilityPolicy":true,` + pol + `}}`, true, true, false, ""},
 		{"version-level off", 0, "", 200, `{"properties":{"immutableStorageWithVersioning":{"enabled":false},` + pol + `}}`, true, true, false, ""},
 		{"version-level on", 0, "", 200, `{"properties":{"immutableStorageWithVersioning":{"enabled":true,"migrationState":"Completed"},` + pol + `}}`, false, false, true, "version-level"},
 		{"migration in progress", 0, "", 200, `{"properties":{"immutableStorageWithVersioning":{"enabled":false,"migrationState":"InProgress"},` + pol + `}}`, false, false, true, "InProgress"},
