@@ -380,11 +380,21 @@ typedef struct {
     skey_t keys[MAX_KEYS];
     int n;
     int writes;
+    int loading; /* the clock reads genesis while a key loads */
 } shost_t;
 
 /* Epoch 2000 of a chain with genesis at 0 and 12 s slots: every epoch
  * and slot the vectors use is behind the clock. */
 #define S_NOW (2000ull * 32ull * 12ull)
+
+/*
+ * Keys load with the clock at genesis, so the restart floor refuses slots
+ * up to 63, targets up to 1 and sources below 1 (max_epochs_ahead 0). The
+ * signer modes move every epoch the vectors give up by S_OFF epochs, and
+ * every slot by S_OFF * 32, above that floor. The rules compare values with
+ * each other only, so the shift keeps every expected result.
+ */
+#define S_OFF 2ull
 
 static skey_t *s_find(shost_t *h, const uint8_t pk[48])
 {
@@ -417,9 +427,17 @@ static int s_store(void *ctx, const uint8_t pk[48], const sc_watermark *wm)
 
 static int s_now(void *ctx, uint64_t *t)
 {
-    (void)ctx;
-    *t = S_NOW;
+    *t = ((shost_t *)ctx)->loading ? 0 : S_NOW;
     return SC_OK;
+}
+
+static int s_add(shost_t *h, sc_signer *s, const skey_t *k)
+{
+    int rc;
+    h->loading = 1;
+    rc = sc_signer_add_validator(s, k->pk, k->secret, SC_INDEX_UNKNOWN, NULL);
+    h->loading = 0;
+    return rc;
 }
 
 static void die(const char *what, int rc)
@@ -450,7 +468,7 @@ static sc_signer *signer_start(shost_t *h, void *mem, size_t mem_len, const uint
     if ((rc = sc_signer_init(mem, mem_len, MAX_KEYS, 0, &cfg, &ops, &s)) != SC_OK)
         die("sc_signer_init", rc);
     for (int i = 0; i < h->n; i++) {
-        rc = sc_signer_add_validator(s, h->keys[i].pk, h->keys[i].secret, SC_INDEX_UNKNOWN, NULL);
+        rc = s_add(h, s, &h->keys[i]);
         if (rc != SC_OK)
             die("sc_signer_add_validator", rc);
         h->keys[i].last[0].valid = h->keys[i].last[1].valid = 0;
@@ -476,7 +494,7 @@ static skey_t *s_key(shost_t *h, sc_signer *s, const uint8_t pk[48])
     k->secret[0] = 0x11; /* below the group order */
     k->secret[1] = (uint8_t)h->n;
     h->n++;
-    rc = sc_signer_add_validator(s, k->pk, k->secret, SC_INDEX_UNKNOWN, NULL);
+    rc = s_add(h, s, k);
     if (rc != SC_OK)
         die("sc_signer_add_validator", rc);
     return k;
@@ -498,7 +516,11 @@ static int signer_import_step(shost_t *h, sc_signer *s, const line_t *step, size
         return step->root_ok ? SC_OK : SC_ERR_ARG;
     for (int j = 0; j < nimp; j++) {
         skey_t *k = s_key(h, s, imp[j].pk);
-        int rc = sc_signer_import(s, k->pk, step->gvr, &imp[j].wm);
+        sc_watermark wm = imp[j].wm;
+        wm.block_slot += S_OFF * 32;
+        wm.source_epoch += S_OFF;
+        wm.target_epoch += S_OFF;
+        int rc = sc_signer_import(s, k->pk, step->gvr, &wm);
         if (rc != SC_OK)
             return rc;
         /* The import dropped the key's repeat roots. */
@@ -513,16 +535,16 @@ static int sign_op(sc_signer *s, const skey_t *k, const line_t *l, uint8_t sig[9
     if (l->kind[0] == 'B') {
         sc_beacon_block_header b;
         memset(&b, 0, sizeof b);
-        b.slot = l->a;
+        b.slot = l->a + S_OFF * 32;
         memcpy(b.body_root, l->root, 32);
         return sc_sign_block(s, k->pk, &b, sig);
     }
     sc_attestation_data a;
     memset(&a, 0, sizeof a);
-    a.slot = l->b * 32;
+    a.slot = (l->b + S_OFF) * 32;
     memcpy(a.beacon_block_root, l->root, 32);
-    a.source.epoch = l->a;
-    a.target.epoch = l->b;
+    a.source.epoch = l->a + S_OFF;
+    a.target.epoch = l->b + S_OFF;
     return sc_sign_attestation(s, k->pk, &a, sig);
 }
 

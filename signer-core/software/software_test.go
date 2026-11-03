@@ -13,7 +13,12 @@ func TestSoftwareBackend(t *testing.T) {
 	ctx := context.Background()
 	now := uint64(time.Now().Unix())
 	cfg := DevConfig(now-100*384, 12, 32) // clock epoch 100
-	b, err := New(cfg, 4, nil)
+	// The key loads at clock epoch 100, so the restart floor refuses up to
+	// epoch 102 (max_epochs_ahead 1); the votes below go at epoch 104.
+	mh := NewMemHooks()
+	at := now
+	mh.Clock = func() (uint64, error) { return at, nil }
+	b, err := New(cfg, 4, mh)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +32,8 @@ func TestSoftwareBackend(t *testing.T) {
 	if len(keys) != 1 || keys[0].Pubkey != pk {
 		t.Fatalf("%+v", keys)
 	}
-	a := &backend.AttestationData{Slot: 100 * 32, Source: backend.Checkpoint{Epoch: 99}, Target: backend.Checkpoint{Epoch: 100}}
+	at = now + 4*384
+	a := &backend.AttestationData{Slot: 104 * 32, Source: backend.Checkpoint{Epoch: 103}, Target: backend.Checkpoint{Epoch: 104}}
 	domain, _ := cfg.MessageDomain(a)
 	if _, err := b.Sign(ctx, backend.SignRequest{Pubkey: pk, Message: a}); backend.StatusOf(err) != backend.StatusDomainMismatch {
 		t.Fatalf("no domain: %v", err)

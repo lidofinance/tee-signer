@@ -4,13 +4,12 @@
  * accepts today is marked EXPECTED-FAIL with its id and exits 0, so this
  * file can run in CI and turns red only if the behaviour changes.
  *
- * SIM-L1: per-validator marks with a source window (commit_ahead
- * source_epochs > 0, as in the cloud chain.json 32,2,2 with
- * -persist-watermarks) stall after a restart during non-finality, the way
- * finding 22 did for device marks before its fix: the stored source bound is
- * the signed source + source_epochs, the chain's source stays at the signed
- * one, so every vote is refused until the chain justifies an epoch at or
- * above the bound.
+ * SIM-L1: a restart during non-finality stalls votes. The core's restart
+ * floor refuses sources below epoch(clock) + max_epochs_ahead + 1, and the
+ * chain's source stays at the last justified epoch, so every vote is refused
+ * until the chain justifies an epoch at or above the floor. Per-validator
+ * marks with a source window (commit_ahead source_epochs > 0) stalled the
+ * same way before the floor moved into the core.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -86,7 +85,7 @@ static int vote(sc_signer *s, host_t *h, uint64_t src, uint64_t tgt)
     uint8_t pk[48], sig[96];
     memset(&a, 0, sizeof a);
     memset(pk, 0x99, sizeof pk);
-    a.slot = tgt * 32 + 3;
+    a.slot = tgt * 32; /* slot 0 of the epoch: started at the clock below */
     a.source.epoch = src;
     a.target.epoch = tgt;
     a.beacon_block_root[0] = (uint8_t)tgt;
@@ -123,10 +122,10 @@ int main(void)
     sc_signer_wipe(s);
     free(mem);
     if (first_ok < 0) {
-        printf("EXPECTED-FAIL SIM-L1: per-validator marks, source window 2: after a restart in a "
-               "non-finality period every vote with the chain's source is refused (%d of %d "
-               "epochs, until the chain justifies epoch %llu from E)\n",
-               refused, refused, (unsigned long long)(S + 2 - E));
+        printf("EXPECTED-FAIL SIM-L1: after a restart in a non-finality period every vote with "
+               "the chain's source is refused (%d of %d epochs, until the chain justifies the "
+               "restart floor)\n",
+               refused, refused);
         return 0;
     }
     printf("SIM-L1 changed: a vote signed again %d epochs after the restart; update this test\n",

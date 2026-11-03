@@ -5,9 +5,25 @@
 
 package main
 
-import "github.com/lidofinance/tee-signer/tee-signer/server"
+import (
+	"errors"
+
+	"github.com/lidofinance/tee-signer/tee-signer/server"
+)
 
 func checkPlainImport(string) error { return nil }
+
+// The core sets its restart floor on every load in every build. A release
+// build keeps -restart-floor for the command lines of existing images, and
+// refuses it off: the runner's own floor copy stays on.
+const restartFloorUsage = "must be true in a release build: the runner's own restart floor copy (the core always sets its floor)"
+
+func checkRestartFloor(on bool) error {
+	if !on {
+		return errors.New("-restart-floor=false is for debug builds; the core sets its restart floor on every load in any case")
+	}
+	return nil
+}
 
 // plainVsockAllowed is false in a release build: vsock is served with
 // mutual TLS only, because the host side of vsock is not trusted.

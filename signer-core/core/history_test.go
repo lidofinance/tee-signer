@@ -46,7 +46,7 @@ func TestSSIHISTORY02FailedImportLeavesNoSignableKey(t *testing.T) {
 	pk, _ := core.PubkeyOf(sk)
 	history := backend.Watermark{HasAttestation: true, SourceEpoch: 15, TargetEpoch: 18}
 	h.failStores = 1
-	if _, err := s.AddValidator(pk, sk, 7, &history); err == nil {
+	if _, err := addAtGenesis(h.MemHooks, s, pk, sk, 7, &history); err == nil {
 		t.Fatal("the import's failed mark write did not reach AddValidator")
 	}
 	// Source 10 is below the imported history's source 15: a surround of

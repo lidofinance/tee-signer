@@ -10,10 +10,6 @@ import (
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
-// coreRestartFloor is false while the core has no restart floor: a
-// slashable request it signs is logged as a gap, not a failure.
-const coreRestartFloor = false
-
 // hostileHooks keep per-validator marks and a device mark like an honest
 // host, and misbehave on request.
 type hostileHooks struct {
@@ -115,14 +111,9 @@ func (h *hostileHooks) restore(m map[backend.Pubkey]backend.Watermark, d backend
 // refused fails the test if err is nil: the request went through.
 func refused(t *testing.T, err error, what string) {
 	t.Helper()
-	if err != nil {
-		return
+	if err == nil {
+		t.Fatalf("%s went through", what)
 	}
-	if !coreRestartFloor {
-		t.Logf("gap: %s went through", what)
-		return
-	}
-	t.Fatalf("%s went through", what)
 }
 
 // hostileKey is a fixed full key, so every signer of a test loads the same.

@@ -68,6 +68,9 @@ void sc_h2g2_cache_wipe(sc_h2g2_cache *c);
 void sc_slashing_record_block(sc_slashing_state *st, uint64_t slot);
 void sc_slashing_record_attestation(sc_slashing_state *st, uint64_t source_epoch,
                                     uint64_t target_epoch);
+/* Raises wm so it refuses every block slot up to the last slot of epoch f,
+ * every target <= f and every source < f. Fields above stay. */
+void sc_slashing_floor(sc_watermark *wm, uint64_t f, uint64_t slots_per_epoch);
 
 /* Policy. */
 int sc_policy_check_config(const sc_config *cfg);

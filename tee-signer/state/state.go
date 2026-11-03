@@ -1,5 +1,11 @@
 // Package state implements the core's storage and clock hooks for the
-// runner, with two restart protections that can be used alone or together:
+// runner, with two restart protections that can be used alone or together.
+//
+// The core sets the restart floor itself on every validator load
+// (signer_core.h SC_RESTART_FLOOR_EPOCHS), for blocks, targets and sources,
+// whatever these hooks return. The floor below is the runner's own copy: it
+// can only raise what the core starts from, and it names the floor epoch in
+// the log and in refusals.
 //
 //   - Persisted marks: the core's commit-ahead watermarks are sealed and
 //     written to the platform store. Safe only if the store cannot be
@@ -59,16 +65,20 @@ type Mode struct {
 	// it together with core.Config.DeviceMark. Not with Persist.
 	MarkLog bool
 
-	// noSourceFloor drops the source bound from the floor (targets and
-	// blocks only). Tests use it to show why the source bound is needed.
+	// noSourceFloor drops the source bound from this copy of the floor
+	// (targets and blocks only). Tests use it to show that the core's own
+	// floor bounds sources without it.
 	noSourceFloor bool
 	// shortMargin allows FloorMargin = max_epochs_ahead, the margin before
 	// the review. Tests use it to show the sub-second skew gap.
 	shortMargin bool
 }
 
-// DefaultFloorMargin is max_epochs_ahead + 1.
-func DefaultFloorMargin(cfg core.Config) uint64 { return satAdd(cfg.MaxEpochsAhead, 1) }
+// DefaultFloorMargin is max_epochs_ahead + 1, the core's margin
+// (core.RestartFloorEpochs).
+func DefaultFloorMargin(cfg core.Config) uint64 {
+	return satAdd(cfg.MaxEpochsAhead, core.RestartFloorEpochs)
+}
 
 // markTimeout bounds one mark log write; the core waits for it.
 const markTimeout = 10 * time.Second
@@ -530,12 +540,11 @@ func (h *Hooks) LoadWatermark(pk backend.Pubkey) (backend.Watermark, bool, error
 var _ core.DeviceMarkHooks = (*Hooks)(nil)
 
 // LoadDeviceMark is the mark the log held at start, merged with the
-// restart floor's target and block bounds (if the floor is on). The floor
-// leaves the source bound of a log with a vote alone: the log's mark
-// carries the highest source signed, so a restart while the chain does not
-// finalize signs again at the first vote above the target bound. A log
-// with no vote keeps source 0 in the core and gates sources in SourceFloor
-// instead, so an import with vote history can still set the bound.
+// restart floor's target and block bounds (if the floor is on). This merge
+// leaves the source bound of a log with a vote alone, but the core's own
+// floor raises the source to the floor epoch too: after a restart a vote
+// signs only once the chain justifies the floor epoch, also while it does
+// not finalize. SourceFloor still gates the sources of a log with no vote.
 func (h *Hooks) LoadDeviceMark() (backend.Watermark, bool, error) {
 	if !h.mode.MarkLog || h.marks == nil {
 		return backend.Watermark{}, false, errors.New("state: no mark log")

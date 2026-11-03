@@ -16,6 +16,13 @@ import (
 
 var allowImport = flag.Bool("allow-import", false, "accept plaintext IMPORT_SHARE (debug build, dev platform only)")
 
+// restartFloorUsage: in a debug build -restart-floor=false turns off the
+// runner's own floor copy (package state). The core sets its restart floor
+// on every load in any case.
+const restartFloorUsage = "debug build: false turns off the runner's own restart floor copy; the core always sets its floor"
+
+func checkRestartFloor(bool) error { return nil }
+
 // checkPlainImport refuses -allow-import on any platform but dev.
 func checkPlainImport(platformName string) error {
 	if platformName != "dev" && *allowImport {

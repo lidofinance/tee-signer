@@ -69,10 +69,10 @@ func TestReview4F2HostileVotePinsSourceBound(t *testing.T) {
 					t.Fatal(err)
 				}
 				t.Cleanup(s.Close)
-				if _, err := s.AddValidator(pka, ska, 7, nil); err != nil {
+				if _, err := addAtGenesis(h.MemHooks, s, pka, ska, 7, nil); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := s.AddValidator(pkb, skb, 8, nil); err != nil {
+				if _, err := addAtGenesis(h.MemHooks, s, pkb, skb, 8, nil); err != nil {
 					t.Fatal(err)
 				}
 				return s

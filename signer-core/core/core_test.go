@@ -42,7 +42,7 @@ func newTestSignerWith(t *testing.T, hooks *software.MemHooks, cfg core.Config) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	k, err := s.AddValidator(pk, sk, 7, nil)
+	k, err := addAtGenesis(hooks, s, pk, sk, 7, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,6 +50,17 @@ func newTestSignerWith(t *testing.T, hooks *software.MemHooks, cfg core.Config) 
 		t.Fatal("share pubkey of a full key should equal the key")
 	}
 	return s, pk, cfg
+}
+
+// addAtGenesis adds a validator with m's clock at genesis: the core's restart
+// floor is then epoch max_epochs_ahead + 1, below the epochs these tests
+// sign, so they see the stored marks alone. hostile_test.go tests the floor.
+func addAtGenesis(m *software.MemHooks, s *core.Signer, pk backend.Pubkey, sk [32]byte, index uint64,
+	interchange *backend.Watermark) (backend.ValidatorKey, error) {
+	saved := m.Clock
+	m.Clock = func() (uint64, error) { return genesis, nil }
+	defer func() { m.Clock = saved }()
+	return s.AddValidator(pk, sk, index, interchange)
 }
 
 func att(source, target uint64) *backend.AttestationData {
@@ -233,7 +244,7 @@ func TestRepeatAfterRestart(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.AddValidator(pk, sk, 7, nil); err != nil {
+		if _, err := addAtGenesis(h, s, pk, sk, 7, nil); err != nil {
 			t.Fatal(err)
 		}
 		return s
@@ -275,7 +286,7 @@ func TestExitBoundIndex(t *testing.T) {
 	defer s.Close()
 	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
-	if _, err := s.AddValidator(pk, sk, 8, nil); err != nil {
+	if _, err := addAtGenesis(h, s, pk, sk, 8, nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, epoch := range []uint64{5, 20, 2000} {
@@ -319,14 +330,14 @@ func TestHookFailuresRefuse(t *testing.T) {
 	defer s.Close()
 	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
-	if _, err := s.AddValidator(pk, sk, 7, nil); err != nil {
+	if _, err := addAtGenesis(mh, s, pk, sk, 7, nil); err != nil {
 		t.Fatal(err)
 	}
+	before, _ := s.State(pk)
 	h.failStore = true
 	_, err = s.Sign(signReq(s, pk, att(19, 20)))
 	wantStatus(t, err, backend.StatusStorage)
-	st, _ := s.State(pk)
-	if st.RAM.HasAttestation {
+	if st, _ := s.State(pk); st != before {
 		t.Fatal("failed store must leave the state unchanged")
 	}
 	h.failStore, h.failClock = false, true
@@ -347,7 +358,7 @@ func TestInterchangeImportOnAdd(t *testing.T) {
 	sk, _ := software.NewSecret()
 	pk, _ := core.PubkeyOf(sk)
 	wm := &backend.Watermark{HasAttestation: true, SourceEpoch: 18, TargetEpoch: 19, HasBlock: true, BlockSlot: 600}
-	if _, err := s.AddValidator(pk, sk, 7, wm); err != nil {
+	if _, err := addAtGenesis(h, s, pk, sk, 7, wm); err != nil {
 		t.Fatal(err)
 	}
 	_, err := s.Sign(signReq(s, pk, att(18, 19)))

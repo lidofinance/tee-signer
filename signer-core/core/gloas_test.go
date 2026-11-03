@@ -40,7 +40,7 @@ func gloasSigner(t *testing.T, hooks *software.MemHooks) (*core.Signer, backend.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.AddValidator(pk, sk, 7, nil); err != nil {
+	if _, err := addAtGenesis(hooks, s, pk, sk, 7, nil); err != nil {
 		t.Fatal(err)
 	}
 	return s, pk, cfg, sk
@@ -199,7 +199,7 @@ func TestGloasUnverifiedRoots(t *testing.T) {
 	}
 	t.Cleanup(on.Close)
 	sk := [32]byte{0x11, 0x22, 0x33}
-	if _, err := on.AddValidator(pk, sk, 7, nil); err != nil {
+	if _, err := addAtGenesis(h, on, pk, sk, 7, nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, tt := range types {
@@ -268,7 +268,7 @@ func TestGloasRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	if _, err := r.AddValidator(pk, sk, 7, nil); err != nil {
+	if _, err := addAtGenesis(h, r, pk, sk, 7, nil); err != nil {
 		t.Fatal(err)
 	}
 	_, err = r.Sign(signReq(r, pk, ptc))

@@ -291,12 +291,10 @@ roll the mark back.
   conflict on create.
 - Store down while running. The core keeps signing inside the committed
   mark and refuses what lies above it until a write succeeds again.
-- Restart floor. With the log the floor keeps only its target and block
-  bounds; the source bound comes from the log. That removes the floor's
-  stall while the chain does not finalize: in the fuzzer's 200 epochs of
-  non-finality (`nonfinal200`) the `cloud` profile lost a mean of 74 and
-  at most 99 epochs per key after each restart, the `cloud-ext` profile
-  (the mark log) 3 and 3 (the floor's margin), with no validator miss.
+- Restart floor. The core sets it on every load, sources included
+  (`signer-core/README.md`, "Restart floor"); the log's mark can only raise
+  it. A restart while the chain does not finalize stops votes until the
+  chain justifies the floor epoch, with the log as without it.
 - Objects that are not records under future names (anyone with write
   access can create new names) cost the writer a skip each, up to 16 in a
   row; readers ignore them. A copy of an old record under a new name does

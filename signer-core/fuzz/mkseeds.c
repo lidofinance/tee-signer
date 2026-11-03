@@ -324,7 +324,8 @@ static void configs(void)
 
 /* Signer op streams: a header, two validators, then one kind of request
  * several times around a restart. 0x18 in every argument picks the clock
- * epoch, so the requests start inside the horizon. */
+ * epoch, so the requests start inside the horizon; the clock moves four
+ * epochs after the loads, past their restart floor. */
 /* Appends one operation with its argument block: args, then 0x18 bytes. */
 static size_t op_block(uint8_t *in, size_t n, int op, int v, const uint8_t *args, size_t nargs)
 {
@@ -339,7 +340,7 @@ static size_t op_block(uint8_t *in, size_t n, int op, int v, const uint8_t *args
 static void signer_seeds(void)
 {
     static const uint8_t flag_sets[] = {0, F_VERIFY, F_DEVICE, F_DEVICE | F_VERIFY};
-    static const uint8_t add[] = {0}, gloas[] = {0x40, 20}, next[] = {0x40, 1};
+    static const uint8_t add[] = {0}, gloas[] = {0x40, 20}, next[] = {0x40, 1}, ahead4[] = {0x40, 4};
     for (size_t fs = 0; fs < sizeof flag_sets; fs++) {
         for (int op = 0; op < OP_COUNT; op++) {
             uint8_t in[HEADER_LEN + 20 * (2 + ARGS_LEN)];
@@ -353,6 +354,7 @@ static void signer_seeds(void)
             in[4] = 7; /* clock offset */
             n = op_block(in, n, OP_ADD, 0, add, sizeof add);
             n = op_block(in, n, OP_ADD, 1, add, sizeof add);
+            n = op_block(in, n, OP_TIME, 0, ahead4, sizeof ahead4);
             if ((op >= OP_PTC && op <= OP_PREFERENCES) || op == OP_BUILDER_AUTH)
                 n = op_block(in, n, OP_TIME, 0, gloas, sizeof gloas); /* past the Gloas fork */
             for (int rep = 0; rep < 4; rep++) {
@@ -362,6 +364,8 @@ static void signer_seeds(void)
                     n = op_block(in, n, OP_BLOCK, rep & 1, NULL, 0);
                 n = op_block(in, n, op, rep & 1, NULL, 0);
                 n = op_block(in, n, OP_TIME, 0, next, sizeof next);
+                if (rep == 1) /* past the floor of the restart that follows */
+                    n = op_block(in, n, OP_TIME, 0, ahead4, sizeof ahead4);
             }
             snprintf(name, sizeof name, "ops-f%zu-op%02d", fs, op);
             put("signer", name, in, n);
@@ -388,8 +392,8 @@ static void signer_seeds(void)
             in[2] = 3;
             in[3] = 2;
             in[4] = 7;
-            n = op_block(in, n, OP_TIME, 0, gloas, sizeof gloas);
             n = op_block(in, n, OP_ADD, 0, add, sizeof add);
+            n = op_block(in, n, OP_TIME, 0, gloas, sizeof gloas);
             if (kinds[i].op == OP_ENVELOPE)
                 n = op_block(in, n, OP_BLOCK, 0, NULL, 0);
             n = op_block(in, n, kinds[i].op, 0, NULL, 0);
@@ -402,7 +406,7 @@ static void signer_seeds(void)
     /* F_HOSTILE: votes and a block, then the host loses them (a store that
      * lies, a played-back copy, or both with the clock an epoch back), a
      * restart, and the same requests again. */
-    static const uint8_t ahead4[] = {0x40, 4}, back1[] = {0x40, 0xff}, lie[] = {FAIL_LIE},
+    static const uint8_t back1[] = {0x40, 0xff}, lie[] = {FAIL_LIE},
                          ok[] = {0}, snap[] = {0x20}, replay[] = {0x10};
     for (int dev = 0; dev < 2; dev++) {
         for (int how = 0; how < 3; how++) {
