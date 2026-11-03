@@ -201,7 +201,7 @@ func TestFirstSnapshotOfLocalState(t *testing.T) {
 	l, _ := markstore.NewFileLog(t.TempDir())
 	local := newLocal(t)
 	local.Put("sealing/dek.gcpkms", []byte("wrapped"))
-	local.Put("shares/key", []byte("sealed share"))
+	local.Put("handover/key", []byte("sealed handover body"))
 	if _, err := open(t, local, l, keysOf("image-a"), Options{}); err != nil {
 		t.Fatal(err)
 	}
@@ -209,8 +209,8 @@ func TestFirstSnapshotOfLocalState(t *testing.T) {
 	if _, err := open(t, fresh, l, keysOf("image-a"), Options{}); err != nil {
 		t.Fatal(err)
 	}
-	if string(mustGet(t, fresh, "shares/key")) != "sealed share" {
-		t.Fatal("the share is not in the first snapshot")
+	if string(mustGet(t, fresh, "handover/key")) != "sealed handover body" {
+		t.Fatal("the handover entry is not in the first snapshot")
 	}
 }
 

@@ -45,7 +45,7 @@ checks() {
       go vet -tags platform_aws ./... && go test $RACE -count=1 -v -tags platform_aws ./transport || return 1 ;;
     governance)
       go test $RACE -count=1 -v ./... || return 1
-      go vet -tags testnet ./... && go test $RACE -count=1 -v -tags testnet ./setupwire ./setuptext ./flavor || return 1 ;;
+      go vet -tags testnet ./... && go test $RACE -count=1 -v -tags testnet ./setupwire ./setuptext ./flavor ./handoverorder || return 1 ;;
     tee-signer)
       vet_builds || return 1
       local tags
@@ -67,7 +67,9 @@ checks() {
       local dbg=() b
       b="$BUILD/$HOST_ARCH/bin/runner-azure-debugimport"; [ -x "$b" ] && dbg+=(RUNNER_AZURE_DEBUG_BIN="$b")
       b="$BUILD/$HOST_ARCH/bin/runner-aws-debugimport"; [ -x "$b" ] && dbg+=(RUNNER_AWS_DEBUG_BIN="$b")
-      env "${dbg[@]}" go test $RACE -count=1 -v ./... || return 1 ;;
+      env "${dbg[@]}" go test $RACE -count=1 -v ./... || return 1
+      local p
+      for p in azure aws gcp dev; do go test $RACE -count=1 -tags "verifierselect,platform_$p" ./runnerclient/verify || return 1; done ;;
     devkit)
       go test $RACE -count=1 -v ./... || return 1
       go test $RACE -count=1 -tags lockcheck ./lockorder || return 1 ;;

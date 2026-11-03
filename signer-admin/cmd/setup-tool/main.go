@@ -19,7 +19,8 @@
 //	    Decode FILE strictly and print setup_sha256, platform, signer,
 //	    signing_mode, policy_root and platform_commitment, and one
 //	    peer_attestation_hosts line per host (on nitro
-//	    "peer_attestation_hosts none" without any). With
+//	    "peer_attestation_hosts none" without any: its handover verifier
+//	    then reaches no azure-maa or gcp-cs key set). With
 //	    -platform, refuse a setup for another platform. With -chain, refuse
 //	    a setup whose chain or first fork schedule differs from the runner
 //	    chain.json (cloud/chains/chain.sh picks that file by chain name).

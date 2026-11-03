@@ -149,7 +149,7 @@ signer_dir() { echo "$OUT/$(group_name "$1")"; }
 # Names. Index N is 1..3 and sets the group, the key,
 # the identity and the location.
 #
-# A second group of signer N next to the running one
+# A second group of signer N next to the running one (a handover target)
 # takes GROUP_NAME_N (for example signer-1b) and KEY_NAME_N, a new
 # key name. Never the running group's key: key-create on an existing name
 # adds a version, and the running runner releases the newest version at its

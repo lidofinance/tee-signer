@@ -1,3 +1,5 @@
+//go:build !verifierselect || platform_azure || platform_gcp
+
 package main
 
 import (
@@ -14,6 +16,7 @@ import (
 	"github.com/lidofinance/tee-signer/attestation-verify"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/platform/dev"
+	"github.com/lidofinance/tee-signer/platform/setup"
 )
 
 // keySetServer is a fake MAA host on 127.0.0.1: its openid-configuration
@@ -41,7 +44,9 @@ func keySetServer(t *testing.T) *httptest.Server {
 
 // A Nitro-like dev runner: its setup lists one peer endpoint, so the start
 // gives the dev platform option egress, and the platform's HTTP client
-// fetches the key set of the listed MAA host and reaches no other host.
+// (the one the handover verifier gets, handover_wire.go) fetches the key
+// set of the listed MAA host and reaches no other host. AttestationEgress
+// reports the limit that the handover orders check.
 func TestDevRunnerAttestationEgress(t *testing.T) {
 	listed, other := keySetServer(t), keySetServer(t)
 	s, err := setupwire.DecodeSetup(sampleSetup(t, "dev-single"))
@@ -62,8 +67,8 @@ func TestDevRunnerAttestationEgress(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if n := len(st.setup.Wire.Platform.PeerAttestationHosts); n != 1 {
-			t.Fatalf("%d peer endpoints in the setup, want 1", n)
+		if e, limited := setup.AttestationEgress(st.setup.Wire); !limited || len(e) != 1 {
+			t.Fatalf("peer egress %v %v", e, limited)
 		}
 		if plat.HTTPClient == nil {
 			t.Fatal("no egress client")

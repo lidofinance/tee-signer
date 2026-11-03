@@ -367,7 +367,7 @@ func TestWriteCostPerSessionIsFlat(t *testing.T) {
 	key := 0
 	for sess := 0; sess < 128; sess++ {
 		before := s.bytesOut
-		pend := fmt.Sprintf("shares/pd/%064d", sess)
+		pend := fmt.Sprintf("handover/pd/%064d", sess)
 		if err := s.Put(pend, bytes.Repeat([]byte{'p'}, 16982)); err != nil {
 			t.Fatal(err)
 		}
@@ -392,7 +392,7 @@ func TestWriteCostPerSessionIsFlat(t *testing.T) {
 			}
 		}
 		if sess > 0 {
-			if err := s.Delete(fmt.Sprintf("shares/pd/%064d", sess-1)); err != nil {
+			if err := s.Delete(fmt.Sprintf("handover/pd/%064d", sess-1)); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -415,7 +415,7 @@ func TestWriteCostPerSessionIsFlat(t *testing.T) {
 		t.Fatalf("an object of %d bytes", largest)
 	}
 	objs, b := s.objects, s.bytesOut
-	if err := s.Put("shares/key", []byte("one small change")); err != nil {
+	if err := s.Put("handover/key", []byte("one small change")); err != nil {
 		t.Fatal(err)
 	}
 	if s.objects-objs != 1 || s.bytesOut-b > 8<<10 {
@@ -439,10 +439,10 @@ func TestMissingChunk(t *testing.T) {
 	if err := s.Apply(changeOf(state, nil)); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Put("shares/key", []byte("k")); err != nil {
+	if err := s.Put("handover/key", []byte("k")); err != nil {
 		t.Fatal(err)
 	}
-	state["shares/key"] = []byte("k")
+	state["handover/key"] = []byte("k")
 	first := s.segs[0].chunks[0].sum
 	now = now.Add(48 * time.Hour)
 	if err := s.Refresh(context.Background(), 24*time.Hour); err != nil || s.segs[0].chunks[0].sum == first {
@@ -476,23 +476,23 @@ func TestDeleteFinishedAtStart(t *testing.T) {
 	l := newMemLog()
 	local := newMemLocal()
 	s, _ := open(t, local, l, keysOf("image-a"), Options{})
-	s.Put("shares/pd/01", []byte("committed"))
+	s.Put("handover/pd/01", []byte("committed"))
 	s.Put("shares/aa", []byte("share"))
-	if err := s.Delete("shares/pd/01"); err != nil {
+	if err := s.Delete("handover/pd/01"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := local.Get("shares/pd/01"); !errors.Is(err, platform.ErrNotFound) {
+	if _, err := local.Get("handover/pd/01"); !errors.Is(err, platform.ErrNotFound) {
 		t.Fatal("the local delete did not happen")
 	}
-	local.Put("shares/pd/01", []byte("committed")) // as if the crash came first
+	local.Put("handover/pd/01", []byte("committed")) // as if the crash came first
 	if _, err := open(t, local, l, keysOf("image-a"), Options{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := local.Get("shares/pd/01"); !errors.Is(err, platform.ErrNotFound) {
+	if _, err := local.Get("handover/pd/01"); !errors.Is(err, platform.ErrNotFound) {
 		t.Fatal("the start did not finish the delete")
 	}
-	local.Put("shares/pd/02", []byte("never in the copy"))
-	if _, err := open(t, local, l, keysOf("image-a"), Options{}); err == nil || !strings.Contains(err.Error(), "shares/pd/02") {
+	local.Put("handover/pd/02", []byte("never in the copy"))
+	if _, err := open(t, local, l, keysOf("image-a"), Options{}); err == nil || !strings.Contains(err.Error(), "handover/pd/02") {
 		t.Fatalf("a local key the copy never had: %v", err)
 	}
 }

@@ -1,3 +1,5 @@
+//go:build !verifierselect || platform_azure
+
 package verify
 
 import (
@@ -21,6 +23,13 @@ func init() {
 			return nil, err
 		}
 		return m.verify, nil
+	}
+	documentFactories[VerifierAzureMAA] = func(a *Attestation, o *optset.Options) (DocumentVerifier, error) {
+		m, err := a.newMAA(o)
+		if err != nil {
+			return nil, err
+		}
+		return m.verifyDocument, nil
 	}
 }
 
@@ -84,6 +93,22 @@ func (m *maaVerifier) verify(ctx context.Context, nonce []byte, id *backend.Iden
 		o := m.opts
 		o.Keys = ks
 		_, err := azureid.Verify(nonce, id, o)
+		return err
+	})
+}
+
+// verifyDocument checks an MAA token that binds userData: the runtime data
+// MAA hashed into the SNP report is backend.MAARuntimeData(userData), as
+// for an identity.
+func (m *maaVerifier) verifyDocument(ctx context.Context, _ []byte, userData []byte, a *backend.Attestation) error {
+	if err := checkUserData(userData, a, azureid.Platform, azureid.Format, "an Azure MAA token"); err != nil {
+		return err
+	}
+	return m.keys.verify(ctx, func(ks *attest.KeySet) error {
+		o := m.opts
+		o.Keys = ks
+		o.RuntimeData = backend.MAARuntimeData(userData)
+		_, err := attest.VerifyMAA(string(a.Document), o)
 		return err
 	})
 }

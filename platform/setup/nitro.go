@@ -23,7 +23,9 @@ const (
 	PortCoarse     = 8002 // the third coarse-time host
 	PortMarkBucket = 8004
 	// The peer endpoint block: the setup's peer_attestation_hosts, in their sorted
-	// order, on 8010 up to 8025.
+	// order, on 8010 up to 8025. The handover verifier fetches its key
+	// sets through these (an Azure peer's MAA host, Google's Confidential
+	// Space hosts).
 	PortPeerFirst  = 8010
 	NitroPeerPorts = 16
 )

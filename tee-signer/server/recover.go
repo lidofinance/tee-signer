@@ -16,7 +16,7 @@ import (
 // that connection; the other connections go on.
 //
 // Recover policy: a panic in a request
-// that changes state (SIGN, the imports, CONFIG_UPDATE, any type but the four below) may
+// that changes state (SIGN, the imports, the handover messages, CONFIG_UPDATE, any type but the four below) may
 // have left that state half written. The runner then refuses every
 // request but HEALTH, PUBLIC_KEYS, ATTEST and IDENTITY with NOT_READY
 // until it restarts and reads its stored state again, as after ErrLost,
@@ -32,8 +32,8 @@ import (
 // and the supervisor starts the runner again from its stored state).
 
 // panicProbeTimeout bounds the wait for the server's locks after a
-// panic. A request can hold a lock across mark log writes, so it is
-// long. A variable so a test can shorten it.
+// panic. A HANDOVER page holds the source's lock across mark log
+// writes, so it is long. A variable so a test can shorten it.
 var panicProbeTimeout = 5 * time.Minute
 
 // answer runs one frame's request and returns the response payload. ok
@@ -115,12 +115,21 @@ func (s *Server) checkAfterPanic(wait time.Duration) {
 
 // lockers are the server's locks.
 func (s *Server) lockers() []sync.Locker {
-	ls := []sync.Locker{&s.blockedMu, &s.admitMu, &s.shareSetMu, &s.attestLimit.mu}
+	ls := []sync.Locker{&s.sharesMu, &s.blockedMu, &s.admitMu, &s.shareSetMu, &s.promoteMu, &s.attestLimit.mu}
 	if u := s.Updates; u != nil {
-		ls = append(ls, &u.writeMu, &u.mu)
+		ls = append(ls, &u.writeMu, &u.mu, &u.srcMu)
 	}
 	if g := s.Image; g != nil {
 		ls = append(ls, &g.mu)
 	}
+	for _, x := range []any{s.imp, s.handoverSrc} {
+		if h, ok := x.(lockHolder); ok {
+			ls = append(ls, h.lockers()...)
+		}
+	}
 	return ls
 }
+
+// lockHolder is a part of the server with locks of its own: the handover
+// source and target of release builds.
+type lockHolder interface{ lockers() []sync.Locker }

@@ -129,12 +129,19 @@ fi
 image_suffix() { echo "$FLAVOR_SUFFIX"; }
 
 # runner_tags <binary name>: its platform tags, then debugimport for a debug
-# build, then nts for a cloud build, then testnet for that flavour. No
-# runner links an attestation verifier (scripts/check-deps.sh). The cloud runners (azure, aws,
+# build, then nts for a cloud build, then testnet for that flavour, then
+# verifierselect and runnerbuild. verifierselect: a runner links the
+# attestation verifier of its own platform only (attestation-verify, the
+# handover checks the other image with it), where the tools and the tests
+# link every verifier. runnerbuild marks a runner build as such: a cloud
+# platform tag with runnerbuild and without verifierselect does not
+# compile (tee-signer/verifier_guard.go), so no runner build links the dev
+# verifier by mistake, while the module tests, which carry no runnerbuild,
+# still build with the platform tags alone. The cloud runners (azure, aws,
 # gcp and their debug builds) link the Rust NTS library (trusted-time,
 # build/nts/<arch>/lib) and their images run the NTS clock (-nts-clock).
 # The dev builds stay without it.
-runner_tags() { runner_base_tags "$1"; }
+runner_tags() { echo "$(runner_base_tags "$1"),verifierselect,runnerbuild"; }
 runner_base_tags() {
   case "$1" in
     runner-*-testnet) echo "$(runner_base_tags "${1%-testnet}"),testnet" ;;
@@ -283,6 +290,37 @@ git_checkout_pinned() {
 
 # has_nts <binary name>: the build links the NTS library (tag nts).
 has_nts() { case ",$(runner_tags "$1")," in *,nts,*) return 0 ;; *) return 1 ;; esac; }
+
+# The handover release gate (signer-protocol/docs/protocol.md, "Handover"). No image goes
+# out that cannot hand its shares to the next one. scripts/handover-gate.sh
+# runs tests/e2e TestE2EHandoverGate (image N hands over to N+1, then N+1
+# to N+2) and, when it passed, writes HANDOVER_GATE_STAMP with the source id
+# of the tree it tested. The image builds call require_handover_gate.
+HANDOVER_GATE_STAMP="$BUILD/handover-gate.stamp"
+
+# handover_source_id: one id for the Go sources an image is built from:
+# HEAD, the uncommitted changes and the untracked files of backend, runner,
+# attest and admin.
+handover_source_id() {
+  {
+    git -C "$ROOT" rev-parse HEAD
+    git -C "$ROOT" diff HEAD -- "${GO_MODULES[@]}"
+    (cd "$ROOT" && git ls-files -z --others --exclude-standard -- "${GO_MODULES[@]}" | xargs -0 -r sha256sum)
+    devnet_hook source_id
+  } | sha256sum | cut -c1-64
+}
+
+# require_handover_gate <runner binary name>: the handover gate passed on
+# exactly these sources. There is no override.
+require_handover_gate() {
+  local want got
+  want="$(handover_source_id)"
+  got="$(cat "$HANDOVER_GATE_STAMP" 2>/dev/null || true)"
+  if [ "$got" != "$want" ]; then
+    echo "the handover release gate has not passed on these sources (stamp ${got:-missing}, sources $want): run scripts/handover-gate.sh" >&2
+    return 1
+  fi
+}
 
 # The build overlay. SIGNER_BUILD_OVERLAY_DIR names a folder outside this
 # repo whose hooks.sh adds parts to a build: runner files (go build

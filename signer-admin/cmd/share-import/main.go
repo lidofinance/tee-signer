@@ -1,3 +1,5 @@
+//go:build !verifierselect
+
 // Command share-import is the dealer side of the sealed share import: it
 // asks a runner for its attested identity, checks it, encrypts one share to
 // the runner's import key (HPKE, ML-KEM-768-X25519) and sends it. The share

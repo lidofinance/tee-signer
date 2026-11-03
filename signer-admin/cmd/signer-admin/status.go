@@ -156,8 +156,10 @@ func facets(st *signerState) map[string]string {
 		}
 		f[g.String()+"_pending"] = p
 	}
+	// A handover order names one source, so the others never hold it and
+	// it is no difference; no other order kind exists today.
 	o := "none"
-	if s.Order.Kind != 0 {
+	if s.Order.Kind != 0 && verify.OrderKind(s.Order.Kind) != "handover" {
 		o = hex8(s.Order.Hash)
 	}
 	f["order"] = o

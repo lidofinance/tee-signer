@@ -37,7 +37,8 @@
 # overlay there is no Azure CCE policy (azure.cce_policy none). With
 # SIGNER_BUILD_OVERLAY_DIR (testnet images only) the overlay sets the
 # network entries of the devnet images (devnet_generic_images_env).
-# The EIF file's own sha256 changes with every build (its
+# Every image build needs a passed handover gate (scripts/handover-gate.sh;
+# common.sh require_handover_gate). The EIF file's own sha256 changes with every build (its
 # metadata has the build time); PCR0 to PCR2, which KMS checks, do not. It is
 # printed, not compared.
 #

@@ -531,7 +531,7 @@ runner stops on the 403. With a setup, the container of the state copy
 gets the same checks at start; an account or container the management
 plane does not find stops it too.
 
-## State copy and a new image
+## State copy and handover
 
 The runner's state lives on the container's own file system under
 `/var/lib/signer`, not on a volume, so a group that restarts without it
@@ -544,9 +544,9 @@ covers it. Without a state copy, a runner that lost its state makes a new
 data key and the shares need a new import.
 
 A new image gets a new Key Vault key, which cannot open the old image's
-state or mark log. The new image starts as a new signer: a new setup and
-mark log, and the shares imported again with their interchange maxima
-(`slashing-log/docs/durable-state.md`, "A new image").
+state or mark log. The old runner hands its shares and its mark to the new
+one under an approver-signed handover order (HANDOVER,
+`signer-protocol/docs/protocol.md`, "Handover").
 
 ## Key, identity and registry
 
@@ -726,8 +726,8 @@ group next to the running one. The old runner hands over to the new one.
 4. `key-create N`, `key-role N`, then `group-deploy N`.
 5. Watch `az container logs -g "$RG" -n <group> --container-name runner`
    (see "Verify").
-6. Stop the old group, import the shares into the new one (see "State
-   copy and a new image"), then delete the old group.
+6. Hand over from the old runner (see "State copy and handover"), then
+   delete the old group.
 
 ## Verify
 

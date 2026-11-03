@@ -66,9 +66,9 @@ constant runs one minute for each day of the default build:
 | Default time lock (the setup names none) | 48 hours | 2 minutes |
 | Time lock cap (`change_delay_seconds` at most) | 30 days | 30 minutes |
 | Activation horizon, past the required wait | 30 days | 30 minutes |
-| Images minimum: allowed-images updates | 7 days | 7 minutes |
+| Images minimum: allowed-images updates, handover orders on a cloud | 7 days | 7 minutes |
 
-Use them while research changes images, when a week
+Use them while research changes images and runs handover orders, when a week
 per step would stall the work. They never hold real keys: production, and
 every signer whose keys matter, runs the default build. What keeps the two
 apart:
@@ -84,7 +84,8 @@ apart:
   `signer-runner testnet`.
 - Every client refuses it in the TLS handshake unless the connection sets
   `"allow_testnet_build": true`: cloud.json of the signing client and
-  signer-admin's runner entries and identity-check;
+  signer-admin's runner entries, identity-check, handover-source and
+  handover-target;
   `-allow-testnet-build` for cloud-import and share-import.
   `platform-gcp/deploy/deploy.sh verifier-config` writes it for a testnet image.
 - Its measurements are its own, so key-release policies, `allowed_image_measurements`
@@ -101,21 +102,32 @@ flavour goes into every name: runners `runner-<cloud>-testnet`, folders
 `signer-cloud/{azure,gcp}-runner-testnet`, registry tags `generic-testnet-ts`
 (Azure) and `generic-testnet` (GCP), record `cloud/generic-images-testnet.txt`.
 
-The testnet tests: `tests/e2e` built with `-tags testnet` (from
+The testnet tests: `scripts/handover-gate.sh` runs the handover gate on
+`runner-dev-testnet` too, and `tests/e2e` built with `-tags testnet` (from
 `tests/`: `go test -tags testnet -timeout 20m -run TestE2ETestnet -v ./e2e`)
 runs the chain refusals and a testnet dev runner whose allowed-images update
 stays pending past its 2-minute time lock and comes into force 7 minutes
 after it is sent. Deploying testnet images follows the steps below, with the
 testnet values and `allow_testnet_build` in every connection.
 
-### Nitro peer endpoints
+### Nitro peer endpoints (handover)
 
-A Nitro enclave reaches only the routes of its setup. A Nitro signer's
-setup may list hosts in `peer_attestation_hosts`. The parent starts a
-vsock-proxy for each on ports 8010 to 8025 (at most 16), in the setup's
-order, and the enclave maps those names to them; nothing else gets a
-route. No runner checks another runner's attestation, so no runner code
-needs these hosts, and the sample setup below lists none. `setup-tool check` prints the list
+A runner checks the other image of a handover with the attestation
+verifier of its own platform (`attestation-verify/runnerclient/verify`, build tag
+`verifierselect`, which `scripts/common.sh` sets for every runner build). A
+Nitro signer hands over to a Nitro signer and checks it with `aws-nitro`,
+whose root certificate is in the binary, so it fetches no key set. The
+Azure and GCP verifiers (`azure-maa`, `gcp-cs`) fetch their key sets over
+HTTPS, and the Azure and GCP signers have egress of their own; a Nitro
+enclave reaches only the routes of its setup.
+
+A Nitro signer's setup may list hosts in `peer_attestation_hosts`. The
+parent starts a vsock-proxy for each on ports 8010 to 8025 (at most 16),
+in the setup's order, and the enclave maps those names to them; nothing
+else gets a route. On a runner with limited egress a handover order whose
+verifier would fetch a key set from a host outside that list is refused,
+and the refusal names the host; with the own-platform verifier a Nitro
+signer never needs one, so the sample setup below lists none. `setup-tool check` prints the list
 (`peer_attestation_hosts none` for a Nitro setup without one);
 `hostagent -proxy-routes` prints the routes, 8010 and up last. The
 parent's security group allows TCP 443 out (`main.tf`), so a listed host

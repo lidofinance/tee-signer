@@ -106,6 +106,48 @@ func TestLateImportGetsAPTCFloor(t *testing.T) {
 	}
 }
 
+// A handover target gives each key it takes the floor of its own import:
+// the target takes the first share, the clock moves on 20 epochs, then it
+// takes the second. The target's device mark loaded with the first share
+// and the page's mark hold only bounds from then; the second key's own
+// mark holds its later floor. The source imports whole keys made by
+// newKey, so it and its target run in single mode.
+func TestHandoverTargetGetsABlockFloor(t *testing.T) {
+	src := newSingleSrcEnv(t)
+	tgt := newTargetOf(t, src, nil, nil, nil)
+	var pks []backend.Pubkey
+	for i := range 2 {
+		sk, pk := newKey(t)
+		if err := src.importSealed(pk, sk, uint64(6+i), nil); err != nil {
+			t.Fatal(err)
+		}
+		pks = append(pks, pk)
+	}
+	order, _ := srcOrder(t, src, tgt, []byte{1, 2}, nil)
+	if _, err := src.push(order); err != nil {
+		t.Fatal(err)
+	}
+	src.clock.add(srcDelay)
+	page, err := handOver(t, src, tgt, order, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, second := *page, *page
+	first.Shares, second.Shares = page.Shares[:1], page.Shares[1:]
+	tgt.mustImp(order, &first, 0)
+	start := tgt.floorOf()
+	src.clock.add(20 * testEpoch)
+	if imp := tgt.mustImp(order, &second, 0); !imp.Done {
+		t.Fatalf("import %+v", imp)
+	}
+	late := second.Shares[0].Pubkey
+	if f, ok := tgt.hooks.Floor(late); !ok || f <= start+10 {
+		t.Fatalf("the second key's floor %d (%v), want above %d", f, ok, start+10)
+	}
+	wantSlashing(t, tgt.signMsg(late, &backend.BeaconBlockHeader{Slot: (start+5)*8 + 3, ProposerIndex: second.Shares[0].Index, BodyRoot: backend.Root{0xb4}}),
+		"the target: a block above its earlier bounds, below the second key's import floor")
+}
+
 // A key imported with vote history while the runner runs gets the floor's
 // block bound too: it may have proposed elsewhere after its interchange
 // was exported.

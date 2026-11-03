@@ -299,6 +299,9 @@ func TestNitroPeerRoutes(t *testing.T) {
 		"8011 sharedneu.neu.attest.azure.net 443\n8012 www.googleapis.com 443\n") || strings.Count(lines, "\n") != 11 {
 		t.Fatalf("proxy lines:\n%s", lines)
 	}
+	if e, limited := AttestationEgress(n.Wire); !limited || len(e) != 3 {
+		t.Fatalf("peer egress %v %v", e, limited)
+	}
 
 	// The full block: 16 endpoints on 8010 to 8025, apart from every
 	// fixed port.
@@ -334,10 +337,15 @@ func TestNitroPeerRoutes(t *testing.T) {
 		!strings.Contains(err.Error(), "www.cloudflare.com:443 is the fixed route of port 8002") {
 		t.Fatalf("fixed route as a peer endpoint: %v", err)
 	}
+	// A Nitro setup without the list: limited egress, no peer endpoint.
+	if e, limited := AttestationEgress(load(t, "nitro").Wire); !limited || len(e) != 0 {
+		t.Fatalf("nitro without peers: %v %v", e, limited)
+	}
 }
 
 // dev: a setup with peer_attestation_hosts limits the runner's HTTP client to them
-// (option egress); without them it is not limited.
+// (option egress); without them, and on Azure and GCP, egress is not
+// limited.
 func TestDevAttestationEgress(t *testing.T) {
 	d, err := Load(withPeers(t, "dev-single", "127.0.0.1:8443", "maa.test:443"), "dev")
 	if err != nil {
@@ -345,6 +353,14 @@ func TestDevAttestationEgress(t *testing.T) {
 	}
 	if o := d.Options(); len(o) != 1 || o["egress"] != "127.0.0.1:8443,maa.test:443" {
 		t.Fatalf("dev options %v", o)
+	}
+	if e, limited := AttestationEgress(d.Wire); !limited || len(e) != 2 {
+		t.Fatalf("dev with peers: %v %v", e, limited)
+	}
+	for _, p := range []string{"dev-single", "azure", "gcp"} {
+		if e, limited := AttestationEgress(load(t, p).Wire); limited || e != nil {
+			t.Fatalf("%s: %v %v", p, e, limited)
+		}
 	}
 	if o := load(t, "dev-single").Options(); len(o) != 0 {
 		t.Fatalf("dev options without peers %v", o)

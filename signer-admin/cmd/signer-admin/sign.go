@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/lidofinance/tee-signer/governance/flavor"
+	"github.com/lidofinance/tee-signer/governance/handoverorder"
 	"github.com/lidofinance/tee-signer/governance/setuptext"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 )
@@ -86,6 +87,8 @@ func cmdShow(args []string, out io.Writer) error {
 	switch {
 	case isImportFile(head):
 		return showImport(out, fs.Arg(0), head, *activePath)
+	case handoverorder.IsBody(head) || handoverorder.IsOrder(head):
+		return showHandover(out, fs.Arg(0), head, *activePath)
 	}
 	body, _, signed, err := decodeBodyOrUpdate(fs.Arg(0), head)
 	if err != nil {
@@ -152,6 +155,8 @@ func cmdShow(args []string, out io.Writer) error {
 //	                       header, which names the root of the new group's salted leaves)
 //	public_key = 0x...    the approver's Ed25519 key
 //	signature = 0x...     over signer-config-update-v1 and the body
+//
+// a handover order's likewise, over signer-handover-order-v1.
 type sigFile struct {
 	bodyHash [32]byte
 	key      [32]byte
@@ -238,7 +243,7 @@ func cmdSign(args []string, out io.Writer) error {
 		return err
 	}
 	if *keyPath == "" || fs.NArg() != 1 {
-		return errors.New("usage: signer-admin sign -key FILE|openpgp:KEYGRIP [-hashed] [-expect-sha256 HEX] [-out FILE] update.bin|import.bin")
+		return errors.New("usage: signer-admin sign -key FILE|openpgp:KEYGRIP [-hashed] [-expect-sha256 HEX] [-out FILE] update.bin|handover.bin|import.bin")
 	}
 	raw, err := os.ReadFile(fs.Arg(0))
 	if err != nil {
@@ -249,11 +254,11 @@ func cmdSign(args []string, out io.Writer) error {
 			return fmt.Errorf("%s: %w", fs.Arg(0), err)
 		}
 	}
-	if len(raw) > 0 && (raw[0] == 'U' || raw[0] == 'J') {
-		return fmt.Errorf("%s is signed already; sign the body that draft or import-draft wrote", fs.Arg(0))
+	if len(raw) > 0 && (raw[0] == 'U' || raw[0] == 'J' || handoverorder.IsOrder(raw)) {
+		return fmt.Errorf("%s is signed already; sign the body that draft, handover-draft or import-draft wrote", fs.Arg(0))
 	}
 	var body *setupwire.UpdateBody
-	if !isImportFile(raw) {
+	if !isImportFile(raw) && !handoverorder.IsBody(raw) {
 		if body, err = setupwire.DecodeUpdateBody(raw); err != nil {
 			return fmt.Errorf("%s: %w", fs.Arg(0), err)
 		}
@@ -269,6 +274,8 @@ func cmdSign(args []string, out io.Writer) error {
 	switch {
 	case isImportFile(raw):
 		return signKind(out, fs.Arg(0), raw, key, *hashed, *outPath)
+	case handoverorder.IsBody(raw):
+		return signHandover(out, fs.Arg(0), raw, key, *hashed, *outPath)
 	}
 	h, err := body.Hash()
 	if err != nil {
@@ -307,7 +314,7 @@ func cmdSign(args []string, out io.Writer) error {
 func cmdAssemble(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("assemble", flag.ContinueOnError)
 	activePath := fs.String("active", "", "the active values (default: BODY.active)")
-	outPath := fs.String("out", "", "the signed update (default update.signed)")
+	outPath := fs.String("out", "", "the signed update (default update.signed, handover.signed for a handover order)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -320,6 +327,9 @@ func cmdAssemble(args []string, out io.Writer) error {
 	}
 	if *activePath == "" {
 		*activePath = fs.Arg(0) + ".active"
+	}
+	if handoverorder.IsBody(raw) {
+		return assembleHandover(out, fs.Arg(0), raw, *activePath, fs.Args()[1:], cmpOr(*outPath, "handover.signed"))
 	}
 	if isImportFile(raw) {
 		return assembleKind(out, fs.Arg(0), raw, *activePath, fs.Args()[1:], *outPath)

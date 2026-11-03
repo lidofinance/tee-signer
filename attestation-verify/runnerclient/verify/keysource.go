@@ -1,3 +1,5 @@
+//go:build !verifierselect || platform_azure || platform_gcp
+
 package verify
 
 import (

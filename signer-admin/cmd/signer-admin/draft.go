@@ -29,6 +29,8 @@ type activeFile struct {
 	Setup  string `json:"setup"`
 	Locked string `json:"locked,omitempty"`
 	Open   string `json:"open,omitempty"`
+	// Target is a handover target's published setup (setupwire.Published).
+	Target string `json:"target,omitempty"`
 }
 
 // active is the active config that a body replaces.

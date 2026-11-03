@@ -56,9 +56,10 @@ The azure branch is `azureid.Verify`, a small package of its own so that
 `runnerclient` builds a runner client from settings. The signing
 client (`backend.cloud.config`), its `cloud-import` tool and
 `signer-admin/cmd/share-import` all use it, so they apply the same checks.
-The settings and the verifiers are in `runnerclient/verify`;
-`runnerclient.Attestation` is `verify.Attestation`. No runner links this
-module.
+The settings and the verifiers are in `runnerclient/verify`, which the
+runner links for its handover checks without the client (dialing, TLS,
+`signer-protocol/remote`); `runnerclient.Attestation` is
+`verify.Attestation`.
 
 ```go
 c := runnerclient.Connection{
@@ -100,8 +101,8 @@ cl, err := c.New() // refuses a bad or incomplete configuration
   | `allow_unpinned_setup` | `-allow-unpinned-setup` | Tests only: accepts a runner with a setup and no `setup_sha256`. Refused with any verifier but `dev`, and together with `setup_sha256`. |
 
   The signing client, `cloud-import` (again on the identity it seals
-  each share to), `proof-check`, `share-import` and `identity-check`
-  all apply these rules. `WithVerified` hands each passed
+  each share to), `proof-check`, `share-import`, `identity-check`,
+  and the runner's own handover checks all apply these rules. `WithVerified` hands each passed
   identity to the caller, and `SetupLog`, `DescribeSetup`,
   `EffectiveVersion` and `CheckPending` read the state for logs and tools.
 - It refuses to build a client for a missing, unreadable, expired or

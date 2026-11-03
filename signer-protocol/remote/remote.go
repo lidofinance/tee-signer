@@ -74,8 +74,8 @@ type Client struct {
 
 var _ backend.Backend = (*Client)(nil)
 
-// The admin calls (imports, config updates) are in
-// package remote/admin. A runner answers
+// The admin calls (imports, config updates, handovers) are in package
+// remote/admin. A runner answers
 // them only to a client of the admin role.
 
 // Option configures a Client.

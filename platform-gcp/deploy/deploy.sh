@@ -57,8 +57,8 @@
 #                 settings and commands
 #   IMAGE_TAG     registry tag of image-push (default poc)
 #   VM, ADDRESS_NAME, KMS_KEY, WIF_POOL, WIF_PROVIDER
-#                 a second signer next to a running one (common.sh): its
-#                 own VM, address,
+#                 a second signer next to a running one, for example the
+#                 handover target (common.sh): its own VM, address,
 #                 key (kms-key-create), pool and provider (wif-create, which
 #                 then pins the target's digest alone and binds the new key
 #                 to the new pool), bucket-bind for the new pool. The

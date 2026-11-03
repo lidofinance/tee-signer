@@ -18,7 +18,7 @@
 # The EIF is the same for every signer (scripts/nitro-eif.sh). What makes it
 # this signer is its setup: the binary file signer-config setup (or signer-admin/cmd/setup-tool)
 # makes, with the chain, the client CA, the KMS key and region, the mark
-# bucket, the signer name and the peer_attestation_hosts.
+# bucket, the signer name and the key set hosts of the handover target's verifier (peer_attestation_hosts).
 # The host agent checks it with the runner's decoder and hands it to the
 # enclave at every start, before any KMS call. The vsock proxies follow
 # from the same file over the fixed port map of platform-aws/deploy/enclave/Dockerfile

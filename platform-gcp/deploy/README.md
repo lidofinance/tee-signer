@@ -346,7 +346,7 @@ new image opens the old snapshots and the old log). `teardown` deletes
 everything except the key ring and key. A deleted WIF pool and provider keep
 their names for 30 days.
 
-A second signer next to a running one sets
+A second signer next to a running one, for example a handover target, sets
 `VM`, `ADDRESS_NAME`, `KMS_KEY`, `WIF_POOL` and `WIF_PROVIDER`: its own VM,
 address, key (`kms-key-create`), pool and provider (`wif-create`, which then
 pins the target's digest alone and binds the new key to the new pool), and

@@ -26,6 +26,9 @@ func TestReimportWithoutHistoryIgnoresOldRepeatRoot(t *testing.T) {
 	if err := e.signMsg(pk, m); err != nil {
 		t.Fatal(err)
 	}
+	// The vote is at the key's source floor, so it earns the key history:
+	// that record write must land before the share is lost below.
+	e.srv.promotions.Wait()
 
 	// The record an older build wrote for that vote: magic, flags, roots.
 	cfg := e.signer.Config()

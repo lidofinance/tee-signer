@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # terraform validate on platform-aws/deploy/main.tf and platform-aws/deploy/target/main.tf (the
-# second parent and key of a second signer), in the pinned Terraform
+# second parent and key of a handover target), in the pinned Terraform
 # image. No AWS account is used and nothing is planned or applied. The
 # provider is downloaded once into build/tf*/.terraform (terraform init) and
 # reused. TF_PLUGIN_DIR (a folder with registry.terraform.io/hashicorp/aws/...,

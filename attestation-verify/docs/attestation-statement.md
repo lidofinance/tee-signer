@@ -217,7 +217,7 @@ The setup state is 353 bytes:
 
 A pending update has a version above the active one; an empty pending update or order is all zero.
 
-The pending order is a handover order (kind 1). Only an image with a handover sets it; this image does not start on a mark log whose state holds one, so it reports zeros. The slot holds the order's hash and the time it may act. A reader refuses a setup state with another kind, and one whose reserved bytes are not zero. Earlier builds used kind 2 and the reserved bytes for keys made in key generation inside the runners; such a state does not read as one without them.
+The pending order is a handover order (kind 1, `signer-protocol/docs/protocol.md` "Handover"): on a source, the order from its arrival on, also after the tombstone; on a target, the handover import in progress, whose act time is the import's start. The slot holds the order's hash (`handoverorder.Hash`) and the time it may act. A reader refuses a setup state with another kind, and one whose reserved bytes are not zero. Earlier builds used kind 2 and the reserved bytes for keys made in key generation inside the runners; such a state does not read as one without them.
 
 `key_release_hash` is what the runner read at start about the key that releases its sealing key, so a verifier sees whether that key's policy is locked:
 
@@ -232,7 +232,7 @@ key_release_hash = H(CTX_KEY_RELEASE, platform:u8 || {len(field):u32 || field} f
 
 The answers come over TLS from the cloud's API, so the host cannot change them. An absent Azure flag counts as 0. GCP and the dev platform have no such read, so their runners write zeros; for GCP the verifiers pin the project instead. A read that fails, or a rule that is not locked, also leaves zeros, and the runner logs why; a verifier that pins `key_release_sha256` refuses such a runner. runnerclient (`key_release_sha256`, `-key-release-sha256`) and the watchdog (per signer) take the pin. On mainnet it is mandatory for Azure and Nitro signers: a runnerclient with `mainnet` set refuses an `azure-maa` or `aws-nitro` setting without it (and a runnerclient without `mainnet` refuses a runner whose TLS certificate names mainnet, signer-protocol/docs/protocol.md "Channel binding"), and the watchdog fails the `key_release_hash` check of an unpinned Azure or Nitro signer whose published policy names mainnet. On other chains it stays optional; GCP never takes one. A runnerclient with `mainnet` set refuses a `gcp-cs` setting without `gcp_project_id` and `gcp_service_account`: they tie a GCP runner to the operator's project, as the key rule hash does on the other clouds. The runner reads the policy once at start: a locked policy cannot change after it, and an unlocked one gives zeros. The Nitro hash leaves out the key's grants: the runner also lists them, and a key with a listed grant is not locked, so it gives zeros too, as does a key whose grants the runner cannot list (signer-protocol/docs/protocol.md, "Key rule lock").
 
-The last three fields are the key origin, bytes 313 to 352. `imported_keys` counts the loaded keys, the ones `keys_hash` covers. Every key came in by an import: a sealed import, or a plaintext import in a debug build. The host can hide or roll back a stored share, which takes the key out of the count and out of keys_hash. The reserved bytes around it are zero. A runner without a setup (the flag path) leaves the key origin and `key_release_hash` zero.
+The last three fields are the key origin, bytes 313 to 352. `imported_keys` counts the loaded keys, the ones `keys_hash` covers. Every key came in by an import: a sealed import, a handover, or a plaintext import in a debug build. The host can hide or roll back a stored share, which takes the key out of the count and out of keys_hash. The reserved bytes around it are zero. A runner without a setup (the flag path) leaves the key origin and `key_release_hash` zero.
 
 The ATTEST user data, which the prover uses:
 
@@ -269,7 +269,7 @@ Every byte of the setup state is public; only `keys_hash` stays a private input.
 | `config_state` | setup state bytes 32 to 312 (281 bytes) | both groups (version, hash, pending update), the approver set hash, the pending order (kind, hash, act time) and `key_release_hash` |
 | `key_origin` | setup state bytes 313 to 352 (40 bytes) | the number of loaded keys, with the reserved zero bytes around it |
 
-The pending order and `key_release_hash` are public because a pending order announces an image change, and `key_release_hash` shows whether the key policies are locked; the watchdog shows both. The sample in the vectors file sets every field so every byte is exercised. `format`, `platform`, `challenge_slot`, `measurement`, `hwmodel` and `vendor_key_set_root` come from the circuit and the attestation, not from the signer's bytes.
+The pending order and `key_release_hash` are public because a pending handover order announces an image change, and `key_release_hash` shows whether the key policies are locked; the watchdog shows both. The sample in the vectors file sets every field so every byte is exercised. `format`, `platform`, `challenge_slot`, `measurement`, `hwmodel` and `vendor_key_set_root` come from the circuit and the attestation, not from the signer's bytes.
 
 ### The measurement and hwmodel outputs
 

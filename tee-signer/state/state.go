@@ -179,9 +179,16 @@ type MarkLog interface {
 	Append(ctx context.Context, wm backend.Watermark) error
 	// Raise makes the log's mark at least wm (one record if it is not yet).
 	Raise(ctx context.Context, wm backend.Watermark) error
+	// HandedOver reports a log that ends with a tombstone.
+	HandedOver() (backend.Watermark, bool)
+	// HandOverTo ends a log with a setup with a tombstone that names the
+	// target's setup_hash; again for the same target it returns the same
+	// mark, for another it refuses.
+	HandOverTo(ctx context.Context, target [32]byte) (backend.Watermark, error)
+	// HandedOverTo is the setup_hash the tombstone names, if any.
+	HandedOverTo() ([32]byte, bool)
 	// Lost is the error the log latched: markstore.ErrLost after another
-	// instance wrote it, markstore.ErrHandedOver for a log that ends with a
-	// tombstone.
+	// instance wrote it, markstore.ErrHandedOver after a handover.
 	Lost() error
 	// SourceGate is the source gate the log holds; SetSourceGate sets the
 	// one the next record carries.
@@ -243,6 +250,31 @@ func (h *Hooks) SourceFloor(pk backend.Pubkey) (uint64, bool) {
 		f, on = max(f, kf), true
 	}
 	return f, on
+}
+
+// Earns reports whether a vote of pk with this source, which the core
+// signed, gives pk vote history of its own (Server.promote): pk has none
+// yet, it has an import floor, and the source is at or above every floor
+// that holds for it. Every vote pk may have cast before its import has a
+// target below the import floor. The core wrote this source into the mark
+// before it signed, so no later vote here, or at a handover target, has a
+// lower source. A vote with a source at or above the floor neither
+// surrounds nor is surrounded by a vote whose target is below it, so the
+// floor is redundant from then on. A key without an import floor (a record
+// stored before floors) earns nothing: no floor bounds what it signed
+// before. sign() refuses a source below the floor before the core signs;
+// this check repeats it.
+func (h *Hooks) Earns(pk backend.Pubkey, source uint64) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	kf, ok := h.keyFloor[pk]
+	if !ok || h.history[pk] {
+		return false
+	}
+	if h.gateOn {
+		kf = max(kf, h.gateFloor)
+	}
+	return source >= kf
 }
 
 // ImportFloor is the source floor for a validator that comes in now
@@ -338,8 +370,27 @@ func (h *Hooks) RecordShareSet(ctx context.Context, s *markstore.ShareSet) error
 	return h.marks.RecordShareSet(ctx, s)
 }
 
+// HandOverTo ends the mark log for a handover to the runner of target's
+// setup (handover, one target per tombstone) and returns the mark the
+// target must start above.
+func (h *Hooks) HandOverTo(ctx context.Context, target [32]byte) (backend.Watermark, error) {
+	if h.marks == nil {
+		return backend.Watermark{}, ErrNoMarkLog
+	}
+	return h.marks.HandOverTo(ctx, target)
+}
+
+// HandedOverTo is the setup_hash the mark log's tombstone names, if it
+// ends with one that names a target.
+func (h *Hooks) HandedOverTo() ([32]byte, bool) {
+	if h.marks == nil {
+		return [32]byte{}, false
+	}
+	return h.marks.HandedOverTo()
+}
+
 // MarkLogLost is markstore.ErrLost once another runner instance took the
-// mark log over (RBRLOG-03), nil otherwise; a tombstone is not a loss.
+// mark log over (RBRLOG-03), nil otherwise; a handover is not a loss.
 func (h *Hooks) MarkLogLost() error {
 	if h.marks == nil {
 		return nil
@@ -373,6 +424,15 @@ func (h *Hooks) MarkLogUnchecked() error {
 		return u.LockUnchecked()
 	}
 	return nil
+}
+
+// HandedOver reports a mark log that ends with a handover's tombstone.
+func (h *Hooks) HandedOver() bool {
+	if h.marks == nil {
+		return false
+	}
+	_, ok := h.marks.HandedOver()
+	return ok
 }
 
 // MarkLogStatus describes the mark log, or "none".
