@@ -12,7 +12,7 @@ import (
 
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-protocol"
-	"github.com/lidofinance/tee-signer/signer-protocol/buildflavor"
+	"github.com/lidofinance/tee-signer/signer-protocol/buildchain"
 )
 
 // The image check (docs/protocol.md, "Image check"). The key rule of the
@@ -37,9 +37,9 @@ type ImageGateOptions struct {
 	// nil hook is accepted on dev only, which has no image kind.
 	Platform  string
 	SelfImage func(ctx context.Context) (setupwire.Image, error)
-	// Override serves an image the list does not name. Only a testnet
+	// Override serves an image the list does not name. Only a non-prod
 	// build takes it (-allow-unlisted-image); NewImageGate refuses it in a
-	// default build.
+	// mainnet build.
 	Override bool
 	Log      *slog.Logger
 }
@@ -56,16 +56,16 @@ type ImageGate struct {
 	logged   string // the last verdict written to the log
 }
 
-// ErrOverrideInDefaultBuild is NewImageGate's answer to an override in a
-// default build.
-var ErrOverrideInDefaultBuild = errors.New("image check: a default build has no override; only a testnet build serves an image the allowed list does not name")
+// ErrOverrideInMainnetBuild is NewImageGate's answer to an override in a
+// mainnet build.
+var ErrOverrideInMainnetBuild = errors.New("image check: a mainnet build has no override; only a non-prod build serves an image the allowed list does not name")
 
 // NewImageGate reads the runner's own image once. A platform that cannot
 // say which image it is gives a gate that refuses (state unknown), not an
 // error: the runner stays up and HEALTH says why.
 func NewImageGate(ctx context.Context, o ImageGateOptions) (*ImageGate, error) {
-	if o.Override && buildflavor.Name != "testnet" {
-		return nil, ErrOverrideInDefaultBuild
+	if o.Override && buildchain.Prod {
+		return nil, ErrOverrideInMainnetBuild
 	}
 	g := &ImageGate{override: o.Override, log: o.Log}
 	if g.log == nil {
@@ -123,7 +123,7 @@ func (g *ImageGate) verdict(u *Updates) (backend.ImageCheck, error) {
 		case backend.ImageNotApplicable:
 			g.log.Info("image check: not applicable", attrs...)
 		case backend.ImageOverride:
-			g.log.Warn("image check: this image is NOT on allowed_image_measurements in force; served anyway under the testnet build's override", attrs...)
+			g.log.Warn("image check: this image is NOT on allowed_image_measurements in force; served anyway under the non-prod build's override", attrs...)
 		default:
 			g.log.Error("image check failed: this runner signs and imports nothing", attrs...)
 		}
@@ -179,7 +179,7 @@ func (g *ImageGate) evaluate(u *Updates) (backend.ImageCheck, string) {
 		return c, ""
 	case g.override:
 		c.State = backend.ImageOverride
-		c.Why = fmt.Sprintf("not on allowed_image_measurements of locked version %d; served under the testnet build's override", v)
+		c.Why = fmt.Sprintf("not on allowed_image_measurements of locked version %d; served under the non-prod build's override", v)
 		return c, ""
 	}
 	c.State = backend.ImageNotAllowed

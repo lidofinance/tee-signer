@@ -13,14 +13,16 @@
 #                                           with FILE (default cloud/generic-images.txt,
 #                                           the recorded values)
 #
-# With IMAGE_FLAVOR=testnet both work on the
-# testnet images (signer-protocol/buildflavor): the same code built with -tags
-# testnet, whose governance times run in minutes and which start on devnets,
-# Hoodi, Sepolia and Chiado only. For research, never for real keys. Their
-# runners, folders, local names, registry tags and records carry "-testnet":
-# runner-<cloud>-testnet, build/nitro-testnet, signer-cloud/azure-runner-testnet,
-# tags generic-testnet (GCP) and generic-testnet-ts (Azure),
-# cloud/generic-images-testnet.txt.
+# CHAIN (scripts/common.sh) picks the build: mainnet when unset. With
+# CHAIN=hoodi, devnet or ci-test both work on that chain's non-prod images
+# (signer-protocol/buildchain): the same code built with -tags
+# nonprod,chain_<chain>, whose governance times run in minutes and which
+# start on that chain only. For research and tests, never for real keys.
+# Their runners, folders, local names, registry tags and records carry
+# "-<chain>": runner-<cloud>-hoodi, build/nitro-hoodi,
+# signer-cloud/azure-runner-hoodi, tags generic-hoodi (GCP) and
+# generic-hoodi-ts (Azure), cloud/generic-images-hoodi.txt. CHAIN=devnet
+# needs CHAIN_JSON, the devnet's chain config (scripts/build-runner.sh).
 #
 # What build runs, with the settings fixed here:
 #   Nitro  scripts/nitro-eif.sh aarch64 (the EIF for Graviton, built twice by
@@ -35,7 +37,7 @@
 #          log_redirect is "always" in this image, a test image
 # This tree has no Azure network entry, so without a build
 # overlay there is no Azure CCE policy (azure.cce_policy none). With
-# SIGNER_BUILD_OVERLAY_DIR (testnet images only) the overlay sets the
+# SIGNER_BUILD_OVERLAY_DIR (non-prod images only) the overlay sets the
 # network entries of the devnet images (devnet_generic_images_env).
 # The EIF file's own sha256 changes with every build (its
 # metadata has the build time); PCR0 to PCR2, which KMS checks, do not. It is
@@ -54,11 +56,10 @@ set -euo pipefail
 die() { echo "generic-images: $*" >&2; exit 1; }
 
 export GOPROXY=off GOTOOLCHAIN=local NITRO_CLI_REUSE=1
-# The flavour: -testnet or nothing.
-export IMAGE_FLAVOR
+# The chain's suffix: -<chain> for a non-prod chain, nothing for mainnet.
 SUFFIX="$(image_suffix)"
 export IMAGE_TAG=generic STDIO=enable
-unset CHAIN CHAIN_JSON CLIENT_CA REGION KMS_KEY_ARN MARK_BUCKET MARK_SIGNER MARK_STORE STATE_STORE
+unset CLIENT_CA REGION KMS_KEY_ARN MARK_BUCKET MARK_SIGNER MARK_STORE STATE_STORE
 
 # The network settings of the Azure and GCP builds: the overlay's, or none
 # (Azure) and public (GCP).
@@ -116,7 +117,7 @@ cmd_build() {
   log "GCP image, ${GCP_ENV[*]} (log $dir/gcp.log)"
   env "${GCP_ENV[@]}" bash "$ROOT/platform-gcp/deploy/build-image.sh" >"$dir/gcp.log" 2>&1 || { tail -n 30 "$dir/gcp.log"; die "gcp build-image.sh failed"; }
   {
-    echo "# generic $([ "$IMAGE_FLAVOR" = default ] || echo "$IMAGE_FLAVOR ")images, built $(date -u +%Y-%m-%dT%H:%M:%SZ) from $(git -C "$ROOT" rev-parse --short HEAD)$([ -z "$(git -C "$ROOT" status --porcelain -- . ':!build' ':!logs')" ] || echo ' with local changes')"
+    echo "# generic $(chain_is_prod "$CHAIN" || echo "$CHAIN ")images, built $(date -u +%Y-%m-%dT%H:%M:%SZ) from $(git -C "$ROOT" rev-parse --short HEAD)$([ -z "$(git -C "$ROOT" status --porcelain -- . ':!build' ':!logs')" ] || echo ' with local changes')"
     echo "# $(head -n 1 "$BUILD/core-src/SOURCE.txt")"
     echo "# go $(go env GOVERSION), nitro-cli $NITRO_CLI_TAG image $(docker image inspect "signer-cloud/nitro-cli:$NITRO_CLI_TAG-$HOST_ARCH" --format '{{.Id}}')$(devnet_hook generic_images_note)"
     fingerprints

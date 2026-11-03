@@ -30,7 +30,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
-	"github.com/lidofinance/tee-signer/governance/flavor"
+	"github.com/lidofinance/tee-signer/governance/runnerchain"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
@@ -214,10 +214,10 @@ func LoadConn(path string) (*runnerclient.Connection, error) {
 type State struct {
 	State  *backend.SetupState
 	Health *backend.Health
-	// Flavor is the runner's build flavour, from HEALTH's version. A
-	// testnet runner's governance times run in minutes; the connection
-	// refuses one unless cloud.json sets allow_testnet_build.
-	Flavor flavor.Flavor
+	// Chain is the chain of the runner's build, from HEALTH's version. A
+	// non-prod runner's governance times run in minutes; the connection
+	// refuses one unless cloud.json sets allow_chain_build to its chain.
+	Chain runnerchain.Chain
 }
 
 // ReadState connects with conn (TLS, attestation, setup pins), asks for
@@ -243,7 +243,7 @@ func ReadState(ctx context.Context, m *Member, conn *runnerclient.Connection, ti
 		cl.Close()
 		return nil, nil, fmt.Errorf("IDENTITY shows setup %x, cluster.json names the setup %x", s.SetupHash[:4], m.SetupHash[:4])
 	}
-	return &State{State: s, Health: h, Flavor: flavor.FromVersion(h.Version)}, cl, nil
+	return &State{State: s, Health: h, Chain: runnerchain.FromVersion(h.Version)}, cl, nil
 }
 
 // EditCloudJSON rewrites the attestation section of a cloud.json with

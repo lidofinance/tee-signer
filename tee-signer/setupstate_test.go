@@ -59,7 +59,7 @@ func TestKeyRuleAtStart(t *testing.T) {
 	} {
 		got, err := keyRule(true, c.mainnet, c.accept, &platform.Platform{KeyRule: c.rule}, quietLog)
 		if c.refuse {
-			if err == nil || !strings.HasPrefix(err.Error(), "mainnet: ") {
+			if err == nil || !strings.HasPrefix(err.Error(), "prod chain: ") {
 				t.Errorf("%s: %+v %v, want a refusal", c.name, got, err)
 			}
 			continue
@@ -82,7 +82,7 @@ func TestStartMainnetKeyRule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if setupwire.IsMainnet(st.Chain.GenesisForkVersion) {
+	if setupwire.ProdChain(st.Chain.GenesisForkVersion) {
 		t.Fatal("the sample setup is on mainnet")
 	}
 	write := func(s *setupwire.Setup) string {
@@ -108,8 +108,8 @@ func TestStartMainnetKeyRule(t *testing.T) {
 		var opts platform.Options
 		s, _, _, err := startPlatform(context.Background(), &startArgs{platformName: "dev", setupSrc: "file:" + c.path},
 			recordingPlatform("dev", &events, &opts), quietLog)
-		if err != nil || opts.Mainnet != c.want || s.mainnet != c.want {
-			t.Fatalf("%s: options mainnet %v, start %+v, %v", c.path, opts.Mainnet, s, err)
+		if err != nil || opts.Prod != c.want || s.prod != c.want {
+			t.Fatalf("%s: options prod %v, start %+v, %v", c.path, opts.Prod, s, err)
 		}
 	}
 
@@ -125,7 +125,7 @@ func TestStartMainnetKeyRule(t *testing.T) {
 		return &platform.Platform{Name: "dev"}, nil
 	}
 	if _, _, _, err := startPlatform(context.Background(), &startArgs{platformName: "dev", setupSrc: "file:" + mainnet}, refusing, quietLog); err == nil ||
-		!strings.Contains(err.Error(), "mainnet: the rule of the key that releases the sealing key is not locked") {
+		!strings.Contains(err.Error(), "prod chain: the rule of the key that releases the sealing key is not locked") {
 		t.Fatalf("mainnet, key rule not locked: %v", err)
 	}
 	if _, _, _, err := startPlatform(context.Background(), &startArgs{platformName: "dev", setupSrc: "file:" + testnet}, refusing, quietLog); err != nil {
@@ -134,12 +134,12 @@ func TestStartMainnetKeyRule(t *testing.T) {
 
 	// The dev platform itself has no real attestation: it does not start
 	// on mainnet, and on other chains HEALTH's key_lock_why says why.
-	if p, err := dev.New(platform.Options{StateDir: t.TempDir(), SetupHash: [32]byte{1}, Mainnet: true}); err == nil ||
-		!strings.HasPrefix(err.Error(), "mainnet: the dev platform has no real attestation") {
+	if p, err := dev.New(platform.Options{StateDir: t.TempDir(), SetupHash: [32]byte{1}, Prod: true}); err == nil ||
+		!strings.HasPrefix(err.Error(), "prod chain: the dev platform has no real attestation") {
 		t.Fatalf("dev on mainnet: %+v %v", p, err)
 	}
 	p, err := dev.New(platform.Options{StateDir: t.TempDir(), SetupHash: [32]byte{1}})
-	if err != nil || p.KeyRule == nil || p.KeyRule.Lock != backend.KeyLockNone || !strings.Contains(p.KeyRule.Why, "refused on mainnet") {
+	if err != nil || p.KeyRule == nil || p.KeyRule.Lock != backend.KeyLockNone || !strings.Contains(p.KeyRule.Why, "refused on a prod chain") {
 		t.Fatalf("dev on a test network: %+v %v", p, err)
 	}
 }
@@ -303,7 +303,7 @@ func TestStartMainnetGCPNeedsNoLockAccepted(t *testing.T) {
 			a := &startArgs{platformName: "gcp", setupSrc: "platform", listens: []transport.Addr{{Network: "tcp", Address: "0.0.0.0:7100"}}}
 			s, plat, _, err := startPlatform(context.Background(), a, gcpBuild, quietLog)
 			if c.refuse != "" {
-				if err == nil || !strings.Contains(err.Error(), c.refuse) || !strings.Contains(err.Error(), "mainnet: the platform has no lock") {
+				if err == nil || !strings.Contains(err.Error(), c.refuse) || !strings.Contains(err.Error(), "prod chain: the platform has no lock") {
 					t.Errorf("%s: %v, want a refusal with %q", c.name, err, c.refuse)
 				}
 				return
@@ -312,7 +312,7 @@ func TestStartMainnetGCPNeedsNoLockAccepted(t *testing.T) {
 				t.Errorf("%s: %v", c.name, err)
 				return
 			}
-			rule, err := keyRule(true, s.mainnet, s.noLockAccepted, plat, quietLog)
+			rule, err := keyRule(true, s.prod, s.noLockAccepted, plat, quietLog)
 			if err != nil || rule.Lock != backend.KeyLockNone {
 				t.Errorf("%s: %+v %v", c.name, rule, err)
 			}

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lidofinance/tee-signer/governance/flavor"
+	"github.com/lidofinance/tee-signer/governance/runnerchain"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 )
 
@@ -97,7 +97,7 @@ func TestDraftSaltsAndSlotTimes(t *testing.T) {
 // A slot time change pending, then a fork: draft counts epochs under the
 // pending slot times too, from the copy push kept.
 func TestDraftForkCountsPendingSlotTimes(t *testing.T) {
-	fc := newFakeClusterAs(t, flavor.Default, 3600)
+	fc := newFakeClusterAs(t, runnerchain.Mainnet, 3600)
 	mustTool(t, "pin", "-cluster", fc.cluster)
 	_, signed := fc.update(t, "slots", "locked", lockedText(fc.keys[:3], 2, 3600, fee1)+"slot_time_changes = 1454 1\n", "0s", 0, 1)
 	if out := mustTool(t, "push", "-cluster", fc.cluster, signed); count(out, `accepted: locked v1/[0-9a-f]{8} pending`) != 3 {
@@ -113,7 +113,7 @@ func TestDraftForkCountsPendingSlotTimes(t *testing.T) {
 // The same with the slot time change pending on one signer only, not the
 // first: its runner would refuse the fork, so draft does.
 func TestDraftForkCountsPendingSlotTimesOfAnySigner(t *testing.T) {
-	fc := newFakeClusterAs(t, flavor.Default, 3600)
+	fc := newFakeClusterAs(t, runnerchain.Mainnet, 3600)
 	mustTool(t, "pin", "-cluster", fc.cluster)
 	_, signed := fc.update(t, "slots", "locked", lockedText(fc.keys[:3], 2, 3600, fee1)+"slot_time_changes = 1454 1\n", "0s", 0, 1)
 	if out := mustTool(t, "push", "-cluster", fc.cluster, "-signers", "s3", signed); count(out, `accepted: locked v1/[0-9a-f]{8} pending`) != 1 {
@@ -128,7 +128,7 @@ func TestDraftForkCountsPendingSlotTimesOfAnySigner(t *testing.T) {
 // which the pending fork at epoch 2000 comes within reach before its
 // effective time, and takes slower ones.
 func TestDraftSlotTimesCountPendingFork(t *testing.T) {
-	fc := newFakeClusterAs(t, flavor.Default, 3600)
+	fc := newFakeClusterAs(t, runnerchain.Mainnet, 3600)
 	mustTool(t, "pin", "-cluster", fc.cluster)
 	_, signed := fc.update(t, "fork", "open", openText(2000), "2h", 0, 1)
 	if out := mustTool(t, "push", "-cluster", fc.cluster, signed); count(out, `accepted: open v1/[0-9a-f]{8} pending`) != 3 {

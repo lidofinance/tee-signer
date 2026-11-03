@@ -402,7 +402,7 @@ func cmdDraft(args []string, out io.Writer) error {
 		}
 		return errors.New("draft needs the state of every signer it drafts for (-signers names a part of the cluster)")
 	}
-	// The waits are the signers' image constants: a testnet build's run in
+	// The waits are the signers' image constants: a non-prod build's run in
 	// minutes.
 	fl, lim, err := clusterLimits(c, states)
 	if err != nil {

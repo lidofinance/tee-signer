@@ -34,8 +34,8 @@
 #   group-deploy N            deploy the container group of signer N
 #
 # Settings (environment): SETUP_FILE_N (group-deploy: the binary setup of
-# signer N, see "Setup" below), CHAIN (group-deploy: the chain of the setups,
-# hoodi, devnet or testnet), VAULT and ACR_NAME (globally unique names, no
+# signer N, see "Setup" below), CHAIN (the chain of the build and of the
+# setups: mainnet, the default, hoodi, devnet or ci-test), VAULT and ACR_NAME (globally unique names, no
 # default), RG (default signer-poc-rg), SUBSCRIPTION_ID (the identity's
 # resource ID in the template; when set, group-deploy and store-role check
 # that the setup's stores name it), LOCATION_N, MAA_ENDPOINT_N,

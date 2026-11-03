@@ -87,6 +87,11 @@ if [ "$e2e" = 1 ]; then
     >"$LOGS/e2e-nts-$HOST_ARCH.log" 2>&1 || { tail -80 "$LOGS/e2e-nts-$HOST_ARCH.log"; exit 1; }
   summary "$LOGS/e2e-nts-$HOST_ARCH.log" | grep -E '^(ok|FAIL)'
 
+  log "e2e: the non-prod dev runners (hoodi, devnet, ci-test) start on their own chain only"
+  (cd "$ROOT/tests" && go test $RACE -count=1 -v -timeout 20m -tags platform_aws,nonprod,chain_ci_test -run 'TestE2ENonProdChains' ./e2e/) \
+    >"$LOGS/e2e-nonprod-$HOST_ARCH.log" 2>&1 || { tail -80 "$LOGS/e2e-nonprod-$HOST_ARCH.log"; exit 1; }
+  summary "$LOGS/e2e-nonprod-$HOST_ARCH.log" | grep -E '^(ok|FAIL)'
+
   if [ "$HOST_ARCH" = x86_64 ] && command -v qemu-aarch64 >/dev/null && [ -x "$BUILD/aarch64/bin/runner-dev" ]; then
     log "e2e: static aarch64 runners under qemu-aarch64"
     # shellcheck disable=SC2046 # the variables of bin_env, split on purpose

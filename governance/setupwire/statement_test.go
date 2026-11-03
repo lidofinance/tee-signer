@@ -548,7 +548,7 @@ func buildVectors(t *testing.T) []byte {
 // recomputed here without the package's helpers.
 func TestStatementVectors(t *testing.T) {
 	if MaxTimeLock < 172800 {
-		t.Skip("the sample's change delay (48 hours) is above the cap of this build flavour")
+		t.Skip("the sample's change delay (48 hours) is above the cap of this build")
 	}
 	want := buildVectors(t)
 	path := filepath.FromSlash(vectorsPath)

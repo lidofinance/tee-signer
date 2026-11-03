@@ -14,19 +14,19 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/lidofinance/tee-signer/governance/flavor"
+	"github.com/lidofinance/tee-signer/governance/runnerchain"
 	"github.com/lidofinance/tee-signer/governance/setuptext"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 )
 
-// testnetWait is what an offline view adds when a testnet build waits
-// another time than the default build (backend/flavor): the body does not
-// say which build its signers run.
-func testnetWait(def, testnet uint64) string {
-	if def == testnet {
+// nonProdWait is what an offline view adds when a non-prod build waits
+// another time than the mainnet build (governance/runnerchain): the body
+// does not say which build its signers run.
+func nonProdWait(long, short uint64) string {
+	if long == short {
 		return ""
 	}
-	return fmt.Sprintf("; %d s on signers of a testnet build", testnet)
+	return fmt.Sprintf("; %d s on signers of a non-prod build (hoodi, devnet, ci-test)", short)
 }
 
 // decodeBodyOrUpdate decodes a draft body ('B') or a signed update ('U'),
@@ -123,9 +123,9 @@ func cmdShow(args []string, out io.Writer) error {
 			fprintf(out, "rotation: the approver set changes from %s to %s; every new key must sign\n", hex8(set.Hash()), hex8(body.Locked.Approvers.Hash()))
 		}
 		if body.Group == setupwire.GroupLocked {
-			fprintf(out, "wait: at least %d s after arrival (the active time lock%s)%s\n", flavor.Default.Limits().Wait(a.locked, body),
+			fprintf(out, "wait: at least %d s after arrival (the active time lock%s)%s\n", runnerchain.Mainnet.Limits().Wait(a.locked, body),
 				map[bool]string{true: ", or the images minimum: the allowed list gains an image", false: ""}[setupwire.GainsImage(a.locked.AllowedImageMeasurements, body.Locked.AllowedImageMeasurements)],
-				testnetWait(flavor.Default.Limits().Wait(a.locked, body), flavor.Testnet.Limits().Wait(a.locked, body)))
+				nonProdWait(runnerchain.Mainnet.Limits().Wait(a.locked, body), runnerchain.Devnet.Limits().Wait(a.locked, body)))
 		}
 	}
 	if signed != nil {

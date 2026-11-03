@@ -3,32 +3,34 @@ package setupwire
 import (
 	"testing"
 
-	"github.com/lidofinance/tee-signer/signer-protocol/buildflavor"
+	"github.com/lidofinance/tee-signer/signer-protocol/buildchain"
 )
 
-// The image constants of this build are its flavour's values. Run under
-// both tags: go test, and go test -tags testnet.
-func TestFlavorConstants(t *testing.T) {
+// The image constants of this build are its chain's values: the long
+// waits in the mainnet build, the short ones in a non-prod build. Run under
+// each build's tags: go test, and go test -tags nonprod,chain_<name>.
+func TestBuildChainConstants(t *testing.T) {
 	type times struct{ timeLock, maxTimeLock, horizon, imagesMin uint64 }
-	want, ok := map[string]times{
-		"default": {48 * 3600, 30 * 86400, 30 * 86400, 7 * 86400},
-		"testnet": {2 * 60, 30 * 60, 30 * 60, 7 * 60},
-	}[buildflavor.Name]
+	long, short := times{48 * 3600, 30 * 86400, 30 * 86400, 7 * 86400}, times{2 * 60, 30 * 60, 30 * 60, 7 * 60}
+	want, ok := map[string]times{"mainnet": long, "hoodi": short, "devnet": short, "ci-test": short}[buildchain.Name]
 	if !ok {
-		t.Fatalf("buildflavor.Name %q", buildflavor.Name)
+		t.Fatalf("buildchain.Name %q", buildchain.Name)
+	}
+	if (want == long) != buildchain.Prod {
+		t.Fatalf("%s build: Prod %v with times %+v", buildchain.Name, buildchain.Prod, want)
 	}
 	if got := (times{DefaultTimeLock, MaxTimeLock, ActivationHorizon, ImagesMinTimeLock}); got != want {
-		t.Fatalf("%s build: %+v, want %+v", buildflavor.Name, got, want)
+		t.Fatalf("%s build: %+v, want %+v", buildchain.Name, got, want)
 	}
-	// A testnet build has one minute for each day of the default build.
+	// A non-prod build has one minute for each day of the mainnet build.
 	for i, p := range [][2]uint64{
-		{buildflavor.DefaultFlavorTimeLock, buildflavor.TestnetFlavorTimeLock},
-		{buildflavor.DefaultFlavorMaxTimeLock, buildflavor.TestnetFlavorMaxTimeLock},
-		{buildflavor.DefaultFlavorActivationHorizon, buildflavor.TestnetFlavorActivationHorizon},
-		{buildflavor.DefaultFlavorImagesMinTimeLock, buildflavor.TestnetFlavorImagesMinTimeLock},
+		{buildchain.MainnetTimeLock, buildchain.ShortTimeLock},
+		{buildchain.MainnetMaxTimeLock, buildchain.ShortMaxTimeLock},
+		{buildchain.MainnetActivationHorizon, buildchain.ShortActivationHorizon},
+		{buildchain.MainnetImagesMinTimeLock, buildchain.ShortImagesMinTimeLock},
 	} {
 		if p[0]/86400*60 != p[1] || p[0]%86400 != 0 {
-			t.Errorf("value %d: default %d s, testnet %d s, want one minute per day", i, p[0], p[1])
+			t.Errorf("value %d: mainnet %d s, non-prod %d s, want one minute per day", i, p[0], p[1])
 		}
 	}
 

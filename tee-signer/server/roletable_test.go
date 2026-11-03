@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/lidofinance/tee-signer/signer-protocol"
-	"github.com/lidofinance/tee-signer/signer-protocol/buildflavor"
+	"github.com/lidofinance/tee-signer/signer-protocol/buildchain"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
 	wireadmin "github.com/lidofinance/tee-signer/signer-protocol/wire/admin"
 	"github.com/lidofinance/tee-signer/tee-signer/attls"
@@ -56,10 +56,10 @@ func TestRoleTable(t *testing.T) {
 		adminOK[typ] = typ != wire.TypeSign && typ < 0x09 && typ != 0
 	}
 
-	// An admin leaf straight under the root: admin rights in a testnet build
-	// only, no rights in a default build. Run under both tags.
+	// An admin leaf straight under the root: admin rights in a non-prod build
+	// only, no rights in a mainnet build. Run under each build's tags.
 	rootDirect := map[wire.MsgType]bool{}
-	if buildflavor.AdminRootDirect {
+	if buildchain.AdminRootDirect {
 		rootDirect = adminOK
 	}
 

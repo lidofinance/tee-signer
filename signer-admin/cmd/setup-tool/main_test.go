@@ -20,7 +20,7 @@ func TestEncodeMainnetGCPSingleNeedsNoLockAccepted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mainnet := strings.Replace(string(text), "genesis_fork_version = 0x00000010\n", "genesis_fork_version = 0x00000000\n", 1)
+	mainnet := strings.Replace(string(text), "genesis_fork_version = 0x00000001\n", "genesis_fork_version = 0x00000000\n", 1)
 	if mainnet == string(text) {
 		t.Fatal("the sample changed its genesis_fork_version line")
 	}
@@ -41,7 +41,7 @@ func TestEncodeMainnetGCPSingleNeedsNoLockAccepted(t *testing.T) {
 	single := write("single.conf", "sealing_key_release.unsafe_single_key_accepted = true\n")
 	out := filepath.Join(dir, "single.setup")
 	err = encode(single, out)
-	if err == nil || !strings.Contains(err.Error(), "on mainnet") || !strings.Contains(err.Error(), "sealing_key_release.no_lock_accepted = true") {
+	if err == nil || !strings.Contains(err.Error(), "on a prod chain") || !strings.Contains(err.Error(), "sealing_key_release.no_lock_accepted = true") {
 		t.Fatalf("encode: %v, want the mainnet refusal naming no_lock_accepted", err)
 	}
 	if _, err := os.Stat(out); !os.IsNotExist(err) {
@@ -60,7 +60,7 @@ func TestEncodeMainnetGCPSingleNeedsNoLockAccepted(t *testing.T) {
 	if k := s.Platform.SealingKeyRelease; !k.UnsafeSingleKeyAccepted || !k.NoLockAccepted {
 		t.Fatalf("the setup carries unsafe_single_key_accepted %v, no_lock_accepted %v, want both", k.UnsafeSingleKeyAccepted, k.NoLockAccepted)
 	}
-	if !setupwire.IsMainnet(s.Chain.GenesisForkVersion) {
+	if !setupwire.ProdChain(s.Chain.GenesisForkVersion) {
 		t.Fatal("the setup is not on mainnet")
 	}
 }

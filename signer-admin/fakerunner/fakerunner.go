@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lidofinance/tee-signer/governance/flavor"
+	"github.com/lidofinance/tee-signer/governance/runnerchain"
 	cloud "github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/sealedimport"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
@@ -51,9 +51,9 @@ type Runner struct {
 	// config, if set (StartSetup), holds the setup and the config groups;
 	// the state comes from it.
 	config *configModel
-	// flavor is the build flavour it plays: its certificate's name and its
-	// HEALTH version (StartSetupAs).
-	flavor flavor.Flavor
+	// chain is the chain of the build it plays: its certificate's name and
+	// its HEALTH version (StartSetupAs).
+	chain runnerchain.Chain
 }
 
 // SetAfterImport makes the runner report s from the first share it
@@ -68,17 +68,14 @@ func (r *Runner) SetAfterImport(s cloud.SetupState) {
 // of the test.
 func Start(t testing.TB, state cloud.SetupState) *Runner {
 	t.Helper()
-	return start(t, state, flavor.Default)
+	return start(t, state, runnerchain.Mainnet)
 }
 
-// start starts a runner of build flavour f.
-func start(t testing.TB, state cloud.SetupState, f flavor.Flavor) *Runner {
+// start starts a runner of the build of chain f.
+func start(t testing.TB, state cloud.SetupState, f runnerchain.Chain) *Runner {
 	t.Helper()
-	r := &Runner{state: state, frames: map[wire.MsgType]int{}, flavor: f}
-	certName := flavor.DefaultCertName
-	if f == flavor.Testnet {
-		certName = flavor.TestnetCertName
-	}
+	r := &Runner{state: state, frames: map[wire.MsgType]int{}, chain: f}
+	certName := f.CertName()
 	var err error
 	if r.caKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader); err != nil {
 		t.Fatal(err)
@@ -219,8 +216,8 @@ func (r *Runner) serve(c net.Conn) {
 			answer = wire.EncodeOK(body)
 		case wire.TypeHealth:
 			h := &cloud.Health{Platform: "dev", Ready: true, ClockUnix: uint64(time.Now().Unix())}
-			if r.flavor == flavor.Testnet {
-				h.Version = "0.1.0" + flavor.VersionSuffix
+			if !r.chain.Prod() {
+				h.Version = "0.1.0" + r.chain.VersionSuffix()
 			}
 			r.mu.Lock()
 			if r.config != nil {

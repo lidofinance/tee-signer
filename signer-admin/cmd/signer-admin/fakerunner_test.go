@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lidofinance/tee-signer/governance/flavor"
+	"github.com/lidofinance/tee-signer/governance/runnerchain"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-admin/fakerunner"
 	wireadmin "github.com/lidofinance/tee-signer/signer-protocol/wire/admin"
@@ -30,12 +30,12 @@ var names = []string{"s1", "s2", "s3"}
 
 func newFakeCluster(t *testing.T) *fakeCluster {
 	t.Helper()
-	return newFakeClusterAs(t, flavor.Default, 0)
+	return newFakeClusterAs(t, runnerchain.Mainnet, 0)
 }
 
-// newFakeClusterAs is newFakeCluster with runners of build flavour f and
+// newFakeClusterAs is newFakeCluster with runners of the build of chain f and
 // setups with the time lock timeLock.
-func newFakeClusterAs(t *testing.T, f flavor.Flavor, timeLock int) *fakeCluster {
+func newFakeClusterAs(t *testing.T, f runnerchain.Chain, timeLock int) *fakeCluster {
 	t.Helper()
 	dir := t.TempDir()
 	fc := &fakeCluster{dir: dir, keys: approvers(t, dir, 4), runners: map[string]*fakerunner.Runner{}}
@@ -115,7 +115,7 @@ func TestFlowFakeRunners(t *testing.T) {
 		t.Fatalf("pin again:\n%s", out)
 	}
 	out = mustTool(t, "status", "-cluster", cl)
-	if count(out, `^s[123] setup=[0-9a-f]{8} locked=v0/[0-9a-f]{8} open=v0/[0-9a-f]{8} approvers=[0-9a-f]{8} clock=trusted\(fake\) build=default$`) != 3 {
+	if count(out, `^s[123] setup=[0-9a-f]{8} locked=v0/[0-9a-f]{8} open=v0/[0-9a-f]{8} approvers=[0-9a-f]{8} clock=trusted\(fake\) build=mainnet$`) != 3 {
 		t.Fatalf("status:\n%s", out)
 	}
 

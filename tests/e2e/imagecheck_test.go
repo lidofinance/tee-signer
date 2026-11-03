@@ -9,7 +9,7 @@ import (
 )
 
 // Release gate of the image check (docs/protocol.md, "Image check"): no
-// default build takes -allow-unlisted-image, so none can serve an image the
+// mainnet build takes -allow-unlisted-image, so none can serve an image the
 // allowed list in force does not name. The dev release builds always run;
 // the cloud release builds when make names them (RUNNER_AWS_BIN,
 // RUNNER_AZURE_BIN, RUNNER_GCP_BIN).

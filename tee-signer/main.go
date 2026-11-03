@@ -212,7 +212,7 @@ func run() (err error) {
 	}
 	// The key rule the platform read before its key release, and the
 	// mainnet rule once more, before anything sealed is opened.
-	rule, err := keyRule(boot.setup != nil, boot.mainnet, boot.noLockAccepted, plat, log)
+	rule, err := keyRule(boot.setup != nil, boot.prod, boot.noLockAccepted, plat, log)
 	if err != nil {
 		return err
 	}

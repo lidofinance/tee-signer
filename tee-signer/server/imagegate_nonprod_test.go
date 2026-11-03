@@ -1,4 +1,4 @@
-//go:build testnet
+//go:build nonprod
 
 package server
 
@@ -9,10 +9,10 @@ import (
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
-// The testnet build's override: an image the list does not name signs,
+// The non-prod build's override: an image the list does not name signs,
 // and HEALTH says so (state override, ready). Without the setting the same
-// runner refuses. Run with go test -tags testnet.
-func TestImageCheckTestnetOverride(t *testing.T) {
+// runner refuses. Run with go test -tags nonprod,chain_<name>.
+func TestImageCheckNonProdOverride(t *testing.T) {
 	mine, other := testImage(setupwire.ImageNitro, 0x41), testImage(setupwire.ImageNitro, 0x42)
 	e := gatedEnv(t, nil, "nitro", mine, other)
 	wantCode(t, e.signWire(), backend.StatusNotReady, "image check:")

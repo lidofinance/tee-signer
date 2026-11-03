@@ -37,7 +37,7 @@ for kind in release debug; do
   expect fail "clean $kind binary with the build overlay set" env SIGNER_BUILD_OVERLAY_DIR=/x bash "$GATE" binary "$tmp/clean" "$kind"
 done
 
-# Every string of the default list fails every default-flavour binary;
+# Every string of the default list fails every mainnet binary;
 # every string of the release list fails a release binary only.
 i=0
 while IFS= read -r s; do

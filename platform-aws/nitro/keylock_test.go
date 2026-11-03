@@ -453,7 +453,7 @@ func TestKeyRuleKeyID(t *testing.T) {
 	f.arn = keyARN
 	k := keys
 	k.KeyID = "arn:aws:kms:eu-west-1:111122223333:alias/signer"
-	rule, id, err := readKeyRule(ctx, platform.Options{SetupHash: [32]byte{7}, Mainnet: true}, k)
+	rule, id, err := readKeyRule(ctx, platform.Options{SetupHash: [32]byte{7}, Prod: true}, k)
 	if err != nil || rule.Lock != backend.KeyLockLocked || id != keyARN {
 		t.Fatalf("alias ARN: %+v %q %v", rule, id, err)
 	}

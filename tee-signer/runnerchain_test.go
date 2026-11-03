@@ -1,4 +1,4 @@
-//go:build testnet
+//go:build nonprod
 
 package main
 
@@ -12,13 +12,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lidofinance/tee-signer/governance/runnerchain"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/platform/setup"
 )
 
-// testnetSetup is the dev sample setup on a chain with these genesis values.
-func testnetSetup(t *testing.T, fork, root string) []byte {
+// chainSetup is the dev sample setup on a chain with these genesis values.
+func chainSetup(t *testing.T, fork, root string) []byte {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("..", "governance", "setupwire", "testdata", "setup-dev-single.bin"))
 	if err != nil {
@@ -47,25 +48,59 @@ const (
 	mainnetFork = "00000000"
 	mainnetRoot = "4b363db94e286120d76eb905340fdd4e54bfe9f06bf33ff6cf5ad27f511bfe95"
 	devnetFork  = "10000038" // ethereum-package's default
+	ciTestFork  = "00000001"
+	ciTestRoot  = "535276eb9690335cc5e4cb926858a79ece25caaf930a7dfad44757c8b7bef420"
 )
 
 var devnetRoot = func() string { h := sha256.Sum256([]byte("a kurtosis devnet")); return hex.EncodeToString(h[:]) }()
 
-func TestTestnetSetupCheck(t *testing.T) {
-	for _, c := range []struct{ name, fork, root, want string }{
-		{"hoodi", hoodiFork, hoodiRoot, ""},
-		{"sepolia", "90000069", "d8ea171f3c94aea21ebc42a1ed61052acf3f9209c00e4efbaaddac09ed9b8078", ""},
-		{"chiado", "0000006f", "9d642dac73058fbf39c0ae41ab1e34e4d889043cb199851ded7095bc99eb4c1e", ""},
-		{"kurtosis devnet", devnetFork, devnetRoot, ""},
-		{"hoodi fork version, other root", hoodiFork, devnetRoot, "hoodi has fork version 0x10000910"},
+// ownChain is a chain this build starts on.
+func ownChain(t *testing.T) (fork, root string) {
+	t.Helper()
+	switch runnerchain.Build {
+	case runnerchain.Hoodi:
+		return hoodiFork, hoodiRoot
+	case runnerchain.Devnet:
+		return devnetFork, devnetRoot
+	case runnerchain.CITest:
+		return ciTestFork, ciTestRoot
+	}
+	t.Fatalf("a %s build has no chain check", runnerchain.Build)
+	return "", ""
+}
+
+// The build starts on its own chain and refuses every other: mainnet
+// first, the other non-prod builds' chains, and public networks.
+func TestChainSetupCheck(t *testing.T) {
+	type tc struct{ name, fork, root, want string }
+	cases := []tc{
 		{"mainnet", mainnetFork, mainnetRoot, "chain mainnet"},
 		{"mainnet root", devnetFork, mainnetRoot, "mainnet has fork version"},
+		{"mainnet fork version", mainnetFork, devnetRoot, "chain mainnet (genesis fork version 0x00000000 and genesis validators root 0x" + devnetRoot + "): a prod chain"},
+		{"sepolia", "90000069", "d8ea171f3c94aea21ebc42a1ed61052acf3f9209c00e4efbaaddac09ed9b8078", "chain sepolia"},
+		{"chiado", "0000006f", "9d642dac73058fbf39c0ae41ab1e34e4d889043cb199851ded7095bc99eb4c1e", "chain chiado"},
 		{"gnosis", "00000064", "f5dcb5564e829aab27264b9becd5dfaa017085611224cb3036f573368dbb9d47", "chain gnosis"},
 		{"holesky", "01017000", "9143aa7c615a7f7115e2b6aac319c03529df8242ae705fba9df39b79c59fa8b1", "chain holesky"},
-	} {
-		raw := testnetSetup(t, c.fork, c.root)
-		err := checkTestnetSetup(raw)
-		_, passed := testnetPassed.Load(hashOf(t, raw))
+	}
+	refuse := "a " + string(runnerchain.Build) + " build runs on"
+	own := map[runnerchain.Chain]tc{
+		runnerchain.Hoodi:  {"hoodi", hoodiFork, hoodiRoot, ""},
+		runnerchain.Devnet: {"kurtosis devnet", devnetFork, devnetRoot, ""},
+		runnerchain.CITest: {"ci-test", ciTestFork, ciTestRoot, ""},
+	}
+	for c, x := range own {
+		if c != runnerchain.Build {
+			x.want = refuse
+		}
+		cases = append(cases, x)
+	}
+	if runnerchain.Build != runnerchain.Hoodi {
+		cases = append(cases, tc{"hoodi fork version, other root", hoodiFork, devnetRoot, "hoodi has fork version 0x10000910"})
+	}
+	for _, c := range cases {
+		raw := chainSetup(t, c.fork, c.root)
+		err := checkChainSetup(raw)
+		_, passed := chainPassed.Load(hashOf(t, raw))
 		switch {
 		case c.want == "" && (err != nil || !passed):
 			t.Errorf("%s: %v (passed %v)", c.name, err, passed)
@@ -74,16 +109,16 @@ func TestTestnetSetupCheck(t *testing.T) {
 		}
 	}
 	// A setup that does not decode is left to setup.Load.
-	if err := checkTestnetSetup([]byte{1, 2, 3}); err != nil {
+	if err := checkChainSetup([]byte{1, 2, 3}); err != nil {
 		t.Errorf("undecodable setup: %v", err)
 	}
 }
 
-func TestTestnetStart(t *testing.T) {
-	if err := testnetStart([32]byte{}, "", false); err == nil || !strings.Contains(err.Error(), "setup only") {
+func TestChainStart(t *testing.T) {
+	if err := chainStart([32]byte{}, "", false); err == nil || !strings.Contains(err.Error(), "setup only") {
 		t.Errorf("flag path: %v", err)
 	}
-	if err := testnetStart([32]byte{}, "", true); err != nil {
+	if err := chainStart([32]byte{}, "", true); err != nil {
 		t.Errorf("flag path with -clock-check: %v", err)
 	}
 	dir := t.TempDir()
@@ -95,31 +130,34 @@ func TestTestnetStart(t *testing.T) {
 		return p
 	}
 	// -setup file: is read again and checked.
-	good := testnetSetup(t, hoodiFork, hoodiRoot)
+	good := chainSetup(t, ownFork(t), ownRoot(t))
 	goodPath := write("good.bin", good)
-	testnetPassed.Delete(hashOf(t, good)) // as if no channel had read it
-	if err := testnetStart(hashOf(t, good), "file:"+goodPath, false); err != nil {
-		t.Errorf("hoodi file: %v", err)
+	chainPassed.Delete(hashOf(t, good)) // as if no channel had read it
+	if err := chainStart(hashOf(t, good), "file:"+goodPath, false); err != nil {
+		t.Errorf("own chain file: %v", err)
 	}
-	bad := testnetSetup(t, mainnetFork, mainnetRoot)
+	bad := chainSetup(t, mainnetFork, mainnetRoot)
 	badPath := write("bad.bin", bad)
-	if err := testnetStart(hashOf(t, bad), "file:"+badPath, false); err == nil || !strings.Contains(err.Error(), "chain mainnet") {
+	if err := chainStart(hashOf(t, bad), "file:"+badPath, false); err == nil || !strings.Contains(err.Error(), "chain mainnet") {
 		t.Errorf("mainnet file: %v", err)
 	}
 	// The file changed after the start read it.
-	if err := testnetStart(hashOf(t, bad), "file:"+goodPath, false); err == nil || !strings.Contains(err.Error(), "changed") {
+	if err := chainStart(hashOf(t, bad), "file:"+goodPath, false); err == nil || !strings.Contains(err.Error(), "changed") {
 		t.Errorf("changed file: %v", err)
 	}
 	// -setup platform: only a setup the channel checked.
-	other := testnetSetup(t, devnetFork, devnetRoot)
-	testnetPassed.Delete(hashOf(t, other))
-	if err := testnetStart(hashOf(t, other), "platform", false); err == nil || !strings.Contains(err.Error(), "not checked") {
+	other := chainSetup(t, ownFork(t), strings.Repeat("ab", 32))
+	chainPassed.Delete(hashOf(t, other))
+	if err := chainStart(hashOf(t, other), "platform", false); err == nil || !strings.Contains(err.Error(), "not checked") {
 		t.Errorf("unchecked setup: %v", err)
 	}
 }
 
+func ownFork(t *testing.T) string { f, _ := ownChain(t); return f }
+func ownRoot(t *testing.T) string { _, r := ownChain(t); return r }
+
 // Every platform and setup channel of this build goes through the check.
-func TestTestnetWrapsEveryPlatform(t *testing.T) {
+func TestChainWrapsEveryPlatform(t *testing.T) {
 	if len(platforms) == 0 {
 		t.Skip("no platform in this build")
 	}
@@ -137,13 +175,13 @@ func TestTestnetWrapsEveryPlatform(t *testing.T) {
 	}
 	// The dev channel reads SIGNER_SETUP: a mainnet setup there is refused.
 	if f, ok := setupChannels["dev"]; ok {
-		t.Setenv(setup.EnvVar, encodeB64(testnetSetup(t, mainnetFork, mainnetRoot)))
+		t.Setenv(setup.EnvVar, encodeB64(chainSetup(t, mainnetFork, mainnetRoot)))
 		if _, err := f().Read(context.Background()); err == nil || !strings.Contains(err.Error(), "chain mainnet") {
 			t.Errorf("dev channel with a mainnet setup: %v", err)
 		}
-		t.Setenv(setup.EnvVar, encodeB64(testnetSetup(t, hoodiFork, hoodiRoot)))
+		t.Setenv(setup.EnvVar, encodeB64(chainSetup(t, ownFork(t), ownRoot(t))))
 		if _, err := f().Read(context.Background()); err != nil {
-			t.Errorf("dev channel with a hoodi setup: %v", err)
+			t.Errorf("dev channel with a setup of its own chain: %v", err)
 		}
 	}
 }

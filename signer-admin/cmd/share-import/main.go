@@ -92,16 +92,16 @@ func readSecret(path string) ([32]byte, error) {
 
 func run() error {
 	var (
-		addr      = flag.String("addr", "", "runner address (tcp:, unix:, vsock:)")
-		pubkeyHex = flag.String("pubkey", "", "validator public key (0x...)")
-		index     = flag.Int64("index", -1, "validator index; -1 = unbound")
-		shareFile = flag.String("share-file", "", "file with the share secret as hex, or - for stdin")
-		certFile  = flag.String("tls-cert", "", "client certificate (PEM) for a runner with mutual TLS")
-		keyFile   = flag.String("tls-key", "", "client key (PEM)")
-		keyPin    = flag.String("tls-key-pin", "", "sha256 of the runner's TLS key as hex, checked in addition to the attested identity (needs -tls-cert)")
-		orderFile = flag.String("order", "", "signed import order (binary); a runner with a setup needs one")
-		commFile  = flag.String("commitments", "", "the validator's public commitments, one 0x-hex point per line (with -order)")
-		testnet   = flag.Bool("allow-testnet-build", false, "accept a runner of a testnet build (governance time locks in minutes, devnets and test networks only; needs -tls-cert)")
+		addr       = flag.String("addr", "", "runner address (tcp:, unix:, vsock:)")
+		pubkeyHex  = flag.String("pubkey", "", "validator public key (0x...)")
+		index      = flag.Int64("index", -1, "validator index; -1 = unbound")
+		shareFile  = flag.String("share-file", "", "file with the share secret as hex, or - for stdin")
+		certFile   = flag.String("tls-cert", "", "client certificate (PEM) for a runner with mutual TLS")
+		keyFile    = flag.String("tls-key", "", "client key (PEM)")
+		keyPin     = flag.String("tls-key-pin", "", "sha256 of the runner's TLS key as hex, checked in addition to the attested identity (needs -tls-cert)")
+		orderFile  = flag.String("order", "", "signed import order (binary); a runner with a setup needs one")
+		commFile   = flag.String("commitments", "", "the validator's public commitments, one 0x-hex point per line (with -order)")
+		chainBuild = flag.String("allow-chain-build", "", "accept a runner of the non-prod build of this chain: hoodi, devnet or ci-test (governance time locks in minutes, that chain only; needs -tls-cert)")
 	)
 	att := runnerclient.Flags(flag.CommandLine)
 	flag.Parse()
@@ -151,7 +151,7 @@ func run() error {
 	var c *remote.Client
 	if *certFile != "" || *keyFile != "" {
 		conn := runnerclient.Connection{Address: *addr, ClientCert: *certFile, ClientKey: *keyFile, TLSKeyPin: *keyPin, Attestation: *att,
-			AllowTestnetBuild: *testnet}
+			AllowChainBuild: *chainBuild}
 		rc, err := conn.New()
 		if err != nil {
 			return err

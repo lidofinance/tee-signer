@@ -25,7 +25,7 @@ func cloudSetupText(t *testing.T, format int, mode, nitroExtra, azureExtra strin
 signing_mode = %s
 handover_generation = 1
 genesis_validators_root = 0x4b36000000000000000000000000000000000000000000000000000000000000
-genesis_fork_version = 0x00000010
+genesis_fork_version = 0x00000001
 genesis_time = %d
 seconds_per_slot = %d
 slots_per_epoch = %d
@@ -153,16 +153,16 @@ func TestSetupAllowGCPSingleFlagScope(t *testing.T) {
 func TestSetupMainnetGCPSingleNeedsNoLockAccepted(t *testing.T) {
 	const name = "gsigner-3"
 	shared, section := signerSection(t, cloudSetupText(t, 3, "single", "", ""), name)
-	mainnet := strings.Replace(shared, "genesis_fork_version = 0x00000010\n", "genesis_fork_version = 0x00000000\n", 1)
+	mainnet := strings.Replace(shared, "genesis_fork_version = 0x00000001\n", "genesis_fork_version = 0x00000000\n", 1)
 	if mainnet == shared {
 		t.Fatal("cloudSetupText changed its genesis_fork_version line")
 	}
 	dir := t.TempDir()
 	file := writeFile(t, filepath.Join(dir, "setup.conf"), mainnet+"\n[signer "+name+"]"+section)
 	wantIn(t, failTool(t, "setup", "-allow-gcp-unsafe-single-key", "-out", filepath.Join(dir, "flag"), file),
-		"signer "+name, "on mainnet", "sealing_key_release.no_lock_accepted = true", "-allow-gcp-unsafe-single-key does not set it")
+		"signer "+name, "on a prod chain", "sealing_key_release.no_lock_accepted = true", "-allow-gcp-unsafe-single-key does not set it")
 	keyed := writeFile(t, filepath.Join(dir, "keyed.conf"), mainnet+"\n[signer "+name+"]"+section+"sealing_key_release.unsafe_single_key_accepted = true\n")
-	wantIn(t, failTool(t, "setup", "-out", filepath.Join(dir, "keyed"), keyed), "signer "+name, "on mainnet", "sealing_key_release.no_lock_accepted = true")
+	wantIn(t, failTool(t, "setup", "-out", filepath.Join(dir, "keyed"), keyed), "signer "+name, "on a prod chain", "sealing_key_release.no_lock_accepted = true")
 	both := writeFile(t, filepath.Join(dir, "both.conf"), mainnet+"\n[signer "+name+"]"+section+"sealing_key_release.no_lock_accepted = true\n")
 	out := mustTool(t, "setup", "-allow-gcp-unsafe-single-key", "-out", filepath.Join(dir, "both"), both)
 	wantIn(t, out, name+" setup_sha256",
@@ -174,7 +174,7 @@ func TestSetupMainnetGCPSingleNeedsNoLockAccepted(t *testing.T) {
 	// A real split (3 of 4) on a mainnet cluster with a GCP signer that
 	// accepts neither still makes its setups: the acceptances are only
 	// for a key held alone.
-	threeFile := writeFile(t, filepath.Join(dir, "three.conf"), strings.Replace(cloudSetupText(t, 3, "threshold", "", ""), "genesis_fork_version = 0x00000010\n", "genesis_fork_version = 0x00000000\n", 1))
+	threeFile := writeFile(t, filepath.Join(dir, "three.conf"), strings.Replace(cloudSetupText(t, 3, "threshold", "", ""), "genesis_fork_version = 0x00000001\n", "genesis_fork_version = 0x00000000\n", 1))
 	mustTool(t, "setup", "-out", filepath.Join(dir, "three"), threeFile)
 }
 

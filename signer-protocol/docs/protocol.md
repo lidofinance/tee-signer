@@ -336,17 +336,18 @@ add a second `anyOf` entry for another attestation provider, or one that
 any SEV-SNP VM meets, and keep a way to the key after the lock. A mainnet setup's `kid`
 names the version.
 
-On mainnet (the setup's `genesis_fork_version` is mainnet's,
-`setupwire.IsMainnet`, the test of the threshold rule) the runner refuses
+On a prod chain (`setupwire.ProdChain`: the chain table's prod property
+for the setup's `genesis_fork_version`, true for mainnet and for any fork
+version without a row; the test of the threshold rule too) the runner refuses
 to start when the rule is not locked or when it cannot read the rule
-(no read grant). The error starts with `mainnet:` and comes before the
+(no read grant). The error starts with `prod chain:` and comes before the
 key release, so nothing is sealed or opened. GCP has no lock: a GCP runner
-starts on mainnet only when its setup says
+starts on a prod chain only when its setup says
 `sealing_key_release.no_lock_accepted = true`; HEALTH's `key_lock_why`
 then says that the setup accepts it. The dev platform has no key release
-service and no real attestation, so it never starts on mainnet: the start error begins `mainnet: the dev
+service and no real attestation, so it never starts on a prod chain: the start error begins `prod chain: the dev
 platform has no real attestation`, and on other chains HEALTH's
-`key_lock_why` says the dev platform is refused on mainnet. On other
+`key_lock_why` says the dev platform is refused on a prod chain. On other
 chains the runner starts; a failed read, or a rule that is not locked,
 leaves `key_release_hash` zero and logs a warning, so no
 `key_release_sha256` pin matches the runner.
@@ -470,7 +471,7 @@ record's locked group, with every pending update past its effective time
 active (the `Updates` view that also feeds the core, with
 effective times from `setupwire.EffectiveActivation`). A pending update
 that adds the image counts only from its effective time, which is at least
-the images minimum (7 days, 7 minutes in a testnet build) after it
+the images minimum (7 days, 7 minutes in a non-prod build) after it
 arrived. An entry of another kind with the same bytes does not match.
 
 The start order:
@@ -516,13 +517,14 @@ and `why`. `ready` is false while the check refuses. The start log line
 `runner started` carries `image_check`, and every change of the state is
 logged once (an error line when it refuses).
 
-A testnet build (`-tags testnet`) takes `-allow-unlisted-image`: it serves
-an image the list does not name, logs a warning at start and reports state
-`override`. It does not cover an unknown image. A default build has no
-such flag: `server.NewImageGate` refuses an override in a default build,
+A non-prod build (`CHAIN=hoodi`, `devnet` or `ci-test`, `-tags
+nonprod,chain_<chain>`) takes `-allow-unlisted-image`: it serves an image
+the list does not name, logs a warning at start and reports state
+`override`. It does not cover an unknown image. A mainnet build has no
+such flag: `server.NewImageGate` refuses an override in a mainnet build,
 `tee-signer/imagecheck_test.go` and `tests/e2e` `TestE2EImageCheckNoOverrideInReleaseBuilds`
-check that no default build takes the flag, and `scripts/build-runner.sh`
-fails when a default-flavour binary holds its name.
+check that no mainnet build takes the flag, and `scripts/build-runner.sh`
+fails when a mainnet binary holds its name.
 
 ### ATTEST body
 
@@ -890,12 +892,12 @@ A TLS client's role comes from its verified certificate chain
    intermediate. So a key that reaches only the signing intermediate cannot
    mint an admin certificate, whatever path length that intermediate
    allows (ATTEST-ROLES-02).
-3. Admin-root-direct, testnet builds only (`buildflavor.AdminRootDirect`):
+3. Admin-root-direct, non-prod builds only (`buildchain.AdminRootDirect`):
    the leaf lists the admin mark and the self-signed root signed it
    directly (an intermediate in `allowed_client_ca` does not count). It has the
    admin rights. It is meant for a test chain whose pinned client root has
    `pathlen:0`, so no admin intermediate can exist under it. There, whoever
-   holds the root key can make admin certificates. Default builds never give this role.
+   holds the root key can make admin certificates. Mainnet builds never give this role.
 4. None: the leaf lists the admin mark but no rule above gave it a role,
    for example a chain that ends at an admin intermediate listed in
    `allowed_client_ca`. The connection gets no rights, so an admin
@@ -1017,7 +1019,7 @@ another chain if they do. The settings decide the client's mainnet rules
 (`key_release_sha256` for `azure-maa` and `aws-nitro`), and IDENTITY
 does not name the chain, so without the mark a setting left out would fail
 open. The mark is readable by anyone who starts a handshake, like the
-flavour in the subject. A certificate without the mark leaves the decision
+build's chain in the subject. A certificate without the mark leaves the decision
 to the setting alone. The next IDENTITY version should carry the chain in
 the attested fields.
 

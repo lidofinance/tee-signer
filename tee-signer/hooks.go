@@ -10,8 +10,8 @@ import (
 
 // Build hooks. Files a build adds to package main (go build -overlay) may
 // register hooks here; this tree registers none. scripts/build-runner.sh
-// adds such files only to a testnet build, from SIGNER_BUILD_OVERLAY_DIR,
-// and the release gate (scripts/release-gate.sh) refuses a default build
+// adds such files only to a non-prod build, from SIGNER_BUILD_OVERLAY_DIR,
+// and the release gate (scripts/release-gate.sh) refuses a mainnet build
 // that has them.
 
 // startHooks run after the setup check and before the platform is built

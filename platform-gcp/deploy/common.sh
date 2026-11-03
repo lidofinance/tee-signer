@@ -9,11 +9,10 @@ GCP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 die() { echo "gcp: $*" >&2; exit 1; }
 
-# The image is the same for every signer and every chain (Dockerfile); its
-# build folder is build/gcp. CHAIN names the chain of the setup (vm-create
-# checks it) and of the verifier settings file.
-if [ -n "${CHAIN:-}" ]; then check_chain_name "$CHAIN" || exit 1; fi
-CHAIN_SUFFIX="$(chain_suffix "${CHAIN:-devnet}")"
+# The image is the same for every signer of a chain (Dockerfile); its
+# build folder is build/gcp. CHAIN picks the build and names the chain of
+# the setup (vm-create checks it) and of the verifier settings file.
+CHAIN_SUFFIX="$(chain_suffix "$CHAIN")"
 OUT="$BUILD/gcp"
 
 # SETUP_FILE: the signer's binary setup (signer-admin/cmd/setup-tool encode). It holds the chain
@@ -55,11 +54,11 @@ ZONE="${ZONE:-europe-west4-a}"
 AR_REPO=signer
 IMAGE_NAME=runner
 # Another IMAGE_TAG keeps the deployed image's tag in the registry, for a
-# rollback (the mark log test pushes :marklog). IMAGE_FLAVOR=testnet
-# (scripts/common.sh) adds "-testnet" (generic-testnet).
+# rollback (the mark log test pushes :marklog). A non-prod CHAIN
+# (scripts/common.sh) adds "-<chain>" (generic-hoodi).
 IMAGE_TAG="${IMAGE_TAG:-poc}"
-if [ "$IMAGE_FLAVOR" = testnet ]; then
-  case "$IMAGE_TAG" in *-testnet) ;; *) IMAGE_TAG="$IMAGE_TAG-testnet" ;; esac
+if [ -n "$(image_suffix)" ]; then
+  case "$IMAGE_TAG" in *"$(image_suffix)") ;; *) IMAGE_TAG="$IMAGE_TAG$(image_suffix)" ;; esac
 fi
 KMS_RING=signer
 SA_NAME=signer-workload
@@ -169,7 +168,7 @@ WIF_PROVIDER_RESOURCE="//iam.googleapis.com/$WIF_POOL_RESOURCE/providers/$WIF_PR
 WIF_PRINCIPAL_SET="principalSet://iam.googleapis.com/$WIF_POOL_RESOURCE/*"
 REGISTRY="$REGION-docker.pkg.dev"
 IMAGE_REPO="$REGISTRY/$PROJECT_ID/$AR_REPO/$IMAGE_NAME"
-# IMAGE_FLAVOR=testnet puts "-testnet" into the build folder and the image name.
+# A non-prod CHAIN puts "-<chain>" into the build folder and the image name.
 IMAGE_SUFFIX="$(image_suffix)"
 OUT="$OUT$IMAGE_SUFFIX"
 

@@ -123,15 +123,15 @@ type nitroRunner struct {
 	err     *error
 }
 
-// testnetChain is the -config of the e2e runners unless a test passes
+// ciTestChain is the -config of the e2e runners unless a test passes
 // another.
-const testnetChain = "../../governance/chains/chain.testnet.json"
+const ciTestChain = "../../governance/chains/chain.ci-test.json"
 
 // nitroE2E is nitroGood pinned to the flag path state of a runner started
-// with testnetChain.
+// with ciTestChain.
 func nitroE2E(t *testing.T) Attestation {
 	a := nitroGood()
-	a.SetupSHA256 = configPin(t, testnetChain)
+	a.SetupSHA256 = configPin(t, ciTestChain)
 	return a
 }
 
@@ -149,7 +149,7 @@ func launchNitroRunner(t *testing.T, bin string, fake *fakeNSM, args ...string) 
 	}
 	t.Cleanup(func() { logFile.Close() })
 	base := []string{"-platform", "nitro", "-platform-opt", "test_nsm_url=" + fake.srv.URL,
-		"-config", testnetChain, "-state-dir", filepath.Join(dir, "state"),
+		"-config", ciTestChain, "-state-dir", filepath.Join(dir, "state"),
 		"-listen", listen, "-mark-store", "none"}
 	cmd := exec.Command(bin, append(base, args...)...)
 	cmd.Stdout, cmd.Stderr = logFile, logFile

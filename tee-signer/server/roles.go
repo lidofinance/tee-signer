@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/signer-protocol"
-	"github.com/lidofinance/tee-signer/signer-protocol/buildflavor"
+	"github.com/lidofinance/tee-signer/signer-protocol/buildchain"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
 	wireadmin "github.com/lidofinance/tee-signer/signer-protocol/wire/admin"
 	"github.com/lidofinance/tee-signer/tee-signer/attls"
@@ -161,9 +161,9 @@ var allows = func() map[attls.Role]map[wire.MsgType]grant {
 		attls.RoleAttestOnly: {wire.TypeHealth: allow, wire.TypePublicKeys: allow, wire.TypeAttest: limited, wire.TypeIdentity: limited},
 		attls.RoleAdmin:      admin,
 	}
-	// Testnet builds only. A default build has no row for this role, so
+	// Non-prod builds only. A mainnet build has no row for this role, so
 	// it gets nothing even if RoleOf ever returned it.
-	if buildflavor.AdminRootDirect {
+	if buildchain.AdminRootDirect {
 		t[attls.RoleAdminRootDirect] = admin
 	}
 	return t

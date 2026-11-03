@@ -229,11 +229,11 @@ func NoKeyRelease(why string) func(context.Context) (KeyRule, error) {
 	}
 }
 
-// CheckKeyRule is the mainnet rule on a rule already read: with Mainnet
+// CheckKeyRule is the prod rule on a rule already read: with Prod
 // set, KeyLockLocked passes, KeyLockNone passes only as CheckNoLock
 // allows, and the rest stop the start. nil counts as unread.
 func (o Options) CheckKeyRule(r *KeyRule) error {
-	if !o.Mainnet {
+	if !o.Prod {
 		return nil
 	}
 	if r == nil {
@@ -245,9 +245,9 @@ func (o Options) CheckKeyRule(r *KeyRule) error {
 	case backend.KeyLockNone:
 		return o.CheckNoLock(r)
 	case backend.KeyLockUnread:
-		return fmt.Errorf("mainnet: the runner cannot read the rule of the key that releases its sealing key, and does not start unless it sees the rule locked: %s", r.Why)
+		return fmt.Errorf("prod chain: the runner cannot read the rule of the key that releases its sealing key, and does not start unless it sees the rule locked: %s", r.Why)
 	default:
-		return fmt.Errorf("mainnet: the rule of the key that releases the sealing key is not locked, and the runner does not start: %s", r.Why)
+		return fmt.Errorf("prod chain: the rule of the key that releases the sealing key is not locked, and the runner does not start: %s", r.Why)
 	}
 }
 
@@ -260,12 +260,12 @@ func (o Options) CheckKeyRule(r *KeyRule) error {
 // (sealing_key_release.unsafe_single_key_accepted, setupwire.CheckThresholdOn).
 func (o Options) CheckNoLock(r *KeyRule) error {
 	if r.NoService {
-		return fmt.Errorf("mainnet: the dev platform has no real attestation and no key release service, so a mainnet runner does not start on it; run aws, azure or gcp (%s)", r.Why)
+		return fmt.Errorf("prod chain: the dev platform has no real attestation and no key release service, so a runner of a prod chain does not start on it; run aws, azure or gcp (%s)", r.Why)
 	}
 	if o.NoLockAccepted {
 		return nil
 	}
-	return fmt.Errorf("mainnet: the platform has no lock on the rule of the key that releases the sealing key (%s), "+
+	return fmt.Errorf("prod chain: the platform has no lock on the rule of the key that releases the sealing key (%s), "+
 		"and the setup does not accept that (sealing_key_release.no_lock_accepted = true); the runner does not start", r.Why)
 }
 
@@ -296,10 +296,10 @@ type Options struct {
 	// sealing key is read from the store (-state-store). The platforms whose
 	// local state can vanish on a restart call it: azure, gcp and dev.
 	Durable DurableFunc
-	// Mainnet is set when the setup's chain is mainnet
-	// (setupwire.IsMainnet): ReadKeyRule then refuses a key rule that is
+	// Prod is set when the setup's chain is a prod chain
+	// (setupwire.ProdChain): ReadKeyRule then refuses a key rule that is
 	// not locked or not readable.
-	Mainnet bool
+	Prod bool
 	// NoLockAccepted is the setup's sealing_key_release.no_lock_accepted
 	// (GCP only): on mainnet a key rule without a lock passes
 	// (CheckNoLock).

@@ -11,21 +11,24 @@
 #       as CHAIN_JSON to the image builds; it is still chain NAME.
 #   chain.sh check-source NAME CONFIG_YAML GVR_FILE
 #       Compare chains/NAME.source.json with the chain's own files, fetched by
-#       you from the repo and commit the source file names (config.yaml and
-#       genesis_validators_root.txt). Fails on any difference and on a fork in
-#       the config that the source file does not list (a new fork was
-#       scheduled). Then checks that chains/NAME.json is what `build` makes.
+#       you from the repos and commits the source file names (config.yaml,
+#       and genesis_validators_root.txt or the genesis state genesis.ssz).
+#       Fails on any difference and on a fork in the config that the source
+#       file does not list (a new fork was scheduled). Then checks that
+#       chains/NAME.json is what `build` makes. A GVR_FILE that ends in .ssz
+#       is the genesis state: its genesis_time (bytes 0 to 8) and
+#       genesis_validators_root (bytes 8 to 40) are compared.
 #   chain.sh check-beacon NAME [URL]
 #       Compare chains/NAME.json with a beacon node of that chain: genesis,
 #       spec and fork schedule. URL defaults to $BEACON_URL. The URL is passed
 #       to curl on stdin, never on a command line, and printed as scheme and
 #       host only, so a URL with credentials stays out of logs.
 #   chain.sh identify FILE
-#       Print the chain of a runner chain.json: hoodi, devnet (the local
-#       Kurtosis devnet), testnet (governance/chains/chain.testnet.json, a test chain no
-#       network runs), or exit 1 with the reason. A file with the genesis fork
-#       version of a public chain counts as that chain only when every chain
-#       field equals the pinned one.
+#       Print the chain of a runner chain.json: mainnet, hoodi, devnet (the
+#       local Kurtosis devnet), ci-test (governance/chains/chain.ci-test.json, a
+#       test chain no network runs), or exit 1 with the reason. A file with
+#       the genesis fork version of a public chain counts as that chain only
+#       when every chain field equals the pinned one.
 #   chain.sh verify NAME FILE
 #       Exit 0 only if FILE is a runner chain.json of chain NAME.
 #
@@ -55,10 +58,10 @@ KNOWN_VERSIONS='{
   "0x00000064": "gnosis",
   "0x0000006f": "chiado",
   "0x10000038": "devnet",
-  "0x00000001": "testnet"
+  "0x00000001": "ci-test"
 }'
 # The chains this repo pins with a source file.
-PINNED="hoodi"
+PINNED="mainnet hoodi"
 
 source_file() {
   local f="$CHAINS_DIR/$1.source.json"
@@ -131,9 +134,10 @@ cmd_build() {
   say "wrote $out ($name, $(jq '.forks | length' "$out") forks, genesis $(jq -r .genesis_time "$out"))"
 }
 
-# yaml_value FILE KEY: the value of a top-level "KEY: value" line, without quotes.
+# yaml_values FILE: "KEY value" for each top-level "KEY: value" line, without
+# double or single quotes.
 yaml_values() {
-  sed -nE 's/^([A-Z][A-Z0-9_]*):[[:space:]]*"?([^"#[:space:]]+)"?.*$/\1 \2/p' "$1"
+  sed -nE "s/^([A-Z][A-Z0-9_]*):[[:space:]]*[\"']?([^\"'#[:space:]]+)[\"']?.*\$/\\1 \\2/p" "$1"
 }
 
 cmd_check_source() {
@@ -178,14 +182,25 @@ cmd_check_source() {
     bad=1
   fi
   want="$(jq -r .genesis_validators_root "$src")"
-  got="$(tr -d '[:space:]' <"$gvrfile" | tr 'A-F' 'a-f')"
+  case "$gvrfile" in
+    *.ssz) got="0x$(od -An -v -tx1 -j 8 -N 32 "$gvrfile" | tr -d '[:space:]')" ;;
+    *) got="$(tr -d '[:space:]' <"$gvrfile" | tr 'A-F' 'a-f')" ;;
+  esac
   if [ "$got" = "$want" ]; then echo "ok    genesis_validators_root $got"; else echo "DIFF  genesis_validators_root: source file $want, $gvrfile $got"; bad=1; fi
-  # The genesis time is not in config.yaml. For a chain that started at
-  # MIN_GENESIS_TIME it is MIN_GENESIS_TIME + GENESIS_DELAY, which the README
-  # of the chain states too. check-beacon compares it with a node.
+  # The genesis time is not in config.yaml. The genesis state holds it
+  # (bytes 0 to 8, little-endian). Without the state: for a chain that
+  # started at MIN_GENESIS_TIME it is MIN_GENESIS_TIME + GENESIS_DELAY,
+  # which the README of the chain states too. check-beacon compares it
+  # with a node.
   want="$(jq -r .genesis_time "$src")"
-  got=$(( ${up[MIN_GENESIS_TIME]:-0} + ${up[GENESIS_DELAY]:-0} ))
-  if [ "$got" = "$want" ]; then echo "ok    genesis_time $want = MIN_GENESIS_TIME + GENESIS_DELAY"; else echo "DIFF  genesis_time: source file $want, MIN_GENESIS_TIME + GENESIS_DELAY $got"; bad=1; fi
+  case "$gvrfile" in
+    *.ssz)
+      got="$(od -An -v -tu8 -N 8 --endian=little "$gvrfile" | tr -d '[:space:]')"
+      if [ "$got" = "$want" ]; then echo "ok    genesis_time $want (genesis state)"; else echo "DIFF  genesis_time: source file $want, genesis state $got"; bad=1; fi ;;
+    *)
+      got=$(( ${up[MIN_GENESIS_TIME]:-0} + ${up[GENESIS_DELAY]:-0} ))
+      if [ "$got" = "$want" ]; then echo "ok    genesis_time $want = MIN_GENESIS_TIME + GENESIS_DELAY"; else echo "DIFF  genesis_time: source file $want, MIN_GENESIS_TIME + GENESIS_DELAY $got"; bad=1; fi ;;
+  esac
   local tmp
   tmp="$(mktemp)"
   cmd_build "$name" "$tmp" 2>/dev/null
@@ -268,9 +283,9 @@ cmd_identify() {
   case "$name" in
     "") die "$file: genesis fork version $gfv is not a chain this repo knows" ;;
     devnet) ;;
-    testnet)
-      [ "$(chain_fields "$file")" = "$(chain_fields "$CHAINS_DIR/chain.testnet.json")" ] ||
-        die "$file: genesis fork version $gfv but not the chain fields of governance/chains/chain.testnet.json"
+    ci-test)
+      [ "$(chain_fields "$file")" = "$(chain_fields "$CHAINS_DIR/chain.ci-test.json")" ] ||
+        die "$file: genesis fork version $gfv but not the chain fields of governance/chains/chain.ci-test.json"
       ;;
     *)
       case " $PINNED " in *" $name "*) ;; *) die "$file: $name, a public chain this repo does not pin" ;; esac

@@ -8,16 +8,16 @@ AZ_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 die() { echo "azure: $*" >&2; exit 1; }
 
-# The image is the same for every signer and every chain (Dockerfile). Its
+# The image is the same for every signer of a chain (Dockerfile). Its
 # build folder is build/azure. Another IMAGE_TAG keeps the deployed image's
 # tags, local and in the registry, for a rollback.
-if [ -n "${CHAIN:-}" ]; then check_chain_name "$CHAIN" || exit 1; fi
 OUT="$BUILD/azure"
 IMAGE_TAG="${IMAGE_TAG:-poc}"
-# IMAGE_FLAVOR=testnet (scripts/common.sh): the testnet build, with
-# "-testnet" in the tag (generic-testnet, then generic-testnet-ts below).
-if [ "$IMAGE_FLAVOR" = testnet ]; then
-  case "$IMAGE_TAG" in *-testnet) ;; *) IMAGE_TAG="$IMAGE_TAG-testnet" ;; esac
+# A non-prod CHAIN (scripts/common.sh): that chain's build, with "-<chain>"
+# in the tag (generic-hoodi, then generic-hoodi-ts below).
+SUFFIX="$(image_suffix)"
+if [ -n "$SUFFIX" ]; then
+  case "$IMAGE_TAG" in *"$SUFFIX") ;; *) IMAGE_TAG="$IMAGE_TAG$SUFFIX" ;; esac
 fi
 
 # Setup of signer N: SETUP_FILE_N, a binary setup. signer-config setup (the signing
@@ -99,7 +99,7 @@ check_network() {
   die "NETWORK=${NETWORK:-unset}: this tree has no Azure network entry; the build overlay (SIGNER_BUILD_OVERLAY_DIR) adds its own (README, Network entry)"
 }
 
-# IMAGE_FLAVOR=testnet puts "-testnet" into the build folder and the image name.
+# A non-prod CHAIN puts "-<chain>" into the build folder and the image name.
 IMAGE_SUFFIX="$(image_suffix)"
 OUT="$OUT$IMAGE_SUFFIX"
 

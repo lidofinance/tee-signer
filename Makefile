@@ -17,7 +17,7 @@ MODEL_RUNS ?= 500
 FUZZ_EVERYTHING := bash -c '. "$$1"; fuzz_everything' _ $(ROOT)/scripts/common.sh
 
 .DEFAULT_GOAL := help
-.PHONY: help deps check core nts build test test-modules e2e test-core test-rust fuzz fuzz-core model race release-gate loc clean
+.PHONY: help deps check core nts build test test-modules e2e e2e-nonprod test-core test-rust fuzz fuzz-core model race release-gate loc clean
 
 help: ## list targets
 	@grep -E '^[a-z][a-z0-9-]+:.*## ' $(firstword $(MAKEFILE_LIST)) | \
@@ -54,6 +54,9 @@ race: test-modules ## same as test-modules (the race detector is on unless RACE=
 
 e2e: build ## tests/e2e against the built runners
 	cd $(ROOT)/tests && go test $(RACE) -count=1 -v -timeout 40m -tags platform_aws ./e2e/
+
+e2e-nonprod: core nts ## tests/e2e of the non-prod builds: each starts on its own chain only; a ci-test runner's 7-minute images wait
+	cd $(ROOT)/tests && go test $(RACE) -count=1 -v -timeout 30m -tags platform_aws,nonprod,chain_ci_test -run 'TestE2ENonProd' ./e2e/
 
 test: ## everything: guards, build, release gate, modules, e2e, signer-core suites, fuzz (FUZZ_TIME)
 	bash $(ROOT)/scripts/test.sh

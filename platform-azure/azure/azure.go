@@ -211,8 +211,8 @@ func dataKey(ctx context.Context, rel KeyReleaser, kid string, setup [32]byte) (
 // read off mainnet) the release names kid as given, as before.
 func releaseChecked(ctx context.Context, o platform.Options, rel *Releaser, kid string) (*platform.KeyRule, *rsa.PrivateKey, error) {
 	name, version, _ := strings.Cut(kid, "/")
-	if o.Mainnet && version == "" {
-		return nil, nil, fmt.Errorf("azure: mainnet: kid %q names no key version; a mainnet setup names the version (kid <name>/<version>), so the approvers fix the key", kid)
+	if o.Prod && version == "" {
+		return nil, nil, fmt.Errorf("azure: prod chain: kid %q names no key version; a setup of a prod chain names the version (kid <name>/<version>), so the approvers fix the key", kid)
 	}
 	var checked *CheckedKey
 	rule, err := o.ReadKeyRule(ctx, func(ctx context.Context) (platform.KeyRule, error) {

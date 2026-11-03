@@ -15,7 +15,7 @@ const newerKeyVersion = "fedcba9876543210fedcba9876543210"
 
 // mainnetOptions is a mainnet start with a setup, so the key rule is read
 // and checked.
-var mainnetOptions = platform.Options{SetupHash: setupA, Mainnet: true}
+var mainnetOptions = platform.Options{SetupHash: setupA, Prod: true}
 
 // A Key Vault admin adds a version between Get Key and the release. Get Key
 // shows version A (immutable policy, locked); a release of the bare name
@@ -26,18 +26,18 @@ func TestReleaseIsTheCheckedVersion(t *testing.T) {
 	f.kv.newer, f.kv.newerVersion = testRSA(t), newerKeyVersion
 	for _, o := range []platform.Options{{SetupHash: setupA}, mainnetOptions} {
 		kid := "signer-kek-1"
-		if o.Mainnet {
+		if o.Prod {
 			kid += "/" + testKeyVersion
 		}
 		rule, key, err := releaseChecked(context.Background(), o, f.releaser, kid)
 		if err != nil {
-			t.Fatalf("mainnet %v: %v", o.Mainnet, err)
+			t.Fatalf("mainnet %v: %v", o.Prod, err)
 		}
 		if !samePrivateKey(key, f.key) {
-			t.Fatalf("mainnet %v: released a key version other than the checked one", o.Mainnet)
+			t.Fatalf("mainnet %v: released a key version other than the checked one", o.Prod)
 		}
 		if rule == nil || rule.Hash == ([32]byte{}) {
-			t.Fatalf("mainnet %v: no key rule", o.Mainnet)
+			t.Fatalf("mainnet %v: no key rule", o.Prod)
 		}
 	}
 	for _, p := range f.kv.paths {

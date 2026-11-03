@@ -29,7 +29,7 @@ func unhex(t *testing.T, s string) []byte {
 
 func TestStatementHuman(t *testing.T) {
 	if setupwire.MaxTimeLock < 172800 {
-		t.Skip("the sample's change delay (48 hours) is above the cap of this build flavour")
+		t.Skip("the sample's change delay (48 hours) is above the cap of this build")
 	}
 	path := filepath.FromSlash(vectorsPath)
 	raw := readFile(t, path)

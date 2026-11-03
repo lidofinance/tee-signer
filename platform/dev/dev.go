@@ -117,7 +117,7 @@ func New(o platform.Options) (*platform.Platform, error) {
 		p.HTTPClient = EgressClient(strings.Split(s, ","))
 	}
 	// No key release service, so no rule to lock.
-	if p.KeyRule, err = o.ReadKeyRule(context.Background(), platform.NoKeyRelease("the dev platform has no key release service and no real attestation; refused on mainnet")); err != nil {
+	if p.KeyRule, err = o.ReadKeyRule(context.Background(), platform.NoKeyRelease("the dev platform has no key release service and no real attestation; refused on a prod chain")); err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)

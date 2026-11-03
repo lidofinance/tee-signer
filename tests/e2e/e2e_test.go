@@ -68,8 +68,10 @@ var runnerBuilds = map[string]struct{ env, tags string }{
 	"azure-debug": {"RUNNER_AZURE_DEBUG_BIN", "platform_azure,debugimport,nts"},
 	"gcp":         {"RUNNER_GCP_BIN", "platform_gcp,nts"},
 	"gcp-debug":   {"RUNNER_GCP_DEBUG_BIN", "platform_gcp,debugimport,nts"},
-	// The testnet builds (testnet_test.go, -tags testnet).
-	"dev-testnet": {"RUNNER_TESTNET_BIN", "platform_dev,testnet"},
+	// The non-prod builds (nonprod_test.go, -tags nonprod,chain_<name>).
+	"dev-hoodi":   {"RUNNER_HOODI_BIN", "platform_dev,nonprod,chain_hoodi"},
+	"dev-devnet":  {"RUNNER_DEVNET_BIN", "platform_dev,nonprod,chain_devnet"},
+	"dev-ci-test": {"RUNNER_CI_TEST_BIN", "platform_dev,nonprod,chain_ci_test"},
 }
 
 var (

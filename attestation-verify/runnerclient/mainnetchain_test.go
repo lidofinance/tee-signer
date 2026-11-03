@@ -5,7 +5,7 @@ import (
 	"encoding/asn1"
 	"testing"
 
-	"github.com/lidofinance/tee-signer/governance/flavor"
+	"github.com/lidofinance/tee-signer/governance/runnerchain"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
 )
@@ -33,7 +33,7 @@ func chainExt(t *testing.T, gfv backend.Version) []pkix.Extension {
 // checked by the setting alone.
 func TestMainnetRunnerNeedsMainnetSetting(t *testing.T) {
 	ca := newTestCA(t)
-	mainnet := startFakeRunnerExt(t, ca, devAttest, flavor.DefaultCertName, "0.1.0", chainExt(t, backend.Version{0, 0, 0, 0}))
+	mainnet := startFakeRunnerExt(t, ca, devAttest, runnerchain.MainnetCertName, "0.1.0", chainExt(t, backend.Version{0, 0, 0, 0}))
 	wantErr(t, health(t, devConn(t, ca, mainnet)), "mainnet")
 	if n := mainnet.seen(wire.TypeIdentity) + mainnet.seen(wire.TypeHealth); n != 0 {
 		t.Errorf("the client sent %d requests to a refused runner", n)
@@ -44,13 +44,23 @@ func TestMainnetRunnerNeedsMainnetSetting(t *testing.T) {
 		t.Fatalf("mainnet runner, client set to mainnet: %v", err)
 	}
 
-	hoodi := startFakeRunnerExt(t, ca, devAttest, flavor.DefaultCertName, "0.1.0", chainExt(t, backend.Version{0x10, 0, 0, 0x00}))
+	hoodi := startFakeRunnerExt(t, ca, devAttest, runnerchain.MainnetCertName, "0.1.0", chainExt(t, backend.Version{0x10, 0, 0x09, 0x10}))
 	if err := health(t, devConn(t, ca, hoodi)); err != nil {
 		t.Fatalf("test network runner, client without mainnet: %v", err)
 	}
 	c = devConn(t, ca, hoodi)
 	c.Attestation.Mainnet = true
 	wantErr(t, health(t, c), "mainnet")
+
+	// Fail closed: a chain without a row in the chain table is prod, so the
+	// client takes its runner only with the mainnet rules.
+	unknown := startFakeRunnerExt(t, ca, devAttest, runnerchain.MainnetCertName, "0.1.0", chainExt(t, backend.Version{0xde, 0xad, 0xbe, 0xef}))
+	wantErr(t, health(t, devConn(t, ca, unknown)), "set mainnet")
+	c = devConn(t, ca, unknown)
+	c.Attestation.Mainnet = true
+	if err := health(t, c); err != nil {
+		t.Fatalf("unknown chain runner, client set to mainnet: %v", err)
+	}
 
 	old := startFakeRunner(t, ca, devAttest)
 	for _, m := range []bool{false, true} {
