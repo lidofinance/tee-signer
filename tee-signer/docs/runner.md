@@ -78,7 +78,11 @@ of ethereum-package devnets, `0x10000038`, the one
 fork version of its own counts as prod.
 
 The mainnet build is the build for real keys, with the checks and waits
-of the build before the switch. A non-prod build also has the
+of the build before the switch. On a cloud platform it starts on mainnet
+only, with mainnet's exact genesis fork version and genesis validators
+root, and refuses every other chain before key release
+(`tee-signer/prodchain.go`). The dev platform, which protects nothing,
+takes any chain. A non-prod build also has the
 `-allow-unlisted-image` override of the image check, and starts on its own
 chain only (`tee-signer/runnerchain.go`, `governance/runnerchain`): the
 hoodi build on Hoodi with its exact genesis fork version and genesis

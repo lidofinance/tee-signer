@@ -10,7 +10,10 @@ import (
 
 // A non-prod build runs on its own chain only, and never on mainnet or
 // another public chain. The runner checks the setup's chain at start
-// (tee-signer/runnerchain.go); the mainnet build runs on any chain.
+// (tee-signer/runnerchain.go). The mainnet build runs on mainnet only, by
+// its exact genesis fork version and genesis validators root
+// (tee-signer/prodchain.go): a setup with another chain's fork version
+// would start it without the prod rules while it signs for mainnet.
 //
 //   - hoodi: Hoodi, by its exact genesis fork version and genesis
 //     validators root.
@@ -112,7 +115,8 @@ func PublicNetwork(forkVersion [4]byte, root [32]byte) (name string, exact bool)
 }
 
 // CheckChain refuses a chain the build of c must not run on. nil: the
-// chain is c's own. A prod build runs on any chain. A non-prod build
+// chain is c's own. The mainnet build runs on mainnet with its exact
+// values only, and refuses every other chain. A non-prod build
 // refuses every prod chain (a prod row, or a fork version without a row),
 // whatever its root, and then every chain but its own. A build the table
 // does not have runs on none.
@@ -120,13 +124,16 @@ func (c Chain) CheckChain(forkVersion [4]byte, root [32]byte) error {
 	if _, known := setupwire.ChainRowByName(string(c)); !known {
 		return fmt.Errorf("chain %s: no build of this name", c)
 	}
+	name, exact := PublicNetwork(forkVersion, root)
+	values := fmt.Sprintf("genesis fork version 0x%x and genesis validators root 0x%x", forkVersion, root)
 	if c.Prod() {
-		return nil
+		if c == Mainnet && name == "mainnet" && exact {
+			return nil
+		}
+		return fmt.Errorf("chain with %s: a %s build runs on mainnet with its exact values only", values, c)
 	}
 	own := map[Chain]string{Hoodi: "hoodi with its exact values", CITest: "the ci-test chain (governance/chains/chain.ci-test.json)",
 		Devnet: "devnets, whose genesis values are their own"}[c]
-	name, exact := PublicNetwork(forkVersion, root)
-	values := fmt.Sprintf("genesis fork version 0x%x and genesis validators root 0x%x", forkVersion, root)
 	row, known := setupwire.ChainRowOf(backend.Version(forkVersion))
 	switch {
 	case known && row.Prod:
