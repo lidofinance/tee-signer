@@ -353,8 +353,9 @@ machine type, quota, and the newest Confidential Space image.
     The attribute condition holds all of:
     `swname == 'CONFIDENTIAL_SPACE'`, `'STABLE'` in `support_attributes`,
     `dbgstat == 'disabled-since-boot'`, `hwmodel == 'GCP_AMD_SEV'` (or
-    `GCP_INTEL_TDX`), `image_digest == '<digest>'`, and the service account
-    in `google_service_accounts`.
+    `GCP_INTEL_TDX`), `image_digest == '<digest>'` (with
+    `PREV_IMAGE_DIGEST`: `image_digest in ['<previous>', '<digest>']`), and
+    the service account in `google_service_accounts`.
 11. `bucket-bind B`: `storage.objectCreator`, `storage.objectViewer` and
     `storage.legacyBucketReader` on the mark log's bucket (which also holds
     the state copy) for the same principal set. The last one carries
@@ -382,6 +383,11 @@ bucket (the WIF condition moves to the new digest, the KMS key stays, so the
 new image opens the old snapshots and the old log). `teardown` deletes
 everything except the key ring and key. A deleted WIF pool and provider keep
 their names for 30 days.
+
+A switch with a way back: `PREV_IMAGE_DIGEST=<running digest>
+provider-update` lets both images get the key, so the old VM can start
+again if the new one fails. Once the new one has run long enough,
+`provider-update` without `PREV_IMAGE_DIGEST` takes the new digest alone.
 
 A second signer next to a running one sets
 `VM`, `ADDRESS_NAME`, `KMS_KEY`, `WIF_POOL` and `WIF_PROVIDER`: its own VM,

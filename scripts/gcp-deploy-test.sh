@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The GCP deploy script's network settings, checked without GCP:
+# The GCP deploy script's network and switch settings, checked without GCP:
 #
 #   public   the default plan: an external address, TCP 7100 from
 #            OPERATOR_IP, the egress rules
@@ -8,9 +8,12 @@
 #            ENTRY_SOURCE_RANGES and ENTRY_SOURCE_TAGS. With a second
 #            signer's names and SUBNET and NET_TAG set, the plan makes its
 #            subnet and rules and the teardown list deletes them
+#   switch   PREV_IMAGE_DIGEST: the WIF condition takes both digests;
+#            the VM metadata keeps tee-restart-policy=OnFailure
 #   refused  entry sources with the public entry, a private firewall rule
 #            without sources, an address for a private VM, bad names and
-#            addresses, a subnet-create on the running signer's subnet
+#            addresses, a subnet-create on the running signer's subnet, a
+#            bad previous digest
 #
 # deploy.sh runs in a copy of the repo's scripts and cloud folders with a
 # fake gcloud that records its arguments, as in side-by-side-test.sh, so no
@@ -50,6 +53,7 @@ ln -s gcp "$work/build/gcp-ci-test"
 DEPLOY="$work/platform-gcp/deploy/deploy.sh"
 base=(-u SIGNER_BUILD_OVERLAY_DIR -u NETWORK_ENTRY -u PRIVATE_IP -u ENTRY_SOURCE_RANGES -u ENTRY_SOURCE_TAGS
   -u SUBNET -u SUBNET_RANGE -u NET_TAG -u FW_RULE -u FW_EGRESS_ALLOW -u FW_EGRESS_DENY -u CONFIRM
+  -u PREV_IMAGE_DIGEST
   MARK_STORE=gcs:bucket=signer-marks-2 PATH="$work/bin:$PATH")
 dep() { env "${base[@]}" "$@"; }
 # A private second signer with a subnet, tag and rules of its own.
@@ -122,6 +126,22 @@ call="$(cat "$work/gcloud.calls")"
 [ "$rc" = 0 ] && has "--source-ranges=10.20.0.0/24,10.30.0.0/24" "$call" && has "--source-tags=entry-gw" "$call" &&
   ok "private firewall-create: the entry's ranges and tags" || bad "private firewall-create: rc $rc $out $call"
 
+# ---- previous digest and restart policy -------------------------------------
+prev="sha256:$(printf 'previous' | sha256sum | cut -d' ' -f1)"
+p="$(dep PREV_IMAGE_DIGEST="$prev" bash "$DEPLOY" plan 2>&1)"
+both="assertion.submods.container.image_digest in ['$prev', '$digest']"
+[ "$(grep -c -F -- "$both" <<<"$p")" = 2 ] && ! has "image_digest == " "$p" &&
+  ok "PREV_IMAGE_DIGEST: wif-create and provider-update take both digests, previous first" || bad "PREV_IMAGE_DIGEST plan: $(grep -o 'image_digest[^&]*' <<<"$p")"
+p="$(dep PREV_IMAGE_DIGEST="$digest" bash "$DEPLOY" plan 2>&1)"
+has "image_digest == '$digest'" "$p" && ! has "image_digest in" "$p" &&
+  ok "PREV_IMAGE_DIGEST equal to runner.digest: one digest" || bad "PREV_IMAGE_DIGEST = digest: $(grep -o 'image_digest[^&]*' <<<"$p")"
+: >"$work/gcloud.calls"
+run_rc dep PREV_IMAGE_DIGEST="$prev" CONFIRM=yes bash "$DEPLOY" provider-update
+has "--attribute-condition=assertion.swname == 'CONFIDENTIAL_SPACE'" "$(cat "$work/gcloud.calls")" && has "$both" "$(cat "$work/gcloud.calls")" &&
+  ok "provider-update with PREV_IMAGE_DIGEST: gcloud gets both digests" || bad "provider-update: rc $rc $out $(cat "$work/gcloud.calls")"
+p="$(dep bash "$DEPLOY" plan 2>&1)"
+has "~tee-restart-policy=OnFailure~" "$p" && ok "restart policy OnFailure" || bad "restart policy: $(grep -o 'tee-restart-policy=[A-Za-z]*' <<<"$p")"
+
 # ---- refused ----------------------------------------------------------------
 refused() { # refused WHAT PATTERN ENV... -- CMD
   local what="$1" pat="$2" envs=()
@@ -144,6 +164,7 @@ refused "a bad ENTRY_SOURCE_RANGES" "is not a comma-separated list of IPv4 CIDR"
 refused "a bad NET_TAG" "NET_TAG=Signer_Tag is not" NET_TAG=Signer_Tag -- plan
 refused "an unknown entry without an overlay" "NETWORK_ENTRY must be public or private" NETWORK_ENTRY=example -- plan
 refused "subnet-create on the running signer's subnet" "is the running signer's" VM=signer-node-2 -- subnet-create
+refused "a bad PREV_IMAGE_DIGEST" "PREV_IMAGE_DIGEST=sha256:abc is not" PREV_IMAGE_DIGEST=sha256:abc -- provider-update
 
 [ "$fail" = 0 ] || exit 1
 echo "gcp-deploy-test: all cases as expected"

@@ -141,6 +141,13 @@ if [ "$NETWORK_ENTRY" != private ] && { [ -n "$ENTRY_SOURCE_RANGES" ] || [ -n "$
   die "ENTRY_SOURCE_RANGES and ENTRY_SOURCE_TAGS are for NETWORK_ENTRY=private; public takes OPERATOR_IP"
 fi
 
+# PREV_IMAGE_DIGEST: a second image digest that the WIF condition takes next
+# to runner.digest (wif-create, provider-update): the image being replaced,
+# so a rollback needs no provider change. Unset: runner.digest alone.
+PREV_IMAGE_DIGEST="${PREV_IMAGE_DIGEST:-}"
+[ -z "$PREV_IMAGE_DIGEST" ] || [[ "$PREV_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] ||
+  die "PREV_IMAGE_DIGEST=$PREV_IMAGE_DIGEST is not a sha256 digest"
+
 # MARK_STORE: the bucket of the runner's mark log (slashing-log/docs/marklog.md), for
 # example gcs:bucket=<mark-bucket>: bucket-bind grants the
 # pool on it, and vm-create checks that the setup names it. The runner takes

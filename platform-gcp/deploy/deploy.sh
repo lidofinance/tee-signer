@@ -69,6 +69,9 @@
 #                 a subnet, tag and rules of the signer's own in the shared
 #                 VPC (common.sh)
 #   IMAGE_TAG     registry tag of image-push (default poc)
+#   PREV_IMAGE_DIGEST
+#                 wif-create, provider-update: a second digest the WIF
+#                 condition takes, the image being replaced (common.sh)
 #   VM, ADDRESS_NAME, KMS_KEY, WIF_POOL, WIF_PROVIDER
 #                 a second signer next to a running one (common.sh): its
 #                 own VM, address,
@@ -154,15 +157,33 @@ operator_ip() {
 }
 
 # The WIF attribute condition. All of it must hold, or the STS exchange fails:
-# a production Confidential Space image (no debug), the pinned image digest,
-# the VM's service account, and the hardware model.
+# a production Confidential Space image (no debug), the pinned image digest
+# (or one of two with PREV_IMAGE_DIGEST), the VM's service account, and the
+# hardware model.
+digest_condition() {
+  local d
+  d="$(image_digest)"
+  if [ -n "$PREV_IMAGE_DIGEST" ] && [ "$PREV_IMAGE_DIGEST" != "$d" ]; then
+    printf '%s' "assertion.submods.container.image_digest in ['$PREV_IMAGE_DIGEST', '$d']"
+  else
+    printf '%s' "assertion.submods.container.image_digest == '$d'"
+  fi
+}
 attribute_condition() {
   printf '%s' "assertion.swname == 'CONFIDENTIAL_SPACE'" \
     " && 'STABLE' in assertion.submods.confidential_space.support_attributes" \
     " && assertion.dbgstat == 'disabled-since-boot'" \
     " && assertion.hwmodel == '$GCP_HWMODELS'" \
-    " && assertion.submods.container.image_digest == '$(image_digest)'" \
+    " && $(digest_condition)" \
     " && '$SERVICE_ACCOUNT' in assertion.google_service_accounts"
+}
+# The images the condition takes, for the step descriptions.
+digests_text() {
+  if [ -n "$PREV_IMAGE_DIGEST" ] && [ "$PREV_IMAGE_DIGEST" != "$(image_digest)" ]; then
+    echo "image $(image_digest) or the previous one $PREV_IMAGE_DIGEST"
+  else
+    echo "image $(image_digest) only"
+  fi
 }
 
 # ---- steps ------------------------------------------------------------------
@@ -314,7 +335,7 @@ cmd_sa_bindings() {
 cmd_wif_create() {
   local cond
   cond="$(attribute_condition)"
-  gate wif-create "workload identity pool $WIF_POOL and OIDC provider $WIF_PROVIDER. It takes tokens from $CS_ISSUER with audience $STS_AUDIENCE only, and only for image $(image_digest) on hardware $GCP_HWMODELS (production image, not debug, STABLE). The pool's principal set, and nothing else, may encrypt and decrypt with $KMS_KEY. Keep the pool to this one provider: any provider added to it gets the key"
+  gate wif-create "workload identity pool $WIF_POOL and OIDC provider $WIF_PROVIDER. It takes tokens from $CS_ISSUER with audience $STS_AUDIENCE only, and only for $(digests_text) on hardware $GCP_HWMODELS (production image, not debug, STABLE). The pool's principal set, and nothing else, may encrypt and decrypt with $KMS_KEY. Keep the pool to this one provider: any provider added to it gets the key"
   run gcloud iam workload-identity-pools create "$WIF_POOL" --location=global \
     --display-name="Signer PoC" --project="$PROJECT_ID"
   run gcloud iam workload-identity-pools providers create-oidc "$WIF_PROVIDER" --location=global \
@@ -354,7 +375,7 @@ cmd_bucket_bind() {
 cmd_provider_update() {
   local cond
   cond="$(attribute_condition)"
-  gate provider-update "after a rebuild: provider $WIF_PROVIDER takes image $(image_digest) only"
+  gate provider-update "after a rebuild: provider $WIF_PROVIDER takes $(digests_text)"
   run gcloud iam workload-identity-pools providers update-oidc "$WIF_PROVIDER" --location=global \
     --workload-identity-pool="$WIF_POOL" --attribute-condition="$cond" --project="$PROJECT_ID"
 }
@@ -525,6 +546,7 @@ EOF
     n=$((n + 1))
   done
   echo "After a rebuild (new digest): build-image.sh, image-push, provider-update, vm-delete, vm-create."
+  echo "With PREV_IMAGE_DIGEST set to the running digest, provider-update takes both images until a second provider-update without it."
   echo
   printf 'Redeploy. '
   cmd_provider_update

@@ -19,8 +19,8 @@
 #   PCR3             scripts/kms-policy.sh self-test
 #   EIF check        scripts/eif-check-test.sh
 #   deploy names     scripts/side-by-side-test.sh
-#   GCP network      scripts/gcp-deploy-test.sh: the public and private entries,
-#                    the egress rules and the names of a subnet of its own
+#   GCP deploy       scripts/gcp-deploy-test.sh: the public and private entries,
+#                    the egress rules, a subnet of its own, a previous digest
 #   Azure template   scripts/azure-template-test.sh: the rendered group and
 #                    its CCE policy with and without the optional parameters
 #   fuzz             scripts/fuzz.sh: every Go fuzz target for FUZZ_TIME (3s),
@@ -32,7 +32,7 @@
 # The variables of scripts/ci-scope.sh narrow the run; unset, everything
 # runs. CI_MODULES picks the modules, CI_E2E=0 skips the runner builds and
 # everything that needs them or checks them (release gate, EIF check,
-# chains, e2e, PCR3, deploy names, GCP network, Azure template), CI_CORE=0 skips the signer-core suites.
+# chains, e2e, PCR3, deploy names, GCP deploy, Azure template), CI_CORE=0 skips the signer-core suites.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 mkdir -p "$LOGS"
