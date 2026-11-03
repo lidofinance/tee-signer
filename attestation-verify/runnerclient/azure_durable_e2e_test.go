@@ -130,7 +130,9 @@ func TestE2EAzureRunnerDurable(t *testing.T) {
 	if err := sign(cl, vote(s0-1, e1, 0x30)); err == nil {
 		t.Fatal("after the restart a vote with a source below the log's signed")
 	}
-	if err := sign(cl, vote(s0, e1, 0x20)); err != nil {
+	// The core's restart floor bounds the source at the floor epoch, at
+	// most e1 - 1.
+	if err := sign(cl, vote(e1-1, e1, 0x20)); err != nil {
 		t.Fatalf("after the restart, target %d: %v", e1, err)
 	}
 	log, _ := os.ReadFile(a.logPath)

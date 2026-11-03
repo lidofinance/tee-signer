@@ -35,7 +35,9 @@ func TestThresholdRecover(t *testing.T) {
 	sharePks := map[uint64]backend.Pubkey{}
 	for _, sh := range shares {
 		h := software.NewMemHooks()
-		h.Clock = clockAtEpoch(20)
+		// The share loads at epoch 0, so the restart floor (epoch 2) stays
+		// below the vote at epoch 20.
+		h.Clock = clockAtEpoch(0)
 		s, err := core.NewSigner(cfg, 1, 0, h)
 		if err != nil {
 			t.Fatal(err)
@@ -44,6 +46,7 @@ func TestThresholdRecover(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		h.Clock = clockAtEpoch(20)
 		sig, err := s.Sign(signReq(s, pk, a))
 		s.Close()
 		if err != nil {

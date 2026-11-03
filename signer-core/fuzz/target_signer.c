@@ -916,11 +916,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
         if (flags & F_NO_GLOAS)
             W.cfg0.gloas_scheduled = 0;
         W.verify = flags & F_VERIFY ? 1 : 0;
-#ifdef SC_RESTART_FLOOR_EPOCHS
         W.hostile = flags & F_HOSTILE ? 1 : 0;
-#else
-        W.hostile = 0; /* the core has no restart floor yet */
-#endif
         for (uint8_t i = 0; i < npatch; i++)
             fz_patch_config(&W.cfg0, &h);
         if (flags & F_SLOT_TIMES)

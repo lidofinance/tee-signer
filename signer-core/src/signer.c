@@ -171,13 +171,27 @@ static void gloas_restore(sc_validator *v, const sc_watermark *mark)
     }
 }
 
-/* Starts v's slashing state from its own stored mark, or from the device
- * mark (read from storage once, with the first validator). */
+/*
+ * Starts v's slashing state from its own stored mark, or from the device
+ * mark (read from storage once, with the first validator), raised to the
+ * restart floor: epoch(now) + max_epochs_ahead + SC_RESTART_FLOOR_EPOCHS.
+ * Before this load the validator signed nothing past epoch(t) +
+ * max_epochs_ahead at any clock reading t, and the trusted clock never reads
+ * an epoch more than SC_RESTART_FLOOR_EPOCHS below an earlier reading, so the
+ * floor covers all of it. The stored mark can only raise the bounds: a host
+ * that loses, rolls back or garbles it costs signing time, not safety.
+ */
 static int load_marks(sc_signer *s, sc_validator *v, const uint8_t pubkey[SC_PUBKEY_LEN])
 {
     sc_watermark wm;
+    uint64_t now, floor;
     int rc;
 
+    if (s->ops.now(s->ops.ctx, &now) != SC_OK)
+        return SC_ERR_CLOCK;
+    floor = sc_sat_add(sc_sat_add(sc_epoch_at(&s->cfg, &s->slot_times, now),
+                                  s->cfg.max_epochs_ahead),
+                       SC_RESTART_FLOOR_EPOCHS);
     memset(&wm, 0, sizeof wm);
     if (s->cfg.mark_scope == SC_MARKS_PER_DEVICE) {
         if (!s->device_loaded) {
@@ -190,18 +204,17 @@ static int load_marks(sc_signer *s, sc_validator *v, const uint8_t pubkey[SC_PUB
             s->device = wm;
             s->device_loaded = 1;
         }
-        sc_slashing_restore(&v->slash, &s->device);
-        gloas_restore(v, &s->device);
-        return SC_OK;
+        wm = s->device;
+    } else {
+        rc = s->ops.load_watermark(s->ops.ctx, pubkey, &wm);
+        if (rc == SC_ERR_UNKNOWN_VALIDATOR)
+            memset(&wm, 0, sizeof wm);
+        else if (rc != SC_OK)
+            return SC_ERR_STORAGE;
     }
-    rc = s->ops.load_watermark(s->ops.ctx, pubkey, &wm);
-    if (rc == SC_OK)
-        sc_slashing_restore(&v->slash, &wm);
-    else if (rc == SC_ERR_UNKNOWN_VALIDATOR)
-        sc_slashing_restore(&v->slash, NULL);
-    else
-        return SC_ERR_STORAGE;
-    gloas_restore(v, &v->slash.committed);
+    sc_slashing_floor(&wm, floor, s->cfg.slots_per_epoch);
+    sc_slashing_restore(&v->slash, &wm);
+    gloas_restore(v, &wm);
     return SC_OK;
 }
 

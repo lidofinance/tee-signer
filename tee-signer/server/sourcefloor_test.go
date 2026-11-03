@@ -46,9 +46,11 @@ func TestRBRLOG02SourceFloorSurvivesCoverAndRestart(t *testing.T) {
 	e.clock.add((f2 + 1 - e.signer.EpochAt(e.now())) * testEpoch) // the slots of f2+1 have started
 	wantSlashSource(t, e.signMsg(pk, vote(floor-1, f2+1)),
 		"vote below the floor after a cover write and a restart")
+	// The core's restart floor bounds the source at f2 after the restart.
+	wantSlashSource(t, e.signMsg(pk, vote(floor, f2+1)), "vote below the core's floor after the restart")
 	// A vote at the floor signs, and once its source is in the log a
 	// restart needs the gate no more.
-	if err := e.signMsg(pk, vote(floor, f2+1)); err != nil {
+	if err := e.signMsg(pk, vote(f2, f2+1)); err != nil {
 		t.Fatalf("vote at the floor: %v", err)
 	}
 	e.restart()
@@ -58,8 +60,10 @@ func TestRBRLOG02SourceFloorSurvivesCoverAndRestart(t *testing.T) {
 }
 
 // SSI-HISTORY-01: one import with vote history lifted the source gate for
-// every validator. Validator A, imported without history, must stay gated
-// while B's history lets B vote below the floor, also after a restart.
+// every validator. Validator A, imported without history, must stay gated.
+// B's history no longer lets B vote below the floor either: the core sets
+// the restart floor of every key at its load, sources included. Both sign
+// at the floor, and after a restart at the new one.
 func TestSSIHISTORY01HistoryLiftsTheGateForItsKeyOnly(t *testing.T) {
 	e := newTgtEnv(t, "dev", nil)
 	start := e.signer.EpochAt(e.now())
@@ -73,22 +77,22 @@ func TestSSIHISTORY01HistoryLiftsTheGateForItsKeyOnly(t *testing.T) {
 	if err := e.importSealed(pkb, skb, 6, hist); err != nil {
 		t.Fatal(err)
 	}
-	check := func(when string) {
-		t.Helper()
-		wantSlashSource(t, e.signMsg(pka, vote(start-3, floor+1)), when+": A (no history) below the floor")
-		if err := e.signMsg(pkb, vote(start-3, floor+1)); err != nil {
-			t.Errorf("%s: B at its own history's source %d: %v", when, start-3, err)
+	e.clock.add((floor + 1 - start) * testEpoch) // the slots of floor+1 have started
+	wantSlashSource(t, e.signMsg(pka, vote(start-3, floor+1)), "A (no history) below the floor")
+	wantSlashSource(t, e.signMsg(pkb, vote(start-3, floor+1)), "B at its own history's source, below the floor")
+	for _, pk := range []backend.Pubkey{pka, pkb} {
+		if err := e.signMsg(pk, vote(floor, floor+1)); err != nil {
+			t.Errorf("vote at the floor %d: %v", floor, err)
 		}
 	}
-	e.clock.add((floor + 1 - start) * testEpoch) // the slots of floor+1 have started
-	check("same process")
 
 	f2 := e.floorOf()
 	e.restart()
 	e.clock.add((f2 + 1 - e.signer.EpochAt(e.now())) * testEpoch) // the slots of f2+1 have started
-	wantSlashSource(t, e.signMsg(pka, vote(start-3, f2+1)), "after a restart: A (no history) below the floor")
-	if err := e.signMsg(pkb, vote(start-3, f2+1)); err != nil {
-		t.Errorf("after a restart: B at its own history's source %d: %v", start-3, err)
+	wantSlashSource(t, e.signMsg(pka, vote(floor, f2+1)), "after a restart: A below the new floor")
+	wantSlashSource(t, e.signMsg(pkb, vote(floor, f2+1)), "after a restart: B below the new floor")
+	if err := e.signMsg(pkb, vote(f2, f2+1)); err != nil {
+		t.Errorf("after a restart: B at the new floor %d: %v", f2, err)
 	}
 }
 
@@ -128,7 +132,9 @@ func TestSLBOUND01LateImportGetsItsOwnSourceFloor(t *testing.T) {
 	f2 := e.floorOf()
 	e.clock.add((f2 + 1 - e.signer.EpochAt(e.now())) * testEpoch) // the slots of f2+1 have started
 	wantSlashSource(t, e.signMsg(pkb, vote(gate, f2+1)), "after a restart: B below its import floor")
-	if err := e.signMsg(pkb, vote(late, f2+1)); err != nil {
-		t.Fatalf("after a restart: B at its import floor %d: %v", late, err)
+	// The core's restart floor f2 is above B's import floor now.
+	wantSlashSource(t, e.signMsg(pkb, vote(late, f2+1)), "after a restart: B below the core's floor")
+	if err := e.signMsg(pkb, vote(f2, f2+1)); err != nil {
+		t.Fatalf("after a restart: B at the floor %d: %v", f2, err)
 	}
 }

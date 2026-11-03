@@ -21,6 +21,10 @@
  *     handover to an instance of a new image (tombstone record, a new log
  *     from the old mark); and the same log on a store whose admin can set it
  *     back (cloud-ext-mut, controls only).
+ * The core sets its own restart floor on every validator load (signer.c
+ * load_marks, SC_RESTART_FLOOR_EPOCHS) in every profile; the cloud
+ * callbacks below keep the runner's copy of it as well. Profile pv-bare has
+ * no copy: storage that rolls back and tears, with the core's floor alone.
  * A chain model makes honest duties; a host model turns hostile on request;
  * clocks drift and jump; signers crash at store calls, restart, roll back
  * and get cloned; fork schedule updates arrive near a fork (scenario sched,
@@ -130,6 +134,9 @@ static const prof_t PROFS[] = {
      * keeps target and block bounds only; the log refuses clones. The
      * store admin cannot set the log back (WORM). */
     {"cloud-ext", DV, {32, 0, 1}, 2, 0, 1, 3, 0, 0, CLK_ANCH, 1, 1, 0, 1, 0},
+    /* Per-validator marks on storage that rolls back and tears, and no
+     * floor in the callbacks: the core's restart floor alone keeps it safe. */
+    {"pv-bare", PV, {32, 1, 1}, 1, 1, 0, 0, 0, 0, CLK_ANCH, 1, 0, 1, 0, 0},
     /* The same on a store whose admin can set the record back (a DynamoDB
      * item, a Firestore document): outside the design, for the controls. */
     {"cloud-ext-mut", DV, {32, 0, 1}, 2, 0, 1, 3, 0, 0, CLK_ANCH, 1, 1, 0, 1, 1},
@@ -902,7 +909,8 @@ static int cb_now(void *ctx, uint64_t *t)
 }
 
 /* state.go LoadDeviceMark with the floor: target and block bounds only; the
- * source bound is the log's. */
+ * source bound is the log's. The core then raises the source to the floor
+ * too (its own floor). */
 static void floor_merge_tb(sc_watermark *wm, uint64_t f)
 {
     uint64_t last = (f + 1) * SPE - 1;
@@ -951,7 +959,7 @@ static int cb_store_dev(void *ctx, const sc_watermark *wm)
     return ta_state_write(in, now > in->ta_floor ? now : in->ta_floor, in->ta_last_step, wm);
 }
 
-/* state.go FloorWatermark and Merge */
+/* state.go FloorWatermark and Merge: the runner's copy of the core's floor. */
 static void floor_merge(sc_watermark *wm, uint64_t f)
 {
     uint64_t last = (f + 1) * SPE - 1;
@@ -3019,9 +3027,9 @@ static int negative_controls(void)
         {"cloud-ext handover (in model: tombstone)", "cloud-ext", 0, 0, 0, 4, 0, nc_handover},
         {"cloud-ext handover, old log left open", "cloud-ext", 0, 0, 0, 4, 1, nc_handover_open},
         {"cloud-ext clock 13 min off (log)", "cloud-ext", 0, 0, 0, 4, 0, nc_clockerr},
-        {"pv-persist storage rollback", "pv-persist", 1, 0, 0, 4, 1, nc_rollback},
+        {"pv-persist storage rollback (in model: core floor)", "pv-persist", 1, 0, 0, 4, 0, nc_rollback},
         {"cloud-norec clone", "cloud-norec", 0, 1, 0, 4, 1, nc_clone},
-        {"pv-persist torn writes", "pv-persist", 0, 0, 1, 4, 1, nc_torn},
+        {"pv-persist torn writes (in model: core floor)", "pv-persist", 0, 0, 1, 4, 0, nc_torn},
         {"cloud rollback (in model)", "cloud", 1, 0, 0, 4, 0, nc_rollback},
         {"cloud clone (in model)", "cloud", 0, 1, 0, 4, 0, nc_clone},
         {"cloud-t clone (in model)", "cloud-t", 0, 1, 0, 4, 0, nc_clone},
@@ -3029,8 +3037,10 @@ static int negative_controls(void)
         {"ta torn writes (atomic store)", "ta", 0, 0, 1, 4, 0, nc_torn},
         {"cloud-norec clock 13 min off", "cloud-norec", 0, 0, 0, 4, 1, nc_clockerr},
         {"cloud clock 13 min off (record)", "cloud", 0, 0, 0, 4, 0, nc_clockerr},
-        {"ta key moved in, no import", "ta", 0, 0, 0, 4, 1, nc_noimport},
-        {"pv-persist key moved in, no import", "pv-persist", 0, 0, 0, 4, 1, nc_noimport},
+        {"ta key moved in, no import (in model: core floor)", "ta", 0, 0, 0, 4, 0, nc_noimport},
+        {"pv-persist key moved in, no import (in model: core floor)", "pv-persist", 0, 0, 0, 4, 0, nc_noimport},
+        {"pv-bare rollback (in model: core floor)", "pv-bare", 1, 0, 0, 4, 0, nc_rollback},
+        {"pv-bare hostile routing (in model: core floor)", "pv-bare", 1, 0, 0, 4, 0, nc_hostile_route},
         {"ta key moved in, import", "ta", 0, 0, 0, 4, 0, nc_import},
         {"cloud key moved in, import", "cloud", 0, 0, 0, 4, 0, nc_import},
         {"pv-persist key moved in, import", "pv-persist", 0, 0, 0, 4, 0, nc_import},

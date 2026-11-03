@@ -355,22 +355,25 @@ func TestOldRepeatRootRecordIgnored(t *testing.T) {
 
 func TestPersistedMarksAndMissingRecord(t *testing.T) {
 	n := newNode(t, Mode{Persist: true})
-	n.clk.set(at(50, 5))
+	n.clk.set(at(46, 5)) // loads before epoch 50, past the core's restart floor
 	if err := n.start(t); err != nil {
 		t.Fatal(err)
 	}
+	n.clk.set(at(50, 5))
 	if err := n.attest(49, 50, 1); err != nil {
 		t.Fatal(err)
 	}
+	// Commit-ahead {32,1,1}: stored target bound 51, source bound 50. A
+	// restart at epoch 50 starts from them, raised to the core's floor 52.
 	if err := n.start(t); err != nil {
 		t.Fatal(err)
 	}
-	// Commit-ahead {32,1,1}: stored target bound 51, source bound 50.
-	n.clk.set(at(51, 5))
-	wantStatus(t, n.attest(49, 51, 2), backend.StatusSlashSource)
-	wantStatus(t, n.attest(50, 51, 2), backend.StatusSlashTarget)
-	n.clk.set(at(52, 5))
-	if err := n.attest(50, 52, 2); err != nil {
+	if st, _ := n.signer.State(n.pk); st.RAM.TargetEpoch != 52 || st.RAM.SourceEpoch != 52 {
+		t.Fatalf("after the restart: %+v", st.RAM)
+	}
+	n.clk.set(at(53, 5))
+	wantStatus(t, n.attest(50, 53, 2), backend.StatusSlashSource)
+	if err := n.attest(52, 53, 2); err != nil {
 		t.Fatal(err)
 	}
 	// The host deletes the record of a share that was restored from storage.
@@ -386,14 +389,16 @@ func TestPersistedMarksAndMissingRecord(t *testing.T) {
 	}
 }
 
-// A host that rolls the store back defeats persisted-only marks: the node
-// signs a second, different vote for a target it already signed.
-func TestPersistedOnlyBrokenByStoreRollback(t *testing.T) {
+// A host that rolls the store back defeated persisted-only marks: the node
+// signed a second, different vote for a target it already signed. The
+// core's restart floor now refuses it.
+func TestPersistedOnlyRollbackStoppedByCoreFloor(t *testing.T) {
 	n := newNode(t, Mode{Persist: true})
-	n.clk.set(at(49, 5))
+	n.clk.set(at(45, 5)) // loads before epoch 49, past the core's restart floor
 	if err := n.start(t); err != nil {
 		t.Fatal(err)
 	}
+	n.clk.set(at(49, 5))
 	if err := n.attest(48, 49, 1); err != nil { // stores target bound 50
 		t.Fatal(err)
 	}
@@ -406,9 +411,7 @@ func TestPersistedOnlyBrokenByStoreRollback(t *testing.T) {
 	if err := n.start(t); err != nil {
 		t.Fatal(err)
 	}
-	if err := n.attest(50, 51, 2); err != nil {
-		t.Fatalf("expected the rollback to allow a double vote, got %v", err)
-	}
+	wantSlashing(t, n.attest(50, 51, 2))
 }
 
 // With an honest clock the floor stops the same rollback.
@@ -565,8 +568,9 @@ func simulate(t *testing.T, mode Mode, trials, steps int, clockLie, jitterSec in
 }
 
 // The randomized check behind the README claims. Honest clock: no
-// violations in any mode that includes the floor, even with the store
-// rolled back. Lying clock or rollback without the floor: violations.
+// violations in any mode, even with the store rolled back or the runner's
+// floor copy without its source bound: the core sets the full floor on
+// every load. Lying clock: violations.
 // Clock readings that disagree by up to 60 s (honest servers): none with
 // the default max_epochs_ahead + 1, and none with the pre-review margin
 // max_epochs_ahead either, since the core's slot rule keeps every signed
@@ -588,10 +592,10 @@ func TestRestartSafetyProperty(t *testing.T) {
 		wantSafe  bool
 	}{
 		{"floor, honest clock", floor, 0, 0, false, true},
-		{"floor without source bound, honest clock", Mode{Floor: true, FloorMargin: 2, noSourceFloor: true}, 0, 0, false, false},
+		{"floor without source bound, honest clock", Mode{Floor: true, FloorMargin: 2, noSourceFloor: true}, 0, 0, false, true},
 		{"floor+persisted, honest clock, store rollback", both, 0, 0, true, true},
 		{"persisted, store intact", Mode{Persist: true}, 0, 0, false, true},
-		{"persisted, store rollback", Mode{Persist: true}, 0, 0, true, false},
+		{"persisted, store rollback", Mode{Persist: true}, 0, 0, true, true},
 		{"floor, clock off by up to 3 epochs", floor, 3, 0, false, false},
 		{"floor+persisted, clock off by up to 3 epochs, store intact", both, 3, 0, false, true},
 		{"floor+persisted, clock off by up to 3 epochs, store rollback", both, 3, 0, true, false},

@@ -449,9 +449,9 @@ compliance mode, Cloud Storage with a locked retention policy, Blob Storage
 with a locked time-based retention policy. The runner writes the record
 before it signs past the old mark, raises the mark for the next epoch
 ahead of time (`-mark-raise-slot`), reads the newest valid record at start
-and refuses to start when it cannot. The restart floor then keeps only its
-target and block bounds, so a restart while the chain does not finalize
-loses only the floor's margin. The clients of the three stores are our
+and refuses to start when it cannot. The core's restart floor applies on
+top, sources included, so after a restart while the chain does not
+finalize no vote signs until the chain justifies the floor epoch. The clients of the three stores are our
 own (SigV4 for S3, the JSON API for GCS, the Blob REST API for Azure), each
 in its own platform build.
 

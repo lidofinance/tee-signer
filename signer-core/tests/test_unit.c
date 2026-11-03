@@ -14,6 +14,8 @@
 
 /* ---- fake host ---------------------------------------------------------- */
 
+#define GENESIS_TIME 1606824023ull
+
 /* Per validator: the encoded mark, only once written. One device mark.
  * Mark writes are counted. */
 #define HOST_MAX 512
@@ -81,12 +83,15 @@ static int h_store(void *ctx, const uint8_t pk[48], const sc_watermark *wm)
     return SC_OK;
 }
 
+/* Set while load_at_genesis adds a validator: the clocks read genesis. */
+static int g_loading;
+
 static int h_now(void *ctx, uint64_t *t)
 {
     host_t *h = ctx;
     if (h->fail_clock)
         return SC_ERR_CLOCK;
-    *t = h->now;
+    *t = g_loading ? GENESIS_TIME : h->now;
     return SC_OK;
 }
 
@@ -133,7 +138,6 @@ static sc_host_ops host_ops(host_t *h)
 
 /* ---- config and helpers ------------------------------------------------- */
 
-#define GENESIS_TIME 1606824023ull
 #define EPOCH_SECONDS (12ull * 32ull)
 #define E 420000ull /* a Fulu-era epoch in the mainnet-like config below */
 
@@ -195,6 +199,29 @@ static sc_signer *new_signer(host_t *h, const sc_config *cfg, uint32_t maxv, uin
     return s;
 }
 
+/*
+ * sc_signer_add_validator with the clock at genesis: the restart floor is
+ * then epoch max_epochs_ahead + 1, below every epoch these tests sign, so
+ * they see the stored marks alone. The floor's own tests load at the clock
+ * as it is (add_at_clock).
+ */
+static int load_at_genesis(sc_signer *s, const uint8_t pk[48], const uint8_t sk[32],
+                           uint64_t index, uint8_t share_pk[48])
+{
+    int rc;
+    g_loading = 1;
+    rc = sc_signer_add_validator(s, pk, sk, index, share_pk);
+    g_loading = 0;
+    return rc;
+}
+
+/* The last slot of the restart floor of a load at genesis: the block bound of
+ * a validator that has signed no block since load_at_genesis. */
+static uint64_t genesis_floor_slot(const sc_config *c)
+{
+    return (c->max_epochs_ahead + SC_RESTART_FLOOR_EPOCHS + 1) * c->slots_per_epoch - 1;
+}
+
 /* Deterministic valid secret: first byte 0x11 keeps it below the group order. */
 static void secret_for(uint32_t i, uint8_t sk[32])
 {
@@ -219,7 +246,7 @@ static vkeys add_validator(sc_signer *s, uint32_t i, uint64_t index)
     secret_for(i, acct);
     secret_for(10000 + i, share);
     CHECK_RC(sc_bls_pubkey(acct, k.pk), SC_OK);
-    CHECK_RC(sc_signer_add_validator(s, k.pk, share, index, k.share_pk), SC_OK);
+    CHECK_RC(load_at_genesis(s, k.pk, share, index, k.share_pk), SC_OK);
     return k;
 }
 
@@ -485,7 +512,7 @@ static void test_slot_rule(void)
     b.slot = first + 10 + 32; /* inside the epoch horizon, a whole epoch ahead */
     CHECK_RC(sc_sign_block(s, k.pk, &b, sig), SC_ERR_POLICY_FUTURE);
     CHECK_RC(sc_signer_get_state(s, k.pk, &st), SC_OK);
-    CHECK(!(st.ram.flags & SC_WM_HAS_BLOCK));
+    CHECK(st.ram.block_slot == genesis_floor_slot(&cfg));
     b.slot = first + 10;
     CHECK_RC(sc_sign_block(s, k.pk, &b, sig), SC_OK);
     /* An honest proposal at the next slot still signs once it starts. */
@@ -494,7 +521,8 @@ static void test_slot_rule(void)
     CHECK_RC(sc_sign_block(s, k.pk, &b, sig), SC_OK);
 
     /* Before genesis no slot has started: slot 0 starts at genesis, so it
-     * is refused until now + margin reaches genesis, and slot 1 later. */
+     * is refused until now + margin reaches genesis, and slot 1 later. Then
+     * the restart floor of the load refuses them (its epochs come first). */
     host_t h0 = {0};
     h0.now = GENESIS_TIME - 86400;
     sc_signer *s0 = new_signer(&h0, &cfg, 1, 0);
@@ -508,13 +536,13 @@ static void test_slot_rule(void)
     CHECK_RC(sc_sign_attestation(s0, k0.pk, &g, sig), SC_ERR_POLICY_FUTURE);
     CHECK_RC(sc_sign_block(s0, k0.pk, &b, sig), SC_ERR_POLICY_FUTURE);
     CHECK_RC(sc_signer_get_state(s0, k0.pk, &st), SC_OK);
-    CHECK(!(st.ram.flags & SC_WM_HAS_BLOCK));
+    CHECK(st.ram.block_slot == genesis_floor_slot(&cfg));
     b.slot = 1;
     CHECK_RC(sc_sign_block(s0, k0.pk, &b, sig), SC_ERR_POLICY_FUTURE);
     h0.now = GENESIS_TIME - SC_SLOT_MARGIN_SECONDS;
-    CHECK_RC(sc_sign_attestation(s0, k0.pk, &g, sig), SC_OK);
+    CHECK_RC(sc_sign_attestation(s0, k0.pk, &g, sig), SC_ERR_SLASH_SOURCE);
     b.slot = 0;
-    CHECK_RC(sc_sign_block(s0, k0.pk, &b, sig), SC_OK);
+    CHECK_RC(sc_sign_block(s0, k0.pk, &b, sig), SC_ERR_SLASH_BLOCK);
 }
 
 /* sc_sign_root: the six domain types that need no slashing protection sign
@@ -1016,20 +1044,20 @@ static void test_table_and_errors(void)
         add_validator(s, 200 + i, SC_INDEX_UNKNOWN);
     secret_for(300, sk);
     CHECK_RC(sc_bls_pubkey(sk, pk), SC_OK);
-    CHECK_RC(sc_signer_add_validator(s, pk, sk, 1, NULL), SC_ERR_NOMEM);
+    CHECK_RC(load_at_genesis(s, pk, sk, 1, NULL), SC_ERR_NOMEM);
     secret_for(200, sk);
     CHECK_RC(sc_bls_pubkey(sk, pk), SC_OK);
-    CHECK_RC(sc_signer_add_validator(s, pk, sk, 1, NULL), SC_ERR_DUPLICATE);
+    CHECK_RC(load_at_genesis(s, pk, sk, 1, NULL), SC_ERR_DUPLICATE);
 
     sc_signer *s2 = new_signer(&h, &cfg, 4, 0);
-    CHECK_RC(sc_signer_add_validator(s2, pk, zero, 1, NULL), SC_ERR_BAD_KEY);
+    CHECK_RC(load_at_genesis(s2, pk, zero, 1, NULL), SC_ERR_BAD_KEY);
     parse_hex("73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001", r_order, 32);
-    CHECK_RC(sc_signer_add_validator(s2, pk, r_order, 1, NULL), SC_ERR_BAD_KEY);
+    CHECK_RC(load_at_genesis(s2, pk, r_order, 1, NULL), SC_ERR_BAD_KEY);
     CHECK_RC(sc_bls_check_secret(r_order), SC_ERR_BAD_KEY);
     h.fail_load = 1;
-    CHECK_RC(sc_signer_add_validator(s2, pk, sk, 1, NULL), SC_ERR_STORAGE);
+    CHECK_RC(load_at_genesis(s2, pk, sk, 1, NULL), SC_ERR_STORAGE);
     h.fail_load = 0;
-    CHECK_RC(sc_signer_add_validator(s2, pk, sk, 1, NULL), SC_OK);
+    CHECK_RC(load_at_genesis(s2, pk, sk, 1, NULL), SC_OK);
 
     /* init argument checks */
     sc_host_ops ops = host_ops(&h);
@@ -1265,7 +1293,7 @@ static void test_device_marks(void)
     CHECK(st.committed.target_epoch == E + 1 && st.committed.source_epoch == E - 1 &&
           st.committed.block_slot == (E + 2) * 32 - 1);
     CHECK(st.ram.target_epoch == E && st.ram.source_epoch == E - 1 &&
-          st.ram.flags == SC_WM_HAS_ATTESTATION);
+          st.ram.block_slot == genesis_floor_slot(&cfg));
 
     /* A block inside the window needs no write; one past it raises the
      * target and block bounds, not the source bound. */
@@ -1340,9 +1368,9 @@ static void test_device_marks(void)
     sc_signer *s2 = new_signer(&h2, &cfg, 2, 0);
     uint8_t share[32];
     secret_for(10000 + 30, share);
-    CHECK_RC(sc_signer_add_validator(s2, k[0].pk, share, SC_INDEX_UNKNOWN, NULL), SC_ERR_STORAGE);
+    CHECK_RC(load_at_genesis(s2, k[0].pk, share, SC_INDEX_UNKNOWN, NULL), SC_ERR_STORAGE);
     h2.fail_load = 0;
-    CHECK_RC(sc_signer_add_validator(s2, k[0].pk, share, SC_INDEX_UNKNOWN, NULL), SC_OK);
+    CHECK_RC(load_at_genesis(s2, k[0].pk, share, SC_INDEX_UNKNOWN, NULL), SC_OK);
 }
 
 /*
@@ -1618,54 +1646,29 @@ static void test_saturation_signer(void)
         CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_ERR_SLASH_SOURCE);
         CHECK_RC(sc_sign_block(s, k.pk, &b, sig), SC_ERR_SLASH_BLOCK);
 
-        /* A horizon that reaches UINT64_MAX: the signer signs there. The
-         * block mark saturates; the target mark lands one window above T.
-         * Genesis at 0 with 1 s slots and the clock at UINT64_MAX, so slot
-         * UINT64_MAX has started and every slot below it too. */
+        /* A horizon that reaches UINT64_MAX: the restart floor saturates
+         * at the load, so the validator starts with every bound at
+         * UINT64_MAX and signs no block or vote, before a restart or after.
+         * Genesis at 0 with 1 s slots and the clock at UINT64_MAX, so every
+         * slot has started. */
         host_t h2 = {0};
         cfg.max_epochs_ahead = M;
         cfg.genesis_time = 0;
         cfg.seconds_per_slot = 1;
         h2.now = M;
-        sc_signer *s2 = new_signer(&h2, &cfg, 2, 0);
-        vkeys k2 = add_validator(s2, 51, SC_INDEX_UNKNOWN);
-        a = att_in(T - 1, T, T * 32, 1);
-        b = blk(M - 1, 1);
-        CHECK_RC(sc_sign_attestation(s2, k2.pk, &a, sig), SC_OK);
-        CHECK_RC(sc_sign_block(s2, k2.pk, &b, sig), SC_OK);
-        CHECK_RC(sc_signer_get_state(s2, k2.pk, &st), SC_OK);
-        CHECK(st.committed.block_slot == M && st.committed.target_epoch == T + 1);
-        CHECK(st.committed.source_epoch == (scope == SC_MARKS_PER_DEVICE ? T - 1 : T));
-        CHECK(st.ram.block_slot == M - 1 && st.ram.source_epoch == T - 1 && st.ram.target_epoch == T);
-        b = blk(M, 2);
-        CHECK_RC(sc_sign_block(s2, k2.pk, &b, sig), SC_OK);
-        CHECK_RC(sc_signer_get_state(s2, k2.pk, &st), SC_OK);
-        CHECK(st.committed.block_slot == M && st.ram.block_slot == M);
-
-        /* Restart from the stored mark: block slot UINT64_MAX and target
-         * T + 1, so every block and every vote is refused, the repeats of
-         * the last ones included. */
-        int writes = h2.writes;
-        sc_signer_wipe(s2);
-        s2 = new_signer(&h2, &cfg, 2, 0);
-        add_validator(s2, 51, SC_INDEX_UNKNOWN);
-        CHECK_RC(sc_signer_get_state(s2, k2.pk, &st), SC_OK);
-        CHECK(st.ram.block_slot == M && st.ram.target_epoch == T + 1 &&
-              st.ram.source_epoch == (scope == SC_MARKS_PER_DEVICE ? T - 1 : T));
-        /* Per validator the source bound is one window above the signed
-         * source, so the source refuses the last vote; per device it sits at
-         * the signed source, so the target does. */
-        a = att_in(T - 1, T, T * 32, 1);
-        CHECK_RC(sc_sign_attestation(s2, k2.pk, &a, sig),
-                 scope == SC_MARKS_PER_DEVICE ? SC_ERR_SLASH_TARGET : SC_ERR_SLASH_SOURCE);
-        CHECK_RC(sc_sign_block(s2, k2.pk, &b, sig), SC_ERR_SLASH_BLOCK);
-        a = att_in(T, T, M, 3);
-        CHECK_RC(sc_sign_attestation(s2, k2.pk, &a, sig), SC_ERR_SLASH_TARGET);
-        a = att(E - 1, E, 3);
-        b = blk(E * 32, 3);
-        CHECK_RC(sc_sign_attestation(s2, k2.pk, &a, sig), SC_ERR_SLASH_SOURCE);
-        CHECK_RC(sc_sign_block(s2, k2.pk, &b, sig), SC_ERR_SLASH_BLOCK);
-        CHECK(h2.writes == writes);
+        for (int run = 0; run < 2; run++) {
+            sc_signer *s2 = new_signer(&h2, &cfg, 2, 0);
+            vkeys k2;
+            CHECK_RC(add_at_clock(s2, 51, &k2), SC_OK);
+            CHECK_RC(sc_signer_get_state(s2, k2.pk, &st), SC_OK);
+            CHECK(st.ram.block_slot == M && st.ram.target_epoch == M && st.ram.source_epoch == M);
+            a = att_in(T - 1, T, T * 32, 1);
+            CHECK_RC(sc_sign_attestation(s2, k2.pk, &a, sig), SC_ERR_SLASH_SOURCE);
+            b = blk(M, 2);
+            CHECK_RC(sc_sign_block(s2, k2.pk, &b, sig), SC_ERR_SLASH_BLOCK);
+            CHECK(h2.writes == 0);
+            sc_signer_wipe(s2);
+        }
     }
 }
 
@@ -1808,7 +1811,7 @@ static int c_store(void *ctx, const uint8_t pk[48], const sc_watermark *wm)
 }
 static int c_now(void *ctx, uint64_t *t)
 {
-    *t = ((chost_t *)ctx)->now;
+    *t = g_loading ? GENESIS_TIME : ((chost_t *)ctx)->now;
     return SC_OK;
 }
 static int c_load_device(void *ctx, sc_watermark *out)
@@ -1851,7 +1854,7 @@ static void vote_writes(uint32_t scope, uint64_t ahead, uint32_t nkeys, int epoc
     CHECK_RC(sc_signer_init(mem, sz, nkeys, 16, &cfg, &ops, &s), SC_OK);
     for (uint32_t i = 0; i < nkeys; i++) {
         secret_for(10000 + i, share);
-        CHECK_RC(sc_signer_add_validator(s, g_big_pk[i], share, SC_INDEX_UNKNOWN, NULL), SC_OK);
+        CHECK_RC(load_at_genesis(s, g_big_pk[i], share, SC_INDEX_UNKNOWN, NULL), SC_OK);
     }
     for (int e = 0; e < epochs; e++) {
         uint64_t t = E + (uint64_t)e;
@@ -3402,21 +3405,7 @@ static void test_builder_auth(void)
  * keeps). Whatever it does, a request that is slashable against what the
  * validator signed before must be refused; the code does not matter.
  */
-#ifdef SC_RESTART_FLOOR_EPOCHS
 #define CHECK_REFUSED(expr) CHECK((expr) != SC_OK)
-#else
-/* No restart floor in the core yet: a slashable request it signs is a gap,
- * printed and counted, not a failure. */
-static int g_gaps;
-#define CHECK_REFUSED(expr)                                                      \
-    do {                                                                         \
-        g_checks++;                                                              \
-        if ((expr) == SC_OK) {                                                   \
-            g_gaps++;                                                            \
-            fprintf(stderr, "GAP %s:%d: %s signed\n", __FILE__, __LINE__, #expr); \
-        }                                                                        \
-    } while (0)
-#endif
 
 enum { H_LOST, H_LIE, H_ROLLBACK, H_FLAGS0, H_JUNK_FLAGS, H_CLOCK_BACK, H_COUNT };
 static const char *const H_NAMES[H_COUNT] = {"lost", "lie", "rollback", "flags0", "junk-flags",
@@ -3557,7 +3546,7 @@ static void hostile_errors(uint32_t scope)
     /* No clock at the load: the core cannot set the floor, so it refuses. */
     h.fail_clock = 1;
     s = new_signer(&h, &cfg, 4, 0);
-    CHECK_REFUSED(add_at_clock(s, 41, &k));
+    CHECK_RC(add_at_clock(s, 41, &k), SC_ERR_CLOCK);
     h.fail_clock = 0;
     /* A store that fails refuses the request that needed it. */
     s = new_signer(&h, &cfg, 4, 0);
@@ -3575,6 +3564,59 @@ static void hostile_errors(uint32_t scope)
     h.fail_clock = 0;
 }
 
+/* The floor's bounds; a stored mark above it; a validator added later; the
+ * cost while the chain does not finalize. */
+static void test_restart_floor(void)
+{
+    const uint32_t both = SC_WM_HAS_BLOCK | SC_WM_HAS_ATTESTATION;
+    for (uint32_t scope = SC_MARKS_PER_VALIDATOR; scope <= SC_MARKS_PER_DEVICE; scope++) {
+        host_t h = {0};
+        sc_config cfg;
+        sc_slashing_state st;
+        sc_attestation_data a;
+        uint8_t sig[96];
+        vkeys k1, k2, k3;
+        make_config(&cfg); /* max_epochs_ahead 2 */
+        cfg.mark_scope = scope;
+        const uint64_t F = E + cfg.max_epochs_ahead + SC_RESTART_FLOOR_EPOCHS;
+
+        set_epoch(&h, E);
+        sc_signer *s = new_signer(&h, &cfg, 4, 0);
+        CHECK_RC(add_at_clock(s, 43, &k1), SC_OK);
+        CHECK_RC(sc_signer_get_state(s, k1.pk, &st), SC_OK);
+        CHECK(st.ram.flags == both && st.ram.block_slot == (F + 1) * 32 - 1 &&
+              st.ram.source_epoch == F && st.ram.target_epoch == F);
+        CHECK(h.writes == 0); /* the floor needs no write */
+
+        /* Added five epochs later: a floor of its own, five epochs higher. */
+        set_epoch(&h, E + 5);
+        CHECK_RC(add_at_clock(s, 44, &k2), SC_OK);
+        CHECK_RC(sc_signer_get_state(s, k2.pk, &st), SC_OK);
+        CHECK(st.ram.target_epoch == F + 5 && st.ram.source_epoch == F + 5);
+        CHECK_RC(sc_signer_get_state(s, k1.pk, &st), SC_OK);
+        CHECK(st.ram.target_epoch == F);
+
+        /* A vote signs only with its source at the floor or above: while the
+         * chain does not justify epoch F, every vote is refused. */
+        set_epoch(&h, E + 6);
+        a = att(E, E + 6, 1);
+        CHECK_RC(sc_sign_attestation(s, k1.pk, &a, sig), SC_ERR_SLASH_SOURCE);
+        a = att(F, E + 6, 1);
+        CHECK_RC(sc_sign_attestation(s, k1.pk, &a, sig), SC_OK);
+
+        /* A stored mark above the floor stays as it is. */
+        sc_watermark high = {(F + 30) * 32, F + 20, F + 21, both};
+        h.load_raw = 1;
+        h.raw = high;
+        sc_signer *s3 = new_signer(&h, &cfg, 4, 0);
+        CHECK_RC(add_at_clock(s3, 45, &k3), SC_OK);
+        CHECK_RC(sc_signer_get_state(s3, k3.pk, &st), SC_OK);
+        CHECK(st.ram.block_slot == high.block_slot && st.ram.source_epoch == high.source_epoch &&
+              st.ram.target_epoch == high.target_epoch);
+        h.load_raw = 0;
+    }
+}
+
 static void test_hostile_host(void)
 {
     for (uint32_t scope = SC_MARKS_PER_VALIDATOR; scope <= SC_MARKS_PER_DEVICE; scope++) {
@@ -3582,9 +3624,6 @@ static void test_hostile_host(void)
             hostile_case(scope, how);
         hostile_errors(scope);
     }
-#ifndef SC_RESTART_FLOOR_EPOCHS
-    printf("hostile host: %d gaps (slashable requests signed)\n", g_gaps);
-#endif
 }
 
 int main(int argc, char **argv)
@@ -3640,6 +3679,7 @@ int main(int argc, char **argv)
     test_slot_times();
     test_schedule_pending_slot_times();
     test_hostile_host();
+    test_restart_floor();
     bench_cache();
     for (int i = 0; i < g_nmem; i++)
         free(g_mem[i]);

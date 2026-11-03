@@ -215,6 +215,22 @@ window for this reason.
 If `store_watermark` fails, the request is refused and the state is left
 unchanged.
 
+### Restart floor
+
+`sc_signer_add_validator` reads the clock and raises the loaded mark (the
+validator's own, or the device mark) to the restart floor: epoch
+F = epoch(now) + `max_epochs_ahead` + `SC_RESTART_FLOOR_EPOCHS` (1). The
+validator then refuses block, PTC vote and envelope slots up to the last
+slot of F, targets up to F and sources below F. The core signs nothing past
+epoch(clock) + `max_epochs_ahead`, so F covers everything signed before the
+load, as long as the clock never reads an epoch more than one below an
+earlier reading. A mark that is lost, old or garbled costs signing time, not
+safety. No clock at the load refuses the validator (`SC_ERR_CLOCK`).
+
+The cost: after each load, votes sign from target F + 1 with a source of F
+or above, so about `max_epochs_ahead` + 2 epochs of attestations are missed,
+and none signs while the chain does not justify epoch F.
+
 [`markformat`](../markformat/README.md) provides the fixed 32-byte watermark storage
 record. The core only handles in-memory watermark values.
 Rollback protection of that record (RPMB or similar) is the TA's job.

@@ -118,7 +118,7 @@ func TestParallelSigningOneKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.AddValidator(pk2, sk2, 8, nil); err != nil {
+	if _, err := addAtGenesis(h, s, pk2, sk2, 8, nil); err != nil {
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup

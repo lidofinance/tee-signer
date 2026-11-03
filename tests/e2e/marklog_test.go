@@ -55,10 +55,10 @@ func TestE2EMarkLog(t *testing.T) {
 		return err
 	}
 
-	// Restart in non-finality: the source stays at s0 the whole time. With
-	// the floor alone the restarted runner refuses every vote (source below
-	// the floor); with the mark log it signs again once the target passes
-	// the floor's target bound.
+	// Restart in non-finality: the source stays at s0 the whole time. The
+	// core's restart floor bounds sources too, so the restarted runner
+	// refuses every vote (source below the floor), with the mark log or
+	// without it, until the chain justifies the floor epoch.
 	nonFinal := func(name string, flags ...string) (signedAfter int, firstAfter uint64, r *runner) {
 		addr := fmt.Sprintf("tcp:127.0.0.1:%d", freePort(t))
 		r = newRunner(t, name, c, addr, flags...)
@@ -100,7 +100,7 @@ func TestE2EMarkLog(t *testing.T) {
 	logDir := t.TempDir()
 	withLog, first, r1 := nonFinal("marklog", "-mark-store", "file:"+logDir, "-mark-signer", "s1")
 	t.Logf("non-finality restart: floor only signed %d of 6 epochs; with the mark log %d of 6, first at epoch +%d", floorOnly, withLog, first)
-	if floorOnly != 0 || withLog < 3 {
+	if floorOnly != 0 || withLog != 0 {
 		t.Fatalf("floor only %d, mark log %d", floorOnly, withLog)
 	}
 	if !strings.Contains(r1.logText(), "restart from the mark log") {

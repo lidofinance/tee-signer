@@ -37,7 +37,7 @@ func TestVSGLOAS01ImportRaisesGloasSlotBounds(t *testing.T) {
 		sk, _ := software.NewSecret()
 		pk, _ := core.PubkeyOf(sk)
 		wm := backend.Watermark{HasBlock: true, BlockSlot: 20*32 + 10}
-		if _, err := s.AddValidator(pk, sk, 7, &wm); err != nil {
+		if _, err := addAtGenesis(h.MemHooks, s, pk, sk, 7, &wm); err != nil {
 			t.Fatal(err)
 		}
 		_, err = s.Sign(signReq(s, pk, &backend.PayloadAttestationData{BeaconBlockRoot: backend.Root{1}, Slot: 20*32 + 5}))

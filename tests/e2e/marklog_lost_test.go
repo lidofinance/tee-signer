@@ -191,7 +191,8 @@ func sourceFloorRefusal(err error) (uint64, bool) {
 // share imported without history it refuses the lower source too: the
 // restart floor bounds sources until an import carries vote history (issue
 // #5 R2). A second runner whose import carries history with a lower source
-// signs it: the carried history, not the floor, sets the bound.
+// refuses it as well: the core's restart floor bounds sources at every
+// load, with history or without.
 func surroundControl(t *testing.T, c chain, sk [32]byte, pk backend.Pubkey, s0 uint64) {
 	t.Helper()
 	try := func(name string, interchange *backend.Watermark, tag byte) (signedAt uint64, ok bool) {
@@ -218,11 +219,10 @@ func surroundControl(t *testing.T, c chain, sk [32]byte, pk backend.Pubkey, s0 u
 	}
 	t.Logf("control, empty log, import without history: source %d refused (restart floor)", s0-2)
 	carried := &backend.Watermark{HasAttestation: true, SourceEpoch: s0 - 3, TargetEpoch: s0 - 2}
-	e, ok := try("empty-log-history", carried, 0x32)
-	if !ok {
-		t.Fatalf("control, empty log, import with history (source %d): source %d refused", s0-3, s0-2)
+	if e, ok := try("empty-log-history", carried, 0x32); ok {
+		t.Fatalf("control, empty log, import with history (source %d): source %d signed at target %d below the restart floor", s0-3, s0-2, e)
 	}
-	t.Logf("control, empty log, import with history (source %d): source %d signed at target %d", s0-3, s0-2, e)
+	t.Logf("control, empty log, import with history (source %d): source %d refused (restart floor)", s0-3, s0-2)
 }
 
 func plainImport(t *testing.T, sk [32]byte, pk backend.Pubkey) func(*remote.Client) {

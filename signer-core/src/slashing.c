@@ -21,7 +21,12 @@
  * layer, in signer.c. The device mark's source bound is the highest source
  * signed (or imported), with no window: the chain's source stays put while it
  * does not finalize, so a bound above the signed sources would refuse every
- * vote after a restart until the chain justifies an epoch at or above it.
+ * vote until the chain justifies an epoch at or above it. After a restart the
+ * restart floor (signer.c) does refuse those votes: it does not trust the
+ * stored source.
+ *
+ * Restart floor (sc_slashing_floor): the bounds of everything a validator may
+ * have signed up to epoch f, whatever the stored mark says.
  */
 #include "sc_internal.h"
 
@@ -176,6 +181,21 @@ static uint64_t last_slot_of(uint64_t e, uint64_t slots_per_epoch)
     if (n > UINT64_MAX / slots_per_epoch)
         return UINT64_MAX;
     return n * slots_per_epoch - 1;
+}
+
+void sc_slashing_floor(sc_watermark *wm, uint64_t f, uint64_t slots_per_epoch)
+{
+    uint64_t last = last_slot_of(f, slots_per_epoch);
+    wm->flags &= WM_FLAGS_MASK;
+    wm->block_slot = (wm->flags & SC_WM_HAS_BLOCK) ? sc_max64(wm->block_slot, last) : last;
+    if (wm->flags & SC_WM_HAS_ATTESTATION) {
+        wm->source_epoch = sc_max64(wm->source_epoch, f);
+        wm->target_epoch = sc_max64(wm->target_epoch, f);
+    } else {
+        wm->source_epoch = f;
+        wm->target_epoch = f;
+    }
+    wm->flags = SC_WM_HAS_BLOCK | SC_WM_HAS_ATTESTATION;
 }
 
 /*

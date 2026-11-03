@@ -137,7 +137,7 @@ func run() (err error) {
 		setupSrc      = flag.String("setup", "", "where the signer's setup comes from: platform (the platform's channel: the host agent on nitro, SIGNER_SETUP on azure and dev, the metadata attribute signer-setup on gcp) or file:PATH (dev); empty: the values come from flags (-config, -tls-client-ca, -platform-opt, ...), on dev or in a debug build only")
 		configPath    = flag.String("config", "", "chain and policy config (JSON, see core.Config); not with -setup")
 		stateDir      = flag.String("state-dir", "state", "directory for sealed shares and watermarks (dev, or a host volume)")
-		floor         = flag.Bool("restart-floor", true, "on load, refuse everything at or below clock epoch + floor margin")
+		floor         = flag.Bool("restart-floor", true, restartFloorUsage)
 		floorMargin   = flag.Int64("floor-margin", -1, "epochs added to the clock epoch for the floor, at least max_epochs_ahead + 1; -1 = max_epochs_ahead + 1")
 		persist       = flag.Bool("persist-watermarks", false, "persist commit-ahead watermarks (safe only on rollback-proof storage)")
 		clockWait     = flag.Duration("clock-wait", time.Minute, "how long to wait for the first clock reading at start")
@@ -160,6 +160,9 @@ func run() (err error) {
 	)
 	flag.Var(params, "platform-opt", "platform option key=value (repeatable)")
 	flag.Parse()
+	if err := checkRestartFloor(*floor); err != nil {
+		return err
+	}
 
 	var log *slog.Logger
 	if *logJSON {

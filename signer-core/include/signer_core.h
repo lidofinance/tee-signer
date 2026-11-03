@@ -494,10 +494,14 @@ typedef struct {
     void *ctx;
     /* SC_MARKS_PER_VALIDATOR. Fill *out with the stored watermark for
      * pubkey. Return SC_OK, or SC_ERR_UNKNOWN_VALIDATOR if nothing is
-     * stored, or any other code to refuse loading the validator. */
+     * stored, or any other code to refuse loading the validator. The core
+     * raises what it returns to the restart floor (SC_RESTART_FLOOR_EPOCHS),
+     * so a lost or old mark costs signing time, not safety. */
     int (*load_watermark)(void *ctx, const uint8_t pubkey[SC_PUBKEY_LEN], sc_watermark *out);
     sc_store_fn store_watermark;
-    /* Trusted wall clock in unix seconds. Non-SC_OK refuses the request. */
+    /* Trusted wall clock in unix seconds. Non-SC_OK refuses the request, or
+     * the validator load. Its epoch must never fall more than
+     * SC_RESTART_FLOOR_EPOCHS below an earlier reading, across restarts too. */
     int (*now)(void *ctx, uint64_t *unix_seconds);
     /* SC_MARKS_PER_DEVICE: the one mark that covers every validator. Same
      * contract as load_watermark and store_watermark. The core loads it
@@ -545,7 +549,7 @@ typedef struct {
      * target_epochs + 1 epochs whatever its number of keys; while the source
      * moves every epoch, once an epoch. commit_ahead.block_slots and
      * commit_ahead.source_epochs are not used. After a restart every
-     * validator starts from this mark.
+     * validator starts from this mark, raised to the restart floor.
      */
     uint32_t mark_scope;
 
@@ -594,11 +598,27 @@ int sc_signer_init(void *mem, size_t mem_len, uint32_t max_validators,
 void sc_signer_wipe(sc_signer *s);
 
 /*
+ * Restart floor. Each sc_signer_add_validator reads the clock and starts the
+ * validator at or above floor epoch F = epoch(now) + max_epochs_ahead +
+ * SC_RESTART_FLOOR_EPOCHS (sums saturate; epochs under the slot time changes
+ * in force): it refuses block, PTC vote and envelope slots up to the last
+ * slot of F, attestation targets <= F and sources < F, whatever the stored
+ * mark says. A signer signs nothing past epoch(clock) + max_epochs_ahead, so
+ * F covers all it signed before the load as long as the clock never reads an
+ * epoch more than SC_RESTART_FLOOR_EPOCHS below an earlier reading. The stored
+ * mark only raises these bounds. The cost: after a load, attestations sign
+ * from target F + 1, and with source at least F, so while the chain does not
+ * justify an epoch at or above F no vote signs.
+ */
+#define SC_RESTART_FLOOR_EPOCHS 1
+
+/*
  * Loads a validator. pubkey is the validator's (account) public key that
  * identifies it on chain and in slashing protection. secret may be a
  * threshold share of the key; share_pubkey_out (may be NULL) receives the
- * public key of that share. Calls ops.load_watermark. The validator
- * starts with no repeat roots.
+ * public key of that share. Calls ops.now (SC_ERR_CLOCK if it fails) and
+ * ops.load_watermark, or ops.load_device_mark for the first validator, and
+ * applies the restart floor. The validator starts with no repeat roots.
  */
 int sc_signer_add_validator(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
                             const uint8_t secret[SC_SECRET_LEN], uint64_t validator_index,
@@ -630,9 +650,9 @@ int sc_signer_get_repeat_roots(const sc_signer *s, const uint8_t pubkey[SC_PUBKE
  * SC_MARKS_PER_DEVICE: makes the device mark cover attestation targets and
  * blocks of epoch, with one store_device_mark call if it does not yet;
  * nothing before the first validator is added. The source bound stays at the
- * highest source signed: a cover never raises it, so a restart in a long
- * period without finality, where the chain's source stays put, does not stop
- * the device. A host that writes other state once an epoch can call it then,
+ * highest source signed: a cover never raises it, so a cover alone does not
+ * stop the device's votes while the chain's source stays put (the restart
+ * floor does, after a restart). A host that writes other state once an epoch can call it then,
  * so the votes that follow find the mark in place. Call it after the epoch's
  * first vote: a vote with a new source writes the mark itself, and the host
  * write then goes with it (the TA does this with its clock floor). Raising

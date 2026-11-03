@@ -42,16 +42,26 @@ const (
 // starts at most this many seconds after the clock.
 const SlotMarginSeconds = C.SC_SLOT_MARGIN_SECONDS
 
+// RestartFloorEpochs is the core's restart floor margin
+// (SC_RESTART_FLOOR_EPOCHS): AddValidator starts every validator at or above
+// floor epoch EpochAt(now) + MaxEpochsAhead + RestartFloorEpochs, whatever
+// the hooks load.
+const RestartFloorEpochs = C.SC_RESTART_FLOOR_EPOCHS
+
 // Hooks are the host callbacks of the core: durable watermark storage and
 // the trusted clock. The runner composes them from platform hooks and the
 // restart rule (runner/state).
 type Hooks interface {
 	// LoadWatermark returns the watermark to start a validator from.
-	// found=false means "never signed anything".
+	// found=false means "never signed anything". The core raises it to its
+	// restart floor (RestartFloorEpochs), so a lost or old mark costs signing
+	// time, not safety.
 	LoadWatermark(pubkey backend.Pubkey) (wm backend.Watermark, found bool, err error)
 	// StoreWatermark must return nil only once wm is durable.
 	StoreWatermark(pubkey backend.Pubkey, wm backend.Watermark) error
-	// Now is the trusted wall clock in unix seconds.
+	// Now is the trusted wall clock in unix seconds. AddValidator reads it
+	// for the restart floor; its epoch must never fall more than
+	// RestartFloorEpochs below an earlier reading.
 	Now() (uint64, error)
 }
 
@@ -481,7 +491,8 @@ func (s *Signer) refusal(rc C.int, what string) error {
 }
 
 // AddValidator loads a share. pubkey is the validator's on-chain key,
-// secret the share (big endian). The core calls Hooks.LoadWatermark here.
+// secret the share (big endian). The core reads Hooks.Now and calls
+// Hooks.LoadWatermark (or LoadDeviceMark) here, and applies its restart floor.
 // If interchange is set, the EIP-3076 maxima are imported before the lock
 // is released, so no request can be signed between the two steps. If the
 // import fails the validator stays loaded but the error is returned, and
