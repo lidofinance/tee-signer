@@ -187,8 +187,6 @@ chain:
     - {epoch: 0, version: "0x50000910"}       # Deneb
     - {epoch: 2048, version: "0x60000910"}    # Electra
     - {epoch: 50688, version: "0x70000910"}   # Fulu
-    - {epoch: 132352, version: "0x80000910"}  # Gloas
-  gloas_fork_epoch: 132352
 signers:
   client_cert: gateway.pem        # signing role, followed by its intermediate
   client_key: gateway-key.pem
