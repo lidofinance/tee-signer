@@ -33,7 +33,7 @@ const (
 type MsgType uint8
 
 // The signing and attestation message types. The admin types (imports,
-// config updates, exit approvals) are in package wire/admin.
+// config updates) are in package wire/admin.
 const (
 	TypeHealth     MsgType = 0x01
 	TypePublicKeys MsgType = 0x02
@@ -46,7 +46,7 @@ const (
 // too, so logs stay readable without that package.
 var typeNames = map[MsgType]string{
 	0x01: "HEALTH", 0x02: "PUBLIC_KEYS", 0x03: "SIGN", 0x04: "ATTEST", 0x05: "IMPORT_SHARE",
-	0x06: "IDENTITY", 0x07: "IMPORT_SHARE_SEALED", 0x08: "CONFIG_UPDATE", 0x09: "APPROVE_EXIT",
+	0x06: "IDENTITY", 0x07: "IMPORT_SHARE_SEALED", 0x08: "CONFIG_UPDATE",
 }
 
 func (t MsgType) String() string {

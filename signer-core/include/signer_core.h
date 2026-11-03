@@ -34,9 +34,6 @@ extern "C" {
 #ifndef SC_MAX_FORKS
 #define SC_MAX_FORKS 16
 #endif
-#ifndef SC_MAX_EXIT_ALLOWLIST
-#define SC_MAX_EXIT_ALLOWLIST 1024
-#endif
 #ifndef SC_MAX_FEE_RECIPIENTS
 #define SC_MAX_FEE_RECIPIENTS 64
 #endif
@@ -78,7 +75,8 @@ typedef enum {
     SC_ERR_POLICY_FUTURE,        /* too far ahead of the trusted clock: epoch past
                                     the horizon, or a slot that has not started
                                     (slot rule, SC_SLOT_MARGIN_SECONDS) */
-    SC_ERR_POLICY_EXIT,          /* validator index not in the exit allowlist */
+    SC_ERR_POLICY_EXIT,          /* not returned since the exit allowlist went;
+                                    kept so the codes after it keep their values */
     SC_ERR_POLICY_FEE_RECIPIENT, /* fee recipient not in the allowlist */
     SC_ERR_POLICY_GAS_LIMIT,     /* gas limit outside [min, max] */
     SC_ERR_POLICY_TIMESTAMP,     /* registration timestamp too far in the future */
@@ -527,8 +525,6 @@ typedef struct {
 
     /* Policy. */
     uint64_t max_epochs_ahead; /* refuse epochs > clock epoch + this */
-    uint64_t exit_allowlist[SC_MAX_EXIT_ALLOWLIST];
-    uint32_t exit_allowlist_count;
     uint8_t fee_recipients[SC_MAX_FEE_RECIPIENTS][SC_ADDRESS_LEN];
     uint32_t fee_recipient_count;
     uint64_t gas_limit_min;
@@ -648,7 +644,7 @@ void sc_signer_get_stats(const sc_signer *s, sc_signer_stats *out);
 
 /*
  * Replaces the policy part of a running signer's config with the same fields
- * of policy: exit allowlist, fee recipients, gas limit range and
+ * of policy: fee recipients, gas limit range and
  * registration_max_future_seconds. Chain, clock horizon and slashing settings
  * stay as they are, and so do the loaded validators and their slashing state,
  * so a policy update needs no restart. SC_ERR_ARG (and no change) if the

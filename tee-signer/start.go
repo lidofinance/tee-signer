@@ -265,8 +265,7 @@ func startPlatform(ctx context.Context, a *startArgs, newPlatform platformFunc, 
 // what chain.json held on the flag path, with the slot time changes of
 // version 0. The floor margin follows from max_sign_epochs_ahead_of_clock
 // (state.DefaultFloorMargin). The cloud runner does not use the board-only
-// values of locked yet (exit_stake_cap_per_day, exit_stake_counting,
-// exit_approvals_needed, balances, withdrawal credentials, deposit amounts,
+// values of locked yet (balances, withdrawal credentials, deposit amounts,
 // bare_root_domains), nor the approvers, change delay and allowed images,
 // which config updates use.
 func chainConfig(s *setupwire.Setup) (core.Config, error) {
@@ -282,7 +281,6 @@ func chainConfig(s *setupwire.Setup) (core.Config, error) {
 		MaxEpochsAhead:           sf.MaxSignEpochsAheadOfClock,
 		CommitAhead: core.CommitAhead{BlockSlots: sf.SlashingMarkPrewrite.BlockSlots, SourceEpochs: sf.SlashingMarkPrewrite.SourceEpochs,
 			TargetEpochs: sf.SlashingMarkPrewrite.TargetEpochs},
-		ExitAllowlist:                append([]uint64(nil), l.ExitAllowedValidators...),
 		FeeRecipients:                append([]backend.Address(nil), l.AllowedFeeRecipients...),
 		BuilderRequestAuthRoots:      append([]backend.Root(nil), l.AllowedBuilderRequestAuthDataRoots...),
 		GasLimitMin:                  l.BuilderGasLimitMin,

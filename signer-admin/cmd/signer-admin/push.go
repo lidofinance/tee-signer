@@ -24,25 +24,12 @@ func cmdPush(args []string, out io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() == 0 {
-		return errors.New("usage: signer-admin push -cluster cluster.json [-raise-min] [-signers NAME,...] update.signed|exit.signed...")
+	if fs.NArg() != 1 {
+		return errors.New("usage: signer-admin push -cluster cluster.json [-raise-min] [-signers NAME,...] update.signed")
 	}
 	raw, err := os.ReadFile(fs.Arg(0))
 	if err != nil {
 		return err
-	}
-	if isExitFile(raw) {
-		if *raise {
-			return errors.New("-raise-min is for config updates, not exit approvals")
-		}
-		c, err := cf.load()
-		if err != nil {
-			return err
-		}
-		return pushExits(out, c, fs.Args(), *cf.timeout)
-	}
-	if fs.NArg() != 1 {
-		return errors.New("push takes one update or order; only exit approvals go several at a time")
 	}
 	if isImportFile(raw) {
 		return errors.New("an import order is not pushed: signer-admin import sends it with the shares")

@@ -16,7 +16,7 @@ import (
 // that connection; the other connections go on.
 //
 // Recover policy: a panic in a request
-// that changes state (SIGN, the imports, CONFIG_UPDATE, APPROVE_EXIT, any type but the four below) may
+// that changes state (SIGN, the imports, CONFIG_UPDATE, any type but the four below) may
 // have left that state half written. The runner then refuses every
 // request but HEALTH, PUBLIC_KEYS, ATTEST and IDENTITY with NOT_READY
 // until it restarts and reads its stored state again, as after ErrLost,
@@ -115,7 +115,7 @@ func (s *Server) checkAfterPanic(wait time.Duration) {
 
 // lockers are the server's locks.
 func (s *Server) lockers() []sync.Locker {
-	ls := []sync.Locker{&s.blockedMu, &s.admitMu, &s.shareSetMu, &s.exits.mu, &s.attestLimit.mu}
+	ls := []sync.Locker{&s.blockedMu, &s.admitMu, &s.shareSetMu, &s.attestLimit.mu}
 	if u := s.Updates; u != nil {
 		ls = append(ls, &u.writeMu, &u.mu)
 	}

@@ -50,7 +50,7 @@ mutant restart-forgets-source src/slashing.c 's/st->ram = st->committed;/st->ram
   test_unit "$CORE_DIR/tests/data"
 mutant window-source-too-low src/slashing.c 's/next.source_epoch = s_hi;/next.source_epoch = source_epoch ? source_epoch - 1 : 0;/' \
   test_unit "$CORE_DIR/tests/data"
-mutant exit-allowlist-ignored src/policy.c 's/return SC_ERR_POLICY_EXIT;/return SC_OK;/' \
+mutant exit-index-ignored src/policy.c 's/return SC_ERR_POLICY_INDEX;/return SC_OK;/' \
   test_unit "$CORE_DIR/tests/data"
 mutant repeat-any-root src/signer.c 's/memcmp(last, root, SC_ROOT_LEN) == 0/memcmp(last, root, 0) == 0/' \
   test_unit "$CORE_DIR/tests/data"

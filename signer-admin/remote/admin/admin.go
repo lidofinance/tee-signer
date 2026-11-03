@@ -1,5 +1,5 @@
 // Package admin is the client side of the admin messages: share import,
-// config updates and exit approvals. A runner
+// config updates. A runner
 // answers them only to a client of the admin role (docs/protocol.md,
 // "Client roles"). Client wraps a remote.Client, so it has the signing and
 // attestation calls too; the signing client builds remote without this package.
@@ -104,13 +104,6 @@ func (c *Client) ImportShareSealedWith(ctx context.Context, req backend.ImportSh
 		return backend.ValidatorKey{}, err
 	}
 	return c.ImportSealed(ctx, sreq)
-}
-
-// ApproveExit sends a signed exit approval (APPROVE_EXIT, package
-// exitapproval) to a runner with a setup.
-func (c *Client) ApproveExit(ctx context.Context, signed []byte) error {
-	_, err := c.RoundTrip(ctx, wireadmin.TypeApproveExit, signed)
-	return err
 }
 
 // ImportSealed sends an already sealed share (IMPORT_SHARE_SEALED).

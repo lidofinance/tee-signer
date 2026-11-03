@@ -34,7 +34,7 @@ every module builds and tests on its own.
 | [markformat](markformat) | Portable C watermark storage codec and its Go binding |
 | [signer-core](signer-core) | The C signing core: SSZ, BLS (blst, vendored), EIP-3076 slashing protection, signing policy; its Go binding, fuzz targets and simulator |
 | [signer-protocol](signer-protocol) | The runner's wire protocol: request types, frames, transports, client connection |
-| [governance](governance) | The setup format, approver sets and signed updates, approved orders (import, exit), chain configs |
+| [governance](governance) | The setup format, approver sets and signed updates, approved import orders, chain configs |
 | [tee-signer](tee-signer) | The runner that runs in the TEE: server, state, mark log, attested TLS |
 | [slashing-log](slashing-log) | The mark log and the encrypted state copy on host storage |
 | [platform](platform) | The platform interface of the runner, setup loading, the dev platform |

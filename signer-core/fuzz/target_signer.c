@@ -707,8 +707,6 @@ static void op_policy(fz_in *in)
     for (uint8_t i = 0; i < n; i++)
         fz_patch_config(&pol, in);
     if (sc_signer_set_policy(W.s, &pol) == SC_OK) {
-        memcpy(W.cfg.exit_allowlist, pol.exit_allowlist, sizeof pol.exit_allowlist);
-        W.cfg.exit_allowlist_count = pol.exit_allowlist_count;
         memcpy(W.cfg.fee_recipients, pol.fee_recipients, sizeof pol.fee_recipients);
         W.cfg.fee_recipient_count = pol.fee_recipient_count;
         W.cfg.gas_limit_min = pol.gas_limit_min;

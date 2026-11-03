@@ -17,7 +17,7 @@
 // Integers are big endian. str is len:u8 and 1 to 255 bytes. A list has a
 // count and a cap. An optional field has a presence byte, 0 or 1. Lists
 // without an order of their own (CA certificates, tags, images, fee
-// recipients, exit allowlist, deposit amounts, BuilderRequestAuth data
+// recipients, deposit amounts, BuilderRequestAuth data
 // roots, peer attestation hosts) are
 // sorted and hold no duplicates, forks and slot time changes are in
 // ascending epoch order, and the approver list keeps its order, because
@@ -26,7 +26,7 @@
 //
 //	setup    = 'S' public public_salts locked locked_salts open open_salts
 //	           platform_salt[32] private
-//	public   = setup_format_version:u8(2) cluster_id[32] handover_generation:u64
+//	public   = setup_format_version:u8(3) cluster_id[32] handover_generation:u64
 //	           chain safety max_keys:u32 slashing_log_min_lock_days:u32
 //	           signing_mode:u8
 //	chain    = genesis_validators_root[32] genesis_fork_version[4] genesis_time:u64
@@ -36,8 +36,7 @@
 //	locked   = n:u8 {key[32]} approvals_needed:u8 has:u8 [change_delay_seconds:u64]
 //	           image_count:u8 {kind:u8 measurement[144 nitro, else 32]}
 //	           fee_count:u8 {address[20]} builder_gas_limit_min:u64 builder_gas_limit_max:u64
-//	           builder_registration_max_future_seconds:u64 exit_count:u16 {index:u64}
-//	           exit_stake_cap_per_day:u64 exit_approvals_needed:u8
+//	           builder_registration_max_future_seconds:u64
 //	           min_activation_balance:u64 max_effective_balance:u64
 //	           withdrawal_credentials[32] deposit_count:u8 {amount:u64}
 //	           allow_unverified_nonslashable_signing:u8 bare_root_domains:u16
@@ -90,7 +89,10 @@ import (
 const (
 	// FormatVersion is setup_format_version, the setup's second byte.
 	// Format 2 added signing_mode, the last leaf of the public part.
-	FormatVersion = 2
+	// Format 3 dropped the exit approval fields of the locked group
+	// (exit_allowed_validators, exit_stake_cap_per_day,
+	// exit_approvals_needed).
+	FormatVersion = 3
 
 	kindSetup  = 'S'
 	kindBody   = 'B'
@@ -112,9 +114,8 @@ const (
 // Caps of the other lists and values.
 const (
 	MaxAllowedClientCA = 4
-	MaxForks           = 16   // SC_MAX_FORKS
-	MaxExitAllowlist   = 1024 // SC_MAX_EXIT_ALLOWLIST
-	MaxFeeRecipients   = 64   // SC_MAX_FEE_RECIPIENTS
+	MaxForks           = 16 // SC_MAX_FORKS
+	MaxFeeRecipients   = 64 // SC_MAX_FEE_RECIPIENTS
 	MaxDepositAmounts  = 8
 	MaxPeerHosts       = 16  // the Nitro port map's block for them (runner/setup)
 	MaxSignerName      = 128 // markstore.CheckSigner
@@ -403,9 +404,6 @@ type Locked struct {
 	BuilderGasLimitMin                  uint64
 	BuilderGasLimitMax                  uint64
 	BuilderRegistrationMaxFutureSeconds uint64
-	ExitAllowedValidators               []uint64 // sorted validator indices
-	ExitStakeCapPerDay                  uint64   // Gwei
-	ExitApprovalsNeeded                 uint8
 	MinActivationBalance                uint64 // Gwei
 	MaxEffectiveBalance                 uint64 // Gwei
 	WithdrawalCredentials               backend.Root
@@ -925,14 +923,6 @@ func (l *Locked) fields() []field {
 		{"builder_gas_limit_min", func(w *writer) { w.u64(l.BuilderGasLimitMin) }},
 		{"builder_gas_limit_max", func(w *writer) { w.u64(l.BuilderGasLimitMax) }},
 		{"builder_registration_max_future_seconds", func(w *writer) { w.u64(l.BuilderRegistrationMaxFutureSeconds) }},
-		{"exit_allowed_validators", func(w *writer) {
-			w.u16(uint16(len(l.ExitAllowedValidators)))
-			for _, i := range l.ExitAllowedValidators {
-				w.u64(i)
-			}
-		}},
-		{"exit_stake_cap_per_day", func(w *writer) { w.u64(l.ExitStakeCapPerDay) }},
-		{"exit_approvals_needed", func(w *writer) { w.u8(l.ExitApprovalsNeeded) }},
 		{"min_activation_balance", func(w *writer) { w.u64(l.MinActivationBalance) }},
 		{"max_effective_balance", func(w *writer) { w.u64(l.MaxEffectiveBalance) }},
 		{"withdrawal_credentials", func(w *writer) { w.raw(l.WithdrawalCredentials[:]) }},
@@ -986,11 +976,6 @@ func readLocked(r *reader, l *Locked) {
 	l.BuilderGasLimitMin = r.u64()
 	l.BuilderGasLimitMax = r.u64()
 	l.BuilderRegistrationMaxFutureSeconds = r.u64()
-	for range r.count("exit_allowed_validators entries", MaxExitAllowlist, true) {
-		l.ExitAllowedValidators = append(l.ExitAllowedValidators, r.u64())
-	}
-	l.ExitStakeCapPerDay = r.u64()
-	l.ExitApprovalsNeeded = r.u8()
 	l.MinActivationBalance = r.u64()
 	l.MaxEffectiveBalance = r.u64()
 	r.fixed(l.WithdrawalCredentials[:])
@@ -1403,7 +1388,6 @@ func (l *Locked) Check() error {
 	if err := l.Approvers.Check(); err != nil {
 		return fmt.Errorf("locked: %w", err)
 	}
-	n := len(l.Approvers.Keys)
 	if l.ChangeDelaySeconds != nil && *l.ChangeDelaySeconds > MaxTimeLock {
 		return fmt.Errorf("locked: change_delay_seconds %d, at most %d", *l.ChangeDelaySeconds, MaxTimeLock)
 	}
@@ -1431,15 +1415,6 @@ func (l *Locked) Check() error {
 	}
 	if l.BuilderGasLimitMin > l.BuilderGasLimitMax {
 		return fmt.Errorf("locked: builder_gas_limit_min %d above builder_gas_limit_max %d", l.BuilderGasLimitMin, l.BuilderGasLimitMax)
-	}
-	if len(l.ExitAllowedValidators) > MaxExitAllowlist {
-		return fmt.Errorf("locked: %d exit_allowed_validators entries, at most %d", len(l.ExitAllowedValidators), MaxExitAllowlist)
-	}
-	if !slices.IsSorted(l.ExitAllowedValidators) || hasRepeat(l.ExitAllowedValidators) {
-		return errors.New("locked: exit_allowed_validators must be sorted, without repeats")
-	}
-	if l.ExitApprovalsNeeded < MinThreshold || int(l.ExitApprovalsNeeded) > n {
-		return fmt.Errorf("locked: exit_approvals_needed %d, want %d to the %d approvers: one approver alone must not approve an exit", l.ExitApprovalsNeeded, MinThreshold, n)
 	}
 	if l.MinActivationBalance == 0 || l.MinActivationBalance > l.MaxEffectiveBalance {
 		return errors.New("locked: want 0 < min_activation_balance <= max_effective_balance")

@@ -45,8 +45,7 @@ func (e *tgtEnv) panicOn(t wire.MsgType) {
 // IDENTITY until it restarts, as after ErrLost, and HEALTH says why. A
 // panic in a read-only request only closes its connection.
 func TestPanicInAStateChangingRequestRefusesUntilRestart(t *testing.T) {
-	changing := []wire.MsgType{wire.TypeSign, wireadmin.TypeImportSealed, wireadmin.TypeConfigUpdate,
-		wireadmin.TypeApproveExit}
+	changing := []wire.MsgType{wire.TypeSign, wireadmin.TypeImportSealed, wireadmin.TypeConfigUpdate}
 	for _, pt := range changing {
 		t.Run(pt.String(), func(t *testing.T) {
 			e := newTgtEnv(t, "dev", nil)

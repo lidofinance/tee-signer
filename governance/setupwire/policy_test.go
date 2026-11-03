@@ -142,7 +142,7 @@ func TestPolicySplit(t *testing.T) {
 		}},
 		{"gloas_fork_epoch", true, func(s *Setup) { s.Open = sampleOpen() }},
 		{"a public salt", true, func(s *Setup) { s.PolicySalts.Public[16][0]++ }},
-		{"a locked salt", true, func(s *Setup) { s.PolicySalts.Locked[18][0]++ }},
+		{"a locked salt", true, func(s *Setup) { s.PolicySalts.Locked[15][0]++ }},
 		{"an open salt", true, func(s *Setup) { s.PolicySalts.Open[1][0]++ }},
 		{"signer_name", false, func(s *Setup) { s.SignerName = "signer-9" }},
 		{"slashing_log_store", false, func(s *Setup) { s.Platform.SlashingLogStore.Bucket = "other-bucket" }},

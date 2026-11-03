@@ -42,10 +42,9 @@ var (
 	CtxAzureSealing = Context{"signer-runner azure sealing v1"}
 	CtxAzureKeyWrap = Context{"signer-runner azure key wrap v1"}
 	// Approvers on boards (the TA).
-	CtxTAPolicy       = Context{"signer-ta-policy-v1"}
-	CtxTAExitApproval = Context{"signer-ta-exit-approval-v1"}
-	CtxTAPause        = Context{"signer-ta-pause-v1"}
-	CtxTAResume       = Context{"signer-ta-resume-v1"}
+	CtxTAPolicy = Context{"signer-ta-policy-v1"}
+	CtxTAPause  = Context{"signer-ta-pause-v1"}
+	CtxTAResume = Context{"signer-ta-resume-v1"}
 
 	// Hashes the design names without a context. Its rule puts every
 	// hash the runner makes in the registry, so they get one here.
@@ -106,10 +105,9 @@ var (
 	// message of 20, 28, 32, 48 or 64 bytes only (docs/protocol.md,
 	// "Hardware approver keys"). The verifiers take either form per
 	// signature (VerifyApproval).
-	CtxConfigUpdateHash   = Context{"signer-config-update-hash-v1"}
-	CtxHandoverOrderHash  = Context{"signer-handover-order-hash-v1"}
-	CtxImportOrderHash    = Context{"signer-import-order-hash-v1"}
-	CtxTAExitApprovalHash = Context{"signer-ta-exit-approval-hash-v1"}
+	CtxConfigUpdateHash  = Context{"signer-config-update-hash-v1"}
+	CtxHandoverOrderHash = Context{"signer-handover-order-hash-v1"}
+	CtxImportOrderHash   = Context{"signer-import-order-hash-v1"}
 
 	// Reserved, as CtxHandoverOrder: the hash of what a handover source
 	// carries to its target besides the shares. Each share's HPKE associated
@@ -120,14 +118,13 @@ var (
 
 // hashedForm maps each approver context to its hash-then-sign context.
 var hashedForm = map[Context]Context{
-	CtxConfigUpdate:   CtxConfigUpdateHash,
-	CtxHandoverOrder:  CtxHandoverOrderHash,
-	CtxImportOrder:    CtxImportOrderHash,
-	CtxTAExitApproval: CtxTAExitApprovalHash,
+	CtxConfigUpdate:  CtxConfigUpdateHash,
+	CtxHandoverOrder: CtxHandoverOrderHash,
+	CtxImportOrder:   CtxImportOrderHash,
 }
 
 // HashedContext is the hash-then-sign context of the approver context c;
-// false if c is not one of the four approver contexts.
+// false if c is not one of the three approver contexts.
 func HashedContext(c Context) (Context, bool) {
 	h, ok := hashedForm[c]
 	return h, ok
@@ -175,7 +172,7 @@ var Contexts = []Context{
 	CtxSetup, CtxConfigUpdate, CtxHandoverOrder, CtxPause,
 	CtxRunnerIdentity, CtxMark, CtxMarkKey, CtxMarkHint, CtxShare,
 	CtxAzureSealing, CtxAzureKeyWrap,
-	CtxTAPolicy, CtxTAExitApproval, CtxTAPause, CtxTAResume,
+	CtxTAPolicy, CtxTAPause, CtxTAResume,
 	CtxChain, CtxApproverSet,
 	CtxState, CtxStateKey,
 	CtxRunnerAttest, CtxGCPSealing, CtxGCPKeyWrap,
@@ -183,7 +180,7 @@ var Contexts = []Context{
 	CtxKeyRelease,
 	CtxHandoverShare, CtxHandoverOrigin, CtxHandoverOriginKey,
 	CtxImportOrder, CtxImportCommitments,
-	CtxConfigUpdateHash, CtxHandoverOrderHash, CtxImportOrderHash, CtxTAExitApprovalHash,
+	CtxConfigUpdateHash, CtxHandoverOrderHash, CtxImportOrderHash,
 	CtxHandoverCarry,
 }
 

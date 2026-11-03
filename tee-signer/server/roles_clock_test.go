@@ -73,7 +73,6 @@ func TestNoTrustedTimeAnswersOnlyHealth(t *testing.T) {
 		{"signing", wire.TypeIdentity, nonce},
 		{"attest-only", wire.TypeAttest, nonce},
 		{"admin", wireadmin.TypeConfigUpdate, nil},
-		{"admin", wireadmin.TypeApproveExit, nil},
 		{"admin", wireadmin.TypeImportSealed, nil},
 		{"admin", wire.TypePublicKeys, nil},
 		{"admin", 0x7e, nil}, // a type no runner serves

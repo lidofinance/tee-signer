@@ -24,7 +24,6 @@ type ChainFile struct {
 	SlotsPerEpoch            uint64          `json:"slots_per_epoch"`
 
 	MaxEpochsAhead               uint64            `json:"max_epochs_ahead"`
-	ExitAllowlist                []uint64          `json:"exit_allowlist"`
 	FeeRecipients                []backend.Address `json:"fee_recipients"`
 	GasLimitMin                  uint64            `json:"gas_limit_min"`
 	GasLimitMax                  uint64            `json:"gas_limit_max"`
@@ -164,9 +163,6 @@ func ChainLines(c *ChainFile) (string, error) {
 	kv("builder_gas_limit_min", c.GasLimitMin)
 	kv("builder_gas_limit_max", c.GasLimitMax)
 	kv("builder_registration_max_future_seconds", c.RegistrationMaxFutureSeconds)
-	for _, i := range c.ExitAllowlist {
-		kv("exit_allowed_validators", i)
-	}
 	kv("allow_unverified_nonslashable_signing", c.AllowUnverifiedNonslashable)
 	b.WriteString("\n# open: the fork schedule, one fork per epoch\n")
 	for _, f := range sched {

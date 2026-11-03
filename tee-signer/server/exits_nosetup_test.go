@@ -1,7 +1,6 @@
 package server
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/lidofinance/tee-signer/signer-core/core"
@@ -9,10 +8,9 @@ import (
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
-// A runner without a setup has no exit approvals and no daily cap, so off
-// the dev platform it refuses every VOLUNTARY_EXIT; on dev the core
-// decides as before.
-func TestNoExitWithoutSetup(t *testing.T) {
+// A runner without a setup signs a voluntary exit like any other message,
+// on every platform: the core checks the key's bound index only.
+func TestExitWithoutSetup(t *testing.T) {
 	for _, platform := range []string{"gcp", "azure", "nitro", "dev"} {
 		s := roleServer(t)
 		s.Platform.Name = platform
@@ -24,16 +22,24 @@ func TestNoExitWithoutSetup(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.addShare(pk, &sk, 1, nil, "test"); err != nil {
+		if _, err := s.addShare(pk, &sk, 5, nil, "test"); err != nil {
 			t.Fatal(err)
 		}
-		_, err = s.sign(backend.SignRequest{Pubkey: pk, Message: &backend.VoluntaryExit{Epoch: 1, ValidatorIndex: 5}})
-		refused := err != nil && strings.Contains(err.Error(), "no setup")
-		if refused != (platform != "dev") {
+		exit := func(index uint64) error {
+			m := &backend.VoluntaryExit{Epoch: 1, ValidatorIndex: index}
+			cfg := s.Signer.Config()
+			d, err := cfg.MessageDomain(m)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = s.sign(backend.SignRequest{Pubkey: pk, Message: m, Domain: d})
+			return err
+		}
+		if err := exit(5); err != nil {
 			t.Errorf("platform %s: %v", platform, err)
 		}
-		if refused && refusedWith(err) != backend.StatusPolicyExit {
-			t.Errorf("platform %s: code %v, want POLICY_EXIT", platform, refusedWith(err))
+		if err := exit(6); refusedWith(err) != backend.StatusPolicyIndex {
+			t.Errorf("platform %s: an exit for another index: %v, want POLICY_INDEX", platform, err)
 		}
 	}
 }

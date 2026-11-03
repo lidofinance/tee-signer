@@ -24,7 +24,6 @@ func DevConfig(genesisTime, secondsPerSlot, slotsPerEpoch uint64) core.Config {
 		SecondsPerSlot:               secondsPerSlot,
 		SlotsPerEpoch:                slotsPerEpoch,
 		MaxEpochsAhead:               1,
-		ExitAllowlist:                []uint64{7},
 		FeeRecipients:                []backend.Address{fee},
 		GasLimitMin:                  30_000_000,
 		GasLimitMax:                  60_000_000,

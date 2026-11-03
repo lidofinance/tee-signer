@@ -1,4 +1,4 @@
-/* Signing policy: clock horizon, exit allowlist, builder registration rules. */
+/* Signing policy: clock horizon, exit index, builder registration rules. */
 #include "sc_internal.h"
 
 int sc_policy_check_config(const sc_config *cfg)
@@ -7,8 +7,7 @@ int sc_policy_check_config(const sc_config *cfg)
         return SC_ERR_ARG;
     if (cfg->seconds_per_slot > UINT64_MAX / cfg->slots_per_epoch)
         return SC_ERR_ARG;
-    if (cfg->fork_count > SC_MAX_FORKS || cfg->exit_allowlist_count > SC_MAX_EXIT_ALLOWLIST ||
-        cfg->fee_recipient_count > SC_MAX_FEE_RECIPIENTS ||
+    if (cfg->fork_count > SC_MAX_FORKS || cfg->fee_recipient_count > SC_MAX_FEE_RECIPIENTS ||
         cfg->builder_auth_root_count > SC_MAX_BUILDER_AUTH_ROOTS)
         return SC_ERR_ARG;
     for (uint32_t i = 1; i < cfg->fork_count; i++)
@@ -140,10 +139,8 @@ int sc_policy_check_exit(const sc_config *cfg, const sc_voluntary_exit *exit,
 {
     if (bound_index != SC_INDEX_UNKNOWN && exit->validator_index != bound_index)
         return SC_ERR_POLICY_INDEX;
-    for (uint32_t i = 0; i < cfg->exit_allowlist_count; i++)
-        if (cfg->exit_allowlist[i] == exit->validator_index)
-            return SC_OK;
-    return SC_ERR_POLICY_EXIT;
+    (void)cfg;
+    return SC_OK;
 }
 
 int sc_policy_check_registration(const sc_config *cfg, uint64_t now,

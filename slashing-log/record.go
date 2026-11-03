@@ -32,7 +32,6 @@ type Record struct {
 	State       ConfigState       // the config state per group, and the pending order
 	Copies      [4]BodyCopy       // the newest copy of each update body State names (bodyIndex)
 	Target      *[32]byte         // a tombstone only: the setup_hash of the handover's target
-	Exits       *ExitDay          // the day's exits; nil before the first
 	// SourceGate is the source floor epoch of a log that held no vote when
 	// the runner started on it (state.Hooks): a validator without imported
 	// history of its own signs no vote with a source below it. nil: no
@@ -84,53 +83,6 @@ type Order struct {
 	Kind  OrderKind
 	Hash  [32]byte
 	ActAt uint64 // unix seconds
-}
-
-// ExitDay is the day's voluntary exits the runner signed under exit
-// approvals (issue #4 F4), carried by every record from the first exit on,
-// so a rollback of the host's local state cannot free the day's stake cap.
-type ExitDay struct {
-	Day   uint64 // unix seconds / 86400, trusted clock
-	Stake uint64 // Gwei counted against exit_stake_cap_per_day
-	Exits []ExitEntry
-}
-
-// ExitEntry is one exit of the day, keyed by validator key, index and exit
-// epoch (OPTEE-EXIT-01).
-type ExitEntry struct {
-	Pubkey         backend.Pubkey
-	ValidatorIndex uint64
-	ExitEpoch      uint64
-	Stake          uint64
-	Nonce          [32]byte // the approval's
-}
-
-// MaxExitsPerDay bounds ExitDay.Exits so a record stays under MaxRecord.
-const MaxExitsPerDay = 200
-
-// Clone returns a deep copy.
-func (d *ExitDay) Clone() *ExitDay {
-	if d == nil {
-		return nil
-	}
-	c := *d
-	c.Exits = append([]ExitEntry(nil), d.Exits...)
-	return &c
-}
-
-func exitsEqual(a, b *ExitDay) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	if a.Day != b.Day || a.Stake != b.Stake || len(a.Exits) != len(b.Exits) {
-		return false
-	}
-	for i := range a.Exits {
-		if a.Exits[i] != b.Exits[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // BodyCopy is the newest copy of an update body that the runner wrote: its
@@ -203,8 +155,7 @@ const (
 	maxSignerLen  = 128
 	maxKeyBlob    = 1024
 	// MaxRecord bounds an encoded record: the store clients read at most
-	// 1 MiB of an object, a record is about 700 bytes, 21 KB more with
-	// MaxExitsPerDay exits.
+	// 1 MiB of an object, a record is about 700 bytes.
 	MaxRecord = 32768
 )
 
@@ -321,19 +272,9 @@ func (r *Record) encodeBody() []byte {
 	if r.Target != nil {
 		b = append(b, r.Target[:]...)
 	}
-	b = putFlag(b, r.Exits != nil)
-	if d := r.Exits; d != nil {
-		b = be.AppendUint64(b, d.Day)
-		b = be.AppendUint64(b, d.Stake)
-		b = be.AppendUint16(b, uint16(len(d.Exits)))
-		for _, e := range d.Exits {
-			b = append(b, e.Pubkey[:]...)
-			b = be.AppendUint64(b, e.ValidatorIndex)
-			b = be.AppendUint64(b, e.ExitEpoch)
-			b = be.AppendUint64(b, e.Stake)
-			b = append(b, e.Nonce[:]...)
-		}
-	}
+	// The exits block of an image with exit approvals: its presence byte
+	// stays, always 0.
+	b = putFlag(b, false)
 	b = putFlag(b, r.SourceGate != nil)
 	if r.SourceGate != nil {
 		b = be.AppendUint64(b, *r.SourceGate)
@@ -454,32 +395,10 @@ func Parse(enc []byte) (*Record, error) {
 		rd.fixed(t[:])
 		r.Target = &t
 	}
-	exits, valid := rd.flag()
-	ok = ok && valid
-	if exits {
-		d := &ExitDay{Day: rd.u64(), Stake: rd.u64()}
-		n := int(rd.u16())
-		if n > MaxExitsPerDay {
-			return nil, fmt.Errorf("%w: %d exits", errRecord, n)
-		}
-		// The entries must be there before they are allocated: a short
-		// record claiming 200 keyed exits would otherwise grow the slice
-		// to about 64 KiB from a few hundred bytes.
-		size := len(backend.Pubkey{}) + 8 + 8 + 8 + 32
-		if len(rd.b) < n*size {
-			return nil, fmt.Errorf("%w: %d exits in %d bytes", errRecord, n, len(rd.b))
-		}
-		if n > 0 {
-			d.Exits = make([]ExitEntry, 0, n)
-		}
-		for range n {
-			var e ExitEntry
-			rd.fixed(e.Pubkey[:])
-			e.ValidatorIndex, e.ExitEpoch, e.Stake = rd.u64(), rd.u64(), rd.u64()
-			rd.fixed(e.Nonce[:])
-			d.Exits = append(d.Exits, e)
-		}
-		r.Exits = d
+	if exits, valid := rd.flag(); exits || !valid {
+		// An image with exit approvals wrote the day's exits here; this
+		// one signs exits without them and reads no such record.
+		return nil, fmt.Errorf("%w: an exits block (written by an image with exit approvals)", errRecord)
 	}
 	has, valid = rd.flag()
 	ok = ok && valid
@@ -608,18 +527,6 @@ func (r *Record) check() error {
 	}
 	if o := r.State.Order; o != nil && o.Kind != OrderHandover {
 		return bad(fmt.Sprintf("order kind %d", o.Kind))
-	}
-	if d := r.Exits; d != nil {
-		var sum uint64
-		for _, e := range d.Exits {
-			if sum+e.Stake < sum {
-				return bad("exit stake overflows")
-			}
-			sum += e.Stake
-		}
-		if len(d.Exits) == 0 || len(d.Exits) > MaxExitsPerDay || sum != d.Stake {
-			return bad("exits: none, too many, or a stake that is not their sum")
-		}
 	}
 	return nil
 }

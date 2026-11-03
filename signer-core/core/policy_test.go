@@ -36,7 +36,6 @@ func TestSetPolicy(t *testing.T) {
 	p := cfg.Policy()
 	p.FeeRecipients = append(p.FeeRecipients, newFee)
 	p.GasLimitMax = 80_000_000
-	p.ExitAllowlist = nil
 	p.AllowUnverifiedNonslashable = true
 	if err := s.CheckPolicy(p); err != nil {
 		t.Fatal(err)
@@ -53,7 +52,9 @@ func TestSetPolicy(t *testing.T) {
 			t.Fatalf("%s: %v", name, err)
 		}
 	}
-	wantStatus(t, sign(&backend.VoluntaryExit{Epoch: 5, ValidatorIndex: 7}), backend.StatusPolicyExit)
+	if err := sign(&backend.VoluntaryExit{Epoch: 5, ValidatorIndex: 7}); err != nil {
+		t.Fatalf("exit after the policy update: %v", err)
+	}
 	got := s.Config()
 	if !reflect.DeepEqual(got.Policy(), p) || !reflect.DeepEqual(got.Schedule(), cfg.Schedule()) ||
 		got.GenesisValidatorsRoot != cfg.GenesisValidatorsRoot || got.MaxEpochsAhead != cfg.MaxEpochsAhead {

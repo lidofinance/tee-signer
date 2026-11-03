@@ -342,7 +342,7 @@ func TestE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const index = 9 // not on the exit allowlist {7}
+	const index = 9
 
 	sock := filepath.Join(t.TempDir(), "a.sock")
 	tcpA := fmt.Sprintf("tcp:127.0.0.1:%d", freePort(t))
@@ -435,10 +435,13 @@ func TestE2E(t *testing.T) {
 	r := wantRefused(t, err, backend.StatusSlashTarget)
 	t.Logf("double vote for target %d refused: %v", e1, r)
 
-	// Exit for a validator not on the allowlist.
-	_, err = viaTCP.Sign(ctx, c.req(pk, &backend.VoluntaryExit{Epoch: e1, ValidatorIndex: index}))
-	r = wantRefused(t, err, backend.StatusPolicyExit)
-	t.Logf("voluntary exit refused: %v", r)
+	// A voluntary exit signs for the key's index, and not for another.
+	if _, err := viaTCP.Sign(ctx, c.req(pk, &backend.VoluntaryExit{Epoch: e1, ValidatorIndex: index})); err != nil {
+		t.Fatalf("voluntary exit: %v", err)
+	}
+	_, err = viaTCP.Sign(ctx, c.req(pk, &backend.VoluntaryExit{Epoch: e1, ValidatorIndex: index + 1}))
+	r = wantRefused(t, err, backend.StatusPolicyIndex)
+	t.Logf("voluntary exit for another index refused: %v", r)
 
 	// Block and a RANDAO root over the unix socket.
 	blk := &backend.BeaconBlockHeader{Slot: e1*slotsPerEpoch + 1, ProposerIndex: index, BodyRoot: backend.Root{0xb0}}

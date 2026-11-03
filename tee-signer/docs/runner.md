@@ -229,8 +229,7 @@ at one epoch, the last is the one in force, and the setup holds that one
   `gloas_fork_epoch`, which the runner needs to sign the Gloas kinds 6 to 8.
   The signer policy fields come from the `policy` object of the same file,
   or from `FEE_RECIPIENT`, `GAS_LIMIT_MIN`, `GAS_LIMIT_MAX`,
-  `EXIT_ALLOWLIST`, `MAX_EPOCHS_AHEAD` and `COMMIT_AHEAD`. The committed file
-  allows no exit.
+  `MAX_EPOCHS_AHEAD` and `COMMIT_AHEAD`.
 - `check-source hoodi config.yaml genesis_validators_root.txt` compares the
   source file with the two files of the chain's repo, fetched by you, and
   fails on a difference or on a fork the source does not list. Run it again
@@ -298,7 +297,7 @@ Two implementations: `remote.New("tcp:host:port" | "unix:/path" |
 dev only). `remote` is pure Go; `software` and `signer-core/core` use cgo
 and need `scripts/build-core.sh` first. Both run the same C core, so
 refusals are identical. Errors carry the core's status code
-(`SC_ERR_SLASH_TARGET`, `SC_ERR_POLICY_EXIT`, ...), see
+(`SC_ERR_SLASH_TARGET`, `SC_ERR_POLICY_INDEX`, ...), see
 `signer-protocol/errors.go`.
 
 ## Platforms

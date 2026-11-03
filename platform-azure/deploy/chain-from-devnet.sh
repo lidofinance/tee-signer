@@ -6,7 +6,7 @@
 #
 # BEACON_URL defaults to http://127.0.0.1:33001 (fixed port of the devnet's
 # beacon node). OUT defaults to stdout. The chain fields come from the beacon
-# API. The policy fields (fee recipient, gas limits, exits) are set here with
+# API. The policy fields (fee recipient, gas limits) are set here with
 # the values of the signing client's devnet mode; override them with the variables
 # below.
 #
@@ -36,7 +36,6 @@ MAX_EPOCHS_AHEAD="${MAX_EPOCHS_AHEAD:-2}"
 FEE_RECIPIENT="${FEE_RECIPIENT:-0x000000000000000000000000000000000000dEaD}"
 GAS_LIMIT_MIN="${GAS_LIMIT_MIN:-30000000}"
 GAS_LIMIT_MAX="${GAS_LIMIT_MAX:-60000000}"
-EXIT_ALLOWLIST="${EXIT_ALLOWLIST:-}" # comma separated validator indices, empty = no exits
 COMMIT_AHEAD="${COMMIT_AHEAD:-32,2,2}" # block_slots,source_epochs,target_epochs
 FAR_FUTURE=18446744073709551615
 
@@ -52,7 +51,7 @@ chain="$(jq -n \
   --argjson genesis "$genesis" --argjson spec "$spec" --argjson forks "$forks" \
   --argjson maxahead "$MAX_EPOCHS_AHEAD" --arg fee "$FEE_RECIPIENT" \
   --argjson gasmin "$GAS_LIMIT_MIN" --argjson gasmax "$GAS_LIMIT_MAX" \
-  --arg exits "$EXIT_ALLOWLIST" --arg commit "$COMMIT_AHEAD" --arg far "$FAR_FUTURE" '
+  --arg commit "$COMMIT_AHEAD" --arg far "$FAR_FUTURE" '
   def fail(m): error("chain-from-devnet: " + m);
   ($commit | split(",") | map(tonumber)) as $c
   | $genesis.data.genesis_fork_version as $gfv
@@ -82,7 +81,6 @@ chain="$(jq -n \
       seconds_per_slot: $sps,
       slots_per_epoch: ($s.SLOTS_PER_EPOCH | tonumber),
       max_epochs_ahead: $maxahead,
-      exit_allowlist: (if $exits == "" then [] else ($exits | split(",") | map(tonumber)) end),
       fee_recipients: [$fee],
       gas_limit_min: $gasmin,
       gas_limit_max: $gasmax,

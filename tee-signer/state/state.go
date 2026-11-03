@@ -179,10 +179,6 @@ type MarkLog interface {
 	Append(ctx context.Context, wm backend.Watermark) error
 	// Raise makes the log's mark at least wm (one record if it is not yet).
 	Raise(ctx context.Context, wm backend.Watermark) error
-	// Exits is the day's exits the newest record carries;
-	// RecordExits writes a record that carries d (exit approvals).
-	Exits() *markstore.ExitDay
-	RecordExits(ctx context.Context, d *markstore.ExitDay) error
 	// Lost is the error the log latched: markstore.ErrLost after another
 	// instance wrote it, markstore.ErrHandedOver for a log that ends with a
 	// tombstone.
@@ -340,23 +336,6 @@ func (h *Hooks) RecordShareSet(ctx context.Context, s *markstore.ShareSet) error
 		return ErrNoMarkLog
 	}
 	return h.marks.RecordShareSet(ctx, s)
-}
-
-// Exits is the day's exits in the mark log; ErrNoMarkLog without one.
-func (h *Hooks) Exits() (*markstore.ExitDay, error) {
-	if h.marks == nil {
-		return nil, ErrNoMarkLog
-	}
-	return h.marks.Exits(), nil
-}
-
-// RecordExits writes the day's exits to the mark log before an exit is
-// signed; ErrNoMarkLog without one.
-func (h *Hooks) RecordExits(ctx context.Context, d *markstore.ExitDay) error {
-	if h.marks == nil {
-		return ErrNoMarkLog
-	}
-	return h.marks.RecordExits(ctx, d)
 }
 
 // MarkLogLost is markstore.ErrLost once another runner instance took the

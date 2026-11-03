@@ -71,7 +71,7 @@ func Update(t testing.TB, g setupwire.Group, v uint64, tag byte) []byte {
 		wc[0], wc[31] = 0x01, 0x42
 		body.Locked = &setupwire.Locked{Approvers: setupwire.ApproverSet{Keys: [][32]byte{pub(1), pub(2), pub(3)}, ApprovalsNeeded: 2},
 			BuilderGasLimitMin: 30_000_000, BuilderGasLimitMax: 30_000_000 + uint64(tag),
-			ExitApprovalsNeeded: 2, MinActivationBalance: 32e9, MaxEffectiveBalance: 2048e9, WithdrawalCredentials: wc}
+			MinActivationBalance: 32e9, MaxEffectiveBalance: 2048e9, WithdrawalCredentials: wc}
 	}
 	for i := range n {
 		body.Salts = append(body.Salts, [32]byte{tag, byte(i + 1), byte(g)})
