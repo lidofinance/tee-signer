@@ -84,19 +84,31 @@ store_accounts() {
 
 RG="${RG:-signer-poc-rg}"
 
-# Network entry: how the signing clients reach port 7100 of a signer (README,
-# "Network entry"). It is one part of the container group template, which
-# deploy.sh render merges into aci-template.json. The network is not
-# trusted and can be replaced; nothing but the runner's port 7100 may
-# listen inside the group. This tree implements none: a build
-# overlay (SIGNER_BUILD_OVERLAY_DIR) adds its network entries and may
-# set NETWORK's default, its build folder and image tag.
+# Network. By default (NETWORK unset) the group holds the runner alone; it
+# listens on port 7100 and, with SUBNET_ID_N, gets a private IP in that
+# subnet (README, "Network"). A build overlay (SIGNER_BUILD_OVERLAY_DIR)
+# may add network entries: each is one part of the container group
+# template, which deploy.sh render merges into aci-template.json, and the
+# overlay may set NETWORK's default, its build folder and image tag.
 NETWORK="${NETWORK:-}"
 devnet_hook azure_network_defaults
 
+# has_network: a network entry part is in use.
+has_network() { [ -n "$NETWORK" ]; }
+
 check_network() {
-  [ -n "$NETWORK" ] && devnet_has azure_network_file && return 0
-  die "NETWORK=${NETWORK:-unset}: this tree has no Azure network entry; the build overlay (SIGNER_BUILD_OVERLAY_DIR) adds its own (README, Network entry)"
+  has_network || return 0
+  devnet_has azure_network_file && return 0
+  die "NETWORK=$NETWORK: this tree has no Azure network entry part; leave NETWORK unset for the runner alone, or use the build overlay (SIGNER_BUILD_OVERLAY_DIR) that has it"
+}
+
+# subnet_id N: SUBNET_ID_N, the resource ID of the subnet of signer N, or
+# nothing (the group gets no IP address).
+subnet_id() {
+  local v="SUBNET_ID_$1"
+  [ -z "${!v:-}" ] || [[ "${!v}" =~ ^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\.Network/virtualNetworks/[^/]+/subnets/[^/]+$ ]] ||
+    die "$v=${!v}: not a subnet resource ID (/subscriptions/.../virtualNetworks/<vnet>/subnets/<subnet>)"
+  echo "${!v:-}"
 }
 
 # A non-prod CHAIN puts "-<chain>" into the build folder and the image name.
@@ -191,11 +203,12 @@ describe_var() {
 registry_server() { echo "${ACR_NAME}.azurecr.io"; }
 vault_endpoint() { echo "${VAULT}.vault.azure.net"; }
 
-# The name overrides are checked here, outside any $(...), so a bad one
-# stops the script instead of leaving an empty name.
+# The name overrides and subnet IDs are checked here, outside any $(...),
+# so a bad one stops the script instead of leaving an empty name.
 for _n in 1 2 3; do
   group_name "$_n" >/dev/null
   key_name "$_n" >/dev/null
   identity_name "$_n" >/dev/null
+  subnet_id "$_n" >/dev/null
 done
 unset _n

@@ -2,7 +2,7 @@
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
   "contentVersion": "1.0.0.0",
   "metadata": {
-    "description": "One PoC signer: the runner in one confidential container group, plus the network entry container that deploy.sh render adds from network/<NETWORK>.json (an optional overlay; this tree has none). The runner does the attestation and the key release itself, in process; no other container in the group listens on a port. Its command holds only the flags that are the same for every signer; the signer's values come in its setup (signerSetup, base64 of the binary setup, into SIGNER_SETUP). deploy.sh render fills the capitalised placeholders between two at signs per signer; do not deploy this file as it is. signerSetup and the network part's parameters have no default on purpose: az confcom turns such a parameter into a wildcard rule, so their values stay out of the CCE policy hash."
+    "description": "One signer: the runner alone in one confidential container group, listening on port 7100. The runner does the attestation and the key release itself, in process. Its command holds only the flags that are the same for every signer; the signer's values come in its setup (signerSetup, base64 of the binary setup, into SIGNER_SETUP). deploy.sh render fills the capitalised placeholders between two at signs per signer; do not deploy this file as it is. signerSetup has no default on purpose: az confcom turns such a parameter into a wildcard rule, so its value stays out of the CCE policy hash. subnetId and the two logWorkspace parameters are optional and only set group properties, which are not in the CCE policy. Without subnetId the group has no IP address, as before."
   },
   "parameters": {
     "name": { "type": "string", "defaultValue": "@GROUP_NAME@" },
@@ -10,7 +10,10 @@
     "runnerImage": { "type": "string", "defaultValue": "@RUNNER_IMAGE@" },
     "identityId": { "type": "string", "defaultValue": "@IDENTITY_ID@" },
     "registryServer": { "type": "string", "defaultValue": "@REGISTRY_SERVER@" },
-    "signerSetup": { "type": "string", "metadata": { "description": "Base64 of the signer's binary setup (runner/cmd/setup-tool encode). Not secret. No default: wildcard in the CCE policy, so one policy serves every signer." } }
+    "signerSetup": { "type": "string", "metadata": { "description": "Base64 of the signer's binary setup (runner/cmd/setup-tool encode). Not secret. No default: wildcard in the CCE policy, so one policy serves every signer." } },
+    "subnetId": { "type": "string", "defaultValue": "", "metadata": { "description": "Optional. Resource ID of a subnet delegated to Microsoft.ContainerInstance/containerGroups. When set, the group gets a private IP in it with port 7100 open; there is never a public IP. Empty: no IP address." } },
+    "logWorkspaceId": { "type": "securestring", "defaultValue": "", "metadata": { "description": "Optional. Log Analytics workspace ID (customer ID) for the group's logs. Empty: no diagnostics." } },
+    "logWorkspaceKey": { "type": "securestring", "defaultValue": "", "metadata": { "description": "Optional. The workspace's shared key, with logWorkspaceId." } }
   },
   "resources": [
     {
@@ -26,6 +29,9 @@
         "sku": "Confidential",
         "confidentialComputeProperties": { "ccePolicy": "" },
         "osType": "Linux",
+        "subnetIds": "[if(empty(parameters('subnetId')), null(), createArray(createObject('id', parameters('subnetId'))))]",
+        "ipAddress": "[if(empty(parameters('subnetId')), null(), createObject('type', 'Private', 'ports', createArray(createObject('port', 7100, 'protocol', 'TCP'))))]",
+        "diagnostics": "[if(empty(parameters('logWorkspaceId')), null(), createObject('logAnalytics', createObject('workspaceId', parameters('logWorkspaceId'), 'workspaceKey', parameters('logWorkspaceKey'), 'logType', 'ContainerInstanceLogs')))]",
         "restartPolicy": "OnFailure",
         "imageRegistryCredentials": [
           { "server": "[parameters('registryServer')]", "identity": "[parameters('identityId')]" }
@@ -39,7 +45,7 @@
                 "/runner",
                 "-platform", "azure",
                 "-setup", "platform",
-                "-listen", "tcp:127.0.0.1:7100",
+                "-listen", "tcp:0.0.0.0:7100",
                 "-state-dir", "/var/lib/signer",
                 "-restart-floor=true", "-persist-watermarks=false",
                 "-nts-clock",
@@ -47,6 +53,7 @@
                 "-nts-wait", "90s", "-nts-max-bound", "100ms",
                 "-log-json"
               ],
+              "ports": [ { "port": 7100, "protocol": "TCP" } ],
               "environmentVariables": [
                 { "name": "SIGNER_SETUP", "value": "[parameters('signerSetup')]" }
               ],

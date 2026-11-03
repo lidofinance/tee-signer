@@ -28,16 +28,15 @@
 #   Nitro  scripts/nitro-eif.sh aarch64 (the EIF for Graviton, built twice by
 #          the script), and the parent's hostagent, forwarder and udprelay
 #          for arm64
-#   Azure  platform-azure/deploy/build-image.sh, then, when a network entry exists,
-#          deploy.sh policy in a network namespace with only lo (unshare
-#          -rn): az confcom reads the local images and cannot reach a
-#          registry. STDIO=enable: a test image (the group's logs are
-#          readable); production uses STDIO=disable, another policy
+#   Azure  platform-azure/deploy/build-image.sh, then deploy.sh policy
+#          in a network namespace with only lo (unshare -rn): az confcom
+#          reads the local images and cannot reach a registry. The group
+#          is the runner alone (aci-template.json). STDIO=enable: a test
+#          image (the group's logs are readable); production uses
+#          STDIO=disable, another policy
 #   GCP    platform-gcp/deploy/build-image.sh with NETWORK_ENTRY=public;
 #          log_redirect is "always" in this image, a test image
-# This tree has no Azure network entry, so without a build
-# overlay there is no Azure CCE policy (azure.cce_policy none). With
-# SIGNER_BUILD_OVERLAY_DIR (non-prod images only) the overlay sets the
+# With SIGNER_BUILD_OVERLAY_DIR (non-prod images only) the overlay sets the
 # network entries of the devnet images (devnet_generic_images_env).
 # The EIF file's own sha256 changes with every build (its
 # metadata has the build time); PCR0 to PCR2, which KMS checks, do not. It is
@@ -101,19 +100,15 @@ cmd_build() {
   for p in PCR0 PCR1 PCR2; do
     grep -q "$p repeats" "$dir/nitro.log" || die "the two EIF builds differ in $p (see $dir/nitro.log)"
   done
-  log "Azure image, ${AZ_ENV[*]:-no network entry} (log $dir/azure.log)"
+  log "Azure image, ${AZ_ENV[*]:-the runner alone} (log $dir/azure.log)"
   env ${AZ_ENV[@]+"${AZ_ENV[@]}"} bash "$ROOT/platform-azure/deploy/build-image.sh" >"$dir/azure.log" 2>&1 || { tail -n 30 "$dir/azure.log"; die "azure build-image.sh failed"; }
   rm -f "$AZ_OUT/policy.sha256"
-  if [ ${#AZ_ENV[@]} = 0 ]; then
-    log "no Azure CCE policy: this tree has no Azure network entry (the build overlay has its own)"
-  else
   log "Azure CCE policy, in a network namespace with only lo (log $dir/azure-policy.log)"
   # shellcheck disable=SC2016 # the inner script's $1, expanded by the inner bash
-  env "${AZ_ENV[@]}" ACR_NAME="${ACR_NAME:-signeracr}" VAULT="${VAULT:-signer-vault}" \
+  env ${AZ_ENV[@]+"${AZ_ENV[@]}"} ACR_NAME="${ACR_NAME:-signeracr}" VAULT="${VAULT:-signer-vault}" \
     unshare -rn bash -c 'ip -o link | grep -qv "lo:" && { echo "the namespace has a link besides lo" >&2; exit 1; }; exec bash "$1" policy' _ \
     "$ROOT/platform-azure/deploy/deploy.sh" >"$dir/azure-policy.log" 2>&1 || { tail -n 30 "$dir/azure-policy.log"; die "deploy.sh policy failed"; }
   [ -s "$AZ_OUT/policy.sha256" ] || die "no $AZ_OUT/policy.sha256"
-  fi
   log "GCP image, ${GCP_ENV[*]} (log $dir/gcp.log)"
   env "${GCP_ENV[@]}" bash "$ROOT/platform-gcp/deploy/build-image.sh" >"$dir/gcp.log" 2>&1 || { tail -n 30 "$dir/gcp.log"; die "gcp build-image.sh failed"; }
   {
