@@ -25,13 +25,8 @@
     {
       "epoch": 50688,
       "version": "0x70000910"
-    },
-    {
-      "epoch": 132352,
-      "version": "0x80000910"
     }
   ],
-  "gloas_fork_epoch": 132352,
   "voluntary_exit_fork_version": "0x40000910",
   "genesis_time": 1742213400,
   "seconds_per_slot": 12,

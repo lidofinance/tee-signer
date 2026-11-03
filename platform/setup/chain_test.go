@@ -24,14 +24,14 @@ func chainFile(t *testing.T, path ...string) *ChainFile {
 }
 
 // Hoodi's chain.json lists four forks at epoch 0; the setup holds the last
-// one, which is the one in force from epoch 0.
+// one, which is the one in force from epoch 0. Hoodi has no Gloas epoch.
 func TestChainSchedule(t *testing.T) {
 	sched, err := chainFile(t, "hoodi.json").Schedule()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sched) != 4 || sched[0].Epoch != 0 || sched[0].Version != [4]byte{0x50, 0, 0x09, 0x10} ||
-		sched[1].Epoch != 2048 || sched[3].Epoch != 132352 {
+	if len(sched) != 3 || sched[0].Epoch != 0 || sched[0].Version != [4]byte{0x50, 0, 0x09, 0x10} ||
+		sched[1].Epoch != 2048 || sched[2].Epoch != 50688 {
 		t.Fatalf("schedule %v", sched)
 	}
 	c := &ChainFile{Forks: []chainFork{{Epoch: 5}, {Epoch: 3}}, SecondsPerSlot: 1, SlotsPerEpoch: 1}
@@ -63,7 +63,7 @@ func TestChainLinesAndCompare(t *testing.T) {
 	}
 	var human strings.Builder
 	for _, l := range strings.Split(string(sample), "\n") {
-		if k, _, ok := strings.Cut(l, " = "); ok && keys[k] {
+		if k, _, ok := strings.Cut(l, " = "); ok && (keys[k] || k == "gloas_fork_epoch") {
 			continue
 		}
 		human.WriteString(l + "\n")
@@ -77,7 +77,7 @@ func TestChainLinesAndCompare(t *testing.T) {
 		t.Fatal(err)
 	}
 	if s.Chain.Preset != setupwire.PresetMainnet || s.Safety.MaxSignEpochsAheadOfClock != 2 || s.Locked.BuilderGasLimitMax != 200_000_000 ||
-		len(s.Open.ForkSchedule) != 4 || s.Open.GloasForkEpoch == nil || *s.Open.GloasForkEpoch != 132352 {
+		len(s.Open.ForkSchedule) != 3 || s.Open.GloasForkEpoch != nil {
 		t.Fatalf("setup from hoodi.json: %+v %+v", s.Chain, s.Open)
 	}
 	// Another chain, or the same chain with one chain field changed.
@@ -87,7 +87,7 @@ func TestChainLinesAndCompare(t *testing.T) {
 	for name, mutate := range map[string]func(c *ChainFile){
 		"genesis time":    func(c *ChainFile) { c.GenesisTime++ },
 		"a fork moved":    func(c *ChainFile) { c.Forks[5].Epoch++ },
-		"no gloas":        func(c *ChainFile) { c.GloasForkEpoch = nil },
+		"a gloas epoch":   func(c *ChainFile) { e := uint64(200_000); c.GloasForkEpoch = &e },
 		"exit version":    func(c *ChainFile) { c.VoluntaryExitForkVersion[0]++ },
 		"minimal preset":  func(c *ChainFile) { c.Preset = "minimal" },
 		"seconds a slot":  func(c *ChainFile) { c.SecondsPerSlot = 6 },
