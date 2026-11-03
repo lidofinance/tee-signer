@@ -33,8 +33,8 @@ if [ "$(jq -r '.fee_recipients[0]' "$T/hoodi-fee.json")" = 0x1111111111111111111
 else
   bad "FEE_RECIPIENT override"
 fi
-[ "$(jq -c '[.forks[] | .epoch]' "$HOODI")" = "[0,0,0,0,2048,50688,132352]" ] && ok "fork epochs Altair to Gloas" || bad "fork epochs: $(jq -c '[.forks[] | .epoch]' "$HOODI")"
-[ "$(jq -c .gloas_fork_epoch "$HOODI")" = 132352 ] && ok "gloas_fork_epoch 132352" || bad "gloas_fork_epoch: $(jq -c .gloas_fork_epoch "$HOODI")"
+[ "$(jq -c '[.forks[] | .epoch]' "$HOODI")" = "[0,0,0,0,2048,50688]" ] && ok "fork epochs Altair to Fulu" || bad "fork epochs: $(jq -c '[.forks[] | .epoch]' "$HOODI")"
+[ "$(jq -c .gloas_fork_epoch "$HOODI")" = null ] && ok "no gloas_fork_epoch (unscheduled)" || bad "gloas_fork_epoch: $(jq -c .gloas_fork_epoch "$HOODI")"
 bash "$CHAIN" build mainnet "$T/mainnet.json" 2>/dev/null
 if cmp -s "$T/mainnet.json" "$MAINNET"; then ok "mainnet.json rebuilds to the committed bytes"; else bad "mainnet.json differs from a fresh build"; fi
 [ "$(jq -c '[.forks[] | .epoch]' "$MAINNET")" = "[74240,144896,194048,269568,364032,411392]" ] && ok "mainnet fork epochs Altair to Fulu" || bad "mainnet fork epochs: $(jq -c '[.forks[] | .epoch]' "$MAINNET")"
@@ -61,8 +61,8 @@ expect_ok "verify hoodi hoodi.json" bash "$CHAIN" verify hoodi "$HOODI"
 expect_fail "verify hoodi refuses the devnet file" bash "$CHAIN" verify hoodi "$T/devnet.json"
 expect_fail "verify devnet refuses hoodi.json" bash "$CHAIN" verify devnet "$HOODI"
 expect_fail "verify hoodi refuses chain.ci-test.json" bash "$CHAIN" verify hoodi "$CITEST"
-for mut in '.genesis_validators_root = "0x" + ("00" * 32)' '.genesis_time += 1' '.forks[6].epoch = 132353' \
-  '.forks |= .[:6]' '.seconds_per_slot = 6' '.voluntary_exit_fork_version = "0x50000910"'   'del(.gloas_fork_epoch)' '.gloas_fork_epoch = 132353' '.gloas_fork_epoch = 50688'; do
+for mut in '.genesis_validators_root = "0x" + ("00" * 32)' '.genesis_time += 1' '.forks[5].epoch = 50689' \
+  '.forks |= .[:5]' '.seconds_per_slot = 6' '.voluntary_exit_fork_version = "0x50000910"' '.gloas_fork_epoch = 132352' '.gloas_fork_epoch = 50688'; do
   jq "$mut" "$HOODI" >"$T/mut.json"
   expect_fail "identify refuses hoodi.json with $mut" bash "$CHAIN" identify "$T/mut.json"
 done
@@ -119,8 +119,8 @@ expect_ok "check-beacon passes on a matching node" bash "$CHAIN" check-beacon ho
 make_beacon "$T/bn-nogloas" '.[:-1]'
 expect_fail "check-beacon: a node that does not know Gloas" bash "$CHAIN" check-beacon hoodi "file://$T/bn-nogloas"
 make_beacon "$T/bn-glep"
-jq '.data.GLOAS_FORK_EPOCH = "18446744073709551615"' "$T/bn-glep/eth/v1/config/spec" >"$T/s" && mv "$T/s" "$T/bn-glep/eth/v1/config/spec"
-expect_fail "check-beacon: a node whose spec has Gloas unscheduled" bash "$CHAIN" check-beacon hoodi "file://$T/bn-glep"
+jq '.data.GLOAS_FORK_EPOCH = "132352"' "$T/bn-glep/eth/v1/config/spec" >"$T/s" && mv "$T/s" "$T/bn-glep/eth/v1/config/spec"
+expect_fail "check-beacon: a node whose spec has Gloas scheduled" bash "$CHAIN" check-beacon hoodi "file://$T/bn-glep"
 make_beacon "$T/bn-gvr"
 jq '.data.genesis_validators_root = "0x" + ("11" * 32)' "$T/bn-gvr/eth/v1/beacon/genesis" >"$T/g" && mv "$T/g" "$T/bn-gvr/eth/v1/beacon/genesis"
 expect_fail "check-beacon: a node of another chain" bash "$CHAIN" check-beacon hoodi "file://$T/bn-gvr"
