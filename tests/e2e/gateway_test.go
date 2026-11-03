@@ -1,13 +1,21 @@
 package e2e
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
+	"math/big"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -32,7 +40,10 @@ import (
 // validator signature. The test checks every signature under the
 // validator key against the signing root the signer core computes. The
 // signers are listed in another order than their share indices, so the
-// gateway must find the indices from the share keys.
+// gateway must find the indices from the share keys. The validator client
+// reaches the gateway over TLS with a client certificate of the client
+// CA; a client named by its fingerprint gets in too, and clients without
+// an accepted certificate, and plain HTTP, get no service.
 func TestE2EGateway(t *testing.T) {
 	c := newChain(t)
 	dir := t.TempDir()
@@ -92,8 +103,14 @@ func TestE2EGateway(t *testing.T) {
 	}
 	listen := fmt.Sprintf("127.0.0.1:%d", freePort(t))
 	metricsAddr := fmt.Sprintf("127.0.0.1:%d", freePort(t))
+	gtls := newGatewayTLS(t, dir)
 	cfg := fmt.Sprintf(`listen: %s
 metrics: %s
+tls:
+  cert: %s
+  key: %s
+  client_ca: %s
+  client_fingerprints: ["%s"]
 chain:
   preset: mainnet
   slots_per_epoch: %d
@@ -108,15 +125,34 @@ signers:
   nodes:
 %spolicy:
   fee_recipient_allowlist: ["0x1111111111111111111111111111111111111111"]
-`, listen, metricsAddr, slotsPerEpoch, c.cfg.GenesisForkVersion[:], c.cfg.GenesisValidatorsRoot[:], certFile, keyFile, nodes.String())
-	gw := startGateway(t, dir, cfg, listen)
-	url := "http://" + listen
+`, listen, metricsAddr, gtls.certFile, gtls.keyFile, gtls.clientCAFile, gtls.knownFingerprint, slotsPerEpoch, c.cfg.GenesisForkVersion[:], c.cfg.GenesisValidatorsRoot[:], certFile, keyFile, nodes.String())
+	url := "https://" + listen
+	gw := startGateway(t, dir, cfg, url, gtls.client)
 
 	var keys []string
-	getJSON(t, url+"/api/v1/eth2/publicKeys", &keys)
+	getJSON(t, gtls.client, url+"/api/v1/eth2/publicKeys", &keys)
 	if len(keys) != 1 || keys[0] != fmt.Sprintf("%#x", pk[:]) {
 		t.Fatalf("public keys %v", keys)
 	}
+	var known []string
+	getJSON(t, gtls.known, url+"/api/v1/eth2/publicKeys", &known)
+	if len(known) != 1 || known[0] != keys[0] {
+		t.Fatalf("public keys for the client named by its fingerprint: %v", known)
+	}
+	for name, cl := range map[string]*http.Client{"no client certificate": gtls.noCert, "a client of another CA": gtls.stranger} {
+		if resp, err := cl.Get(url + "/api/v1/eth2/publicKeys"); err == nil {
+			resp.Body.Close()
+			t.Fatalf("%s: %d, want a failed handshake", name, resp.StatusCode)
+		}
+	}
+	if resp, err := http.Get("http://" + listen + "/upcheck"); err == nil {
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK || string(b) == "OK" {
+			t.Fatalf("plain HTTP to the TLS listener: %d %q", resp.StatusCode, b)
+		}
+	}
+	t.Logf("TLS: the client CA's client and the listed fingerprint get the key list; no certificate, another CA and plain HTTP get no service")
 	if n := strings.Count(gw.logText(), "signer attested"); n < 3 {
 		t.Fatalf("%d attested connections at start, want 3:\n%s", n, gw.logText())
 	}
@@ -125,7 +161,7 @@ signers:
 		c.cfg.GenesisForkVersion[:], c.cfg.GenesisForkVersion[:], c.cfg.GenesisValidatorsRoot[:])
 	sign := func(body string) (int, backend.Signature, string) {
 		t.Helper()
-		code, out := postJSON(t, url+"/api/v1/eth2/sign/"+fmt.Sprintf("%#x", pk[:]), body)
+		code, out := postJSON(t, gtls.client, url+"/api/v1/eth2/sign/"+fmt.Sprintf("%#x", pk[:]), body)
 		var sig backend.Signature
 		if code == http.StatusOK {
 			var reply struct {
@@ -418,9 +454,9 @@ func (g *gatewayProc) logText() string {
 	return string(b)
 }
 
-// startGateway builds the gateway, starts it with cfg and waits until it
-// answers on listen.
-func startGateway(t *testing.T, dir, cfg, listen string) *gatewayProc {
+// startGateway builds the gateway, starts it with cfg and waits until
+// url answers /upcheck through cl.
+func startGateway(t *testing.T, dir, cfg, url string, cl *http.Client) *gatewayProc {
 	t.Helper()
 	bin := filepath.Join(binDir, "gateway")
 	binMu.Lock()
@@ -455,7 +491,7 @@ func startGateway(t *testing.T, dir, cfg, listen string) *gatewayProc {
 	})
 	deadline := time.Now().Add(60 * time.Second)
 	for {
-		resp, err := http.Get("http://" + listen + "/upcheck")
+		resp, err := cl.Get(url + "/upcheck")
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
@@ -469,9 +505,9 @@ func startGateway(t *testing.T, dir, cfg, listen string) *gatewayProc {
 	}
 }
 
-func getJSON(t *testing.T, url string, v any) {
+func getJSON(t *testing.T, cl *http.Client, url string, v any) {
 	t.Helper()
-	resp, err := http.Get(url)
+	resp, err := cl.Get(url)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -482,7 +518,7 @@ func getJSON(t *testing.T, url string, v any) {
 }
 
 // postJSON sends a sign request as a validator client does.
-func postJSON(t *testing.T, url, body string) (int, string) {
+func postJSON(t *testing.T, cl *http.Client, url, body string) (int, string) {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
 	if err != nil {
@@ -490,7 +526,7 @@ func postJSON(t *testing.T, url, body string) (int, string) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := cl.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -516,4 +552,87 @@ func phase0AggregateSSZ(aggregator uint64, proof backend.Signature, bits []byte,
 	out := le.AppendUint64(nil, aggregator)
 	out = le.AppendUint32(out, 8+4+96)
 	return append(append(out, proof[:]...), att...)
+}
+
+// gatewayTLS is the TLS of the gateway's listener in TestE2EGateway: the
+// server certificate for 127.0.0.1, the client CA, and the validator
+// clients.
+type gatewayTLS struct {
+	certFile, keyFile, clientCAFile string
+	// knownFingerprint is the SHA-256 of the self-signed certificate of known.
+	knownFingerprint string
+	// client has a certificate of the client CA, known a self-signed one
+	// named by its fingerprint, stranger one of another CA, noCert none.
+	client, known, stranger, noCert *http.Client
+}
+
+func newGatewayTLS(t *testing.T, dir string) *gatewayTLS {
+	t.Helper()
+	serial := int64(100)
+	type pair struct {
+		cert *x509.Certificate
+		key  *ecdsa.PrivateKey
+	}
+	issue := func(tmpl *x509.Certificate, parent *pair) *pair {
+		k, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		serial++
+		tmpl.SerialNumber = big.NewInt(serial)
+		tmpl.NotBefore, tmpl.NotAfter = time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour)
+		signer, signerCert := k, tmpl
+		if parent != nil {
+			signer, signerCert = parent.key, parent.cert
+		}
+		der, err := x509.CreateCertificate(rand.Reader, tmpl, signerCert, &k.PublicKey, signer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, _ := x509.ParseCertificate(der)
+		return &pair{c, k}
+	}
+	ca := func(cn string) *pair {
+		return issue(&x509.Certificate{Subject: pkix.Name{CommonName: cn}, IsCA: true, BasicConstraintsValid: true,
+			KeyUsage: x509.KeyUsageCertSign}, nil)
+	}
+	clientOf := func(parent *pair) *pair {
+		return issue(&x509.Certificate{Subject: pkix.Name{CommonName: "validator client"}, KeyUsage: x509.KeyUsageDigitalSignature,
+			ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}, parent)
+	}
+	serverCA, clientCA := ca("gateway server CA"), ca("validator client CA")
+	server := issue(&x509.Certificate{Subject: pkix.Name{CommonName: "gateway"}, IPAddresses: []net.IP{net.IPv4(127, 0, 0, 1)},
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}, serverCA)
+	certPEM := func(c *x509.Certificate) []byte {
+		return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Raw})
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(server.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := &gatewayTLS{certFile: filepath.Join(dir, "gw-server.pem"), keyFile: filepath.Join(dir, "gw-server-key.pem"),
+		clientCAFile: filepath.Join(dir, "gw-client-ca.pem")}
+	for f, b := range map[string][]byte{
+		g.certFile:     append(certPEM(server.cert), certPEM(serverCA.cert)...),
+		g.keyFile:      pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}),
+		g.clientCAFile: certPEM(clientCA.cert),
+	} {
+		if err := os.WriteFile(f, b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(serverCA.cert)
+	httpClient := func(p *pair) *http.Client {
+		cfg := &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS13}
+		if p != nil {
+			cfg.Certificates = []tls.Certificate{{Certificate: [][]byte{p.cert.Raw}, PrivateKey: p.key}}
+		}
+		cl := &http.Client{Transport: &http.Transport{TLSClientConfig: cfg}, Timeout: 30 * time.Second}
+		t.Cleanup(cl.CloseIdleConnections)
+		return cl
+	}
+	known := clientOf(nil)
+	fp := sha256.Sum256(known.cert.Raw)
+	g.knownFingerprint = hex.EncodeToString(fp[:])
+	g.client, g.known = httpClient(clientOf(clientCA)), httpClient(known)
+	g.stranger, g.noCert = httpClient(clientOf(ca("other CA"))), httpClient(nil)
+	return g
 }

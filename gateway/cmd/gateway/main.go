@@ -22,6 +22,7 @@ import (
 	"github.com/lidofinance/tee-signer/gateway/internal/metrics"
 	"github.com/lidofinance/tee-signer/gateway/internal/policy"
 	"github.com/lidofinance/tee-signer/gateway/internal/server"
+	"github.com/lidofinance/tee-signer/gateway/internal/servertls"
 	"github.com/lidofinance/tee-signer/web3signer-api/eth2"
 	"github.com/lidofinance/tee-signer/web3signer-api/signing"
 )
@@ -72,6 +73,28 @@ func run(cfgPath string, log *slog.Logger) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// The listener's TLS files are read before the signers are reached, so
+	// a bad file stops the start at once.
+	var serverTLS *servertls.Server
+	if cfg.TLSOn() {
+		if serverTLS, err = servertls.New(cfg.ServerTLS(), log); err != nil {
+			return err
+		}
+		leaf := serverTLS.Leaf()
+		log.Info("server TLS", "cert", cfg.TLS.Cert, "serial", leaf.SerialNumber.String(),
+			"not_after", leaf.NotAfter.UTC().Format(time.RFC3339), "min_version", cfg.TLS.MinVersion,
+			"client_ca", cfg.TLS.ClientCA, "client_fingerprints", len(cfg.TLS.ClientFingerprints),
+			"reload_interval", cfg.TLS.ReloadInterval.String())
+		if cfg.TLS.InsecureNoClientAuth {
+			log.Warn("tls.insecure_no_client_auth: no client certificate asked, any client that reaches listen can request signatures",
+				"listen", cfg.Listen)
+		}
+		go serverTLS.Run(ctx, cfg.TLS.ReloadInterval)
+	} else if !cfg.ListenLoopback() {
+		log.Warn("insecure_plain_http_on_network: plain HTTP without authentication on a network address, "+
+			"any host that reaches listen can request signatures", "listen", cfg.Listen)
+	}
 
 	certs, err := certreload.New(cfg.Signers.ClientCert, cfg.Signers.ClientKey, log)
 	if err != nil {
@@ -134,12 +157,23 @@ func run(cfgPath string, log *slog.Logger) error {
 	log.Info("coalesce", "enabled", *cfg.Coalesce.Enabled, "cache_slots", *cfg.Coalesce.CacheSlots,
 		"seconds_per_slot", cfg.Chain.SecondsPerSlot)
 	srv := &http.Server{
-		Addr:              cfg.Listen,
 		Handler:           handler.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		// Failed handshakes (a client without an accepted certificate) go
+		// to the log as warnings.
+		ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 	}
-	go func() { errCh <- srv.ListenAndServe() }()
-	log.Info("listening", "addr", cfg.Listen)
+	ln, err := net.Listen("tcp", cfg.Listen)
+	if err != nil {
+		return err
+	}
+	if serverTLS != nil {
+		srv.TLSConfig = serverTLS.Config()
+		go func() { errCh <- srv.ServeTLS(ln, "", "") }()
+	} else {
+		go func() { errCh <- srv.Serve(ln) }()
+	}
+	log.Info("listening", "addr", cfg.Listen, "tls", serverTLS != nil)
 
 	select {
 	case err := <-errCh:

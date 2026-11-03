@@ -1,6 +1,7 @@
 package config
 
 import (
+	"crypto/tls"
 	"os"
 	"path/filepath"
 	"strings"
@@ -216,6 +217,82 @@ func TestMetricsSetting(t *testing.T) {
 	for _, bad := range []string{"metrics: 19001\n", "metrics: 127.0.0.1:19000\n"} {
 		if _, err := load(t, bad+pin); err == nil || !strings.Contains(err.Error(), "metrics") {
 			t.Fatalf("%q: %v", bad, err)
+		}
+	}
+}
+
+// The tls section and the plain HTTP rule: defaults, relative paths, and
+// every refusal.
+func TestTLSSettings(t *testing.T) {
+	fp := strings.Repeat("ab", 32)
+	fpColons := strings.ToUpper(strings.TrimSuffix(strings.Repeat("CD:", 32), ":"))
+	c, err := load(t, pin+"listen: 0.0.0.0:19000\ntls:\n  cert: s.pem\n  key: s-key.pem\n  client_ca: ca.pem\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.TLSOn() || c.TLS.MinVersion != "1.2" || c.TLS.ReloadInterval != 10*time.Second || !filepath.IsAbs(c.TLS.Cert) ||
+		!filepath.IsAbs(c.TLS.Key) || !filepath.IsAbs(c.TLS.ClientCA) {
+		t.Fatalf("defaults: %+v", c.TLS)
+	}
+	s := c.ServerTLS()
+	if s.MinVersion != tls.VersionTLS12 || s.ClientCAFile != c.TLS.ClientCA || s.NoClientAuth || len(s.ClientFingerprints) != 0 {
+		t.Fatalf("settings: %+v", s)
+	}
+	c, err = load(t, pin+"listen: \"[::]:19000\"\ntls:\n  cert: /s.pem\n  key: /s-key.pem\n  min_version: \"1.3\"\n  reload_interval: 1m\n"+
+		"  client_fingerprints: [\""+fp+"\", \""+fpColons+"\"]\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s = c.ServerTLS()
+	if s.MinVersion != tls.VersionTLS13 || s.ClientCAFile != "" || len(s.ClientFingerprints) != 2 || s.ClientFingerprints[0][0] != 0xab ||
+		s.ClientFingerprints[1][31] != 0xcd || c.TLS.ReloadInterval != time.Minute || c.TLS.Cert != "/s.pem" {
+		t.Fatalf("fingerprints: %+v %+v", c.TLS, s)
+	}
+	if c, err = load(t, pin+"tls:\n  cert: s.pem\n  key: k.pem\n  insecure_no_client_auth: true\n"); err != nil || !c.ServerTLS().NoClientAuth {
+		t.Fatalf("insecure_no_client_auth: %v", err)
+	}
+
+	// Plain HTTP: loopback always; another address only with the opt-out.
+	for _, l := range []string{"127.0.0.1:19000", "127.0.0.2:1", "localhost:19000", "\"[::1]:19000\""} {
+		if c, err := load(t, pin+"listen: "+l+"\n"); err != nil || c.TLSOn() || !c.ListenLoopback() {
+			t.Errorf("listen %s without tls: %v", l, err)
+		}
+	}
+	for _, l := range []string{"0.0.0.0:19000", "\":19000\"", "192.168.1.10:19000", "\"[::]:19000\"", "gateway.lan:19000"} {
+		if _, err := load(t, pin+"listen: "+l+"\n"); err == nil || !strings.Contains(err.Error(), "not a loopback address") {
+			t.Errorf("listen %s without tls: %v", l, err)
+		}
+		if c, err := load(t, pin+"listen: "+l+"\ninsecure_plain_http_on_network: true\n"); err != nil || c.ListenLoopback() {
+			t.Errorf("listen %s with insecure_plain_http_on_network: %v", l, err)
+		}
+	}
+
+	for name, body := range map[string]string{
+		"listen not HOST:PORT":           "listen: 19000\n",
+		"key without cert":               "tls:\n  key: k.pem\n  client_ca: ca.pem\n",
+		"client_ca without cert":         "tls:\n  client_ca: ca.pem\n",
+		"fingerprints without cert":      "tls:\n  client_fingerprints: [\"" + fp + "\"]\n",
+		"min_version without cert":       "tls:\n  min_version: \"1.3\"\n",
+		"no client auth without cert":    "tls:\n  insecure_no_client_auth: true\n",
+		"reload without cert":            "tls:\n  reload_interval: 1s\n",
+		"cert without key":               "tls:\n  cert: s.pem\n  client_ca: ca.pem\n",
+		"no clients named":               "tls:\n  cert: s.pem\n  key: k.pem\n",
+		"no client auth and a CA":        "tls:\n  cert: s.pem\n  key: k.pem\n  client_ca: ca.pem\n  insecure_no_client_auth: true\n",
+		"no client auth and fingerprint": "tls:\n  cert: s.pem\n  key: k.pem\n  client_fingerprints: [\"" + fp + "\"]\n  insecure_no_client_auth: true\n",
+		"short fingerprint":              "tls:\n  cert: s.pem\n  key: k.pem\n  client_fingerprints: [\"abcd\"]\n",
+		"fingerprint not hex":            "tls:\n  cert: s.pem\n  key: k.pem\n  client_fingerprints: [\"" + strings.Repeat("zz", 32) + "\"]\n",
+		"same fingerprint twice": "tls:\n  cert: s.pem\n  key: k.pem\n  client_fingerprints: [\"" + fp + "\", \"" +
+			strings.ToUpper(fp) + "\"]\n",
+		"min_version 1.1":         "tls:\n  cert: s.pem\n  key: k.pem\n  client_ca: ca.pem\n  min_version: \"1.1\"\n",
+		"negative reload":         "tls:\n  cert: s.pem\n  key: k.pem\n  client_ca: ca.pem\n  reload_interval: -1s\n",
+		"unknown tls key":         "tls:\n  cert: s.pem\n  key: k.pem\n  client_ca: ca.pem\n  verify_client: false\n",
+		"opt-out with tls":        "tls:\n  cert: s.pem\n  key: k.pem\n  client_ca: ca.pem\ninsecure_plain_http_on_network: true\n",
+		"opt-out misspelt":        "listen: 0.0.0.0:1\ninsecure_plain_http: true\n",
+		"opt-out not a bool":      "listen: 0.0.0.0:1\ninsecure_plain_http_on_network: yes please\n",
+		"tls on network, no auth": "listen: 0.0.0.0:1\ntls:\n  cert: s.pem\n  key: k.pem\n",
+	} {
+		if _, err := load(t, pin+body); err == nil {
+			t.Errorf("%s: accepted", name)
 		}
 	}
 }

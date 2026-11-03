@@ -3,6 +3,7 @@ package config
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
+	"github.com/lidofinance/tee-signer/gateway/internal/servertls"
 	"github.com/lidofinance/tee-signer/governance/runnerchain"
 )
 
@@ -73,6 +75,29 @@ func (a *Attestation) UnmarshalYAML(n *yaml.Node) error {
 // Config is the gateway configuration file.
 type Config struct {
 	Listen string `yaml:"listen"`
+	// TLS of the listen address. Without tls.cert the API is plain HTTP.
+	TLS struct {
+		// Cert is the server certificate chain (PEM, leaf first), Key its key.
+		Cert string `yaml:"cert"`
+		Key  string `yaml:"key"`
+		// ClientCA is a PEM bundle of the CAs whose client certificates are
+		// accepted.
+		ClientCA string `yaml:"client_ca"`
+		// ClientFingerprints are SHA-256 fingerprints of client certificates
+		// accepted whatever their issuer.
+		ClientFingerprints []string `yaml:"client_fingerprints"`
+		// InsecureNoClientAuth asks for no client certificate: any client
+		// that reaches listen gets service.
+		InsecureNoClientAuth bool `yaml:"insecure_no_client_auth"`
+		// MinVersion is "1.2" (default) or "1.3". Clients that support
+		// TLS 1.3 get it either way.
+		MinVersion string `yaml:"min_version"`
+		// ReloadInterval is how often the files are read again (default 10s).
+		ReloadInterval time.Duration `yaml:"reload_interval"`
+	} `yaml:"tls"`
+	// InsecurePlainHTTPOnNetwork lets listen be an address other than
+	// loopback without tls.
+	InsecurePlainHTTPOnNetwork bool `yaml:"insecure_plain_http_on_network"`
 	// Metrics, if set, is the HOST:PORT of the Prometheus endpoint: plain
 	// HTTP, GET /metrics only. Absent: no endpoint.
 	Metrics string `yaml:"metrics"`
@@ -147,6 +172,9 @@ func Load(path string) (*Config, error) {
 	if c.Listen == "" {
 		c.Listen = "127.0.0.1:19000"
 	}
+	if err := c.loadTLS(filepath.Dir(path)); err != nil {
+		return nil, err
+	}
 	if c.Metrics != "" {
 		if _, _, err := net.SplitHostPort(c.Metrics); err != nil {
 			return nil, fmt.Errorf("metrics: %w", err)
@@ -183,6 +211,108 @@ func Load(path string) (*Config, error) {
 	}
 
 	return &c, nil
+}
+
+// TLSOn reports whether the API listener serves TLS.
+func (c *Config) TLSOn() bool { return c.TLS.Cert != "" }
+
+// ListenLoopback reports whether listen is a loopback address:
+// localhost, 127.0.0.0/8 or ::1. A host name other than localhost, or
+// no host (every interface), is not.
+func (c *Config) ListenLoopback() bool {
+	host, _, err := net.SplitHostPort(c.Listen)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+
+	return ip != nil && ip.IsLoopback()
+}
+
+// loadTLS checks the tls section and the rule for plain HTTP: a listen
+// address other than loopback needs tls, or
+// insecure_plain_http_on_network.
+func (c *Config) loadTLS(base string) error {
+	if _, _, err := net.SplitHostPort(c.Listen); err != nil {
+		return fmt.Errorf("listen: %w", err)
+	}
+	t := &c.TLS
+	if !c.TLSOn() {
+		if t.Key != "" || t.ClientCA != "" || len(t.ClientFingerprints) > 0 || t.InsecureNoClientAuth || t.MinVersion != "" ||
+			t.ReloadInterval != 0 {
+			return errors.New("tls: tls.cert is required with any other tls setting")
+		}
+		if !c.ListenLoopback() && !c.InsecurePlainHTTPOnNetwork {
+			return fmt.Errorf("listen %s is not a loopback address: set tls (server certificate and client certificates), "+
+				"or insecure_plain_http_on_network: true to serve plain HTTP without authentication there", c.Listen)
+		}
+
+		return nil
+	}
+	if c.InsecurePlainHTTPOnNetwork {
+		return errors.New("insecure_plain_http_on_network is for a listener without tls; remove it")
+	}
+	if t.Key == "" {
+		return errors.New("tls.key is required with tls.cert")
+	}
+	named := t.ClientCA != "" || len(t.ClientFingerprints) > 0
+	if !named && !t.InsecureNoClientAuth {
+		return errors.New("tls: name the clients allowed in: tls.client_ca, tls.client_fingerprints, or both")
+	}
+	if named && t.InsecureNoClientAuth {
+		return errors.New("tls.insecure_no_client_auth is set together with tls.client_ca or tls.client_fingerprints; keep one")
+	}
+	seen := map[[32]byte]bool{}
+	for i, s := range t.ClientFingerprints {
+		fp, err := servertls.ParseFingerprint(s)
+		if err != nil {
+			return fmt.Errorf("tls.client_fingerprints[%d]: %w", i, err)
+		}
+		if seen[fp] {
+			return fmt.Errorf("tls.client_fingerprints[%d]: %s twice", i, s)
+		}
+		seen[fp] = true
+	}
+	switch t.MinVersion {
+	case "":
+		t.MinVersion = "1.2"
+	case "1.2", "1.3":
+	default:
+		return fmt.Errorf("tls.min_version %q: 1.2 or 1.3", t.MinVersion)
+	}
+	if t.ReloadInterval == 0 {
+		t.ReloadInterval = 10 * time.Second
+	}
+	if t.ReloadInterval < 0 {
+		return errors.New("tls.reload_interval must be positive")
+	}
+	for _, p := range []*string{&t.Cert, &t.Key, &t.ClientCA} {
+		if *p != "" && !filepath.IsAbs(*p) {
+			*p = filepath.Join(base, *p)
+		}
+	}
+
+	return nil
+}
+
+// ServerTLS is the servertls setting of the tls section; call it only
+// when TLSOn.
+func (c *Config) ServerTLS() servertls.Settings {
+	t := c.TLS
+	s := servertls.Settings{CertFile: t.Cert, KeyFile: t.Key, ClientCAFile: t.ClientCA, NoClientAuth: t.InsecureNoClientAuth,
+		MinVersion: tls.VersionTLS12}
+	if t.MinVersion == "1.3" {
+		s.MinVersion = tls.VersionTLS13
+	}
+	for _, f := range t.ClientFingerprints {
+		fp, _ := servertls.ParseFingerprint(f) // checked by Load
+		s.ClientFingerprints = append(s.ClientFingerprints, fp)
+	}
+
+	return s
 }
 
 func (c *Config) loadSigners(base string) error {
