@@ -5,7 +5,8 @@
 // IMPORT_SHARE_SEALED. It opens each sealed share with a real HPKE key, so a
 // share sealed to its identity imports. A runner made with StartSetup has a
 // setup and takes CONFIG_UPDATE (config.go). It counts the requests it gets
-// by type and signs nothing. Only tests use it.
+// by type, and signs only with the function a test gives it (SetSigner).
+// Only tests use it.
 package fakerunner
 
 import (
@@ -54,6 +55,16 @@ type Runner struct {
 	// chain is the chain of the build it plays: its certificate's name and
 	// its HEALTH version (StartSetupAs).
 	chain runnerchain.Chain
+	// sign, if set (SetSigner), answers SIGN.
+	sign func(cloud.SignRequest) (cloud.Signature, error)
+}
+
+// SetSigner adds k to the runner's keys and makes it answer SIGN with sign.
+func (r *Runner) SetSigner(k cloud.ValidatorKey, sign func(cloud.SignRequest) (cloud.Signature, error)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.keys = append(r.keys, k)
+	r.sign = sign
 }
 
 // SetAfterImport makes the runner report s from the first share it
@@ -234,6 +245,8 @@ func (r *Runner) serve(c net.Conn) {
 			answer = r.importSealed(f.Payload)
 		case wireadmin.TypeConfigUpdate:
 			answer = r.configUpdate(f.Payload)
+		case wire.TypeSign:
+			answer = r.signFrame(f.Payload)
 		default:
 			// A type the runner does not serve, as the admin role probe sends.
 			answer = wire.EncodeError(cloud.Refused(cloud.StatusForbidden, "message type 0x%02x not served", uint8(f.Type)))
@@ -242,6 +255,26 @@ func (r *Runner) serve(c net.Conn) {
 			return
 		}
 	}
+}
+
+// signFrame answers SIGN with the function of SetSigner, or refuses it
+// without one.
+func (r *Runner) signFrame(p []byte) []byte {
+	r.mu.Lock()
+	sign := r.sign
+	r.mu.Unlock()
+	if sign == nil {
+		return wire.EncodeError(cloud.Refused(cloud.StatusForbidden, "SIGN not served"))
+	}
+	req, err := wire.DecodeSign(p)
+	if err != nil {
+		return wire.EncodeError(cloud.Refused(cloud.StatusDecode, "%v", err))
+	}
+	sig, err := sign(req)
+	if err != nil {
+		return wire.EncodeError(err)
+	}
+	return wire.EncodeOK(sig[:])
 }
 
 // identity is the IDENTITY answer: the state, the HPKE import key, the TLS

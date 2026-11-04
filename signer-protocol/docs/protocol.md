@@ -663,8 +663,11 @@ same with the same settings.
 
 ### Voluntary exits
 
-A runner signs a VOLUNTARY_EXIT like any other message, on request of a
-signing client, with or without a setup. The core checks only that a key
+A runner signs a VOLUNTARY_EXIT on request of an admin client (or a local
+client), with or without a setup; a signing client gets `FORBIDDEN` (see
+"Client roles"). An exit cannot be undone and stays valid for good, so the
+signing client, which the runner does not trust, cannot make one.
+`signer-admin exit` collects t partial exits and combines them. The core checks only that a key
 loaded with a validator index signs an exit for that index
 (`SC_ERR_POLICY_INDEX`); a key loaded without an index signs an exit for
 any index. No clock horizon applies to exits. Exits use the exit fork
@@ -956,7 +959,7 @@ has mutual TLS.
 | --- | --- | --- | --- | --- |
 | 0x01 | HEALTH | yes | yes | yes |
 | 0x02 | PUBLIC_KEYS | yes | yes | yes |
-| 0x03 | SIGN | yes | no | no |
+| 0x03 | SIGN | yes, all kinds but a voluntary exit | no | a voluntary exit only |
 | 0x04 | ATTEST | no | yes, limited | yes |
 | 0x06 | IDENTITY | yes, limited | yes, limited | yes |
 | 0x05 | IMPORT_SHARE (debug builds) | no | no | yes |
@@ -964,7 +967,9 @@ has mutual TLS.
 | 0x08 | CONFIG_UPDATE | no | no | yes |
 | any other | | no | no | no |
 
-An admin certificate cannot SIGN, so a stolen one makes no signature.
+A voluntary exit is the admin role's only SIGN: a signing certificate gets
+`FORBIDDEN` for kind 3, and an admin certificate gets `FORBIDDEN` for every
+other kind. A stolen admin certificate makes exits and no other signature.
 PUBLIC_KEYS is open to attest-only clients because a verifier of an ATTEST
 answer needs the keys for `keys_hash`.
 

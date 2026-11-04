@@ -5,7 +5,10 @@ import (
 	"encoding/asn1"
 	"net"
 	"testing"
+	"time"
 
+	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/buildchain"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
@@ -139,6 +142,68 @@ func TestRefusedImportPayloadCleared(t *testing.T) {
 		}
 		if p[0]|p[1]|p[2]|p[3] != 0 {
 			t.Errorf("client %+v: payload %x not cleared", cl, p)
+		}
+	}
+}
+
+// A voluntary exit is the admin role's SIGN: a signing certificate gets
+// FORBIDDEN for it and still signs other kinds; an admin certificate signs
+// the exit and gets FORBIDDEN for any other kind.
+func TestExitAdminOnly(t *testing.T) {
+	admin := []asn1.ObjectIdentifier{backend.AdminClientOID}
+	root := newTestCA(t, nil, nil, nil)
+	adminCA := newTestCA(t, root, clientAuth, admin)
+	signCA := newTestCA(t, root, clientAuth, nil)
+	s := roleServer(t)
+	sk, _ := software.NewSecret()
+	pk, _ := core.PubkeyOf(sk)
+	if _, err := s.addShare(pk, &sk, 5, nil, "test"); err != nil {
+		t.Fatal(err)
+	}
+	cfg := s.Signer.Config()
+	req := func(m backend.Message) []byte {
+		d, err := cfg.MessageDomain(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, err := wire.EncodeSign(backend.SignRequest{Pubkey: pk, Message: m, Domain: d})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	epoch := (uint64(time.Now().Unix()) - cfg.GenesisTime) / cfg.SecondsPerSlot / cfg.SlotsPerEpoch
+	exit := req(&backend.VoluntaryExit{Epoch: 1, ValidatorIndex: 5})
+	rd, _ := cfg.MessageDomain(&backend.RootMessage{Type: backend.RootRandaoReveal, Epoch: epoch})
+	randao := req(&backend.RootMessage{Type: backend.RootRandaoReveal, Epoch: epoch, ObjectRoot: backend.HashTreeRootUint64(epoch), Domain: rd})
+	vote := req(&backend.AttestationData{Slot: (epoch + 1) * cfg.SlotsPerEpoch,
+		Source: backend.Checkpoint{Epoch: epoch}, Target: backend.Checkpoint{Epoch: epoch + 1}})
+
+	sc, err := dial(t, s, root.pem(), signCA.leaf(t, clientAuth, nil, signCA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sc.call(wire.TypeSign, exit); refusedWith(err) != backend.StatusForbidden {
+		t.Errorf("signing certificate, exit: %v, want FORBIDDEN", err)
+	}
+	if _, err := sc.call(wire.TypeSign, randao); err != nil {
+		t.Errorf("signing certificate, RANDAO: %v", err)
+	}
+	// The vote reaches the signer, which may refuse it for its own reasons.
+	if _, err := sc.call(wire.TypeSign, vote); refusedWith(err) == backend.StatusForbidden {
+		t.Errorf("signing certificate, attestation: %v", err)
+	}
+
+	ac, err := dial(t, s, root.pem(), adminCA.leaf(t, clientAuth, admin, adminCA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ac.call(wire.TypeSign, exit); err != nil {
+		t.Errorf("admin certificate, exit: %v", err)
+	}
+	for name, p := range map[string][]byte{"RANDAO": randao, "attestation": vote} {
+		if _, err := ac.call(wire.TypeSign, p); refusedWith(err) != backend.StatusForbidden {
+			t.Errorf("admin certificate, %s: %v, want FORBIDDEN", name, err)
 		}
 	}
 }
