@@ -1,6 +1,6 @@
 // Command setup-tool makes and checks the binary setup of a signer for the
 // cloud scripts in this repo. It uses the runner's decoder (governance/setupwire,
-// runner/setup), so what it accepts is what the runner accepts. signer-admin
+// platform/setup), so what it accepts is what the runner accepts. signer-admin
 // is the operator's tool (cluster ids, n setups, pins); this
 // one covers one file at a time.
 //

@@ -1058,7 +1058,7 @@ var (
 	// keeps one encoding). A group name must not end with a period.
 	azSubscriptionRE  = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	azResourceGroupRE = regexp.MustCompile(`^[A-Za-z0-9_().-]{0,89}[A-Za-z0-9_()-]$`)
-	// As runner/platform/azure: host names without scheme or path, and a
+	// As platform-azure/azure: host names without scheme or path, and a
 	// Key Vault key name with an optional version.
 	hostRE = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?$`)
 	kidRE  = regexp.MustCompile(`^[A-Za-z0-9-]{1,127}(/[0-9a-f]{32})?$`)

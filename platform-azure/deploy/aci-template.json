@@ -10,7 +10,7 @@
     "runnerImage": { "type": "string", "defaultValue": "@RUNNER_IMAGE@" },
     "identityId": { "type": "string", "defaultValue": "@IDENTITY_ID@" },
     "registryServer": { "type": "string", "defaultValue": "@REGISTRY_SERVER@" },
-    "signerSetup": { "type": "string", "metadata": { "description": "Base64 of the signer's binary setup (runner/cmd/setup-tool encode). Not secret. No default: wildcard in the CCE policy, so one policy serves every signer." } },
+    "signerSetup": { "type": "string", "metadata": { "description": "Base64 of the signer's binary setup (signer-admin/cmd/setup-tool encode). Not secret. No default: wildcard in the CCE policy, so one policy serves every signer." } },
     "subnetId": { "type": "string", "defaultValue": "", "metadata": { "description": "Optional. Resource ID of a subnet delegated to Microsoft.ContainerInstance/containerGroups. When set, the group gets a private IP in it with port 7100 open; there is never a public IP. Empty: no IP address." } },
     "logWorkspaceId": { "type": "securestring", "defaultValue": "", "metadata": { "description": "Optional. Log Analytics workspace ID (customer ID) for the group's logs. Empty: no diagnostics." } },
     "logWorkspaceKey": { "type": "securestring", "defaultValue": "", "metadata": { "description": "Optional. The workspace's shared key, with logWorkspaceId." } }

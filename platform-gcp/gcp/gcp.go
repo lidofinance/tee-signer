@@ -30,7 +30,7 @@
 //     STS.
 //   - Store: files under -state-dir on the VM's disk; the disk goes with
 //     the VM. -state-store keeps a copy of what matters in a bucket
-//     (runner/statestore). The operator can roll the disk back (Google
+//     (slashing-log/statestore). The operator can roll the disk back (Google
 //     says so for dm-crypt), so use the restart floor.
 //   - Clock: the system clock (kvmclock or TDX/SNP TSC; no document says
 //     the host cannot set absolute time), or the NTS clock of a runner

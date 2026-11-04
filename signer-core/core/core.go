@@ -212,7 +212,7 @@ func fillConfig(cc *C.sc_config, c *Config) {
 	cc.commit_ahead.target_epochs = C.uint64_t(c.CommitAhead.TargetEpochs)
 	// One mark per validator: the runner's restart floor and clone record work
 	// per validator, and cloud storage has no wear limit. With a mark store
-	// (the locked log of runner/markstore) one mark per device: one log
+	// (the locked mark log, slashing-log) one mark per device: one log
 	// record covers every validator.
 	cc.mark_scope = C.SC_MARKS_PER_VALIDATOR
 	if c.DeviceMark {

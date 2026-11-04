@@ -1,6 +1,6 @@
 package e2e
 
-// The durable state copy (-state-store, runner/statestore),
+// The durable state copy (-state-store, slashing-log/statestore),
 // slashing-log/docs/durable-state.md.
 
 import (

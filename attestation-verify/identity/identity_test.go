@@ -16,7 +16,8 @@ import (
 )
 
 // The runner's IDENTITY response, bound to each platform document the way
-// runner/platform does it, then checked through Config.Verify. All
+// the platform packages (platform-aws/nitro, platform-azure/azure,
+// platform-gcp/gcp) do it, then checked through Config.Verify. All
 // documents are synthetic.
 
 var now = time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)

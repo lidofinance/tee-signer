@@ -1,6 +1,6 @@
 // Package admin holds the wire codecs of the admin messages: plaintext
 // and sealed share import and config updates (docs/protocol.md). Only clients of the admin role may send them
-// (runner/server/roles.go). Package wire keeps the frames, the errors and
+// (tee-signer/server/roles.go). Package wire keeps the frames, the errors and
 // the signing and attestation messages, so a signing client
 // builds without this package.
 package admin

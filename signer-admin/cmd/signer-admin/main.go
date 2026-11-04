@@ -2,7 +2,7 @@
 // the setups of one cluster, changes their config with approver-signed
 // updates and drafts, signs and pushes orders. It builds from this repo's
 // packages: the codecs
-// of governance/ and signer-protocol/ and the client of attest/runnerclient, which checks each
+// of governance/ and signer-protocol/ and the client of attestation-verify/runnerclient, which checks each
 // signer's attestation and setup pins on every connection. A runner takes
 // the admin messages only from a client certificate of the admin role
 // (docs/protocol.md, "Client roles"), so each connection file names an
@@ -115,7 +115,7 @@
 //	}
 //
 // cloud is the signer's connection file (address, client_cert, client_key,
-// attestation), as attest/runnerclient reads it; its client certificate
+// attestation), as attestation-verify/runnerclient reads it; its client certificate
 // has the admin role. setup
 // is the binary setup that signer-admin setup wrote for it. updates is the
 // folder where push keeps a copy of each update a signer took (default

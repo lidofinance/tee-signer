@@ -24,7 +24,7 @@ const (
 	PortMarkBucket = 8004
 )
 
-// NitroNTSKE are the NTS-KE servers of the NTS clock (runner/nts.
+// NitroNTSKE are the NTS-KE servers of the NTS clock (trusted-time/nts.
 // PublicServers) on their fixed ports 8005 to 8008. A test of the nts build
 // checks that the two lists name the same hosts.
 var NitroNTSKE = []Route{
@@ -62,7 +62,7 @@ func NitroRoutes(p *setupwire.PlatformConfig) []Route {
 }
 
 // MarkBucketHost is the virtual-hosted S3 name of the mark bucket, the
-// host the S3 mark log dials (runner/markstore/s3log).
+// host the S3 mark log dials (platform-aws/s3log).
 func MarkBucketHost(mark *setupwire.Store) string {
 	return mark.Bucket + ".s3." + mark.Region + ".amazonaws.com"
 }

@@ -131,7 +131,7 @@ func (c *Client) Setup() ([]byte, error) {
 	return r.Value, nil
 }
 
-// SetupChannel is the Nitro setup channel (runner/setup.Channel): SETUP
+// SetupChannel is the Nitro setup channel (platform/setup.Channel): SETUP
 // from the host agent at Addr, the fixed vsock:3:7101 in the image. Read
 // tries again while the agent cannot be reached, until ctx ends; an agent
 // that answers without a setup ends it at once.

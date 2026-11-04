@@ -63,7 +63,7 @@ func chainSetup(t *testing.T, dir, caFile, fork, root string) []byte {
 // on the ci-test chain. Each refuses mainnet (file and SIGNER_SETUP), the
 // other builds' chains and a public network's fork version with another
 // root, and the flag path. A started one reports its chain;
-// attest/runnerclient refuses it unless allow_chain_build names that chain.
+// attestation-verify/runnerclient refuses it unless allow_chain_build names that chain.
 func TestE2ENonProdChains(t *testing.T) {
 	if runnerchain.Build.Prod() {
 		t.Fatal("run with -tags nonprod,chain_<name>")
@@ -184,7 +184,7 @@ func TestE2ENonProdChains(t *testing.T) {
 }
 
 // checkRunnerclientBuild connects to the non-prod runner at addr with
-// attest/runnerclient: without allow_chain_build, with another chain's,
+// attestation-verify/runnerclient: without allow_chain_build, with another chain's,
 // and with its own.
 func checkRunnerclientBuild(t *testing.T, dir, addr string, cliCfg *tls.Config, setupHash [32]byte, build runnerchain.Chain) {
 	t.Helper()
@@ -226,7 +226,7 @@ func checkRunnerclientBuild(t *testing.T, dir, addr string, cliCfg *tls.Config, 
 // days in the mainnet build): that wait is what keeps a new image from
 // being trusted the moment its update arrives. The update is sent at the
 // start; it stays pending across a restart and past the time lock, and
-// comes into force after its 7 minutes. attest/runnerclient refuses the
+// comes into force after its 7 minutes. attestation-verify/runnerclient refuses the
 // runner without allow_chain_build and takes it with the setting.
 func TestE2ENonProdImagesUpdateWaits(t *testing.T) {
 	if runnerchain.Build.Prod() {

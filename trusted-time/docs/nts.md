@@ -17,7 +17,7 @@ The parts:
   `signer-nts-core`, with Rust tests, and the C ABI over all of it
   (`include/signer_nts.h`).
 - The Go side, behind the build tag `nts`: NTS-KE over `crypto/tls` and NTP
-  over UDP in `trusted-time/nts`, the clock `runner/clock.NTS`, the switch
+  over UDP in `trusted-time/nts`, the clock `trusted-time/clock.NTS`, the switch
   `RUNNER_NTS_CLOCK=1` in tagged runners (`tee-signer/platforms_nts.go`),
   and the interop test against four public operators
   (`scripts/nts-interop.sh`).
@@ -123,7 +123,7 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   `crypto/x509` would read a zero time as `time.Now()`); `Association.Query` over a connected UDP socket
   (refused packets do not end the wait: they may be forgeries); pinned roots
   per operator in `roots/` with their source in `roots.go`.
-- `runner/clock.NTS`: polls each server every 16 s (RFC 5905 MINPOLL),
+- `trusted-time/clock.NTS`: polls each server every 16 s (RFC 5905 MINPOLL),
   doubles a server's interval on RATE up to 1024 s, stops asking a server
   for 1024 s on DENY or RSTR (a Kiss-o'-Death is not authenticated, so a
   forged one must not stop it for good), runs NTS-KE again on NTSN, feeds
@@ -231,7 +231,7 @@ trusted-time/nts/                   the cgo binding, NTS-KE, NTP, pinned roots, 
 trusted-time/clock/nts*.go          the NTS clock and its tests (tag nts)
 tee-signer/nts_on.go              -nts-selftest and -nts-clock-check (tag nts)
 tee-signer/platforms_nts.go       -nts-clock and RUNNER_NTS_CLOCK=1 (tag nts)
-runner/nts_servers_*.go       the servers: public in release builds, test servers in debug builds
+tee-signer/nts_servers_*.go       the servers: public in release builds, test servers in debug builds
 platform-aws/udprelay/              the UDP relay: protocol, allowlist, rate limits, client (Nitro)
 platform-aws/cmd/udprelay/          the relay program on the Nitro parent
 tests/e2e/nts_relay_test.go  the Nitro runner's NTS clock through the relay (test servers; NTS_INTEROP=1: public)

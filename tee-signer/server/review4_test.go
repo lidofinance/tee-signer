@@ -263,7 +263,7 @@ func TestReview5R1SealedImportMinorityThreshold(t *testing.T) {
 // (state.LoadDeviceMark), while floor-only mode keeps it at the floor
 // epoch. A share re-imported without interchange then signs a vote with
 // source 0, which surrounds any vote it cast before the log was lost. The
-// lost-log path (runner/start.go: "a new setup and a share re-import")
+// lost-log path (tee-signer/start.go: "a new setup and a share re-import")
 // reaches exactly this state. The vote must be refused.
 func TestReview5R2FreshLogSourceBoundZero(t *testing.T) {
 	e := newTgtEnv(t, "dev", nil)

@@ -5,7 +5,7 @@ package e2e
 // The NTS clock of the Nitro runner, as the enclave image runs it
 // (-nts-clock), on the AWS debug build: the nitro platform with its fake
 // NSM (test_nsm_url), NTS-KE through the proxy routes and NTP through the
-// UDP relay (cmd/udprelay), against four NTS test servers (runner/nts/
+// UDP relay (platform-aws/cmd/udprelay), against four NTS test servers (trusted-time/nts/
 // ntstest) and three HTTPS-date servers. The proxy routes and the relay
 // use TCP on loopback where the enclave uses vsock; the code paths in the
 // runner are the enclave's (platform/nitro NetDial). Needs -tags

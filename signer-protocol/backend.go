@@ -147,7 +147,7 @@ type Health struct {
 	Stats *SignerStats `json:"stats,omitempty"`
 }
 
-// ClockNTS is what HEALTH reports of the runner's NTS clock (runner/clock
+// ClockNTS is what HEALTH reports of the runner's NTS clock (trusted-time/clock
 // NTS), measured inside the TEE when the answer is made. Durations are in
 // milliseconds.
 type ClockNTS struct {
@@ -243,7 +243,7 @@ var AttestOnlyClientOID = asn1.ObjectIdentifier{1, 2, 840, 113556, 1, 8000, 2554
 // (docs/protocol.md, "Client roles"): the only role that may send imports,
 // config updates and orders. It counts only when the leaf and the leaf's direct issuer both
 // list it and that issuer is an intermediate, not the pinned root
-// (runner/attls.Role). Same GUID arc as AttestOnlyClientOID, last arc 2.
+// (tee-signer/attls.Role). Same GUID arc as AttestOnlyClientOID, last arc 2.
 var AdminClientOID = asn1.ObjectIdentifier{1, 2, 840, 113556, 1, 8000, 2554,
 	49247, 57036, 45844, 17649, 38356, 1811430, 10320378, 2}
 

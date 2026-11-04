@@ -100,7 +100,7 @@ func syncDir(dir string) error {
 // PutMany writes every entry and then syncs the file system once, in
 // place of a sync per entry. It is not atomic: after a crash some entries
 // may be missing or empty. For writes whose durable copy lives elsewhere
-// (runner/statestore puts them back at the next start).
+// (slashing-log/statestore puts them back at the next start).
 func (s *Store) PutMany(entries map[string][]byte) error {
 	for k, v := range entries {
 		if _, err := s.write(k, v, false); err != nil {

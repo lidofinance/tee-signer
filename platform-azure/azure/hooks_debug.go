@@ -15,7 +15,7 @@ package azure
 //	test_imds_url=<URL>         the token endpoint instead of the
 //	                            instance metadata service
 //
-// attest/runnerclient/azure_e2e_test.go uses both.
+// attestation-verify/runnerclient/azure_e2e_test.go uses both.
 
 import (
 	"encoding/binary"

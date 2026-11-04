@@ -98,7 +98,7 @@ sign "$tmp/attest.csr" "$DIR/intermediate.pem" "$DIR/intermediate-key.pem" 1 "$t
 cat "$tmp/attest.leaf.pem" "$DIR/intermediate.pem" >"$DIR/attest-client.pem"
 
 # The admin intermediate: the leaf and its direct issuer both carry
-# ADMIN_OID, the rule of runner/attls.Role.
+# ADMIN_OID, the rule of tee-signer/attls.Role.
 ec_key "$DIR/admin-ca-key.pem"
 openssl req -new -sha256 -key "$DIR/admin-ca-key.pem" -subj "/CN=signer-poc test admin intermediate CA" -out "$tmp/admin-ca.csr"
 printf '%s\n' "basicConstraints=critical,CA:TRUE,pathlen:0" "keyUsage=critical,keyCertSign,cRLSign"   "extendedKeyUsage=clientAuth,$ADMIN_OID" >"$tmp/admin-ca.ext"

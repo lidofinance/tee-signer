@@ -10,12 +10,12 @@ package runnerclient
 // whose user data covers that identity. What the test replaces is the
 // hardware: the debug build's test_nsm_url option sends the NSM request
 // (nonce and user data) to a fake NSM, which answers with a COSE_Sign1
-// document from attest/internal/testgen, signed by a local P-384 test CA
+// document from attestation-verify/internal/testgen, signed by a local P-384 test CA
 // that the client is told to trust in place of the AWS root. Release
 // builds have no such option. In place of a vsock listener the runner
 // listens on TCP, which is the same TLS layer behind the same
 // attls.Listen; the vsock listener itself and the forwarder are tested in
-// runner/attls, runner/forward and runner/e2e (TestE2EVsockTLS skips
+// tee-signer/attls, platform-aws/forward and tests/e2e (TestE2EVsockTLS skips
 // without vsock loopback).
 //
 // Not covered, because it needs AWS: a real NSM, real PCRs, the real AWS
@@ -456,7 +456,7 @@ func TestE2ENitroRunnerClientCertificateClock(t *testing.T) {
 }
 
 // The nitro platform does not start without a client CA, in the debug build
-// as in the release build (TestE2ECloudFlagChecks in runner/e2e checks the
+// as in the release build (TestE2ECloudFlagChecks in tests/e2e checks the
 // release build).
 func TestE2ENitroRunnerNeedsAClientCA(t *testing.T) {
 	bin := os.Getenv("RUNNER_AWS_DEBUG_BIN")

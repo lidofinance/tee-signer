@@ -9,7 +9,7 @@ import (
 )
 
 // CertificatePEM is Certificate with the CA in PEM form instead of a pool,
-// for a runner process that reads its roots from a file (runner/e2e).
+// for a runner process that reads its roots from a file (tests/e2e).
 func CertificatePEM(host string, notBefore, notAfter time.Time) (tls.Certificate, []byte, error) {
 	cert, ca, err := newCertificate(host, notBefore, notAfter)
 	if err != nil {

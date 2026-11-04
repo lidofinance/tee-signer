@@ -15,7 +15,7 @@ import (
 
 const hostData = "73e0d1b6b2d0b0b3c0c8a0d7a8f2b1f3e4d5c6b7a8f9e0d1c2b3a4958677a6b5"
 
-// identityWithToken builds an Azure runner's IDENTITY the way runner/platform
+// identityWithToken builds an Azure runner's IDENTITY the way platform-azure/azure
 // does, with a synthetic MAA token under key kid "maa".
 func identityWithToken(t *testing.T, nonce []byte) (*backend.Identity, attest.MAAOptions) {
 	t.Helper()

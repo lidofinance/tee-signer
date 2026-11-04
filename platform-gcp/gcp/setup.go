@@ -16,7 +16,7 @@ import (
 // attribute holds up to 256 KB, a setup at most 64 KB.
 const MetadataSetupURL = "http://metadata.google.internal/computeMetadata/v1/instance/attributes/signer-setup"
 
-// MetadataSetup is the GCP setup channel (runner/setup.Channel): the
+// MetadataSetup is the GCP setup channel (platform/setup.Channel): the
 // signer-setup attribute from the metadata server. The setup is not secret
 // and the host can hand over any bytes; other bytes make another signer.
 type MetadataSetup struct {

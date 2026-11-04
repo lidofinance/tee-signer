@@ -292,7 +292,7 @@ An NSM attestation document does not reveal the parent host's CPU (Graviton, Int
 
 ## 6. How each platform carries the user data
 
-From today's runner code (`platform/*`) and verifiers (`attest/`):
+From today's runner code (`platform/*`) and verifiers (`attestation-verify/`):
 
 | Platform | The runner asks for | Where the 32 bytes of user data end up | Checked by |
 | --- | --- | --- | --- |
