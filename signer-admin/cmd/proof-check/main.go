@@ -141,7 +141,7 @@ type mark struct {
 	TargetEpoch uint64 `json:"target_epoch"`
 	SourceEpoch uint64 `json:"source_epoch"`
 	BlockSlot   uint64 `json:"block_slot"`
-	State       string `json:"state"` // ok, lost or handed-over
+	State       string `json:"state"` // ok or lost
 }
 
 // setupView is the signer's setup state as the proof file carries it, for
@@ -159,7 +159,6 @@ type mark struct {
 //	  },
 //	  "open": {"version": 1, "effective_version": 1, "hash": "03000000", "min_version": 0},
 //	  "approver_set_hash": "04000000",
-//	  "order": {"kind": "handover", "hash": "05000000", "act_at_unix": 1900000000},
 //	  "key_release_hash": "06000000",
 //	  "key_origin": {"imported": 3}
 //	}
@@ -169,12 +168,12 @@ type mark struct {
 //
 // pinned: cloud.json pins setup_sha256 (the check passed, so it matched).
 // flag_path: a runner without a setup, whose setup_hash is the hash of its
-// -config file; it has no locked, open, approver_set_hash or order.
+// -config file; it has no locked, open or approver_set_hash.
 // effective_version counts a pending update once its effective time has
 // passed on this machine's clock; the runner applies it from then on, while
 // it still reports it as pending. min_version is cloud.json's
 // min_locked_version or min_open_version, 0 when not set. pending is left
-// out when no update waits, order when none is pending, key_release_hash
+// out when no update waits, key_release_hash
 // while it is zero (phase 2). approver_set_hash "00000000" means the runner
 // cannot read its active approver set.
 type setupView struct {
@@ -184,7 +183,6 @@ type setupView struct {
 	Locked          *groupView     `json:"locked,omitempty"`
 	Open            *groupView     `json:"open,omitempty"`
 	ApproverSetHash string         `json:"approver_set_hash,omitempty"`
-	Order           *orderView     `json:"order,omitempty"`
 	KeyReleaseHash  string         `json:"key_release_hash,omitempty"`
 	KeyOrigin       *keyOriginView `json:"key_origin,omitempty"`
 }
@@ -205,12 +203,6 @@ type pendingView struct {
 	Version         uint64 `json:"version"`
 	Hash            string `json:"hash"`
 	EffectiveAtUnix int64  `json:"effective_at_unix"`
-}
-
-type orderView struct {
-	Kind      string `json:"kind"`
-	Hash      string `json:"hash"`
-	ActAtUnix int64  `json:"act_at_unix"`
 }
 
 // short is the 8 hex digit fingerprint of a hash.
@@ -234,9 +226,6 @@ func viewOf(s *cloud.SetupState, att *runnerclient.Attestation, now time.Time) *
 	}
 	v.Locked, v.Open = group(s.Locked, att.MinLockedVersion), group(s.Open, att.MinOpenVersion)
 	v.ApproverSetHash = short(s.ApproverSetHash)
-	if o := s.Order; o.Kind != 0 {
-		v.Order = &orderView{Kind: verify.OrderKind(o.Kind), Hash: short(o.Hash), ActAtUnix: unixCapped(o.ActAt)}
-	}
 	if s.KeyReleaseHash != (cloud.Root{}) {
 		v.KeyReleaseHash = short(s.KeyReleaseHash)
 	}
@@ -409,7 +398,7 @@ func imageOf(a runnerclient.Attestation) string {
 
 // markOf reads HEALTH record of a runner with the mark log (-mark-store):
 // "marklog LOG signer=S owner=O version=N writes=W target=T source=S
-// block=B [skipped=K] [HANDED-OVER|LOST]". Any other record (none, the clone
+// block=B [skipped=K] [LOST]". Any other record (none, the clone
 // guard) gives nil.
 func markOf(record string) *mark {
 	f := strings.Fields(record)
@@ -421,9 +410,6 @@ func markOf(record string) *mark {
 		switch kv {
 		case "LOST":
 			m.State = "lost"
-			continue
-		case "HANDED-OVER":
-			m.State = "handed-over"
 			continue
 		}
 		k, v, ok := strings.Cut(kv, "=")
@@ -522,7 +508,7 @@ func probe(ctx context.Context, cl runner, verify verifyFunc, att *runnerclient.
 }
 
 // setupLine is the setup part of the log line: the version in force per
-// group, the approver set, a pending update or order, and "unpinned" when
+// group, the approver set, a pending update, and "unpinned" when
 // cloud.json pins no setup_sha256.
 func setupLine(r result) string {
 	v := r.Setup
@@ -540,9 +526,6 @@ func setupLine(r result) string {
 		if p := g.v.Pending; p != nil && p.Version != g.v.EffectiveVersion {
 			s += fmt.Sprintf(" pending=%s:v%d@%s", g.name, p.Version, time.Unix(p.EffectiveAtUnix, 0).UTC().Format(time.RFC3339))
 		}
-	}
-	if o := v.Order; o != nil {
-		s += fmt.Sprintf(" order=%s@%s", o.Kind, time.Unix(o.ActAtUnix, 0).UTC().Format(time.RFC3339))
 	}
 	if k := v.KeyOrigin; k != nil {
 		s += fmt.Sprintf(" keys=imported:%d", k.Imported)

@@ -55,7 +55,6 @@ func (r ProbeResult) String() string {
 //     certificate lacks the admin role; BAD_REQUEST
 //     (the empty payload does not decode) means it passed and the runner
 //     has a setup; UNSUPPORTED means it passed and the runner has no setup.
-//     A handed-over runner answers that it was handed over (STORAGE).
 func Probe(ctx context.Context, rt RoundTripper) (ProbeResult, error) {
 	var r ProbeResult
 	_, err := rt.RoundTrip(ctx, probeUnknownType, nil)
@@ -69,7 +68,7 @@ func Probe(ctx context.Context, rt RoundTripper) (ProbeResult, error) {
 		return r, nil
 	case backend.StatusBadRequest:
 		r.Setup = true
-	case backend.StatusUnsupported, backend.StatusStorage:
+	case backend.StatusUnsupported:
 	default:
 		return r, fmt.Errorf("probe: an empty CONFIG_UPDATE got %s, want FORBIDDEN, BAD_REQUEST or UNSUPPORTED", r.Answer)
 	}

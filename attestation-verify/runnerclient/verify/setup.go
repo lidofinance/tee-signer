@@ -166,20 +166,9 @@ func CheckPending(s *backend.SetupState, now time.Time) error {
 			p.Version, rootHex(p.Hash), UnixTime(p.EffectiveAt))
 	}
 	if o := s.Order; o.Kind != 0 {
-		return fmt.Errorf("a %s order is pending (sha256 %s), acting at %s", OrderKind(o.Kind), rootHex(o.Hash), UnixTime(o.ActAt))
+		return fmt.Errorf("an order of kind %d is pending (sha256 %s), acting at %s", o.Kind, rootHex(o.Hash), UnixTime(o.ActAt))
 	}
 	return nil
-}
-
-// OrderKind names the kind of a pending order: "handover" (1).
-func OrderKind(k uint8) string {
-	switch k {
-	case 0:
-		return "none"
-	case 1:
-		return "handover"
-	}
-	return fmt.Sprintf("kind %d", k)
 }
 
 // UnixTime writes Unix seconds as RFC 3339 UTC, or as the plain number
@@ -199,8 +188,8 @@ func rootHex(r backend.Root) string { return hex.EncodeToString(r[:]) }
 // <group>_version and <group>_sha256, <group>_effective_version when a
 // pending update is in force at now, <group>_pending_version,
 // <group>_pending_sha256 and <group>_pending_effective_at for a pending
-// update, approver_set_sha256, and order, order_sha256 and order_act_at for
-// a pending order, key_release_sha256 when set, and imported_keys. For a
+// update, approver_set_sha256, key_release_sha256 when set, and
+// imported_keys. For a
 // runner on the flag path: setup_sha256 and flag_path true.
 func SetupLog(s *backend.SetupState, now time.Time) []any {
 	out := []any{"setup_sha256", rootHex(s.SetupHash)}
@@ -221,9 +210,6 @@ func SetupLog(s *backend.SetupState, now time.Time) []any {
 		}
 	}
 	out = append(out, "approver_set_sha256", rootHex(s.ApproverSetHash))
-	if o := s.Order; o.Kind != 0 {
-		out = append(out, "order", OrderKind(o.Kind), "order_sha256", rootHex(o.Hash), "order_act_at", UnixTime(o.ActAt))
-	}
 	if s.KeyReleaseHash != (backend.Root{}) {
 		out = append(out, "key_release_sha256", rootHex(s.KeyReleaseHash))
 	}
