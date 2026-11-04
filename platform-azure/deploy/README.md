@@ -312,8 +312,7 @@ The reference describes version 2022-08-01. The sidecar and the runner send
 2020-10-01. The empty `initTimeData` and the `Endorsements` field also follow
 the sidecar.
 
-The runtime data is `backend.MAARuntimeData` for an identity and
-`{"signer-runner-clock":"<hex nonce>"}` for the clock, which
+The runtime data is `backend.MAARuntimeData` for an identity, which
 `attestation-verify/azureid` and the signing client expect byte for byte. With
 `dataType` JSON, MAA puts it into the token as `x-ms-runtime`, and the report
 data in the SNP report is the SHA-256 of those exact bytes. The sample token
@@ -786,9 +785,7 @@ mismatch`.
   (steps 1 to 3 above). The runner sends the JSON object
   `{"signer-runner-identity":"<hex of the user data>"}`
   (`backend.MAARuntimeData`); the SNP report data is the SHA-256 of those
-  exact bytes, which `attestation-verify/azureid` recomputes. Clock tokens send
-  `{"signer-runner-clock":"<hex nonce>"}`, and `clock=maa-iat` checks that the
-  token states the report data of that nonce.
+  exact bytes, which `attestation-verify/azureid` recomputes.
 - Sealing: Key Vault releases the exportable RSA key only for a token
   that meets the release policy (steps 4 and 5). The runner derives its
   data key from it and setup_hash (HKDF-SHA256) and stores none.
@@ -803,7 +800,7 @@ mismatch`.
   be rolled back) and the NTS clock (`-nts-clock -nts-coarse-urls
   login.microsoftonline.com,management.azure.com,www.cloudflare.com`; the
   runner is built with the tag nts, `trusted-time/docs/nts.md`). The three
-  HTTPS URLs are its coarse check. `clock=maa-iat` is also implemented.
+  HTTPS URLs are its coarse check.
 - Platform options (`-platform-opt`): `maa_endpoint`, `akv_endpoint`, `kid`,
   `clock`, `client_id`. The runner refuses any other option. The debug build
   has two more for the end-to-end test (`test_snp_hostdata`,

@@ -85,7 +85,7 @@ func Claims(iat int64, nonce any, digest, hwmodel, aud string) map[string]any {
 			},
 			"container": map[string]any{
 				"args": []string{"/signer-runner", "-platform", "gcp", "-listen", ":7100",
-					"-state-dir", "/var/lib/signer", "-param", "clock=token-iat"},
+					"-state-dir", "/var/lib/signer", "-nts-clock"},
 				"env": map[string]any{
 					"HOSTNAME":      "signer-gcp-1",
 					"PATH":          "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",

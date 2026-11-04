@@ -91,24 +91,6 @@ func TestMAARequestShape(t *testing.T) {
 		t.Fatalf("hostdata %v", c["x-ms-sevsnpvm-hostdata"])
 	}
 
-	// Clock: one key, a 32-byte nonce in hex.
-	if _, err := (MAATime{MAA: f.client}).Fetch(ctx); err != nil {
-		t.Fatal(err)
-	}
-	seen = f.maa.seen()
-	if len(seen) != 2 {
-		t.Fatalf("%d requests", len(seen))
-	}
-	var obj map[string]string
-	rt := seen[1].runtime
-	if json.Unmarshal(rt, &obj) != nil || len(obj) != 1 || len(obj["signer-runner-clock"]) != 64 ||
-		string(rt) != `{"signer-runner-clock":"`+obj["signer-runner-clock"]+`"}` {
-		t.Fatalf("clock runtime data %q", rt)
-	}
-	if seen[0].nonce == seen[1].nonce {
-		t.Error("the MAA nonce repeats")
-	}
-
 	// Runtime data that is not a JSON object never reaches the hardware or MAA.
 	calls := f.reports.callCount()
 	for _, bad := range [][]byte{ud, []byte("null"), []byte(`["a"]`), []byte(`"text"`), nil} {
@@ -116,21 +98,8 @@ func TestMAARequestShape(t *testing.T) {
 			t.Errorf("runtime data %q accepted", bad)
 		}
 	}
-	if f.reports.callCount() != calls || len(f.maa.seen()) != 2 {
+	if f.reports.callCount() != calls || len(f.maa.seen()) != 1 {
 		t.Fatal("a request went out for bad runtime data")
-	}
-}
-
-func TestMAAClockToken(t *testing.T) {
-	f := newMAAFixture(t)
-	tm, err := MAATime{MAA: f.client}.Fetch(context.Background())
-	if err != nil || tm.Unix() != f.maa.iat {
-		t.Fatal(tm, err)
-	}
-	// A token that does not state the report data of this request is refused.
-	f.maa.reportDataClaim = strings.Repeat("00", 64)
-	if _, err := (MAATime{MAA: f.client}).Fetch(context.Background()); err == nil || !strings.Contains(err.Error(), "report data") {
-		t.Fatalf("got %v", err)
 	}
 }
 

@@ -45,7 +45,6 @@ import (
 	"github.com/lidofinance/tee-signer/tee-signer/attls"
 	"github.com/lidofinance/tee-signer/tee-signer/server"
 	"github.com/lidofinance/tee-signer/tee-signer/state"
-	"github.com/lidofinance/tee-signer/trusted-time/clock"
 )
 
 type kvFlag map[string]string
@@ -140,7 +139,6 @@ func run() (err error) {
 		floor         = flag.Bool("restart-floor", true, restartFloorUsage)
 		floorMargin   = flag.Int64("floor-margin", -1, "epochs added to the clock epoch for the floor, at least max_epochs_ahead + 1; -1 = max_epochs_ahead + 1")
 		persist       = flag.Bool("persist-watermarks", false, "persist commit-ahead watermarks (safe only on rollback-proof storage)")
-		clockWait     = flag.Duration("clock-wait", time.Minute, "how long to wait for the first clock reading at start")
 		clockCheck    = flag.Bool("clock-check", false, "print clock readings and exit")
 		maxValidators = flag.Uint("max-validators", 1024, "capacity of the signer")
 		sealedImport  = flag.Bool("sealed-import", true, "accept IMPORT_SHARE_SEALED (shares encrypted to this boot's attested key)")
@@ -231,12 +229,6 @@ func run() (err error) {
 		if err := checkClock(*platformName, plat.Clock); err != nil {
 			return err
 		}
-	}
-	if a, ok := plat.Clock.(*clock.Anchored); ok {
-		if err := waitFirstReading(ctx, a, *clockWait, log); err != nil {
-			return err
-		}
-		go a.Run(ctx)
 	}
 	if *clockCheck {
 		t, err := plat.Clock.Now()
@@ -460,23 +452,6 @@ func reportExit(report func(string), panicked any, err error) {
 	}
 	if err != nil {
 		report("runner: " + err.Error())
-	}
-}
-
-func waitFirstReading(ctx context.Context, a *clock.Anchored, wait time.Duration, log *slog.Logger) error {
-	deadline := time.Now().Add(wait)
-	for {
-		rctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		err := a.Refresh(rctx)
-		cancel()
-		if err == nil {
-			return nil
-		}
-		if time.Now().After(deadline) || ctx.Err() != nil {
-			return fmt.Errorf("no clock reading after %v: %w", wait, err)
-		}
-		log.Warn("clock not ready, retrying", "err", err)
-		time.Sleep(2 * time.Second)
 	}
 }
 

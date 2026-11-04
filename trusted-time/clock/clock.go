@@ -2,7 +2,7 @@
 //
 // System reads the local clock, which the host sets on every platform
 // studied here. Anchored reports times it got from authenticated sources
-// (HTTPS Date headers, attestation token iat, NSM timestamps). Between two
+// (HTTPS Date headers). Between two
 // readings it advances with the local monotonic clock, but never further
 // than MaxAdvance past the last reading, so the host can delay or deny
 // time, and can move it forward by at most MaxAdvance, as long as most

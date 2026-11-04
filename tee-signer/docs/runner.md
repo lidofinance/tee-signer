@@ -341,9 +341,9 @@ refusals are identical. Errors carry the core's status code
 | | Attestation | Sealing | Store | Clock |
 | --- | --- | --- | --- | --- |
 | dev | unsigned JSON | AES-GCM, fixed public key | files | system (and a test offset) |
-| nitro | NSM document via `/dev/nsm` | KMS data key with `Recipient` (PCR policy), CMS unwrap | host agent over vsock | NTS (NTS-KE via vsock-proxy, NTP via `udprelay`); also system, `nsm` |
-| gcp | launcher token, `eat_nonce`, audience `signer-runner-identity` (never the STS one) | Cloud KMS through Workload Identity Federation | files on a disk | NTS; also system, `token-iat` |
-| azure | MAA token over an SNP report the runner requests itself, runtime data the JSON object `backend.MAARuntimeData` | Key Vault release of an RSA key in process, with a fresh wrapping key and the MAA token as target | files | NTS; also system, `maa-iat` |
+| nitro | NSM document via `/dev/nsm` | KMS data key with `Recipient` (PCR policy), CMS unwrap | host agent over vsock | NTS (NTS-KE via vsock-proxy, NTP via `udprelay`); also system |
+| gcp | launcher token, `eat_nonce`, audience `signer-runner-identity` (never the STS one) | Cloud KMS through Workload Identity Federation | files on a disk | NTS; also system |
+| azure | MAA token over an SNP report the runner requests itself, runtime data the JSON object `backend.MAARuntimeData` | Key Vault release of an RSA key in process, with a fresh wrapping key and the MAA token as target | files | NTS; also system |
 
 These are the `Sealer`, `Store`, `Clock` and `Attester` of `platform`. The
 Azure platform talks to the SNP device, MAA and Key Vault itself, in
@@ -450,14 +450,14 @@ floor cannot. A release runner refuses to start on `nitro`, `azure` or
 `gcp` with a clock the host can set; only `dev` and debug builds run on
 the system clock.
 
-The anchored clocks (the platform clocks `nsm`, `maa-iat` and
-`token-iat`) read every 15 s and add the local monotonic time since the
-last reading, at most 75 s (5 intervals). They never return a lower
-time than before. A host that speeds up the local timer gains at most
-75 s per reading, far below one epoch and the floor margin, and the next
-reading ends it. At the fifth missed reading in a row the clock fails and
-the signer refuses, so a blocked network stops signing instead of
-freezing time.
+The anchored clock (the HTTPS-date coarse clock of the NTS clock) reads
+every 15 s and adds the local monotonic time since the last reading, at
+most 75 s (5 intervals). It never returns a lower time than before. A
+host that speeds up the local timer gains at most 75 s per reading, far
+below one epoch and the floor margin, and the next reading ends it. At
+the fifth missed reading in a row it fails. The NTS clock then forms no
+new quorum and refuses once its samples are over 60 s old, so a blocked
+network stops signing instead of freezing time.
 
 Cost per restart: votes for targets `E`, `E+1` and `E+2` and proposals in
 those epochs are refused. Non-slashable types are not affected by the

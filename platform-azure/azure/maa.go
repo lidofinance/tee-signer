@@ -42,12 +42,10 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 )
 
 const (
@@ -161,12 +159,3 @@ func maaRequestBody(report []byte, col *Collateral, runtimeData []byte) ([]byte,
 		Nonce:        binary.BigEndian.Uint64(n[:]),
 	})
 }
-
-// reportDataClaim is what MAA states as x-ms-sevsnpvm-reportdata for
-// runtime data: 64 bytes in hex.
-func reportDataClaim(runtimeData []byte) string {
-	rd := runtimeReportData(runtimeData)
-	return hex.EncodeToString(rd[:])
-}
-
-func sameHex(a, b string) bool { return strings.EqualFold(a, b) }

@@ -71,7 +71,7 @@ func TestSetupBeforePlatform(t *testing.T) {
 	ch := &fakeChannel{raw: sampleSetup(t, "nitro"), events: &events}
 	withChannel("nitro", ch, func() {
 		a := &startArgs{platformName: "nitro", setupSrc: "platform", given: map[string]string{"setup": "platform"},
-			params: map[string]string{"clock": "nsm"}, stateDir: "/tmp/unused"}
+			params: map[string]string{"clock": "system"}, stateDir: "/tmp/unused"}
 		s, plat, copyStore, err := startPlatform(context.Background(), a, recordingPlatform("nitro", &events, &opts), quietLog)
 		if err != nil {
 			t.Fatal(err)
@@ -84,7 +84,7 @@ func TestSetupBeforePlatform(t *testing.T) {
 		}
 		// The options: the setup's, plus the image's fixed one.
 		want := map[string]string{"agent": "vsock:3:7101", "region": "eu-west-1", "ntp_relay": "vsock:3:7102",
-			"record_creds": "record/writer-credentials.kms", "clock": "nsm"}
+			"record_creds": "record/writer-credentials.kms", "clock": "system"}
 		for k, v := range want {
 			if opts.Params[k] != v {
 				t.Fatalf("option %s = %q, want %q", k, opts.Params[k], v)

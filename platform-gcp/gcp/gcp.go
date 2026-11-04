@@ -33,8 +33,8 @@
 //     (runner/statestore). The operator can roll the disk back (Google
 //     says so for dm-crypt), so use the restart floor.
 //   - Clock: the system clock (kvmclock or TDX/SNP TSC; no document says
-//     the host cannot set absolute time), or clock=token-iat: the iat of a
-//     fresh, nonce-bound attestation token.
+//     the host cannot set absolute time), or the NTS clock of a runner
+//     built with the tag nts (-nts-clock).
 package gcp
 
 import (
@@ -65,7 +65,7 @@ import (
 const (
 	DefaultSocket = "/run/container_launcher/teeserver.sock"
 	// DefaultIdentityAudience is the audience of the attestation tokens the
-	// runner hands out and reads its token-iat clock from. A client checks
+	// runner hands out. A client checks
 	// it (attest.ConfidentialSpaceOptions.Audience).
 	DefaultIdentityAudience = "signer-runner-identity"
 	// stsAudience is the audience the WIF provider accepts. Only the KMS
@@ -146,37 +146,6 @@ func (a *Attester) Attest(ctx context.Context, _, userData []byte) (*backend.Att
 		return nil, err
 	}
 	return &backend.Attestation{Platform: "gcp", Format: "gcp-confidential-space-jwt", UserData: userData, Document: []byte(tok)}, nil
-}
-
-// TokenTime is a clock.Source: the iat of a token requested with a fresh nonce.
-type TokenTime struct {
-	L        *Launcher
-	Audience string
-}
-
-func (t TokenTime) Name() string { return "gcp-token-iat" }
-
-func (t TokenTime) Fetch(ctx context.Context) (time.Time, error) {
-	if err := CheckIdentityAudience(t.Audience); err != nil {
-		return time.Time{}, err
-	}
-	n := make([]byte, 16)
-	rand.Read(n)
-	nonce := hex.EncodeToString(n)
-	tok, err := t.L.Token(ctx, t.Audience, []string{nonce})
-	if err != nil {
-		return time.Time{}, err
-	}
-	c, err := jwtclaims.Claims(tok)
-	if err != nil {
-		return time.Time{}, err
-	}
-	// eat_nonce echoes the request nonces (string or array, per Google's
-	// token claims reference).
-	if !strings.Contains(fmt.Sprint(c["eat_nonce"]), nonce) {
-		return time.Time{}, errors.New("gcp: token does not carry our nonce")
-	}
-	return jwtclaims.Time(c, "iat")
 }
 
 // KMS wraps and unwraps the data key with Cloud KMS through WIF.
@@ -429,7 +398,7 @@ func (g Keys) OpenKey(ctx context.Context, blob, aad []byte) ([]byte, error) {
 
 // New builds the platform. Params: socket, wif_provider, kms_key,
 // attest_audience (default signer-runner-identity; the STS audience and WIF
-// resource names are refused), clock=system|token-iat, and service_account
+// resource names are refused), clock=system, and service_account
 // (optional, impersonation; leave it unset with the setup of deploy.sh).
 func New(o platform.Options) (*platform.Platform, error) {
 	aud, err := identityAudience(o)
@@ -450,8 +419,6 @@ func New(o platform.Options) (*platform.Platform, error) {
 	var clk platform.Clock = clock.System{}
 	switch o.Param("clock", "system") {
 	case "system":
-	case "token-iat":
-		clk = &clock.Anchored{Src: TokenTime{L: l, Audience: aud}, Interval: clock.DefaultInterval, TrustedSrc: true}
 	default:
 		return nil, fmt.Errorf("gcp: unknown clock %q", o.Param("clock", ""))
 	}

@@ -180,6 +180,10 @@ static void gloas_restore(sc_validator *v, const sc_watermark *mark)
  * an epoch more than SC_RESTART_FLOOR_EPOCHS below an earlier reading, so the
  * floor covers all of it. The stored mark can only raise the bounds: a host
  * that loses, rolls back or garbles it costs signing time, not safety.
+ * The clock assumption is about this signer's own earlier readings. It says
+ * nothing about real time: a host that slows the local counter can make the
+ * trusted clock lag real time, so the floor of a key imported then may not
+ * cover what that key signed on another signer.
  */
 static int load_marks(sc_signer *s, sc_validator *v, const uint8_t pubkey[SC_PUBKEY_LEN])
 {

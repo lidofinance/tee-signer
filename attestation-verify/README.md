@@ -277,7 +277,7 @@ cover them; no test runs them on a cloud.
    The runner hands identity tokens to any client that asks for `IDENTITY`,
    and invariant 7 says the signing client is not trusted. So `attest_audience` defaults
    to `signer-runner-identity`, the runner refuses the STS audience and WIF
-   resource names for identity and token-iat clock tokens, and the
+   resource names for identity tokens, and the
    `Dockerfile` sets the audience. `platform-gcp/deploy/deploy.sh
    wif-create` keeps the STS audience for the runner's own KMS exchange
    only, and `platform-gcp/deploy/common.sh` stops if the identity audience
@@ -286,8 +286,8 @@ cover them; no test runs them on a cloud.
    (Microsoft's sidecar sends it so in `pkg/common/maa.go`, a comment there
    says binary is not allowed). The runner sends
    `backend.MAARuntimeData(user data)`, the object
-   `{"signer-runner-identity":"<hex>"}`, and `{"signer-runner-clock":"<hex>"}`
-   for clock tokens, and refuses runtime data that is not a JSON object.
+   `{"signer-runner-identity":"<hex>"}`, and refuses runtime data that is
+   not a JSON object.
    `identity.Config.Verify` sets `RuntimeData` to `backend.MAARuntimeData` of
    the user data.
 
