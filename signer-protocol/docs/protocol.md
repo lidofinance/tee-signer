@@ -621,7 +621,13 @@ documents. The signing client, `signer-admin import` and
 (`remote.DevVerifier`), `azure-maa` (`attest.VerifyMAA` through
 `attestation-verify/azureid`), `aws-nitro` (`attest.VerifyNitro` through
 `attestation-verify/identity`) and `gcp-cs` (`attest.VerifyConfidentialSpace` through
-`attestation-verify/identity`). No setting turns the check off.
+`attestation-verify/identity`). No setting turns the check off. The `dev`
+verifier takes an unsigned document from whoever answers, so it is refused
+for any address but this machine's (tcp to 127.0.0.0/8, `::1` or
+`localhost`; for `share-import` without TLS also a `unix:` socket or vsock
+CID 1), with `mainnet` set, and for a runner whose certificate names a
+prod chain; `signer-admin` refuses it for a member whose setup names a
+cloud platform.
 
 ### IMPORT_SHARE_SEALED
 

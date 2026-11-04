@@ -2,12 +2,15 @@ package main
 
 import (
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/lidofinance/tee-signer/governance/importorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-admin/fakerunner"
 )
@@ -216,10 +219,10 @@ func TestSetupMainnetGCPSingleNeedsNoLockAccepted(t *testing.T) {
 // (setupwire.CheckThresholdOn): a 1 of 1 order to a GCP signer whose setup
 // does not accept it is refused as the runner would refuse it, and one to
 // a GCP signer that accepts it is drafted only with
-// -allow-gcp-unsafe-single-key, with the WARNING line. show of that order
-// prints the same WARNING line to each approver when the active values
-// name the target, and without them says that it cannot tell the
-// platform. A 1 of 1 order to a dev signer needs no flag.
+// -allow-gcp-unsafe-single-key. show of such an order prints the WARNING
+// line to each approver when the active values name the target, and
+// without them says that it cannot tell the platform. A 1 of 1 order to
+// a dev signer needs no flag.
 func TestImportDraftSingleGCP(t *testing.T) {
 	const name = "gsigner-3"
 	shared, section := signerSection(t, cloudSetupText(t, 4, "single", "", ""), name)
@@ -235,11 +238,43 @@ func TestImportDraftSingleGCP(t *testing.T) {
 	if _, err := os.Stat(body); err == nil {
 		t.Fatal("the refused draft wrote the order")
 	}
-	out := mustTool(t, append(draft, "-allow-gcp-unsafe-single-key")...)
-	wantIn(t, out, "WARNING "+name+": 1 of 1 on GCP", "no lock", "slashable", "import order for "+name, "1 of 1, share index 1", "order_sha256 ")
+	// With the flag the draft goes on to the target's attested state, and
+	// there the cluster's cloud.json is refused: verifier dev for a GCP
+	// setup (memberConn). The fake runner serves the dev document only, so
+	// the order is built here as import-draft builds it, with its active
+	// values, for show.
+	wantIn(t, failTool(t, append(draft, "-allow-gcp-unsafe-single-key")...), "on the gcp platform")
+	if _, err := os.Stat(body); err == nil {
+		t.Fatal("the refused draft wrote the order")
+	}
+	gs, err := setupwire.DecodeSetup(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := setupwire.SetupHash(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sf, err := readSplit(splitPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ob := &importorder.Body{ClusterID: gs.ClusterID, ChainHash: gs.Chain.Hash(), Target: target, T: 1, N: 1, ShareIndex: 1,
+		NotAfter: uint64(time.Now().Add(time.Hour).Unix())}
+	for _, v := range sf.Validators {
+		ob.Validators = append(ob.Validators, importorder.Entry{Pubkey: v.Pubkey, CommitmentsHash: importorder.CommitmentsHash(v.Commitments)})
+	}
+	enc, err := ob.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, body, string(enc))
+	if err := writeActive(body, raw, nil); err != nil {
+		t.Fatal(err)
+	}
 	wantIn(t, mustTool(t, "show", body), "t = 1", "n = 1", "target: "+name, "WARNING "+name+": 1 of 1 on GCP", "IAM bindings")
 	alone := writeFile(t, filepath.Join(dir, "alone", "import.bin"), string(mustRead(t, body)))
-	out = mustTool(t, "show", alone)
+	out := mustTool(t, "show", alone)
 	wantIn(t, out, "1 of 1: the target holds the whole key", "UNSAFE")
 	if strings.Contains(out, "WARNING") {
 		t.Fatalf("show without the active values claims to know the platform:\n%s", out)
@@ -316,21 +351,24 @@ func signerSection(t *testing.T, full, name string) (shared, section string) {
 }
 
 // fakeClusterOf is the cluster.json of a cluster of one signer: a fake
-// runner that serves the binary setup raw, its cloud.json, and the setup
-// pinned.
+// runner that serves the binary setup raw, and its cloud.json with the
+// dev verifier and the setup pinned. The pin is written, not made with
+// pin: a cloud platform setup refuses the dev verifier on connection.
 func fakeClusterOf(t *testing.T, dir, name string, raw []byte) string {
 	t.Helper()
 	r := fakerunner.StartSetup(t, raw)
 	cert, key := r.ClientFiles(t, t.TempDir())
+	h, err := setupwire.SetupHash(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
 	writeFile(t, filepath.Join(dir, name+".setup"), string(raw))
 	writeJSONFile(t, filepath.Join(dir, name, "cloud.json"), map[string]any{
 		"address": r.Addr(), "client_cert": cert, "client_key": key,
-		"attestation": map[string]any{"verifier": "dev"},
+		"attestation": map[string]any{"verifier": "dev", "setup_sha256": hex.EncodeToString(h[:])},
 	})
-	cl := writeJSONFile(t, filepath.Join(dir, "cluster.json"), map[string]any{
+	return writeJSONFile(t, filepath.Join(dir, "cluster.json"), map[string]any{
 		"signers": []any{map[string]string{"name": name, "cloud": name + "/cloud.json", "setup": name + ".setup"}}})
-	mustTool(t, "pin", "-cluster", cl)
-	return cl
 }
 
 // keyReleaseOf reads a binary setup and returns its sealing_key_release.

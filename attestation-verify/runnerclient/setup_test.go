@@ -54,7 +54,7 @@ func pinnedConn(t *testing.T, ca *testCA, f *fakeRunner) Connection {
 func TestSetupConfigRefusals(t *testing.T) {
 	ca := newTestCA(t)
 	cert, key := ca.issue(t, t.TempDir(), "client", time.Time{})
-	good := Connection{Address: "tcp:signer-1:7100", ClientCert: cert, ClientKey: key,
+	good := Connection{Address: "tcp:127.0.0.1:7100", ClientCert: cert, ClientKey: key,
 		Attestation: Attestation{Verifier: VerifierDev, SetupSHA256: pinOf(testSetupHash), MinLockedVersion: 2, MinOpenVersion: 1}}
 	if err := good.Validate(); err != nil {
 		t.Fatal(err)

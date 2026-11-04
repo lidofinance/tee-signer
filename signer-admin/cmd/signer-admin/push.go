@@ -86,7 +86,7 @@ func pushOne(m *member, raw []byte, b *setupwire.UpdateBody, want ref, timeout t
 	if err := b.Matches(m.setup); err != nil {
 		return "", nil, fmt.Errorf("not sent: %v (the signer's setup has cluster_id %s)", err, hex8(m.setup.ClusterID))
 	}
-	conn, err := loadConn(m.cloudPath)
+	conn, err := memberConn(m)
 	if err != nil {
 		return "", nil, err
 	}
@@ -152,7 +152,7 @@ func raiseMin(out io.Writer, c *cluster, states []*cloud.SetupState, b *setupwir
 		}
 	}
 	for _, m := range c.members {
-		conn, err := loadConn(m.cloudPath)
+		conn, err := memberConn(m)
 		if err != nil {
 			return err
 		}

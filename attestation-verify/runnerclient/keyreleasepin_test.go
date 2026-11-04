@@ -37,7 +37,7 @@ func TestKeyReleasePin(t *testing.T) {
 func TestKeyReleasePinConfig(t *testing.T) {
 	ca := newTestCA(t)
 	cert, key := ca.issue(t, t.TempDir(), "client", time.Time{})
-	good := Connection{Address: "tcp:signer-1:7100", ClientCert: cert, ClientKey: key,
+	good := Connection{Address: "tcp:127.0.0.1:7100", ClientCert: cert, ClientKey: key,
 		Attestation: Attestation{Verifier: VerifierDev, SetupSHA256: pinOf(testSetupHash), KeyReleaseSHA256: "0x" + pinOf(backend.Root{7})}}
 	if err := good.Validate(); err != nil {
 		t.Fatal(err)

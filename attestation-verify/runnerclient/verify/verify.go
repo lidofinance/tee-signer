@@ -90,8 +90,8 @@ type Attestation struct {
 	// Mainnet says the runner signs for Ethereum mainnet. An azure-maa or
 	// aws-nitro runner on mainnet is then reached only with
 	// KeyReleaseSHA256 set; gcp-cs never
-	// needs it. The runner's identity does not name its chain, so the
-	// client's settings must.
+	// needs it. The dev verifier is refused with it. The runner's identity
+	// does not name its chain, so the client's settings must.
 	Mainnet bool `json:"mainnet,omitempty"`
 
 	// MAAHost is the attestation provider (the token issuer is

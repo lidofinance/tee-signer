@@ -529,7 +529,7 @@ func TestConfigRefusals(t *testing.T) {
 	}
 
 	maa := Attestation{Verifier: VerifierAzureMAA, MAAHost: "sharedweu.weu.attest.azure.net", CCEPolicySHA256: goodHostData}
-	good := Connection{Address: "tcp:signer-1:7100", ClientCert: cert, ClientKey: key, Attestation: Attestation{Verifier: VerifierDev}}
+	good := Connection{Address: "tcp:127.0.0.1:7100", ClientCert: cert, ClientKey: key, Attestation: Attestation{Verifier: VerifierDev}}
 	goodMAA := good
 	goodMAA.Attestation = maa
 
