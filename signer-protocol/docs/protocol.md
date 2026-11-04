@@ -645,7 +645,9 @@ the trusted clock has not reached, the split (`t`, `n`, this signer's share
 index) and, for each validator, the hash of its public commitments
 (`signer-import-commitments-v1`). An order can be used again until
 `not_after`, so keep it short: `signer-admin import-draft` refuses a
-`not_after` more than 7 days from now. Without an order, or with one that does
+`not_after` more than 7 days from now, and the runner refuses an order
+whose `not_after` is more than 30 days past the trusted time
+(`importorder.MaxValidity`). Without an order, or with one that does
 not verify or does not name the validator, the answer is `FORBIDDEN`. A
 runner without a setup (the flag path) has no approvers and takes the share
 without an order. With the order the request carries the split: `t`,
@@ -869,36 +871,46 @@ order (the status of each refusal in brackets):
    pending update is in force already.
 4. The core exists (`NOT_READY` otherwise). The group's pending or active update sent again skips to
    its signatures (pending) or straight to the body write (active), and
-   answers `outcome` 2.
-5. `version` is above the group's active and pending versions, at most
+   answers `outcome` 2. This comes before the floor of step 5, so an
+   update from before the floor that is in force or pending can be sent
+   again to restore a lost body.
+5. On a prod chain (mainnet, or a chain without a row in the chain
+   table) a new `locked` update's time lock is at least the image default
+   of 48 hours. A non-prod chain takes 0. The tools hold a new setup of a
+   prod chain to the same floor (`setup-tool encode`, `signer-admin
+   setup`); the runner does not refuse a pinned setup or a stored update
+   with a lower value, it raises their wait to the floor (step 9).
+   (`BAD_REQUEST`)
+6. `version` is above the group's active and pending versions, at most
    2^32 above the higher one. `prev_hash` is the hash of the group's
    active update (version 0: the setup's group hash). (`BAD_REQUEST`)
-6. The runner knows the approver set in force and, for an `open` update,
+7. The runner knows the approver set in force and, for an `open` update,
    the open values in force: their update bodies are readable
    (`SC_ERR_STORAGE` otherwise, until that body is sent again).
-7. At least k distinct approvers of the set in force signed, every
+8. At least k distinct approvers of the set in force signed, every
    signature verifies, and for a rotation every key of the new set signed.
    A pending rotation's new set counts for nothing. (`BAD_REQUEST`)
-8. The wait W: for `locked` the time lock in force (the image default of
-   48 hours when the group names none), at least the image's minimum of 7
-   days when the allowed-images list gains an entry; for `open` 0.
+9. The wait W: for `locked` the time lock in force (the image default of
+   48 hours when the group names none; on a prod chain never less than
+   that, whatever the group in force names), at least the image's minimum
+   of 7 days when the allowed-images list gains an entry; for `open` 0.
    `activate_at` is at most now + W + 30 days. Sums saturate.
    (`BAD_REQUEST`)
-9. The core takes the values, and its status goes out as it is: the
-   signing policy and the slot time rule for `locked` (`SC_ERR_ARG`,
-   `SC_ERR_SCHEDULE`), the fork rule for `open` (`SC_ERR_SCHEDULE`; an
-   `open` update while an earlier one is stuck in the core gets
-   `SC_ERR_STORAGE`): every epoch whose fork version or Gloas state
-   changes must lie above epoch(effective time) +
-   `max_sign_epochs_ahead_of_clock` + 1, the epoch the largest under the
-   slot times in force and those of a pending `locked` update. A `locked`
-   update with new slot times is refused when a pending `open` update would
-   not keep clear under them.
-10. The runner writes the body to the mark log, then a record with the
+10. The core takes the values, and its status goes out as it is: the
+    signing policy and the slot time rule for `locked` (`SC_ERR_ARG`,
+    `SC_ERR_SCHEDULE`), the fork rule for `open` (`SC_ERR_SCHEDULE`; an
+    `open` update while an earlier one is stuck in the core gets
+    `SC_ERR_STORAGE`): every epoch whose fork version or Gloas state
+    changes must lie above epoch(effective time) +
+    `max_sign_epochs_ahead_of_clock` + 1, the epoch the largest under the
+    slot times in force and those of a pending `locked` update. A `locked`
+    update with new slot times is refused when a pending `open` update would
+    not keep clear under them.
+11. The runner writes the body to the mark log, then a record with the
     update pending, then answers. A failed write is `SC_ERR_STORAGE` and
     leaves nothing pending.
 
-Steps 1 and 2 refuse with `BAD_REQUEST`, step 3 with `SC_ERR_CLOCK`. The
+Steps 1, 2 and 5 refuse with `BAD_REQUEST`, step 3 with `SC_ERR_CLOCK`. The
 reason is in `detail`. A client tells a malformed update from a
 well-formed one the runner refuses only by that text.
 

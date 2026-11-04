@@ -146,10 +146,11 @@ func cmdSetup(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	// The parser checks the mainnet build's cap (30 days); a non-prod
-	// build's is 30 minutes.
+	// The parser checks the mainnet build's cap (30 days) and, on a prod
+	// chain, its floor (the 2-day default); a non-prod build's are 30 and 2
+	// minutes.
 	for _, s := range setups {
-		if err := fl.Limits().CheckTimeLock(&s.Locked); err != nil {
+		if err := fl.Limits().CheckTimeLock(s.Chain.GenesisForkVersion, &s.Locked); err != nil {
 			return fmt.Errorf("signer %s: %w", s.SignerName, err)
 		}
 	}

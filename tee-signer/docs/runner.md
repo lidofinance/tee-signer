@@ -71,8 +71,12 @@ chain, `prod`, from the chain table in `governance/setupwire/chains.go`:
 
 The table fails closed: a genesis fork version without a row is prod, so
 a setup of an unknown chain gets the strict checks (the threshold rule's
-2t - n >= 2, the key rule lock, the GCP single-key rule), and clients
-treat its runner as a mainnet one. The devnet row names the fork version
+2t - n >= 2, the change delay floor: `change_delay_seconds` at least the
+default time lock in a new setup the tools make and in every new `locked`
+update the runner takes, while a pinned setup or a stored update with a
+lower value is not refused, its wait is raised to the floor, the key rule
+lock, the GCP single-key rule), and clients treat its runner as a mainnet
+one. The devnet row names the fork version
 of ethereum-package devnets, `0x10000038`, the one
 `governance/chains/chain.sh identify` takes as a devnet; a devnet with a
 fork version of its own counts as prod.

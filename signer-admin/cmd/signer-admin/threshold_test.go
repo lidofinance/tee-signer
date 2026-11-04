@@ -190,7 +190,7 @@ func TestSetupAllowGCPSingleFlagScope(t *testing.T) {
 func TestSetupMainnetGCPSingleNeedsNoLockAccepted(t *testing.T) {
 	const name = "gsigner-3"
 	shared, section := signerSection(t, cloudSetupText(t, 4, "single", "", ""), name)
-	mainnet := strings.Replace(shared, "genesis_fork_version = 0x00000001\n", "genesis_fork_version = 0x00000000\n", 1)
+	mainnet := onMainnet(t, shared)
 	if mainnet == shared {
 		t.Fatal("cloudSetupText changed its genesis_fork_version line")
 	}
@@ -211,7 +211,7 @@ func TestSetupMainnetGCPSingleNeedsNoLockAccepted(t *testing.T) {
 	// A real split (3 of 4) on a mainnet cluster with a GCP signer that
 	// accepts neither still makes its setups: the acceptances are only
 	// for a key held alone.
-	threeFile := writeFile(t, filepath.Join(dir, "three.conf"), strings.Replace(cloudSetupText(t, 4, "threshold", "", ""), "genesis_fork_version = 0x00000001\n", "genesis_fork_version = 0x00000000\n", 1))
+	threeFile := writeFile(t, filepath.Join(dir, "three.conf"), onMainnet(t, cloudSetupText(t, 4, "threshold", "", "")))
 	mustTool(t, "setup", "-out", filepath.Join(dir, "three"), threeFile)
 }
 
@@ -383,4 +383,39 @@ func keyReleaseOf(t *testing.T, path string) setupwire.KeyRelease {
 		t.Fatal(err)
 	}
 	return s.Platform.SealingKeyRelease
+}
+
+// onMainnet moves a setup file in the human form to mainnet, with a
+// change_delay_seconds the prod chain's floor takes.
+func onMainnet(t *testing.T, text string) string {
+	t.Helper()
+	m := strings.Replace(text, "genesis_fork_version = 0x00000001\n", "genesis_fork_version = 0x00000000\n", 1)
+	out := strings.Replace(m, "change_delay_seconds = 0\n", fmt.Sprintf("change_delay_seconds = %d\n", setupwire.DefaultTimeLock), 1)
+	if m == text || out == m {
+		t.Fatal("the setup text changed its genesis_fork_version or change_delay_seconds line")
+	}
+	return out
+}
+
+// setup refuses a prod chain setup whose change_delay_seconds is below the
+// floor, the default time lock of the build, and names the floor; a
+// non-prod chain takes 0.
+func TestSetupProdChainChangeDelayFloor(t *testing.T) {
+	dir := t.TempDir()
+	keys := approvers(t, dir, 3)
+	ca := caDER(t)
+	file := func(name string, timeLock int, mainnet bool) string {
+		text := setupText(dir, ca, genesisTime(), lockedText(keys, 2, timeLock, fee1), "a", "b")
+		if mainnet {
+			text = strings.Replace(text, "genesis_fork_version = 0x00000001\n", "genesis_fork_version = 0x00000000\n", 1)
+		}
+		return writeFile(t, filepath.Join(t.TempDir(), name), text)
+	}
+	floor := int(setupwire.DefaultTimeLock)
+	wantIn(t, failTool(t, "setup", "-out", filepath.Join(t.TempDir(), "out"), file("zero.conf", 0, true)),
+		"signer a", "change_delay_seconds 0 on a prod chain", fmt.Sprintf("at least %d", floor))
+	wantIn(t, failTool(t, "setup", "-out", filepath.Join(t.TempDir(), "out"), file("under.conf", floor-1, true)),
+		fmt.Sprintf("change_delay_seconds %d on a prod chain", floor-1))
+	mustTool(t, "setup", "-out", filepath.Join(t.TempDir(), "out"), file("floor.conf", floor, true))
+	mustTool(t, "setup", "-out", filepath.Join(t.TempDir(), "out"), file("devnet.conf", 0, false))
 }

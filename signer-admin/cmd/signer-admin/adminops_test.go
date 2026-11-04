@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
+	"github.com/lidofinance/tee-signer/governance/importorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-core/software"
@@ -288,5 +289,13 @@ func TestReadShares(t *testing.T) {
 	}
 	if _, err := readShares(p); err == nil || !strings.Contains(err.Error(), "mode 0644") {
 		t.Fatalf("mode 0644: %v", err)
+	}
+}
+
+// The life import-draft gives an order is under the runner's cap, so an
+// order the tool makes is never refused for its not_after.
+func TestOrderLifeUnderRunnerCap(t *testing.T) {
+	if maxOrderLife > importorder.MaxValidity*time.Second {
+		t.Fatalf("maxOrderLife %v is above the runner's cap of %d s", maxOrderLife, importorder.MaxValidity)
 	}
 }

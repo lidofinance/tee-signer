@@ -15,7 +15,8 @@ import (
 //     short ones, starts on its own chain only, and never on a prod chain
 //     (governance/runnerchain);
 //   - a setup of the chain gets the strict checks: the threshold rule's
-//     2t - n >= 2 (CheckThreshold), the key rule lock at start
+//     2t - n >= 2 (CheckThreshold), the change delay floor
+//     (MinChangeDelay), the key rule lock at start
 //     (platform.Options.Prod), the GCP single-key rule
 //     (CheckSingleKeyProd), and the client's refusal of a runner whose
 //     certificate names a prod chain when its settings do not say mainnet

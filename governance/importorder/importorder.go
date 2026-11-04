@@ -39,6 +39,11 @@ const (
 	// MaxSize bounds a signed order: MaxValidators entries and eight
 	// signatures.
 	MaxSize = 2 + 4 + 2 + 32*3 + 8 + 5 + MaxValidators*(48+32) + 1 + setupwire.MaxApprovers*65
+	// MaxValidity caps an order's life, in seconds: the runner refuses an
+	// order whose not_after is more than this past the trusted time
+	// (Body.Matches). A far not_after would be a standing permission to
+	// import until the approvers rotate.
+	MaxValidity = 30 * 86400
 
 	kindBody  = 'I'
 	kindOrder = 'J'
@@ -310,7 +315,8 @@ func (o *Order) Verify(active *setupwire.ApproverSet) error {
 }
 
 // Matches checks that the order is for this setup (cluster, chain,
-// target), still valid at now, and names pk; it returns pk's entry.
+// target), still valid at now and not valid past now + MaxValidity, and
+// names pk; it returns pk's entry.
 func (b *Body) Matches(s *setupwire.Setup, setupHash [32]byte, now uint64, pk backend.Pubkey) (*Entry, error) {
 	switch {
 	case b.ClusterID != s.ClusterID:
@@ -321,6 +327,8 @@ func (b *Body) Matches(s *setupwire.Setup, setupHash [32]byte, now uint64, pk ba
 		return nil, fmt.Errorf("import order: its target is setup %x, this signer's is %x", b.Target[:8], setupHash[:8])
 	case now >= b.NotAfter:
 		return nil, fmt.Errorf("import order: expired at %d (now %d)", b.NotAfter, now)
+	case b.NotAfter > setupwire.SatAdd(now, MaxValidity):
+		return nil, fmt.Errorf("import order: not_after %d is more than %d s (30 days) past now %d; an order is valid for at most that long, draft one with a shorter life", b.NotAfter, uint64(MaxValidity), now)
 	}
 	for i := range b.Validators {
 		if b.Validators[i].Pubkey == pk {

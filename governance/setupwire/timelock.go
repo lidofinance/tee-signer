@@ -5,6 +5,8 @@ import (
 	"math"
 	"math/bits"
 	"slices"
+
+	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
 // Arithmetic of section 6, steps 3 and 7, and of activation. Times are Unix
@@ -48,16 +50,54 @@ func GainsImage(active, next []Image) bool {
 	return false
 }
 
-// Wait is W of step 7 for update u under the active locked group: 0 for
-// an open update; for a locked one the active change delay, or the images
-// minimum when that is larger and allowed_image_measurements gains an
-// entry. A change delay of zero does not shorten the images minimum
-// (decision 10).
-func Wait(active *Locked, u *UpdateBody) uint64 {
+// MinChangeDelay is the floor of change_delay_seconds on the chain with
+// this genesis fork version: the build's default time lock on a prod
+// chain (ProdChain), none elsewhere. Without the floor, a locked group
+// with change_delay_seconds = 0 put a rotation, new fee recipients, new
+// slot times or an emptied image list in force the moment k approvers
+// signed; only image additions kept the images minimum.
+func MinChangeDelay(genesisForkVersion backend.Version) uint64 {
+	if ProdChain(genesisForkVersion) {
+		return DefaultTimeLock
+	}
+	return 0
+}
+
+// CheckChangeDelay refuses a change_delay_seconds below the floor of the
+// chain (MinChangeDelay). An absent value is the default, which is never
+// below the floor. It is the check of a new value only: the tools apply
+// it to a setup they make (setup-tool encode; signer-admin setup and
+// draft through runnerchain.Limits.CheckTimeLock) and the runner to a
+// locked update it has not seen (Updates.Accept, after the again paths).
+// A pinned setup or a stored update with a value below the floor is not
+// refused, so a cluster from before the floor keeps starting and can
+// restore a lost body; ChangeDelayOn and Wait raise its wait to the floor.
+func (l *Locked) CheckChangeDelay(genesisForkVersion backend.Version) error {
+	floor := MinChangeDelay(genesisForkVersion)
+	if l.ChangeDelaySeconds != nil && *l.ChangeDelaySeconds < floor {
+		return fmt.Errorf("locked: change_delay_seconds %d on a prod chain (mainnet, or a chain without a row in the chain table), at least %d", *l.ChangeDelaySeconds, floor)
+	}
+	return nil
+}
+
+// ChangeDelayOn is the change delay in force on the chain: ChangeDelay, or
+// the chain's floor (MinChangeDelay) when that is larger, so a stored
+// value below the floor cannot shorten a wait.
+func (l *Locked) ChangeDelayOn(genesisForkVersion backend.Version) uint64 {
+	return max(l.ChangeDelay(), MinChangeDelay(genesisForkVersion))
+}
+
+// Wait is W of step 7 for update u under the active locked group of a
+// setup of the chain with this genesis fork version: 0 for an open
+// update; for a locked one the active change delay (ChangeDelayOn, never
+// below the chain's floor), or the images minimum when that is larger and
+// allowed_image_measurements gains an entry. A change delay of zero does
+// not shorten the images minimum (decision 10).
+func Wait(genesisForkVersion backend.Version, active *Locked, u *UpdateBody) uint64 {
 	if u.Group != GroupLocked {
 		return 0
 	}
-	w := active.ChangeDelay()
+	w := active.ChangeDelayOn(genesisForkVersion)
 	if u.Locked != nil && GainsImage(active.AllowedImageMeasurements, u.Locked.AllowedImageMeasurements) {
 		w = max(w, ImagesMinTimeLock)
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -113,6 +114,12 @@ func TestEncodeMainnetGCPSingleNeedsNoLockAccepted(t *testing.T) {
 	if mainnet == string(text) {
 		t.Fatal("the sample changed its genesis_fork_version line")
 	}
+	// The sample's change_delay_seconds = 0 is below the prod chain's floor.
+	withDelay := strings.Replace(mainnet, "\nchange_delay_seconds = 0\n", fmt.Sprintf("\nchange_delay_seconds = %d\n", setupwire.DefaultTimeLock), 1)
+	if withDelay == mainnet {
+		t.Fatal("the sample changed its change_delay_seconds line")
+	}
+	mainnet = withDelay
 	// A 1-of-1 GCP signer holds a whole key: signing_mode = single.
 	singleMode := strings.Replace(mainnet, "\nsigning_mode = threshold\n", "\nsigning_mode = single\n", 1)
 	if singleMode == mainnet {
@@ -152,5 +159,59 @@ func TestEncodeMainnetGCPSingleNeedsNoLockAccepted(t *testing.T) {
 	}
 	if !setupwire.ProdChain(s.Chain.GenesisForkVersion) {
 		t.Fatal("the setup is not on mainnet")
+	}
+}
+
+// encode refuses a new prod-chain setup whose change_delay_seconds is
+// below the floor, the build's default time lock, and writes nothing; at
+// the floor it writes the setup. check takes a stored setup with 0 on a
+// prod chain, as a tool before the floor wrote it: a runner pinned to it
+// must keep starting.
+func TestEncodeProdChainChangeDelayFloor(t *testing.T) {
+	text, err := os.ReadFile(gcpSample)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A GCP runner checks itself against a gcp image (setupwire.CheckOwnImageListed).
+	zero := strings.Replace(string(text), "genesis_fork_version = 0x00000001\n", "genesis_fork_version = 0x00000000\n", 1) + gcpImage + "\n"
+	floor := strings.Replace(zero, "\nchange_delay_seconds = 0\n", fmt.Sprintf("\nchange_delay_seconds = %d\n", setupwire.DefaultTimeLock), 1)
+	if zero == string(text)+gcpImage+"\n" || floor == zero {
+		t.Fatal("the sample changed its genesis_fork_version or change_delay_seconds line")
+	}
+	dir := t.TempDir()
+	write := func(name, text string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	out := filepath.Join(dir, "zero.setup")
+	err = encode(write("zero.conf", zero), out)
+	if err == nil || !strings.Contains(err.Error(), "change_delay_seconds 0 on a prod chain") || !strings.Contains(err.Error(), fmt.Sprintf("at least %d", setupwire.DefaultTimeLock)) {
+		t.Fatalf("encode: %v, want the refusal naming the floor", err)
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Fatalf("encode wrote the refused setup (stat: %v)", err)
+	}
+	if err := encode(write("floor.conf", floor), filepath.Join(dir, "floor.setup")); err != nil {
+		t.Fatalf("encode at the floor: %v", err)
+	}
+
+	// The binary setup with 0 as an older tool wrote it.
+	s, err := setuptext.ParseSetup("zero.conf", []byte(zero))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := s.Encode()
+	if err != nil {
+		t.Fatalf("a stored setup with change_delay_seconds 0 does not encode: %v", err)
+	}
+	old := filepath.Join(dir, "old.setup")
+	if err := os.WriteFile(old, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := check([]string{"-platform", "gcp", old}); err != nil {
+		t.Fatalf("check of a stored setup with change_delay_seconds 0: %v", err)
 	}
 }

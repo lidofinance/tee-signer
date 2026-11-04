@@ -1129,3 +1129,98 @@ func TestPolicyOfBuilderRequestAuthRoots(t *testing.T) {
 		t.Fatal("an empty list gives roots")
 	}
 }
+
+// On a prod chain the runner refuses a locked update whose
+// change_delay_seconds is below the floor, the build's default time lock,
+// and an update that keeps the default waits it out in full.
+func TestConfigUpdateProdChainFloor(t *testing.T) {
+	e := newEnvWith(t, nil, func(s *setupwire.Setup) { s.Chain.GenesisForkVersion = setupwire.MainnetForkVersion })
+	t0 := e.now()
+	zero := e.body(locked, 1, e.groupHash(locked), t0)
+	zero.Locked.AllowedFeeRecipients = append(zero.Locked.AllowedFeeRecipients, x)
+	zero.Locked.ChangeDelaySeconds = u64(0)
+	_, _, err := e.send(signed(t, zero, first2, nil))
+	wantCode(t, err, backend.StatusBadRequest, "change_delay_seconds 0 on a prod chain")
+	if logPending(t, e, locked) != nil {
+		t.Fatal("the refused update is pending")
+	}
+	b1 := e.body(locked, 1, e.groupHash(locked), t0)
+	b1.Locked.AllowedFeeRecipients = append(b1.Locked.AllowedFeeRecipients, x)
+	h1 := hashOf(t, b1)
+	if st := e.mustSend(signed(t, b1, first2, nil), wireadmin.ConfigAccepted); st.Locked.Pending != pending(1, h1, t0+setupwire.DefaultTimeLock) {
+		t.Fatalf("pending %+v, want in force at arrival + the default time lock", st.Locked)
+	}
+	e.clock.add(setupwire.DefaultTimeLock - 1)
+	wantCode(t, e.register(x), backend.StatusPolicyFeeRecipient, "")
+	e.clock.add(1)
+	if err := e.register(x); err != nil {
+		t.Fatalf("at the effective time: %v", err)
+	}
+}
+
+// A locked update with change_delay_seconds = 0 that an image before the
+// floor put in force on a prod chain (its body and record written straight
+// to the log here, as that image did) stays in force on this image, the
+// next update waits the floor, and the same update sent again is the
+// again path: ConfigKnown, and with its body lost, the body written back,
+// so the runner signs again. A pending one from that image is taken again
+// the same way.
+func TestConfigUpdateStoredZeroDelayAgain(t *testing.T) {
+	for _, pend := range []bool{false, true} {
+		t.Run(map[bool]string{false: "in force", true: "pending"}[pend], func(t *testing.T) {
+			e := newEnvWith(t, nil, func(s *setupwire.Setup) { s.Chain.GenesisForkVersion = setupwire.MainnetForkVersion })
+			t0 := e.now()
+			b1 := e.body(locked, 1, e.groupHash(locked), t0)
+			b1.Locked.ChangeDelaySeconds = u64(0)
+			b1.Locked.AllowedFeeRecipients = append(b1.Locked.AllowedFeeRecipients, x)
+			raw1, h1 := signed(t, b1, first2, nil), hashOf(t, b1)
+			at := t0
+			if pend {
+				at = t0 + 1000
+			}
+			if _, _, _, err := e.log.PutBody(ctx, raw1); err != nil {
+				t.Fatal(err)
+			}
+			next := e.log.State().Clone()
+			next.Locked.Pending = &markstore.Pending{Version: 1, Hash: h1, EffectiveAt: at}
+			if err := e.log.SetState(ctx, next); err != nil {
+				t.Fatal(err)
+			}
+			e.restart()
+			st := e.mustSend(raw1, wireadmin.ConfigKnown)
+			if pend {
+				if st.Locked.Pending != pending(1, h1, at) {
+					t.Fatalf("after the restart: %+v, want version 1 pending at %d", st.Locked, at)
+				}
+				e.clock.add(1000)
+			} else if st.Locked != (backend.ConfigGroup{Version: 1, Hash: h1}) {
+				t.Fatalf("after the restart: %+v, want version 1 in force", st.Locked)
+			}
+			if err := e.register(x); err != nil {
+				t.Fatalf("the stored values do not sign: %v", err)
+			}
+			// The next update waits the floor, whatever the stored 0 says.
+			b2 := e.body(locked, 2, h1, e.now())
+			b2.Locked.AllowedFeeRecipients = append(b2.Locked.AllowedFeeRecipients, y)
+			if st := e.mustSend(signed(t, b2, first2, nil), wireadmin.ConfigAccepted); st.Locked.Pending != pending(2, hashOf(t, b2), e.now()+setupwire.DefaultTimeLock) {
+				t.Fatalf("the wait on top of a stored 0 is not the floor: %+v", st.Locked.Pending)
+			}
+			// The host loses the body of version 1: the runner signs nothing
+			// and asks for the update again; sent again, it is taken.
+			e.tamper = func(g setupwire.Group, v uint64, raw []byte) []byte {
+				if g == locked && v == 1 {
+					return nil
+				}
+				return raw
+			}
+			e.restart()
+			wantCode(t, e.register(x), backend.StatusStorage, "send that update again")
+			if o, _, err := e.send(raw1); err != nil || o != wireadmin.ConfigKnown {
+				t.Fatalf("the update in force sent again with its body lost: outcome %d, %v; want ConfigKnown", o, err)
+			}
+			if err := e.register(x); err != nil || !e.ready() {
+				t.Fatalf("with the body back: %v", err)
+			}
+		})
+	}
+}

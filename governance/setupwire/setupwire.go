@@ -391,7 +391,8 @@ type SlotTimeChange struct {
 // Locked is the config group that waits for the change delay.
 type Locked struct {
 	Approvers ApproverSet
-	// ChangeDelaySeconds nil: DefaultTimeLock. 0: no change delay.
+	// ChangeDelaySeconds nil: DefaultTimeLock. 0: no change delay, which
+	// only a non-prod chain takes (MinChangeDelay).
 	ChangeDelaySeconds                  *uint64
 	AllowedImageMeasurements            []Image           // sorted
 	AllowedFeeRecipients                []backend.Address // sorted
@@ -1170,7 +1171,10 @@ func (s *Setup) checkPublic() error {
 	return nil
 }
 
-// checkGroups applies the rules of the locked and open groups.
+// checkGroups applies the rules of the locked and open groups, with the
+// chain's slot time rule on the locked one. The change delay floor is not
+// here: the decoder runs these rules on a pinned setup too, and a setup
+// made before the floor must keep starting (Locked.CheckChangeDelay).
 func (s *Setup) checkGroups() error {
 	if err := s.Locked.Check(); err != nil {
 		return err
