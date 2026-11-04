@@ -2,6 +2,7 @@ package attls
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
@@ -278,7 +279,8 @@ func TestRoleOf(t *testing.T) {
 		"plain leaf under signing CA":   {roleLeaf(t, plainCA), RoleSigning},
 		"admin leaf under admin CA":     {roleLeaf(t, adminCA, admin), RoleAdmin},
 		"admin leaf under signing CA":   {roleLeaf(t, plainCA, admin), RoleNone},
-		"plain leaf under admin CA":     {roleLeaf(t, adminCA), RoleSigning},
+		"plain leaf under admin CA":     {roleLeaf(t, adminCA), RoleNone},
+		"plain leaf, sub CA of admin":   {roleLeaf(t, adminSub), RoleNone},
 		"admin leaf under the root":     {roleLeaf(t, root, admin), rootDirect},
 		"both marks under the root":     {roleLeaf(t, root, admin, attest), RoleAttestOnly},
 		"plain leaf under the root":     {roleLeaf(t, root), RoleSigning},
@@ -297,6 +299,66 @@ func TestRoleOf(t *testing.T) {
 	}
 	if got := RoleOf(&tls.ConnectionState{}); got != RoleNone {
 		t.Errorf("no certificate: %v, want none", got)
+	}
+}
+
+// sameKeyCA is a CA under root with the given key and subject, so two of
+// them can issue the same leaf.
+func sameKeyCA(t *testing.T, root *ca, key *ecdsa.PrivateKey, pathLen int, marks ...asn1.ObjectIdentifier) *ca {
+	t.Helper()
+	tmpl := &x509.Certificate{
+		SerialNumber: nextSerial(), Subject: pkix.Name{CommonName: "shared CA"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true,
+		KeyUsage: x509.KeyUsageCertSign, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, UnknownExtKeyUsage: marks,
+		MaxPathLen: pathLen, MaxPathLenZero: pathLen == 0,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, root.cert, &key.PublicKey, root.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &ca{cert: cert, key: key, chain: [][]byte{der}}
+}
+
+// The holder of the admin CA key cannot mint a signing certificate, not
+// even when the leaf also verifies through a signing CA with the same key
+// and subject: one verified chain through an admin CA blocks the signing
+// role.
+func TestAdminCAKeyMintsNoSigningLeaf(t *testing.T) {
+	admin := backend.AdminClientOID
+	root := roleCA(t, nil, "root", nil)
+	key := newKey(t)
+	adminCA := sameKeyCA(t, root, key, 0, admin)
+	plainCA := sameKeyCA(t, root, key, -1)
+	cfg, _, err := ServerConfig(certPEM(root.cert), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		marks []asn1.ObjectIdentifier
+		want  Role
+	}{
+		"plain leaf": {nil, RoleNone},
+		"admin leaf": {[]asn1.ObjectIdentifier{admin}, RoleAdmin},
+	} {
+		cert := roleLeaf(t, adminCA, tc.marks...)
+		cert.Certificate = append(cert.Certificate, plainCA.cert.Raw)
+		cs := handshake(t, cfg, cert)
+		if len(cs.VerifiedChains) != 2 {
+			t.Fatalf("%s: %d verified chains, want 2", name, len(cs.VerifiedChains))
+		}
+		if got := RoleOf(&cs); got != tc.want {
+			t.Errorf("%s: %v, want %v", name, got, tc.want)
+		}
+	}
+	// A plain leaf that chains only to the signing CA stays signing.
+	cert := roleLeaf(t, plainCA)
+	cs := handshake(t, cfg, cert)
+	if got := RoleOf(&cs); got != RoleSigning {
+		t.Errorf("plain leaf, signing CA only: %v, want %v", got, RoleSigning)
 	}
 }
 
