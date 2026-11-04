@@ -49,6 +49,10 @@ NITRO_CLI_DIR="$BUILD/third_party/aws-nitro-enclaves-cli"
 NTS_DIR="$ROOT/trusted-time/rust"
 NTS_CARGO_HOME="$BUILD/nts/cargo-home"
 NTS_IMAGE="signer-nts-toolchain:1.94.1-slim"
+# The toolchain always runs as linux/amd64, also on an arm64 host (under
+# emulation there). A native arm64 rustc gives a different aarch64 library,
+# so the Nitro PCRs would depend on the build host.
+NTS_PLATFORM="linux/amd64"
 NTS_RUSTC_COMMIT="e408947bfd200af42db322daf0fadfe7e26d3bd1"
 # The standard library of each target in the image: sha256 of the sorted
 # "sha256  path" list of every file under lib/rustlib/<target> of the
@@ -59,11 +63,14 @@ NTS_STD_SHA256_x86_64="bf5ce11b2dc442f3261fb3197d8412a26ed4114b196299d4284f4fbf8
 NTS_STD_SHA256_aarch64="9ebddcc2f45dafdc7e150626f7ed9bd981c7d4da85c33df46b46e7e2d7db8b88"
 NTS_OUT="$BUILD/nts"
 
-# nts_toolchain_image: builds the toolchain image if this Docker has none.
+# nts_toolchain_image: builds the toolchain image if this Docker has none for
+# $NTS_PLATFORM. An image of another platform under the same tag is rebuilt.
 nts_toolchain_image() {
-  if ! docker image inspect "$NTS_IMAGE" >/dev/null 2>&1; then
-    log "building $NTS_IMAGE (rustup downloads rust-std for aarch64 from static.rust-lang.org)"
-    docker build --pull=false -q -f "$ROOT/trusted-time/toolchain/toolchain.Dockerfile" -t "$NTS_IMAGE" "$ROOT/trusted-time/toolchain" >/dev/null
+  local plat
+  plat="$(docker image inspect -f '{{.Os}}/{{.Architecture}}' "$NTS_IMAGE" 2>/dev/null || true)"
+  if [ "$plat" != "$NTS_PLATFORM" ]; then
+    log "building $NTS_IMAGE for $NTS_PLATFORM (rustup downloads rust-std for aarch64 from static.rust-lang.org)"
+    docker build --pull=false -q --platform "$NTS_PLATFORM" -f "$ROOT/trusted-time/toolchain/toolchain.Dockerfile" -t "$NTS_IMAGE" "$ROOT/trusted-time/toolchain" >/dev/null
   fi
 }
 

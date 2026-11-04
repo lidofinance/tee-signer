@@ -70,7 +70,7 @@ in_toolchain() {
   while [ $# -gt 0 ] && [ "$1" != -- ]; do opts+=("$1"); shift; done
   [ $# -gt 0 ] || { echo "in_toolchain: no -- before the command" >&2; return 2; }
   shift
-  docker run --rm --pull=never --user "$(id -u):$(id -g)" \
+  docker run --rm --pull=never --platform "$NTS_PLATFORM" --user "$(id -u):$(id -g)" \
     -e HOME=/tmp/home -e CARGO_HOME=/tmp/cargo-home -e CARGO_NET_RETRY=3 \
     -v "$work:/work" -w /work "${opts[@]}" "$NTS_IMAGE" "$@"
 }

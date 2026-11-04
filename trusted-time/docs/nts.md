@@ -289,6 +289,12 @@ the release manifest it downloads from the same server, so the pin is what
 keeps a changed download out of the build. A Rust update changes all
 three.
 
+The reference build platform is linux/amd64. The image is built and run with
+`--platform linux/amd64` (`NTS_PLATFORM` in `scripts/common.sh`), also on an
+arm64 host, where it runs under emulation. A native arm64 toolchain builds a
+different aarch64 library, and that library is in the Nitro EIF, so PCR0 and
+PCR2 would depend on the build host. The x86_64 library is the same either way.
+
 ## Crates and where they live
 
 The 20 crates (aes-siv and its dependencies) come from crates.io. None is in
