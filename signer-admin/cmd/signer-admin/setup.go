@@ -194,6 +194,9 @@ func cmdSetup(args []string, out io.Writer) error {
 		if err := setupwire.CheckSingleKeyProd(&s.Platform, s.Chain.GenesisForkVersion); err != nil {
 			return fmt.Errorf("signer %s: %w in the signer's section (-allow-gcp-unsafe-single-key does not set it)", s.SignerName, err)
 		}
+		if err := s.CheckOwnImageListed(); err != nil {
+			return fmt.Errorf("signer %s: %w", s.SignerName, err)
+		}
 		if k.NoLockAccepted {
 			fprintf(out, "WARNING signer %s: the setup accepts a key rule without a lock (sealing_key_release.no_lock_accepted): Cloud KMS has no lock on the rule that releases the sealing key, and a mainnet runner starts anyway\n", s.SignerName)
 		}

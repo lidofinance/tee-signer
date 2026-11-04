@@ -45,6 +45,10 @@ make_setup() { # make_setup SAMPLE OUT [KEY=VALUE...]
   awk -F' = ' 'NR == FNR { if (NF > 1) drop[$1] = 1; next } !($1 in drop)' \
     "$work/chain.lines" "$ROOT/governance/setuptext/testdata/$sample" >"$work/setup.conf"
   cat "$work/chain.lines" >>"$work/setup.conf"
+  # The GCP sample lists no gcp image; setup-tool refuses a setup without one.
+  case "$sample" in
+    setup-gcp*) echo "allowed_image_measurements = gcp 0x$(printf '9%.0s' {1..64})" >>"$work/setup.conf" ;;
+  esac
   for kv in "$@"; do
     sed -i "s|^${kv%%=*} = .*|${kv%%=*} = ${kv#*=}|" "$work/setup.conf"
   done

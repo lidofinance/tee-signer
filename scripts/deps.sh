@@ -5,11 +5,17 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 pkgs=(build-essential git curl file openssl python3 gettext-base jq clang cloc)
+# Where qemu-user-static is a virtual package (Ubuntu 26.04), qemu-user-binfmt
+# registers the binfmt_misc entries instead.
+qemu_binfmt=qemu-user-static
+if LC_ALL=C apt-cache show qemu-user-static 2>&1 >/dev/null | grep -q 'purely virtual'; then
+  qemu_binfmt=qemu-user-binfmt
+fi
 case "$HOST_ARCH" in
   # qemu-user runs the arm64 test binaries. qemu-user-static registers the
   # binfmt_misc entry with the F flag, so arm64 programs also run inside
   # docker containers: nitro-eif.sh needs that for an arm64 EIF.
-  x86_64) pkgs+=(gcc-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user qemu-user-static) ;;
+  x86_64) pkgs+=(gcc-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user "$qemu_binfmt") ;;
   aarch64) pkgs+=(gcc-x86-64-linux-gnu libc6-dev-amd64-cross) ;;
 esac
 missing=()

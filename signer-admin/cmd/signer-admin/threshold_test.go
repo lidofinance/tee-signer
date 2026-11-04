@@ -40,6 +40,7 @@ max_keys = 8192
 slashing_log_min_lock_days = 1
 `, format, mode, genesisTime(), secondsPerSlot, slotsPerEpoch, base64.StdEncoding.EncodeToString(caDER(t)))
 	b.WriteString(lockedText(keys, 2, 0, fee1))
+	b.WriteString(cloudImages)
 	b.WriteString(openText())
 	b.WriteString(`
 [signer gsigner-1]
@@ -67,6 +68,39 @@ sealing_key_release.kms_key = projects/signer-project/locations/europe-west4/key
 sealing_key_release.attest_audience = signer-runner-identity
 `)
 	return b.String()
+}
+
+// cloudImages lists one image per cloud platform, so each signer of
+// cloudSetupText finds its own (setupwire.CheckOwnImageListed).
+const cloudImages = `allowed_image_measurements = nitro 0x111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111 0x111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111 0x111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111
+allowed_image_measurements = azure 0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+allowed_image_measurements = gcp 0x9999999999999999999999999999999999999999999999999999999999999999
+`
+
+// signer-admin setup refuses a cluster file whose
+// allowed_image_measurements lists no image of a signer's platform: that
+// signer's runner would refuse every import. The refusal names the signer
+// and the missing kind; with every kind listed the setup is made.
+func TestSetupRefusesClusterWithoutOwnImage(t *testing.T) {
+	full := cloudSetupText(t, 4, "threshold", "", "")
+	for kind, signer := range map[string]string{"azure": "gsigner-1", "nitro": "gsigner-2", "gcp": "gsigner-3"} {
+		var keep []string
+		for _, l := range strings.Split(full, "\n") {
+			if !strings.HasPrefix(l, "allowed_image_measurements = "+kind+" ") {
+				keep = append(keep, l)
+			}
+		}
+		dir := t.TempDir()
+		file := writeFile(t, filepath.Join(dir, "setup.conf"), strings.Join(keep, "\n"))
+		wantIn(t, failTool(t, "setup", "-out", filepath.Join(dir, "setups"), file),
+			"signer "+signer, "allowed_image_measurements lists no "+kind+" image")
+		if _, err := os.Stat(filepath.Join(dir, "setups")); !os.IsNotExist(err) {
+			t.Fatalf("no %s image: the refused run wrote setups (stat: %v)", kind, err)
+		}
+	}
+	dir := t.TempDir()
+	file := writeFile(t, filepath.Join(dir, "setup.conf"), full)
+	wantIn(t, mustTool(t, "setup", "-out", filepath.Join(dir, "setups"), file), "gsigner-1 setup_sha256", "gsigner-2 setup_sha256", "gsigner-3 setup_sha256")
 }
 
 // signer-admin setup makes a setup for a cluster of one Azure or Nitro

@@ -17,8 +17,11 @@
 //	    (setupwire.CheckSingleKeyProd), as signer-admin setup does.
 //	setup-tool check [-platform P] [-chain CHAIN_JSON] FILE
 //	    Decode FILE strictly and print setup_sha256, platform, signer,
-//	    signing_mode, policy_root and platform_commitment. With
-//	    -platform, refuse a setup for another platform. With -chain, refuse
+//	    signing_mode, policy_root and platform_commitment. Refuse a setup
+//	    whose allowed_image_measurements lists no image of its platform
+//	    (setupwire.CheckOwnImageListed), as encode and signer-admin setup
+//	    do. With -platform, refuse a setup for another platform. With
+//	    -chain, refuse
 //	    a setup whose chain or first fork schedule differs from the runner
 //	    chain.json (cloud/chains/chain.sh picks that file by chain name).
 //	setup-tool show FILE
@@ -110,6 +113,9 @@ func encode(human, out string) error {
 	if err := setupwire.CheckSingleKeyProd(&s.Platform, s.Chain.GenesisForkVersion); err != nil {
 		return err
 	}
+	if err := s.CheckOwnImageListed(); err != nil {
+		return fmt.Errorf("%s: %w", human, err)
+	}
 	if !s.Salted() {
 		p, err := setupwire.NewPolicySalts(rand.Reader)
 		if err != nil {
@@ -191,6 +197,9 @@ func check(args []string) error {
 		}
 		s = st.Wire
 	} else if s, err = setupwire.DecodeSetup(raw); err != nil {
+		return fmt.Errorf("%s: %w", fs.Arg(0), err)
+	}
+	if err := s.CheckOwnImageListed(); err != nil {
 		return fmt.Errorf("%s: %w", fs.Arg(0), err)
 	}
 	if *chain != "" {
