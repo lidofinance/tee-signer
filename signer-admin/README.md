@@ -6,7 +6,7 @@
 
 Operator tools, outside the TEE: `signer-admin` (drafts and signs setup updates and orders, `approver` and its agents), `cluster` (setups of a signer group), the admin client (`remote/admin`), and the key lifecycle tools: `share-import`, `setup-tool`, `identity-check` and `proof-check`. `fakerunner` is a test runner for the tools.
 
-The runner checks everything these tools send; none of them holds a validator key.
+The runner checks what these tools send, but not all of their work. `share-import` reads a plaintext key share and seals it to the runner's attested key; the other tools hold no validator key. The tools are outside the audit scope, except `share-import` ([SECURITY-SCOPE.md](../SECURITY-SCOPE.md)).
 
 `signer-admin exit` signs a voluntary exit. Only the admin role may sign one, so the signing client cannot. It sends the exit to the signers of `cluster.json` in turn with each signer's admin connection file, keeps the first t partial signatures that verify under their share keys (t and the share indices come from the split file of `import-draft`; a cluster of one single-mode signer needs none), combines them, checks the result under the validator key and writes the beacon API body. It posts nothing. To broadcast:
 
