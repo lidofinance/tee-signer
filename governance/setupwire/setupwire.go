@@ -689,6 +689,36 @@ func (s *Setup) CheckPlatform(image Platform) error {
 	return nil
 }
 
+// ImageKind is the kind of allowed_image_measurements entry a runner on p
+// checks its own image against. The dev platform has none: ok is false.
+func (p Platform) ImageKind() (k ImageKind, ok bool) {
+	switch p {
+	case PlatformNitro:
+		return ImageNitro, true
+	case PlatformAzure:
+		return ImageAzure, true
+	case PlatformGCP:
+		return ImageGCP, true
+	}
+	return 0, false
+}
+
+// CheckOwnImageListed refuses a setup whose allowed_image_measurements
+// lists no image of the signer's own platform. Its runner would sign and
+// import nothing until a locked update lists its image. The tools that
+// make and check setups call it; the runner does not, it checks its own
+// measurement at run time (tee-signer/server.ImageGate).
+func (s *Setup) CheckOwnImageListed() error {
+	k, ok := s.Platform.Platform.ImageKind()
+	if !ok {
+		return nil
+	}
+	if slices.ContainsFunc(s.Locked.AllowedImageMeasurements, func(im Image) bool { return im.Kind == k }) {
+		return nil
+	}
+	return fmt.Errorf("setup: platform is %s, but allowed_image_measurements lists no %s image: the runner would refuse every import and signature until a locked update lists its image; add a line allowed_image_measurements = %s ...", s.Platform.Platform, k, k)
+}
+
 // Encode returns the group's values as a setup and an update body carry
 // them (without the salts).
 func (l *Locked) Encode() ([]byte, error) {

@@ -6,11 +6,100 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lidofinance/tee-signer/governance/setuptext"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 )
 
 // gcpSample is setupwire's GCP sample setup, a test file of this repo.
 const gcpSample = "../../../governance/setuptext/testdata/setup-gcp.conf"
+
+// ownImages are allowed_image_measurements lines, one per platform with an
+// image kind.
+var ownImages = map[string]string{
+	"nitro": "allowed_image_measurements = nitro 0x" + strings.Repeat("11", 48) + " 0x" + strings.Repeat("11", 48) + " 0x" + strings.Repeat("11", 48),
+	"azure": "allowed_image_measurements = azure 0x" + strings.Repeat("aa", 32),
+	"gcp":   gcpImage,
+}
+
+const gcpImage = "allowed_image_measurements = gcp 0x9999999999999999999999999999999999999999999999999999999999999999"
+
+// withoutImage is the sample setup of platform p with no
+// allowed_image_measurements line of kind p.
+func withoutImage(t *testing.T, sample, p string) string {
+	t.Helper()
+	text, err := os.ReadFile("../../../governance/setuptext/testdata/" + sample)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keep []string
+	for _, l := range strings.Split(string(text), "\n") {
+		if !strings.HasPrefix(l, "allowed_image_measurements = "+p+" ") {
+			keep = append(keep, l)
+		}
+	}
+	return strings.Join(keep, "\n")
+}
+
+// encode and check refuse a setup whose allowed_image_measurements lists
+// no image of its own platform, whose runner would refuse every import;
+// with that image listed, both pass. A dev setup has no image kind and
+// passes either way.
+func TestOwnImageListed(t *testing.T) {
+	for _, c := range []struct{ p, sample string }{
+		{"nitro", "setup-nitro.conf"}, {"azure", "setup-azure.conf"}, {"gcp", "setup-gcp.conf"}, {"dev", "setup-dev-threshold.conf"},
+	} {
+		t.Run(c.p, func(t *testing.T) {
+			dir := t.TempDir()
+			bare := withoutImage(t, c.sample, c.p)
+			human := filepath.Join(dir, "bare.conf")
+			if err := os.WriteFile(human, []byte(bare), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			// The binary setup as an older tool wrote it, without the check.
+			s, err := setuptext.ParseSetup(human, []byte(bare))
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := s.Encode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			old := filepath.Join(dir, "old.setup")
+			if err := os.WriteFile(old, raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			out := filepath.Join(dir, "bare.setup")
+			encErr := encode(human, out)
+			checkErr := check([]string{"-platform", c.p, old})
+			if c.p == "dev" {
+				if encErr != nil || checkErr != nil {
+					t.Fatalf("dev setup: encode %v, check %v, want both to pass", encErr, checkErr)
+				}
+				return
+			}
+			for name, err := range map[string]error{"encode": encErr, "check": checkErr} {
+				if err == nil || !strings.Contains(err.Error(), "allowed_image_measurements lists no "+c.p+" image") {
+					t.Fatalf("%s: %v, want the refusal naming the missing %s image", name, err, c.p)
+				}
+			}
+			if _, err := os.Stat(out); !os.IsNotExist(err) {
+				t.Fatalf("encode wrote the refused setup (stat: %v)", err)
+			}
+
+			listed := filepath.Join(dir, "listed.conf")
+			if err := os.WriteFile(listed, []byte(bare+"\n"+ownImages[c.p]+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			out = filepath.Join(dir, "listed.setup")
+			if err := encode(listed, out); err != nil {
+				t.Fatalf("encode with a %s image: %v", c.p, err)
+			}
+			if err := check([]string{"-platform", c.p, out}); err != nil {
+				t.Fatalf("check with a %s image: %v", c.p, err)
+			}
+		})
+	}
+}
 
 // encode refuses a mainnet GCP setup that accepts a key held alone without
 // sealing_key_release.no_lock_accepted, as signer-admin setup does, and
@@ -29,7 +118,8 @@ func TestEncodeMainnetGCPSingleNeedsNoLockAccepted(t *testing.T) {
 	if singleMode == mainnet {
 		t.Fatal("the sample changed its signing_mode line")
 	}
-	mainnet = singleMode
+	// A GCP runner checks itself against a gcp image (setupwire.CheckOwnImageListed).
+	mainnet = singleMode + gcpImage + "\n"
 	dir := t.TempDir()
 	write := func(name, extra string) string {
 		p := filepath.Join(dir, name)
