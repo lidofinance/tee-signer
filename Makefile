@@ -26,7 +26,7 @@ help: ## list targets
 deps: ## apt packages (build tools, cross gcc, qemu-user, clang, cloc, jq)
 	bash $(ROOT)/scripts/deps.sh
 
-check: ## guards: module boundaries, secret scan, release gate, eif-check and affected.sh self-tests, gofmt
+check: ## guards: module boundaries, secret scan, release gate, eif-check and affected.sh self-tests, script modes, gofmt
 	bash $(ROOT)/scripts/check-imports.sh
 	bash $(ROOT)/scripts/check-forbidden.sh
 	bash $(ROOT)/scripts/fetch-nts.sh --check
@@ -35,6 +35,7 @@ check: ## guards: module boundaries, secret scan, release gate, eif-check and af
 	bash $(ROOT)/scripts/release-gate-test.sh
 	bash $(ROOT)/scripts/eif-check-test.sh
 	python3 -B $(ROOT)/scripts/bundle-licenses-test.py
+	python3 -B $(ROOT)/scripts/check-modes.py
 	@for m in */go.mod; do d=$${m%/go.mod}; out=$$(cd $$d && gofmt -l . | grep -v '^third_party/' || true); \
 		[ -z "$$out" ] || { echo "gofmt: $$d: $$out"; exit 1; }; done; echo "gofmt: clean"
 
