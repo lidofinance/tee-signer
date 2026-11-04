@@ -145,7 +145,7 @@ const (
 
 // adminTypes are the message types only the admin role may send.
 var adminTypes = []wire.MsgType{
-	wireadmin.TypeImportShare, wireadmin.TypeImportSealed, wireadmin.TypeConfigUpdate,
+	wireadmin.TypeImportShare, wireadmin.TypeImportSealed, wireadmin.TypeConfigUpdate, wireadmin.TypeImportBatch,
 }
 
 // allows is the role table. A role or a type missing here is denied.
@@ -226,7 +226,7 @@ func (s *Server) dispatchFor(ctx context.Context, f wire.Frame, cl *client) ([]b
 	case limited:
 		return s.limitedAttestation(ctx, f, cl)
 	}
-	if f.Type == wireadmin.TypeImportShare || f.Type == wireadmin.TypeImportSealed {
+	if f.Type == wireadmin.TypeImportShare || f.Type == wireadmin.TypeImportSealed || f.Type == wireadmin.TypeImportBatch {
 		clear(f.Payload)
 	}
 	role := attls.RoleNone

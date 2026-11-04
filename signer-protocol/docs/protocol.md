@@ -136,12 +136,13 @@ A refusal caused by the restart floor carries
 | 0x06 | IDENTITY | `nonce_len:u16 nonce version:u8` (version 1) | identity, see below |
 | 0x07 | IMPORT_SHARE_SEALED | see below | key |
 | 0x08 | CONFIG_UPDATE | the signed update, see below (a runner with a setup) | `version:u8 outcome:u8 setup_state` |
+| 0x0a | IMPORT_SHARES_SEALED | see below | `count:u32` then `count` x key |
 
 A `mark` is `has_block:u8 block_slot:u64 has_attestation:u8 source_epoch:u64
 target_epoch:u64`. PUBLIC_KEYS has no paging: one frame holds at most
 10,082 keys (see "Open items").
 
-Type numbers: 0x01 to 0x08 are taken, the next free one is 0x0a. 0x09
+Type numbers: 0x01 to 0x08 and 0x0a are taken, the next free one is 0x0b. 0x09
 belonged to the removed exit approvals, 0x20 to 0x28 to the removed key
 generation and 0x31 to 0x33 to the removed handover; none of them is
 reused (TestRoleTable keeps them
@@ -680,6 +681,33 @@ file or stdin and takes the verifier settings of `attestation-verify/runnerclien
 verifier, see `attest/README.md`). `signer-admin import` does the same with
 the settings of each signer's connection file (`cloud.json`).
 
+### IMPORT_SHARES_SEALED
+
+```
+version:u8 order_len:u32 order count:u16      version 1; order_len 0: no order
+count x (header sealed_len:u16 sealed t:u8 [n:u8 share_index:u8 commitments[48*t]])
+```
+
+Many sealed shares under one import order, at most 1,024 and one frame
+(`wireadmin.BatchLen`, `BatchShareLen`). Each share is an
+IMPORT_SHARE_SEALED without the order: the same 129-byte header, which is
+also its associated data, and `t = 0` for no split. The runner checks
+every share as IMPORT_SHARE_SEALED does, and refuses the whole request at
+the first share that fails, before it writes anything; the detail names
+the share. A batch adds keys only: a validator loaded, stored or twice in
+the batch is refused (`SC_ERR_DUPLICATE`), and a key whose record is
+stored goes in with IMPORT_SHARE_SEALED. The runner then stores the
+batch all or none, under one mark log record
+([marklog.md](../../slashing-log/docs/marklog.md), "Share set"), and
+answers the keys it loaded. After a batch that did not complete, the
+next batch must hold all of its keys (`SC_ERR_BAD_REQUEST` otherwise),
+or they go in one at a time.
+
+A batch of no share writes nothing and answers no key: a sender learns
+that the runner knows the message. A runner older than the message
+refuses its type with `FORBIDDEN` (see "Client roles"), and
+`signer-admin import` then sends one IMPORT_SHARE_SEALED per share.
+
 ### Voluntary exits
 
 A runner signs a VOLUNTARY_EXIT on request of an admin client (or a local
@@ -896,7 +924,7 @@ signers may have rotated away since.
 Every connection has a client role, and the role table below is the only
 grant: a message type a role may not send gets `FORBIDDEN` before the
 runner reads its payload, and a refused
-IMPORT_SHARE or IMPORT_SHARE_SEALED payload is wiped. A type missing from
+IMPORT_SHARE, IMPORT_SHARE_SEALED or IMPORT_SHARES_SEALED payload is wiped. A type missing from
 the table (an unknown one, or a new message nobody added) is `FORBIDDEN`
 for every role.
 
@@ -985,6 +1013,7 @@ has mutual TLS.
 | 0x05 | IMPORT_SHARE (debug builds) | no | no | yes |
 | 0x07 | IMPORT_SHARE_SEALED | no | no | yes |
 | 0x08 | CONFIG_UPDATE | no | no | yes |
+| 0x0a | IMPORT_SHARES_SEALED | no | no | yes |
 | any other | | no | no | no |
 
 A voluntary exit is the admin role's only SIGN: a signing certificate gets

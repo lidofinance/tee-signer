@@ -70,6 +70,30 @@ type tgtEnv struct {
 	// lockErr, if set, fails the log's lock read, as a host that blocks
 	// the store's management API.
 	lockErr error
+	// logDelay, if set, is the time each call to the mark log's store
+	// takes, as a remote store's round trip.
+	logDelay time.Duration
+}
+
+// slowLog is a mark log store whose calls take delay each.
+type slowLog struct {
+	markstore.Log
+	delay time.Duration
+}
+
+func (l slowLog) Create(ctx context.Context, name string, data []byte) error {
+	time.Sleep(l.delay)
+	return l.Log.Create(ctx, name, data)
+}
+
+func (l slowLog) List(ctx context.Context, prefix string) ([]markstore.Entry, error) {
+	time.Sleep(l.delay)
+	return l.Log.List(ctx, prefix)
+}
+
+func (l slowLog) Get(ctx context.Context, e markstore.Entry) ([]byte, error) {
+	time.Sleep(l.delay)
+	return l.Log.Get(ctx, e)
 }
 
 // lockedFileLog is the test env's file log with the lock it reports.
@@ -145,6 +169,9 @@ func (e *tgtEnv) start() {
 	var l markstore.Log = e.fl
 	if e.lockDays > 0 {
 		l = lockedFileLog{FileLog: e.fl, e: e}
+	}
+	if e.logDelay > 0 {
+		l = slowLog{Log: l, delay: e.logDelay}
 	}
 	m, err := markstore.New(l, e.setup.SignerName, dev.NewDevKeys("server test env"), markstore.Options{Setup: ms, Clock: e.clock.Now, Log: quiet, LockDays: e.lockDays})
 	if err != nil {

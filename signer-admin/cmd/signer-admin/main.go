@@ -80,8 +80,10 @@
 //	    they take an order.
 //	signer-admin import -cluster cluster.json -signer NAME -order import.signed -shares FILE -commitments FILE
 //	    Probe the role, check the runner's attestation, seal each share of
-//	    FILE (mode 0600) to the attested import key and send
-//	    IMPORT_SHARE_SEALED under the order.
+//	    FILE (mode 0600) to the attested import key and send them under
+//	    the order: in IMPORT_SHARES_SEALED batches, each stored all or
+//	    none, or, to a runner that does not know that message, one
+//	    IMPORT_SHARE_SEALED per share.
 //	signer-admin exit -cluster cluster.json [-signers NAME,...] [-split FILE] -pubkey 0x... -index N -epoch E -out exit.json
 //	    Sign a voluntary exit: send SIGN of the exit to the signers in turn
 //	    until t partial signatures verify under their share keys (t and the
