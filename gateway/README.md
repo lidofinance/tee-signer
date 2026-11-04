@@ -237,7 +237,7 @@ The `identifier` may come with or without `0x`, in any case.
 
 No type goes to the signers as a bare root they cannot check. RANDAO is a root message, and the signer checks that root against the epoch.
 
-The gateway pins its chain: `chain.genesis_validators_root` and the fork schedule (`chain.genesis_fork_version` plus `chain.forks`) in its config. It computes every domain from that schedule at the message's epoch and refuses (400) a request whose `fork_info` names another `genesis_validators_root`, a fork that is not a schedule entry with its predecessor as `previous_version`, or a fork version other than the schedule's for that epoch. One more `fork_info` passes: the genesis state's fork of a chain that starts at a later fork, whose previous and current version are both the version at epoch 0 (some clients send that for a chain that starts at Fulu; others send the previous fork's version, which the schedule rule already accepts). So a client cannot get a signature under another chain's domain through the gateway; Web3Signer itself builds the domain from `fork_info`. The signers check the domain again against their own chain config.
+The gateway pins its chain: `chain.genesis_validators_root` and the fork schedule (`chain.genesis_fork_version` plus `chain.forks`) in its config. It computes every domain from that schedule at the message's epoch and refuses (400) a request whose `fork_info` names another `genesis_validators_root`, a fork the schedule does not have, or a fork version other than the schedule's for that epoch. A fork in `fork_info` passes when its `current_version` is a version of the schedule, its epoch falls in that version's period (at or after the version's first epoch, before the next version), and its `previous_version` is either the version before it in the schedule or `current_version` itself. The second form is a blob-parameter-only (BPO) fork: it changes the blob limits, not the fork version, and some clients (Prysm) send the latest BPO fork in `fork_info`, for example Fulu as previous and current version at Hoodi's BPO epoch 54016. The genesis state's fork of a chain that starts at a later fork has the same form at epoch 0. BPO forks need no line in `chain.forks`; a line that repeats the version before it changes no domain. So a client cannot get a signature under another chain's domain through the gateway; Web3Signer itself builds the domain from `fork_info`. The signers check the domain again against their own chain config.
 
 The Gloas types need `chain.gloas_fork_epoch`; without it, or for an epoch before it, policy refuses them (412). For `PROPOSER_PREFERENCES` the domain uses the fork version of the proposal epoch (`validator.md`), so preferences for the first Gloas epoch, signed while `fork_info` still names Fulu, get the Gloas version; `fork_info` must still name the chain. For an envelope the gateway hashes the whole payload, builds the summary the signers take and checks that the summary gives the same root. `BUILDER_REQUEST_AUTH` authenticates a validator's requests to an external builder. It never reaches the chain and is not slashable. Its slot must be at or past `chain.gloas_fork_epoch`, and the gateway hashes it as go-eth2-client v0.30.3 does (a plain container as in builder-specs, data as `ByteList[4096]`). The gateway passes any data on; each signer decides which data it signs.
 
@@ -311,7 +311,7 @@ The `attestation` block takes the fields of `runnerclient.Attestation` under the
 
 Settings of one verifier are refused with another, and a required one that is missing stops the start.
 
-The gateway refuses to start without `chain.genesis_validators_root`, with fork epochs out of order, without signers or a client certificate, with an `allow_chain_build` that is not a non-prod chain, and with an `access` or `metrics_access` that does not fit the rest of the config (see [Access](#access)). A new fork needs a config line before its epoch, as it does in the beacon node and in the signers.
+The gateway refuses to start without `chain.genesis_validators_root`, with fork epochs out of order, without signers or a client certificate, with an `allow_chain_build` that is not a non-prod chain, and with an `access` or `metrics_access` that does not fit the rest of the config (see [Access](#access)). A new fork needs a config line before its epoch, as it does in the beacon node and in the signers. A blob-parameter-only fork (`BLOB_SCHEDULE`) keeps the fork version and needs no line.
 
 A configuration for three Hoodi signers:
 
@@ -334,7 +334,7 @@ chain:
     - {epoch: 0, version: "0x40000910"}       # Capella
     - {epoch: 0, version: "0x50000910"}       # Deneb
     - {epoch: 2048, version: "0x60000910"}    # Electra
-    - {epoch: 50688, version: "0x70000910"}   # Fulu
+    - {epoch: 50688, version: "0x70000910"}   # Fulu; the BPO forks after it need no lines
 signers:
   client_cert: gateway.pem        # signing role, followed by its intermediate
   client_key: gateway-key.pem

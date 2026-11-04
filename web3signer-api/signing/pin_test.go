@@ -123,8 +123,10 @@ func TestPinSchedule(t *testing.T) {
 	if dev.knows(&phase0.Fork{PreviousVersion: phase0.Version{2}, CurrentVersion: phase0.Version{2}}) {
 		t.Error("fork version 2 as previous and current at epoch 0 is known, but the chain starts at version 3")
 	}
-	if dev.knows(&phase0.Fork{PreviousVersion: phase0.Version{3}, CurrentVersion: phase0.Version{3}, Epoch: 5}) {
-		t.Error("previous = current at a later epoch is known")
+	// Previous = current at a later epoch is a blob-parameter-only fork of
+	// the version in force.
+	if !dev.knows(&phase0.Fork{PreviousVersion: phase0.Version{3}, CurrentVersion: phase0.Version{3}, Epoch: 5}) {
+		t.Error("previous = current = the version in force at a later epoch is not known")
 	}
 }
 
@@ -198,5 +200,90 @@ func TestForkEpochInsideItsPeriodDomain(t *testing.T) {
 	}
 	if want, _ = eth2.ComputeDomain(eth2.DomainBeaconAttester, phase0.Version{5, 0, 0, 0}, chain.Pin.GenesisValidatorsRoot); job.Domain != want {
 		t.Fatalf("domain %#x, want the Electra domain %#x", job.Domain, want)
+	}
+}
+
+const hoodiGVR = "0x212f13fc4df078b6cb7db228f1c8307566dcecf900867401a92023d7ba99cb5f"
+
+// hoodiPin is the Hoodi schedule to Fulu as gateway/README.md shows it, with
+// the BPO forks (epochs 52480 and 54016) as extra entries when bpo is set.
+func hoodiPin(t *testing.T, bpo bool) *Pin {
+	t.Helper()
+	gvr, err := parseRoot(hoodiGVR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &Pin{GenesisValidatorsRoot: gvr}
+	for i, e := range []phase0.Epoch{0, 0, 0, 0, 0, 2048, 50688} {
+		p.Forks = append(p.Forks, ForkEpoch{Epoch: e, Version: phase0.Version{byte(i+1) << 4, 0, 0x09, 0x10}})
+	}
+	if bpo {
+		fulu := p.Forks[len(p.Forks)-1].Version
+		p.Forks = append(p.Forks, ForkEpoch{Epoch: 52480, Version: fulu}, ForkEpoch{Epoch: 54016, Version: fulu})
+	}
+
+	return p
+}
+
+// A blob-parameter-only (BPO) fork changes the blob limits, not the fork
+// version. Prysm sends the latest one in fork_info: previous and current
+// version both Fulu, the BPO epoch. The gateway takes it with or without BPO
+// entries in the schedule, and the domain stays Fulu's.
+func TestBPOForkInfo(t *testing.T) {
+	const electra, fulu = "0x60000910", "0x70000910"
+	for _, bpo := range []bool{false, true} {
+		chain := mustChain("mainnet")
+		chain.Pin = hoodiPin(t, bpo)
+		domain := func(version byte) phase0.Domain {
+			d, err := eth2.ComputeDomain(eth2.DomainBeaconAttester, phase0.Version{version, 0, 0x09, 0x10}, chain.Pin.GenesisValidatorsRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			return d
+		}
+		accepted := []struct {
+			name     string
+			forkInfo string
+			epoch    uint64
+			want     phase0.Domain
+		}{
+			{"BPO 52480 (Prysm)", pinForkInfo(fulu, fulu, 52480, hoodiGVR), 53000, domain(0x70)},
+			{"BPO 54016 (Prysm)", pinForkInfo(fulu, fulu, 54016, hoodiGVR), 54016, domain(0x70)},
+			{"BPO 54016, later epoch", pinForkInfo(fulu, fulu, 54016, hoodiGVR), 60000, domain(0x70)},
+			{"Fulu fork (Lighthouse, Teku)", pinForkInfo(electra, fulu, 50688, hoodiGVR), 54020, domain(0x70)},
+			{"Fulu fork at its first epoch", pinForkInfo(electra, fulu, 50688, hoodiGVR), 50688, domain(0x70)},
+			{"Fulu fork, last Electra epoch", pinForkInfo(electra, fulu, 50688, hoodiGVR), 50687, domain(0x60)},
+			{"Fulu fork, epoch past a BPO", pinForkInfo(electra, fulu, 54016, hoodiGVR), 54020, domain(0x70)},
+			{"BPO 54016 for an earlier Fulu epoch", pinForkInfo(fulu, fulu, 54016, hoodiGVR), 53000, domain(0x70)},
+		}
+		for _, c := range accepted {
+			job, err := Parse([]byte(attestationBody(c.forkInfo, c.epoch)), chain)
+			if err != nil {
+				t.Errorf("bpo entries %v, %s: %v", bpo, c.name, err)
+				continue
+			}
+			if job.Domain != c.want {
+				t.Errorf("bpo entries %v, %s: domain %#x, want %#x", bpo, c.name, job.Domain, c.want)
+			}
+		}
+		refused := []struct {
+			name, forkInfo string
+			epoch          uint64
+			msg            string
+		}{
+			{"BPO form of Electra in the Fulu period", pinForkInfo(electra, electra, 54016, hoodiGVR), 54020, "not in the configured fork schedule"},
+			{"BPO form of an unknown version", pinForkInfo("0x80000910", "0x80000910", 54016, hoodiGVR), 54020, "not in the configured fork schedule"},
+			{"previous version neither Electra nor Fulu", pinForkInfo("0x50000910", fulu, 54016, hoodiGVR), 54020, "not in the configured fork schedule"},
+			{"BPO epoch before Fulu", pinForkInfo(fulu, fulu, 50000, hoodiGVR), 54020, "not in the configured fork schedule"},
+			{"BPO fork_info for an Electra epoch", pinForkInfo(fulu, fulu, 50688, hoodiGVR), 50000, "the configured chain has"},
+			{"another genesis_validators_root", pinForkInfo(fulu, fulu, 54016, mainnetGVR), 54020, "is not the configured chain's"},
+		}
+		for _, c := range refused {
+			_, err := Parse([]byte(attestationBody(c.forkInfo, c.epoch)), chain)
+			if !IsBadRequest(err) || !strings.Contains(err.Error(), c.msg) {
+				t.Errorf("bpo entries %v, %s: want a bad request with %q, got %v", bpo, c.name, c.msg, err)
+			}
+		}
 	}
 }
