@@ -1037,7 +1037,7 @@ func (s *Server) checkMaxima(wm *backend.Watermark) error {
 }
 
 // checkShare refuses a share that cannot be stored: no log_id yet, a
-// validator already loaded (keys is the signer's list), a runner at its
+// validator or share already loaded (keys is the signer's list), a runner at its
 // setup's max_keys, a bad secret or a key that does not fit the setup's
 // signing_mode (checkWholeKeyOf).
 func (s *Server) checkShare(pk backend.Pubkey, secret *[32]byte, keys []backend.ValidatorKey) error {
@@ -1057,6 +1057,11 @@ func (s *Server) checkShare(pk backend.Pubkey, secret *[32]byte, keys []backend.
 	got, err := core.PubkeyOf(*secret)
 	if err != nil {
 		return &backend.RefusedError{Code: backend.StatusBadKey, Detail: "share secret"}
+	}
+	for _, k := range keys {
+		if k.SharePubkey == got {
+			return &backend.RefusedError{Code: backend.StatusDuplicate, Detail: "this share is loaded under another pubkey"}
+		}
 	}
 	return s.checkWholeKeyOf(pk, got)
 }

@@ -2,6 +2,7 @@ package core_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/lidofinance/tee-signer/signer-core/core"
@@ -372,3 +373,51 @@ func TestInterchangeImportOnAdd(t *testing.T) {
 
 // 3-of-5: every 3-subset of partial signatures recovers a signature that
 // verifies under the full public key.
+
+// The same share under a second pubkey is refused: it would sign a second
+// vote for a target with marks of its own. The first key still signs.
+func TestDuplicateShareRefused(t *testing.T) {
+	h := software.NewMemHooks()
+	s, pk, _ := newTestSigner(t, h)
+	sk, err := software.NewSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pk2, err := core.PubkeyOf(sk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	share, err := software.NewSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := software.NewSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pk3, err := core.PubkeyOf(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := addAtGenesis(h, s, pk2, share, 8, nil); err != nil {
+		t.Fatal(err)
+	}
+	_, err = addAtGenesis(h, s, pk3, share, 9, nil)
+	wantStatus(t, err, backend.StatusDuplicate)
+	if !strings.Contains(err.Error(), "another pubkey") {
+		t.Fatalf("error does not name the cause: %v", err)
+	}
+	_, err = addAtGenesis(h, s, pk2, share, 8, nil)
+	wantStatus(t, err, backend.StatusDuplicate)
+	if len(s.Keys()) != 2 {
+		t.Fatalf("keys = %d, want 2", len(s.Keys()))
+	}
+	if _, err := s.Sign(signReq(s, pk3, att(19, 20))); backend.StatusOf(err) != backend.StatusUnknownValidator {
+		t.Fatalf("refused key signed: %v", err)
+	}
+	for _, k := range []backend.Pubkey{pk, pk2} {
+		if _, err := s.Sign(signReq(s, k, att(19, 20))); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

@@ -1089,6 +1089,40 @@ static void test_table_and_errors(void)
     free(mem);
 }
 
+/* The same share under a second pubkey: refused, the slot wiped, and the
+ * first validator still signs with its own marks. */
+static void test_duplicate_share(void)
+{
+    host_t h = {0};
+    sc_config cfg;
+    uint8_t acct2[32], pk2[48], share[32], share_pk[48], sig[96], root[32], obj[32];
+    make_config(&cfg);
+    set_epoch(&h, E);
+    sc_signer *s = new_signer(&h, &cfg, 4, 0);
+    vkeys k = add_validator(s, 1, 1000);
+
+    secret_for(2, acct2);
+    CHECK_RC(sc_bls_pubkey(acct2, pk2), SC_OK);
+    secret_for(10000 + 1, share); /* validator 1's share */
+    memset(share_pk, 0xaa, sizeof share_pk);
+    CHECK_RC(load_at_genesis(s, pk2, share, 1001, share_pk), SC_ERR_DUPLICATE);
+    for (size_t i = 0; i < sizeof share_pk; i++)
+        CHECK(share_pk[i] == 0xaa); /* nothing written out */
+    sc_attestation_data a = att(E - 1, E, 1);
+    CHECK_RC(sc_sign_attestation(s, pk2, &a, sig), SC_ERR_UNKNOWN_VALIDATOR);
+
+    /* The refused load left no trace: pk2 loads with its own share. */
+    vkeys k2 = add_validator(s, 2, 1001);
+    CHECK(memcmp(k2.pk, pk2, 48) == 0);
+
+    CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_OK);
+    sc_htr_attestation_data(&a, obj);
+    root_with(SC_DOMAIN_BEACON_ATTESTER, V_FULU, cfg.genesis_validators_root, obj, root);
+    CHECK_RC(sc_bls_verify(k.share_pk, root, 32, sig), SC_OK);
+    a = att(E - 1, E, 2);
+    CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_ERR_SLASH_TARGET);
+}
+
 static void test_fork_versions(void)
 {
     host_t h = {0};
@@ -3648,6 +3682,7 @@ int main(int argc, char **argv)
     test_import();
     test_hash_cache();
     test_table_and_errors();
+    test_duplicate_share();
     test_fork_versions();
     test_repeats_in_run();
     test_repeat_dropped_by_import();
