@@ -202,7 +202,11 @@ int sc_decode_aggregate_and_proof(const uint8_t *ssz, size_t len, int form,
 
 size_t sc_contribution_and_proof_len(const sc_preset *p)
 {
-    size_t bits_len = (size_t)((p->sync_committee_size / p->sync_committee_subnet_count + 7) / 8);
+    size_t bits_len;
+
+    if (!p || p->sync_committee_subnet_count == 0)
+        return 0;
+    bits_len = (size_t)((p->sync_committee_size / p->sync_committee_subnet_count + 7) / 8);
 
     return 8 + (8 + SC_ROOT_LEN + 8 + bits_len + SC_SIGNATURE_LEN) + SC_SIGNATURE_LEN;
 }
