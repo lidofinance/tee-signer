@@ -152,13 +152,12 @@ Set these once per shell, from the deploy settings of each cloud.
 ## Step 0: local, no cloud
 
 1. Images: `scripts/generic-images.sh check FILE` passes on the recorded values.
-2. Tools: `signer-config` and `proof-check` from the signing client,
-   `signer-admin`, `identity-check` and `setup-tool` from this repo
-   (`signer-admin/cmd`).
+2. Tools: `signer-admin`, `identity-check`, `proof-check` and `setup-tool`
+   from this repo (`signer-admin/cmd`).
 3. Approver keys: three test keys `approver-1.key` to `approver-3.key`
    (never real keys). For the rotation make a fourth test key:
    `umask 077; openssl rand -hex 32 >approver-4.key` in a private folder.
-   `signer-config sign` prints each key's public key.
+   `signer-admin approver-key -key FILE` prints each key's public key.
 4. The test chain and its chain file:
    `platform-azure/deploy/chain-from-devnet.sh <beacon URL> $CHAIN_JSON`, then
    `setup-tool chain-lines $CHAIN_JSON`. It prints the chain, the safety
@@ -176,7 +175,7 @@ Set these once per shell, from the deploy settings of each cloud.
    to 3, `approvals_needed = 2`, `change_delay_seconds = 0`, the
    balance values and `withdrawal_credentials`
    (`governance/setuptext/testdata/setup-gcp.conf` lists them, without its
-   `salt.*` and `platform_salt` lines: `signer-config setup` draws the
+   `salt.*` and `platform_salt` lines: `signer-admin setup` draws the
    salts). Then one section per signer:
 
    ```
@@ -229,7 +228,7 @@ Set these once per shell, from the deploy settings of each cloud.
    `signer-admin import-draft -allow-gcp-unsafe-single-key`, and `show`
    prints the warning to each approver.
 
-6. `signer-config setup -out setups setup.conf` writes `setups/signer-N.setup`
+6. `signer-admin setup -out setups setup.conf` writes `setups/signer-N.setup`
    and prints `cluster_id` and each `setup_sha256`. Keep the output.
 7. Each setup against its deploy: `setup-tool check -platform azure -chain $CHAIN_JSON setups/signer-1.setup`,
    the same for nitro and gcp. Dry runs: `platform-azure/deploy/deploy.sh plan`,
@@ -240,7 +239,7 @@ Set these once per shell, from the deploy settings of each cloud.
 8. Negative setups for the lock check (C3): the same file with
    `slashing_log_min_lock_days = 2` and the names `lockneg-N`, written to
    `setups-neg/`.
-9. `cluster.json` for signer-config: one entry per signer, with its
+9. `cluster.json` for signer-admin: one entry per signer, with its
    `cloud.json` (address, client certificate, the attestation values of the
    built images) and its setup.
 
@@ -338,20 +337,20 @@ and that the rendered policy equals the key's release policy.
 GCP: `SETUP_FILE=setups/signer-3.setup CONFIRM=yes platform-gcp/deploy/deploy.sh vm-create`,
 then `verifier-config` for the attestation settings.
 
-Then `signer-config pin -cluster cluster.json` (C1) and the share import.
+Then `signer-admin pin -cluster cluster.json` (C1) and the share import.
 
 ## Step 5: checks
 
 | # | Check | How | Expected |
 | --- | --- | --- | --- |
-| C1 | Setup read, hash in IDENTITY | `signer-config pin`, `identity-check -config cloud.json` | each IDENTITY shows the `setup_sha256` that `signer-config setup` printed; pin writes it into each `cloud.json` |
+| C1 | Setup read, hash in IDENTITY | `signer-admin pin`, `identity-check -config cloud.json` | each IDENTITY shows the `setup_sha256` that `signer-admin setup` printed; pin writes it into each `cloud.json` |
 | C2 | Pins | describe-enclaves PCRs; the group's `ccePolicy` hash (`az container show`, base64 -d, sha256sum); the GCP token's `image_digest` (`identity-check`); a copy of `cloud.json` with one hex digit of `setup_sha256` changed | measurements equal the build; the wrong pin is refused (`identity-check` names 8-digit prefixes of both hashes) |
 | C3 | Lock self-check | positive: the start logs `mark log ready` after the lock line. Negative: start the `lockneg-N` setup (`slashing_log_min_lock_days = 2`, the stores hold 1 day). AWS before the real start (step 4). Azure and GCP are optional: a deploy before the real one, which may leave a network entry node `lockneg-N` to remove | positive starts; negative stops before the claim with the lock error (AWS `last-exit.txt`, Azure container log, GCP serial or Cloud Logging) |
-| C4 | `locked` update, time lock 0 | change `fee_recipients` or `gas_limit_max`: `signer-config draft -group locked`, `show`, `sign` with approvers 1 and 2, `assemble`, `push`, then `status` | pending with the effective time `activate_at` (draft margin 10 minutes), then active: locked version 1 on all three, same hash |
+| C4 | `locked` update, time lock 0 | change `fee_recipients` or `gas_limit_max`: `signer-admin draft -group locked`, `show`, `sign -key FILE -expect-sha256 HEX` with approvers 1 and 2, `assemble`, `push`, then `status` | pending with the effective time `activate_at` (draft margin 10 minutes), then active: locked version 1 on all three, same hash |
 | C5 | Fork-schedule update | `draft -group open` with one more fork far ahead (current epoch plus 100,000, an unused version); push; then a second open update that restores the schedule. Negative: a fork at the next epoch | both accepted and active at once; signing goes on; the near fork is refused by the fork rule (`max_epochs_ahead + 2` epochs) |
 | C6 | Rotation | `locked` update with approvers 1, 2 and 4, `k = 2`: signed by 1 and 2 and by every new key (1, 2, 4). Then an update signed by 3 and 1 | `assemble` refuses a rotation without key 4's signature; after activation the approver set hash changes on all three; the update with key 3 is refused |
 | C7 | Supersede | `draft -margin 30m` a `locked` update, push; before it activates, push one with a higher version and the active values; while a rotation is pending, push an update signed by the new set only. Optional: add an `allowed_image_measurements` entry | the second replaces the first and starts its own wait; the update of the pending set is refused; the image entry shows an effective time 7 days out (the image minimum), then a supersede cancels it |
-| C8 | Restart keeps the effective config | AWS: terminate the enclave and run `parent-run.sh` again with the same setup; Azure: `az container restart`; GCP: `gcloud compute instances reset` | `signer-config status` shows the same setup hash, versions, hashes and approver set as before the restart; signing resumes after the restart floor |
+| C8 | Restart keeps the effective config | AWS: terminate the enclave and run `parent-run.sh` again with the same setup; Azure: `az container restart`; GCP: `gcloud compute instances reset` | `signer-admin status` shows the same setup hash, versions, hashes and approver set as before the restart; signing resumes after the restart floor |
 | C9 | Planting attempt on AWS | as the key admin: `aws kms encrypt` with the context `purpose=sealing,signer-setup=<hex>`, with no context, and with `purpose=record-creds` plus one more key; then put 32 random bytes encrypted under `purpose=record-creds` as `sealing/datakey.kms` into a store of its own (`STATE_DIR=/var/lib/signer-runner-plant`, with the record blob) and start a setup there, before step 4's real start | the three encrypt calls are denied (AccessDeniedException); the runner does not use the planted key: the store has no shares, so it ignores the blob, makes a new sealing key and overwrites `sealing/datakey.kms`. With a file under `shares/` in that store its Decrypt under `{purpose: sealing, signer-setup}` fails and it stops (`last-exit.txt`) |
 | C10 | Signing | import a few test validators with `signer-admin import-draft`, `sign` and `import` (setup pins in each signer's `cloud.json`), start their signing clients and validator client | attestations included; HEALTH shows the NTS clock |
 

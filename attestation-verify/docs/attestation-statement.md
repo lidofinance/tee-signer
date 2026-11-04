@@ -113,7 +113,7 @@ policy_root = H(CTX_POLICY, public_root || locked_root || open_root)
 
 A leaf proves against policy_root with its Merkle path in its group and the other two group roots. To withhold a field, an operator publishes its leaf hash instead of its name, value and salt; the watchdog checks the rest against the same roots, with no new setup.
 
-`signer-config setup` draws every policy salt once per cluster and writes the same salts into all n setups, so the signers of a cluster with the same public values have the same policy_root.
+`signer-admin setup` draws every policy salt once per cluster and writes the same salts into all n setups, so the signers of a cluster with the same public values have the same policy_root.
 
 ## 2. Platform commitment
 
@@ -135,13 +135,13 @@ sealing_key_release = nitro: region:str kms_key_id:str
 
 `platform` is 1 nitro, 2 azure, 3 gcp, 4 dev. `ca_count` is 1 to 4 DER CA certificates (`allowed_client_ca`), sorted by their bytes. `no_lock_accepted` (`sealing_key_release.no_lock_accepted`) and `unsafe_single_key_accepted` (`sealing_key_release.unsafe_single_key_accepted`, the setup accepts that the signer holds keys alone, 1 of 1) are GCP only, 0 or 1.
 
-The private part is at most 2560 bytes (`MaxPlatformPrivate`). The attestation circuits hash it with that fixed bound (`MAX_PRIVATE` in `circuits/lib/src/platform.nr`), so a longer one could never be proven, and `signer-config setup` and the decoder refuse it. Four P-256 CA certificates take about 2.07 KB of it.
+The private part is at most 2560 bytes (`MaxPlatformPrivate`). The attestation circuits hash it with that fixed bound (`MAX_PRIVATE` in `circuits/lib/src/platform.nr`), so a longer one could never be proven, and `signer-admin setup` and the decoder refuse it. Four P-256 CA certificates take about 2.07 KB of it.
 
 ```
 platform_commitment = H(CTX_PLATFORM, platform_salt[32] || private)
 ```
 
-There is one platform salt per signer, drawn by `signer-config setup`.
+There is one platform salt per signer, drawn by `signer-admin setup`.
 
 ## 3. setup_hash and the setup bytes
 
@@ -178,7 +178,7 @@ update = 'U' 1:u8 body_len:u32 body sig_count:u8 {position:u8 signature[64]}
 - `chain_hash = H(CTX_CHAIN, genesis_validators_root || genesis_fork_version || genesis_time:u64 || seconds_per_slot:u64 || slots_per_epoch:u64 || preset:u8 || voluntary_exit_fork_version)`, the chain fields of the public group in order (61 bytes).
 - The header is 145 bytes. Each signature is Ed25519 over `len(CTX_UPDATE):u16 || CTX_UPDATE || header`.
 - `update_hash = H(CTX_UPDATE, header)`. The next update of the group names it as `prev_hash`, and the setup state carries it as the group's hash once the update is active or pending.
-- `signer-config draft` draws the salts of each update. They are not secret from the approvers (`signer-config show` prints them and checks the root), and they reach every signer of the cluster in the same signed update.
+- `signer-admin draft` draws the salts of each update. They are not secret from the approvers (`signer-admin show` prints them), and they reach every signer of the cluster in the same signed update.
 
 A watchdog that has the header fields of an update, its signatures, and for each leaf either name, value and salt or only the leaf hash, rebuilds `group_root`, the header and `update_hash`, checks the signatures against the approver set in force, and compares `update_hash` with the setup state.
 
@@ -327,7 +327,7 @@ The design fixes the split and the field names. This file adds these points, and
 2. One leaf per key of the human form. A list is one leaf (count and entries); an optional field keeps its leaf with a presence byte.
 3. The tree is three group trees and a root over the three group roots, not one flat tree, so a config update can carry the root of one group.
 4. The version 0 hash of a group is its root.
-5. Approvers sign a header with the group root, not the values; the body carries values and salts. `signer-config draft` draws fresh salts for each update.
+5. Approvers sign a header with the group root, not the values; the body carries values and salts. `signer-admin draft` draws fresh salts for each update.
 6. Key origin counts are u32 and are part of the setup state, so they are in IDENTITY and ATTEST alike. Every byte of the setup state is a public output; keys_hash is the one private input from the signer.
 7. The slot time rule compares the new changes with the ones in force and is checked at arrival with T the effective activation time; the core takes the new slot times at T. The fork rule counts epochs under the slot times in force and those pending, in both orders of arrival (section 4).
 8. The ranges: `max_sign_epochs_ahead_of_clock` 1 to 16, `slashing_mark_prewrite.block_slots` 0 to 64, `source_epochs` and `target_epochs` 0 to 8 (the design's proposed numbers, lower bounds this file's).

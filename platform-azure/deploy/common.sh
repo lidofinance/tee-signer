@@ -38,7 +38,7 @@ setup_file() { local v="SETUP_FILE_$1"; echo "${!v:-}"; }
 need_setup() {
   local n="$1" f out kid part
   f="$(setup_file "$n")"
-  [ -n "$f" ] || die "set SETUP_FILE_$n to the binary setup of signer $n (signer-config setup, or signer-admin/cmd/setup-tool encode)"
+  [ -n "$f" ] || die "set SETUP_FILE_$n to the binary setup of signer $n (signer-admin setup, or signer-admin/cmd/setup-tool encode)"
   out="$(check_setup "$f" azure)" || die "SETUP_FILE_$n=$f refused"
   [ "$(setup_value "$f" sealing_key_release.maa_endpoint)" = "$(signer_maa_endpoint "$n")" ] ||
     die "SETUP_FILE_$n names attestation provider $(setup_value "$f" sealing_key_release.maa_endpoint), this deploy $(signer_maa_endpoint "$n")"

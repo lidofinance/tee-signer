@@ -293,7 +293,7 @@ cmd_plan() {
   cat <<EOF
 Azure steps in order. Each one needs CONFIRM=yes. Local steps first:
   build-image.sh, then deploy.sh policy (all three signers, no Azure), and a
-  setup per signer (SETUP_FILE_N: signer-config setup for a cluster, or
+  setup per signer (SETUP_FILE_N: signer-admin setup for a cluster, or
   signer-admin/cmd/setup-tool encode)
 Resource group $RG, registry $ACR_NAME, vault $VAULT, network entry ${NETWORK:-none (the runner alone)}.
 Build folder $OUT, image tag signer-runner:$IMAGE_TAG, setups of chain ${CHAIN:-unset (set CHAIN)}.
