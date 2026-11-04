@@ -528,9 +528,6 @@ What the parent reports for the running enclave is the real check:
   drop that traffic but not forge it. The same clock checks the dates of
   client certificates. HTTPS Date readings over vsock-proxy are its coarse
   check.
-- `clock=nsm` (NSM attestation timestamp) is implemented, but it is not
-  known which clock the hypervisor stamps and whether the parent can
-  influence it. Trail of Bits advises against using it for enclave time.
 
 ## NTS clock in the enclave
 

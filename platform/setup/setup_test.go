@@ -180,8 +180,8 @@ func TestNitroOptionsAndRoutes(t *testing.T) {
 }
 
 func TestMergeOptions(t *testing.T) {
-	got, err := MergeOptions(map[string]string{"region": "r"}, map[string]string{"clock": "nsm"})
-	if err != nil || got["region"] != "r" || got["clock"] != "nsm" {
+	got, err := MergeOptions(map[string]string{"region": "r"}, map[string]string{"clock": "system"})
+	if err != nil || got["region"] != "r" || got["clock"] != "system" {
 		t.Fatal(got, err)
 	}
 	if _, err := MergeOptions(map[string]string{"kms_key_id": "a"}, map[string]string{"kms_key_id": "b"}); err == nil ||

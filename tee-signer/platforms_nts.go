@@ -255,9 +255,13 @@ func startNTSClock(ctx context.Context, client *http.Client, dial nts.DialFunc, 
 	go func() {
 		t := time.NewTicker(every)
 		defer t.Stop()
-		for range t.C {
-			st := n.Status()
-			log.Info("nts: status", statusAttrs(st)...)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				log.Info("nts: status", statusAttrs(n.Status())...)
+			}
 		}
 	}()
 	log.Info("nts: status", statusAttrs(n.Status())...)

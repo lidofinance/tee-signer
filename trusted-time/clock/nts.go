@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,7 +35,10 @@ const (
 	// is older, on the local clock, and older samples do not enter a
 	// quorum. The bound ages by rho of the local clock, which the host may
 	// run fast while it blocks the servers; this limit keeps the time
-	// served then within NTSMaxAge of real time.
+	// served then at most NTSMaxAge ahead of real time. It does not cover
+	// the slow direction: a host that slows or stops the local clock while
+	// it blocks the servers also slows the age, so the time served can lag
+	// real time without limit (it never goes back).
 	NTSMaxAge = 60 * time.Second
 	// NTSMaxCoarseDiff: NTS time further than this from the coarse clock
 	// (the HTTPS-date quorum) is refused. The check only catches gross NTS
@@ -80,14 +84,18 @@ type NTSServer struct {
 //   - Now also fails once the oldest sample of the quorum in force is over
 //     MaxAge old. The host sets the rate of the local clock: run fast
 //     while the servers are blocked, it moves the time ahead by less than
-//     its own count since the samples, so by less than MaxAge.
+//     its own count since the samples, so by less than MaxAge. Run slow,
+//     it ages the samples slowly too, and the time can lag real time
+//     without limit. Neither MaxAge nor the coarse check (on the same
+//     local clock) catches that; the drift check does once new samples
+//     come.
 //   - Aging by rho holds only if the local clock (nts.Monotonic,
 //     CLOCK_MONOTONIC_RAW) keeps within rho of real time. Each quorum is
 //     checked against the last one and against a baseline quorum about 64
 //     Intervals older; if the offset moved more than the two bounds and rho
-//     allow, the quorum is refused and Now fails until the next quorum
-//     agrees with it. The short pair catches jumps, the long pair a steady
-//     rate over rho that the bounds hide on a short pair.
+//     allow, the quorum is refused and Now fails until a quorum of new
+//     samples agrees with it. The short pair catches jumps, the long pair a
+//     steady rate over rho that the bounds hide on a short pair.
 //   - Coarse, the HTTPS-date quorum, is checked on every quorum: an NTS
 //     time more than MaxCoarseDiff from it, after its one-second resolution
 //     (NTSCoarseResolution), is refused. The coarse clock must age its
@@ -125,6 +133,9 @@ type NTS struct {
 	drift   ntsDrift
 	// violations counts quorums refused by the drift check.
 	violations int64
+	// refusedT4 is the newest sample (T4) of the last quorum the drift
+	// check refused. Samples up to it do not enter a quorum again.
+	refusedT4  int64
 	coarseDiff time.Duration
 	lastErr    error
 	refusals   atomic.Int64
@@ -313,7 +324,7 @@ func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time) {
 		if err != nil {
 			p.stats.KEFail++
 			p.lastErr = err
-			p.keWait = min(max(2*p.keWait, n.interval()), NTSMaxPoll)
+			p.keWait = min(max(2*p.keWait, n.interval()), n.maxPollD())
 			p.nextKE = now + int64(p.keWait)
 			n.logf(slog.LevelWarn, "nts: key exchange failed", "operator", p.srv.Operator, "host", p.srv.Host, "retry_in", p.keWait, "err", err)
 			return
@@ -339,7 +350,7 @@ func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time) {
 		p.lastErr = err
 		switch kiss.Code {
 		case "RATE":
-			p.poll = min(2*p.poll, NTSMaxPoll)
+			p.poll = min(2*p.poll, n.maxPollD())
 			p.nextPoll = n.local() + int64(p.poll)
 		case "DENY", "RSTR":
 			// A Kiss-o'-Death carries no authenticator, so anyone who sees
@@ -377,7 +388,7 @@ func (n *NTS) combine(coarse time.Time, coarseLocal int64) error {
 		if p.lastErr != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", p.srv.Operator, p.lastErr))
 		}
-		if p.sample == nil || now-p.sample.T4 > maxAge {
+		if p.sample == nil || now-p.sample.T4 > maxAge || p.sample.T4 <= n.refusedT4 {
 			continue
 		}
 		in = append(in, nts.Interval{Operator: p.srv.Operator, Offset: p.sample.Offset, Bound: p.sample.Bound, T4: p.sample.T4})
@@ -419,7 +430,7 @@ func (n *NTS) combine(coarse time.Time, coarseLocal int64) error {
 	// each), and it can move by at most rho times the time between them. If
 	// a pair does not fit, the local clock broke rho (or more servers are
 	// wrong): this quorum is not served, a new history starts with it, and
-	// the next quorum must agree with it first.
+	// the next quorum, of new samples only, must agree with it first.
 	var refs []*ntsResult
 	if k := len(n.hist); k > 0 {
 		refs = append(refs, n.hist[k-1])
@@ -439,8 +450,11 @@ func (n *NTS) combine(coarse time.Time, coarseLocal int64) error {
 		if delta.Abs() > allowed {
 			n.hist, n.result = []*ntsResult{cur}, nil
 			n.violations++
+			for _, v := range in {
+				n.refusedT4 = max(n.refusedT4, v.T4)
+			}
 			err = fmt.Errorf("clock: nts: offset moved %v in %v (%.0f ppm, +-%.0f ppm from the bounds), more than its bounds and rho allow (%v); "+
-				"the local clock does not keep within %d ppm: refused until the next quorum agrees", delta, d.baseline.Round(time.Millisecond),
+				"the local clock does not keep within %d ppm: refused until a quorum of new samples agrees", delta, d.baseline.Round(time.Millisecond),
 				d.ppm, d.errPPM, allowed, nts.RhoPPM)
 			n.lastErr = err
 			n.mu.Unlock()
@@ -633,6 +647,8 @@ func (n *NTS) Status() NTSStatus {
 	}
 	for _, p := range n.peers {
 		ps := NTSPeerStatus{Host: p.srv.Host, NTPAddr: p.ntpAddr, Disabled: p.disabled, Poll: p.poll, Sample: p.sample, Stats: p.stats}
+		// A copy: poll writes the map after Status returns.
+		ps.Stats.Kisses = maps.Clone(p.stats.Kisses)
 		if p.lastErr != nil {
 			ps.LastErr = p.lastErr.Error()
 		}

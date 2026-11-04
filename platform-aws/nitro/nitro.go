@@ -24,10 +24,10 @@
 //     client certificate. The TLS key is made in the enclave and its hash
 //     is in the identity, which the NSM document covers.
 //   - Clock: the enclave's system clock is set by the host. Options are
-//     clock=system (default, untrusted), clock=nsm (NSM timestamps, open
-//     question), or the NTS clock of a runner built with the tag nts (-nts-clock, the release
-//     image's choice): NTS-KE through vsock-proxy routes for port 4460 and
-//     NTP through the parent's UDP relay (ntp_relay, package relayclient).
+//     clock=system (default, untrusted), or the NTS clock of a runner built
+//     with the tag nts (-nts-clock, the release image's choice): NTS-KE
+//     through vsock-proxy routes for port 4460 and NTP through the parent's
+//     UDP relay (ntp_relay, package relayclient).
 package nitro
 
 import (
@@ -582,7 +582,7 @@ func (k Keys) OpenKey(ctx context.Context, blob, aad []byte) ([]byte, error) {
 //	                                         also the NTS-KE hosts, port 4460
 //	ntp_relay=vsock:3:7102                   the UDP relay on the parent, for
 //	                                         the NTS clock's NTP (udprelay)
-//	clock=system|nsm
+//	clock=system
 //	record_creds=record/writer-credentials.kms   store key of the mark log's
 //	                                             KMS-encrypted S3 credentials
 func New(o platform.Options) (*platform.Platform, error) {
@@ -644,8 +644,6 @@ func New(o platform.Options) (*platform.Platform, error) {
 	var clk platform.Clock = clock.System{}
 	switch o.Param("clock", "system") {
 	case "system":
-	case "nsm":
-		clk = &clock.Anchored{Src: NSMTime{NSM: n}, Interval: clock.DefaultInterval, TrustedSrc: false}
 	default:
 		return fail(fmt.Errorf("nitro: unknown clock %q", o.Param("clock", "")))
 	}

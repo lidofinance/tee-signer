@@ -132,7 +132,15 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   oldest sample of the quorum in force is over 60 s old on the local
   clock. The host sets that clock's rate: if it blocks the servers and runs
   the clock fast, the bound ages too slowly, and only this limit keeps the
-  time served within 60 s of real time. A healthy server answers every 16 s,
+  time served within 60 s of real time. The other direction has no such limit: a
+  host that runs the clock slow makes the samples look young and the polls
+  rare, so the time served falls behind real time without a bound until
+  the drift check sees new samples. On a platform without a host-proof
+  counter (SEV-SNP without Secure TSC) the host can do this. The runner's
+  own signatures stay safe, because its time never goes back and a
+  restart waits for a fresh quorum. What lags: a client certificate that
+  expired during the lag is still accepted, and a key imported during it
+  gets a restart floor that is too low for history it built elsewhere. A healthy server answers every 16 s,
   so one lost answer still leaves its sample under 60 s; a quorum needs 3
   of the 4 operators. If every server is out of reach, signing stops within
   60 s and resumes with the next quorum: within about one interval after a

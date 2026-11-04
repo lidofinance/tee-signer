@@ -1,13 +1,10 @@
 package nitro
 
 import (
-	"bytes"
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/fxamacker/cbor/v2"
 	"github.com/hf/nsm"
@@ -113,33 +110,4 @@ func documentImage(doc []byte) (setupwire.Image, error) {
 		return setupwire.Image{}, err
 	}
 	return platform.NitroImage(p.PCRs)
-}
-
-// NSMTime is a clock.Source that reads the timestamp of a fresh
-// attestation document. Open question for AWS: which clock the hypervisor
-// uses for it, and whether the parent can influence it. Trail of Bits
-// advises against reasoning about enclave time from it
-// (https://blog.trailofbits.com/2024/09/24/notes-on-aws-nitro-enclaves-attack-surface/).
-// UNTESTED: needs a Nitro enclave.
-type NSMTime struct{ NSM *NSM }
-
-func (s NSMTime) Name() string { return "nsm-timestamp" }
-
-func (s NSMTime) Fetch(context.Context) (time.Time, error) {
-	nonce := make([]byte, 32)
-	if _, err := rand.Read(nonce); err != nil {
-		return time.Time{}, err
-	}
-	doc, err := s.NSM.Document(nonce, nil, nil)
-	if err != nil {
-		return time.Time{}, err
-	}
-	p, err := ParseDocument(doc)
-	if err != nil {
-		return time.Time{}, err
-	}
-	if !bytes.Equal(p.Nonce, nonce) {
-		return time.Time{}, errors.New("nitro: attestation nonce mismatch")
-	}
-	return time.UnixMilli(int64(p.Timestamp)), nil
 }

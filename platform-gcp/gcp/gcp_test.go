@@ -194,15 +194,8 @@ func TestFlowsAgainstFakes(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("STS fake took the identity token: %s", resp.Status)
 	}
-	tm, err := TokenTime{L: l, Audience: "https://signer.example"}.Fetch(ctx)
-	if err != nil || tm.Unix() != iat {
-		t.Fatal(tm, err)
-	}
 	if _, err := (&Attester{L: l, Audience: stsAudience}).Attest(ctx, nil, []byte{1}); err == nil {
 		t.Fatal("attester with the STS audience made a token")
-	}
-	if _, err := (TokenTime{L: l, Audience: stsAudience}).Fetch(ctx); err == nil {
-		t.Fatal("token-iat clock with the STS audience made a token")
 	}
 }
 

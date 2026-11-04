@@ -540,9 +540,6 @@ assumes the launcher's log is named `confidential-space-launcher`).
   import.
 - Clock: Google documents nothing on guest clock trust. The image uses the
   NTS clock (`-nts-clock`), with three HTTPS-date URLs as its coarse check.
-  `clock=token-iat` (iat of a nonce-bound attestation token) is also
-  implemented; the launcher fetches it over TLS from Google, so the host can
-  delay it but not forge it.
 
 ## Channel and share import
 

@@ -328,6 +328,39 @@ func TestNTSClockKissCodes(t *testing.T) {
 	}
 }
 
+// RATE backoff stops at maxPoll, as DENY/RSTR does.
+func TestNTSClockRateBackoffCappedAtMaxPoll(t *testing.T) {
+	fs := newServers(t, map[string]ntstest.NTPOptions{"rate": {Kiss: "RATE"}}, "a", "b", "c", "rate")
+	n := newNTS(fs, &coarseClock{})
+	n.maxPoll = 70 * time.Millisecond
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	if p := n.Status().Peers["rate"].Poll; p != 70*time.Millisecond {
+		t.Fatalf("poll after RATE %v, want maxPoll 70ms", p)
+	}
+}
+
+// A status snapshot owns its kiss counts: the next poll does not write to it.
+func TestNTSClockStatusCopiesKisses(t *testing.T) {
+	fs := newServers(t, map[string]ntstest.NTPOptions{"rate": {Kiss: "RATE"}}, "a", "b", "c", "rate")
+	n := newNTS(fs, &coarseClock{})
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	st := n.Status()
+	time.Sleep(110 * time.Millisecond)
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	if now := n.Status().Peers["rate"].Stats.Kisses["RATE"]; now != 2 {
+		t.Fatalf("RATE count %d, want 2", now)
+	}
+	if old := st.Peers["rate"].Stats.Kisses["RATE"]; old != 1 {
+		t.Fatalf("the earlier snapshot changed: RATE count %d, want 1", old)
+	}
+}
+
 // A Kiss-o'-Death carries no authenticator, so anyone on the path who sees
 // the request can forge one. DENY or RSTR stops a server for maxPoll only:
 // a forged one must not take the operator out until the next restart.
@@ -403,6 +436,13 @@ func TestNTSClockRefusesWhenLocalClockBreaksRho(t *testing.T) {
 	st := n.Status()
 	if st.RhoViolations != 1 || st.DriftPPM < 1e6 || math.Abs(st.DriftPPM) <= nts.RhoPPM+st.DriftErrPPM {
 		t.Fatalf("violations %d, drift %.0f +- %.0f ppm", st.RhoViolations, st.DriftPPM, st.DriftErrPPM)
+	}
+	// No server is due yet: the refused samples must not form a quorum again.
+	if err := refresh(t, n); err == nil {
+		t.Fatal("the refused samples formed a quorum again")
+	}
+	if _, err := n.Now(); err == nil {
+		t.Fatal("time served from the refused samples")
 	}
 	time.Sleep(60 * time.Millisecond)
 	if err := refresh(t, n); err != nil {

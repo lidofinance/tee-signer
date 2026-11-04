@@ -13,8 +13,7 @@
 //     and posts all of it to MAA. The token has the x-ms-sevsnpvm-* claims,
 //     including hostdata (the hash of the CCE policy). Runtime data goes to
 //     MAA with dataType JSON, so it is the JSON object
-//     backend.MAARuntimeData(user data) for an identity and
-//     {"signer-runner-clock":"<hex nonce>"} for the clock.
+//     backend.MAARuntimeData(user data) for an identity.
 //   - Sealing (keyvault.go, imds.go): the runner makes a fresh RSA wrapping
 //     key, gets an MAA token that offers it in x-ms-runtime, gets a Key
 //     Vault token from the group's managed identity, and asks Key Vault to
@@ -30,7 +29,7 @@
 //   - Store: files under -state-dir (an Azure Files mount or similar). The
 //     host can roll it back; use the restart floor.
 //   - Clock: system clock (no Azure document says the host cannot set it),
-//     or clock=maa-iat: the iat of a fresh MAA token.
+//     or the NTS clock of a runner built with the tag nts (-nts-clock).
 //
 // The protocol follows Microsoft's open-source sidecar
 // (github.com/microsoft/confidential-sidecar-containers, MIT). The code is
@@ -40,11 +39,9 @@ package azure
 import (
 	"context"
 	"crypto/hkdf"
-	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -58,7 +55,6 @@ import (
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/platform/filestore"
-	"github.com/lidofinance/tee-signer/platform/jwtclaims"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/trusted-time/clock"
 )
@@ -136,42 +132,6 @@ func (a *Attester) Attest(ctx context.Context, _, userData []byte) (*backend.Att
 	return &backend.Attestation{Platform: "azure", Format: "azure-maa-jwt", UserData: userData, Document: []byte(tok)}, nil
 }
 
-// MAATime is a clock.Source: iat of a fresh MAA token. The token comes from
-// MAA over TLS (embedded roots, the runner has no CA bundle from the host),
-// and its runtime data holds a random nonce that the SNP report carries, so
-// it is fresh; Fetch checks that the token states the report data of that
-// nonce. It does not check the token's signature: a relying party that
-// needs that checks it (attest.VerifyMAA). UNTESTED on a real token.
-type MAATime struct{ MAA *MAAClient }
-
-func (m MAATime) Name() string { return "azure-maa-iat" }
-
-// clockRuntimeData is the JSON runtime data of a clock token. Its own key
-// keeps it apart from an identity's.
-func clockRuntimeData(nonce []byte) []byte {
-	return []byte(`{"signer-runner-clock":"` + hex.EncodeToString(nonce) + `"}`)
-}
-
-func (m MAATime) Fetch(ctx context.Context) (time.Time, error) {
-	n := make([]byte, 32)
-	if _, err := rand.Read(n); err != nil {
-		return time.Time{}, err
-	}
-	rt := clockRuntimeData(n)
-	tok, err := m.MAA.Token(ctx, rt)
-	if err != nil {
-		return time.Time{}, err
-	}
-	c, err := jwtclaims.Claims(tok)
-	if err != nil {
-		return time.Time{}, err
-	}
-	if got, _ := c["x-ms-sevsnpvm-reportdata"].(string); !sameHex(got, reportDataClaim(rt)) {
-		return time.Time{}, errors.New("azure: the clock token does not state the report data of this request")
-	}
-	return jwtclaims.Time(c, "iat")
-}
-
 // derivedKeys derives the sealing data key and the wrapping key of
 // platform.Keys from the released key and setup_hash: HKDF-SHA256 over the
 // key's private exponent, with the info CtxAzureSealing or CtxAzureKeyWrap
@@ -240,7 +200,7 @@ func releaseChecked(ctx context.Context, o platform.Options, rel *Releaser, kid 
 }
 
 // New builds the platform. Options: maa_endpoint, akv_endpoint, kid,
-// clock=system|maa-iat, and client_id (a user-assigned identity, needed
+// clock=system, and client_id (a user-assigned identity, needed
 // only if the group has more than one). The debug build has two more
 // (hooks_debug.go).
 //
@@ -288,8 +248,6 @@ func New(o platform.Options) (*platform.Platform, error) {
 	var clk platform.Clock = clock.System{}
 	switch c := o.Param("clock", "system"); c {
 	case "system":
-	case "maa-iat":
-		clk = &clock.Anchored{Src: MAATime{MAA: maa}, Interval: clock.DefaultInterval, TrustedSrc: true}
 	default:
 		return nil, errors.New("azure: unknown clock " + strconv.Quote(c))
 	}
