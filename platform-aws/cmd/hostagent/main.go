@@ -12,7 +12,7 @@
 // setup_hash and hands it to the enclave (SETUP) at every start. The enclave
 // image is the same for every operator; the setup is what makes it this
 // signer. With -proxy-routes the agent only prints the vsock-proxy routes of
-// the setup, one "PORT HOST HOSTPORT" line each, for cloud/aws/parent-run.sh,
+// the setup, one "PORT HOST HOSTPORT" line each, for platform-aws/deploy/parent-run.sh,
 // and exits:
 //
 //	hostagent -setup setup.bin -proxy-routes

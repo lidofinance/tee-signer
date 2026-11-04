@@ -15,8 +15,8 @@
 // SETUP hands the runner its setup at
 // every start, before any KMS call: the binary setup the parent keeps in a
 // file (hostagent -setup). It is not secret. A host that hands over other
-// bytes gets a runner with another setup_hash; once key release takes
-// setup_hash (a later step), that runner gets other keys too.
+// bytes gets a runner with another setup_hash, and that runner gets other
+// keys: every KMS call carries setup_hash (package nitro).
 //
 // EXIT carries the runner's fatal error line, the one it prints to stderr
 // before it exits. A production enclave has no console, so without it a

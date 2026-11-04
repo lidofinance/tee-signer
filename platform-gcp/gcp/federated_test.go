@@ -19,7 +19,7 @@ import (
 	"github.com/lidofinance/tee-signer/platform/jwtclaims"
 )
 
-// The KMS role on the WIF pool's principal set (cloud/gcp/deploy.sh
+// The KMS role on the WIF pool's principal set (platform-gcp/deploy/deploy.sh
 // kms-bind): the runner calls KMS and the buckets with the federated token
 // from STS itself, with no service account in between. The fake KMS takes
 // only that token, the IAM credentials endpoint counts calls (there must be

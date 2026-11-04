@@ -239,6 +239,7 @@ func TestCopiesBothWaysIntact(t *testing.T) {
 }
 
 // A half-close of the client reaches the target, which can still answer.
+// Only this direction passes a half-close on.
 func TestHalfClosePassesThrough(t *testing.T) {
 	l := listen(t)
 	go func() {
@@ -262,6 +263,45 @@ func TestHalfClosePassesThrough(t *testing.T) {
 	got, err := io.ReadAll(c)
 	if err != nil || string(got) != "got request" {
 		t.Fatalf("got %q, %v", got, err)
+	}
+}
+
+// When the target closes, the forwarder closes the client and frees the
+// slot, even if the client stays idle and never closes. The target sends one
+// byte, so a connection that got a slot reads it and a refused one does not.
+func TestTargetCloseFreesTheSlot(t *testing.T) {
+	l := listen(t)
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			io.WriteString(c, "x")
+			c.Close()
+		}
+	}()
+	addr := startForwarder(t, l.Addr().String(), func(f *Forwarder) { f.MaxConns = 1 }, nil)
+	deadline := time.Now().Add(5 * time.Second)
+	for served := 0; served < 3; {
+		c, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close() // idle until the test ends
+		_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+		got, err := io.ReadAll(c)
+		if err != nil {
+			t.Fatalf("the client was not closed: %v", err)
+		}
+		if string(got) == "x" {
+			served++
+			continue
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("served %d connections, then the slot stayed held", served)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 

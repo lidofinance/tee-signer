@@ -55,7 +55,7 @@ func (n *NSM) Document(nonce, userData, publicKey []byte) ([]byte, error) {
 }
 
 // Attest implements platform.Attester. The client verifies the document
-// against the AWS Nitro root (see cloud/aws/README.md).
+// against the AWS Nitro root (see platform-aws/deploy/README.md).
 func (n *NSM) Attest(_ context.Context, nonce, userData []byte) (*backend.Attestation, error) {
 	doc, err := n.Document(nonce, userData, nil)
 	if err != nil {

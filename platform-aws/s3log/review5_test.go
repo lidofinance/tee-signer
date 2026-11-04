@@ -78,6 +78,6 @@ func TestReview5R3DeleteMarkerHidesClone(t *testing.T) {
 	if err == nil {
 		t.Errorf("runner A wrote version %d over a delete marker on the clone's record and signs on: two live instances, neither sees the other", v+1)
 	} else if !errors.Is(err, markstore.ErrLost) {
-		t.Logf("refused with %v", err)
+		t.Errorf("refused with %v, want ErrLost", err)
 	}
 }

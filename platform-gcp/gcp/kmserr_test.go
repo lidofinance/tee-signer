@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/platform"
+	"github.com/lidofinance/tee-signer/platform/filestore"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/slashing-log"
 )
@@ -206,4 +207,31 @@ func mustNewest(t *testing.T, l markstore.Log, s *markstore.Setup) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// The sealing key's error names another setup only when KMS refuses the
+// ciphertext as INVALID_ARGUMENT. A disabled key version is reported as
+// KMS gives it.
+func TestSealingKeyErrorSaysWhatKMSSaid(t *testing.T) {
+	g := fakeGoogle(t)
+	defer g.Close()
+	ke := &kmsErrors{fail: map[string]kmsAnswer{}}
+	k := testKMS(t, ke.wrap(t, g))
+	store, _ := filestore.New(t.TempDir())
+	ctx := context.Background()
+	if _, err := k.dataKey(ctx, store, [32]byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.dataKey(ctx, store, [32]byte{2}); err == nil || !strings.Contains(err.Error(), "another setup") {
+		t.Fatalf("another setup: got %v", err)
+	}
+	blob, err := store.Get(dekBlob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ke.fail[b64(blob)] = kmsAnswer{400, gcpError(400, "FAILED_PRECONDITION", "cryptoKeyVersions/1 is not enabled, current state is: DISABLED.")}
+	_, err = k.dataKey(ctx, store, [32]byte{1})
+	if err == nil || strings.Contains(err.Error(), "another setup") || !strings.Contains(err.Error(), "DISABLED") {
+		t.Fatalf("disabled key version: got %v", err)
+	}
 }

@@ -1,6 +1,7 @@
 package nitro
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"path"
@@ -59,6 +60,9 @@ func policyLock(policy, origin string, multiRegion bool) (backend.KeyLock, strin
 	case multiRegion:
 		return backend.KeyLockNotLocked, "the key is a multi-Region key: replicas in other regions have their own policies"
 	}
+	if err := checkPolicyMembers([]byte(policy)); err != nil {
+		return backend.KeyLockNotLocked, fmt.Sprintf("the key policy does not parse: %v", err)
+	}
 	var doc struct {
 		Statement json.RawMessage
 	}
@@ -105,6 +109,57 @@ func policyLock(policy, origin string, multiRegion bool) (backend.KeyLock, strin
 		}
 	}
 	return backend.KeyLockLocked, ""
+}
+
+// policyNames are the policy element names policyLock reads or skips.
+var policyNames = []string{"Version", "Id", "Statement", "Sid", "Effect", "Principal", "NotPrincipal",
+	"Action", "NotAction", "Resource", "NotResource", "Condition"}
+
+// checkPolicyMembers refuses a member that appears twice in one object, at
+// any depth, also when the two differ only in case, and a member that
+// matches a policy element name only in case. encoding/json takes the last
+// duplicate and matches names in any case; KMS may read such a policy
+// another way.
+func checkPolicyMembers(b []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	var walk func(depth int) error
+	walk = func(depth int) error {
+		if depth > 32 {
+			return fmt.Errorf("JSON nested too deep")
+		}
+		t, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		if t != json.Delim('{') && t != json.Delim('[') {
+			return nil
+		}
+		seen := map[string]bool{}
+		for dec.More() {
+			if t == json.Delim('{') {
+				kt, err := dec.Token()
+				if err != nil {
+					return err
+				}
+				k := kt.(string)
+				if seen[strings.ToLower(k)] {
+					return fmt.Errorf("member %q appears twice", k)
+				}
+				seen[strings.ToLower(k)] = true
+				for _, n := range policyNames {
+					if strings.EqualFold(k, n) && k != n {
+						return fmt.Errorf("member %q, want %q", k, n)
+					}
+				}
+			}
+			if err := walk(depth + 1); err != nil {
+				return err
+			}
+		}
+		_, err = dec.Token() // the closing '}' or ']'
+		return err
+	}
+	return walk(0)
 }
 
 // keyPolicyStatement is the part of an IAM policy statement policyLock reads.
