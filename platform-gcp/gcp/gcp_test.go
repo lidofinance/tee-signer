@@ -74,7 +74,7 @@ func fakeGoogle(t *testing.T) *httptest.Server {
 				http.Error(w, "bad sts request", 400)
 				return
 			}
-			// Like the WIF provider of cloud/gcp/deploy.sh wif-create: only the STS audience.
+			// Like the WIF provider of platform-gcp/deploy/deploy.sh wif-create: only the STS audience.
 			if c, err := jwtclaims.Claims(r.Form.Get("subject_token")); err != nil || c["aud"] != stsAudience {
 				http.Error(w, "audience not allowed", 400)
 				return

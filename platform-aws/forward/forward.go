@@ -108,23 +108,27 @@ func (f *Forwarder) handle(ctx context.Context, client net.Conn) {
 		}
 	}()
 
-	// One goroutine per direction. When a direction ends cleanly, pass the
-	// half-close on and let the other direction finish; on an error close
-	// both.
+	// One goroutine per direction. When the client half-closes, pass the
+	// half-close on and let the target answer. When the target side ends,
+	// close both: the runner never half-closes on purpose, and waiting for
+	// the client would hold the slot for as long as the client stays idle.
+	// On an error close both.
 	res := make(chan error, 2)
-	pipe := func(dst, src net.Conn) {
-		_, err := io.Copy(dst, src)
+	go func() {
+		_, err := io.Copy(target, client)
 		if err == nil {
-			if cw, ok := dst.(closeWriter); ok {
+			if cw, ok := target.(closeWriter); ok {
 				err = cw.CloseWrite()
 			} else {
 				err = errors.New("no half-close")
 			}
 		}
 		res <- err
-	}
-	go pipe(target, client)
-	go pipe(client, target)
+	}()
+	go func() {
+		io.Copy(client, target)
+		res <- errors.New("target closed")
+	}()
 	if err := <-res; err != nil {
 		client.Close()
 		target.Close()

@@ -31,7 +31,7 @@ import (
 	"github.com/lidofinance/tee-signer/platform/filestore"
 )
 
-// policyStatement is one statement of cloud/aws/kms-key-policy.json.tmpl.
+// policyStatement is one statement of platform-aws/deploy/kms-key-policy.json.tmpl.
 type policyStatement struct {
 	Sid       string
 	Effect    string

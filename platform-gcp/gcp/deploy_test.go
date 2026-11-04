@@ -9,7 +9,7 @@ import (
 )
 
 // Who can plant a GCP data key: whoever may
-// encrypt with the KMS key. cloud/gcp/deploy.sh grants that role
+// encrypt with the KMS key. platform-gcp/deploy/deploy.sh grants that role
 // (cryptoKeyEncrypterDecrypter) on the key to the WIF principal set alone,
 // the pool whose provider takes only attestation tokens of the pinned
 // image. No step grants a KMS role, owner or editor to anything else; the

@@ -91,6 +91,15 @@ func TestPolicyLock(t *testing.T) {
 		{"multi-Region", lockedPolicy, "AWS_KMS", true, backend.KeyLockNotLocked, "multi-Region"},
 		{"not JSON", `{"Statement":`, "AWS_KMS", false, backend.KeyLockNotLocked, "does not parse"},
 		{"no statements", `{"Version":"2012-10-17"}`, "AWS_KMS", false, backend.KeyLockNotLocked, "does not parse"},
+		// encoding/json keeps the last duplicate and matches names in any
+		// case. Each policy below reads as locked without the check.
+		{"two Actions", `{"Statement":[{"Effect":"Allow","Principal":"*","Action":"kms:*","Action":"kms:DescribeKey"}]}`, "AWS_KMS", false, backend.KeyLockNotLocked, `"Action" appears twice`},
+		{"Action and action", `{"Statement":[{"Effect":"Allow","Principal":"*","Action":"kms:*","action":"kms:DescribeKey"}]}`, "AWS_KMS", false, backend.KeyLockNotLocked, `"action" appears twice`},
+		{"Statement and statement", `{"Statement":[{"Effect":"Allow","Principal":"*","Action":"kms:*"}],"statement":[]}`, "AWS_KMS", false, backend.KeyLockNotLocked, `"statement" appears twice`},
+		{"two Effects", `{"Statement":[{"Effect":"Allow","Effect":"Deny","Principal":"*","Action":"kms:*"}]}`, "AWS_KMS", false, backend.KeyLockNotLocked, `"Effect" appears twice`},
+		{"two Conditions", `{"Statement":[{"Effect":"Allow","Principal":"*","Action":"kms:Decrypt","Condition":{"Bool":{"aws:SecureTransport":"true"}},"Condition":` + enclaveCond + `}]}`, "AWS_KMS", false, backend.KeyLockNotLocked, `"Condition" appears twice`},
+		{"lowercase effect", `{"Statement":[{"effect":"Deny","Principal":"*","Action":"kms:*"}]}`, "AWS_KMS", false, backend.KeyLockNotLocked, `member "effect", want "Effect"`},
+		{"duplicate in a condition", strings.Replace(lockedPolicy, `"StringEqualsIgnoreCase": {`, `"StringEqualsIgnoreCase": {"kms:RecipientAttestation:PCR0": "x", `, 1), "AWS_KMS", false, backend.KeyLockNotLocked, "appears twice"},
 	} {
 		got, why := policyLock(c.policy, c.origin, c.multi)
 		if got != c.want || !strings.Contains(why, c.why) {

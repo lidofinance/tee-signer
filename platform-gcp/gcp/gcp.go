@@ -1,7 +1,7 @@
 // Package gcp is the Google Cloud Confidential Space platform. UNTESTED:
 // it compiles; nothing ran in a Confidential Space VM.
 //
-// Flows (sources in cloud/gcp/README.md):
+// Flows (sources in platform-gcp/deploy/README.md):
 //
 //   - Attestation: the workload asks the launcher for a custom-audience
 //     token: POST /v1/token on the unix socket
@@ -18,7 +18,7 @@
 //     Both AADs carry setup_hash (sealingAAD, Keys).
 //     KMS access goes through Workload Identity Federation: a second
 //     token, with audience https://sts.googleapis.com (the one audience the
-//     WIF provider of cloud/gcp/deploy.sh wif-create accepts), is exchanged
+//     WIF provider of platform-gcp/deploy/deploy.sh wif-create accepts), is exchanged
 //     at sts.googleapis.com for a federated token; the WIF provider's
 //     attribute condition pins the image digest, hardware model, swname,
 //     dbgstat and support attributes. The federated token itself calls KMS
@@ -311,7 +311,7 @@ func sealingAAD(setup [32]byte) []byte { return setupwire.CtxGCPSealing.Message(
 // setup or KMS key does not decrypt, and the start stops.
 //
 // Who can plant one: encrypt needs cryptoKeyVersions.useToEncrypt on the
-// key. cloud/gcp/deploy.sh grants it (cryptoKeyEncrypterDecrypter) to the
+// key. platform-gcp/deploy/deploy.sh grants it (cryptoKeyEncrypterDecrypter) to the
 // WIF principal set alone, whose attribute condition pins the image, and
 // deploy_test.go checks that. The AAD is not secret, so a principal that
 // holds the role anyway (an admin who grants it to itself, or a binding
@@ -336,7 +336,7 @@ func (k *KMS) dataKey(ctx context.Context, store platform.Store, setup [32]byte)
 	}
 	dek, err := k.call(ctx, "decrypt", "ciphertext", blob, aad)
 	var se *statusError
-	if errors.As(err, &se) && se.status == http.StatusBadRequest {
+	if errors.As(err, &se) && se.notAuthentic() {
 		return nil, fmt.Errorf("gcp: the stored sealing key %s does not decrypt under this KMS key and setup_hash %x: "+
 			"it belongs to another setup or key, or someone else put it there; a new setup starts on an empty store (%w)", dekBlob, setup, err)
 	}

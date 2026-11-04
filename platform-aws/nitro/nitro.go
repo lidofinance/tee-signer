@@ -1,7 +1,7 @@
 // Package nitro is the AWS Nitro Enclaves platform. UNTESTED: it compiles
 // and its parsers have unit tests, but no part ran inside an enclave.
 //
-// Flows (sources in cloud/aws/README.md):
+// Flows (sources in platform-aws/deploy/README.md):
 //
 //   - Attestation: NSM attestation document from /dev/nsm (hf/nsm), with
 //     the runner's user data and the client's nonce.
@@ -10,7 +10,7 @@
 //     KMS returns the key encrypted to that RSA key (CMS, see cms.go) and
 //     the KMS ciphertext blob, which goes to the host store. Later boots:
 //     Decrypt(blob, Recipient). The key policy allows this only for the
-//     measured image (PCR0/1/2 conditions), see cloud/aws/kms-key-policy.json.
+//     measured image (PCR0/1/2 conditions), see platform-aws/deploy/kms-key-policy.json.tmpl.
 //     platform.Keys (the mark log's keys) is GenerateDataKey and Decrypt
 //     with an encryption context, the ciphertext kept by the caller. Every
 //     call carries setup_hash in its encryption context (Keys).
@@ -190,7 +190,7 @@ func kmsRecipient(n *NSM, seen *platform.ImageSeen) (*rsa.PrivateKey, *types.Rec
 //
 // The runner's own keys carry setup_hash, so a runner of the same image
 // with another setup, even under the same KMS key, decrypts none of them.
-// The key policy (cloud/aws/kms-key-policy.json.tmpl, main.tf) lets the key
+// The key policy (platform-aws/deploy/kms-key-policy.json.tmpl, main.tf) lets the key
 // admin call Encrypt with exactly {purpose: record-creds} and nothing else,
 // so no blob the admin makes decrypts under the other two: the admin cannot
 // plant a sealing key or a mark log key. Only GenerateDataKey with this
@@ -210,7 +210,7 @@ const (
 
 // recordCredsContext is the context the key admin encrypts the record
 // credentials under: `aws kms encrypt --encryption-context
-// purpose=record-creds` (cloud/aws/README.md).
+// purpose=record-creds` (platform-aws/deploy/README.md).
 func recordCredsContext() map[string]string { return map[string]string{ctxPurpose: purposeRecordCreds} }
 
 // notAuthentic reports whether KMS refused a ciphertext as not its own:

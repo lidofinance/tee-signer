@@ -52,6 +52,22 @@ SETUP="$(cd "$(dirname "$SETUP")" && pwd)/$(basename "$SETUP")"
 ROUTES="$("$HERE/hostagent" -setup "$SETUP" -proxy-routes)" || { echo "$SETUP: refused (see above)" >&2; exit 1; }
 echo "setup $SETUP, proxy routes:"
 echo "$ROUTES"
+# A second run would leave the old agent and proxies running, with the old
+# setup and routes. Stop them, or reboot, before running this again.
+for p in hostagent forwarder udprelay vsock-proxy; do
+  ! pgrep -x "$p" >/dev/null || { echo "$p is already running: stop it or reboot first" >&2; exit 1; }
+done
+# start LOG CMD... runs CMD in the background. check_started fails if any
+# of them has exited after a second, for example on a port in use.
+STARTED=()
+start() { local log="$1"; shift; nohup "$@" >"$log" 2>&1 & STARTED+=("$! $log"); }
+check_started() {
+  sleep 1
+  local s
+  for s in "${STARTED[@]}"; do
+    kill -0 "${s%% *}" 2>/dev/null || { echo "a background process exited: see ${s#* }" >&2; exit 1; }
+  done
+}
 
 # 1. Nitro CLI and allocator (AWS docs: nitro-enclave-cli-install.html).
 sudo dnf install -y aws-nitro-enclaves-cli aws-nitro-enclaves-cli-devel
@@ -76,14 +92,14 @@ sudo systemctl enable --now nitro-enclaves-allocator.service
   done <<<"$ROUTES"
 } | sudo tee /etc/nitro_enclaves/vsock-proxy.yaml >/dev/null
 while read -r port host hostport; do
-  nohup vsock-proxy "$port" "$host" "$hostport" --config /etc/nitro_enclaves/vsock-proxy.yaml \
-    >"/tmp/vsock-proxy-$port.log" 2>&1 &
+  start "/tmp/vsock-proxy-$port.log" \
+    vsock-proxy "$port" "$host" "$hostport" --config /etc/nitro_enclaves/vsock-proxy.yaml
 done <<<"$ROUTES"
 
 # 2b. NTP of the NTS clock: vsock 7102 to UDP, to the allowlist of the four
 #     operators only (udprelay -h; the defaults are that list). It sees
 #     only NTS-protected packets: it can delay or drop them, not forge them.
-nohup "$HERE/udprelay" -listen vsock:any:7102 >/tmp/udprelay.log 2>&1 &
+start /tmp/udprelay.log "$HERE/udprelay" -listen vsock:any:7102
 
 # 3. Host agent: the setup, sealed blobs and instance role credentials over
 #    vsock 7101. record/writer-credentials.kms must be in the store before
@@ -96,8 +112,9 @@ sudo mkdir -p "$STATE_DIR"
 sudo chown "$USER" "$STATE_DIR"
 [ -f "$STATE_DIR/record/writer-credentials.kms" ] || \
   echo "warning: $STATE_DIR/record/writer-credentials.kms missing; the enclave will refuse to start" >&2
-nohup "$HERE/hostagent" -listen vsock:any:7101 -dir "$STATE_DIR" -creds imds -setup "$SETUP" \
-  >/tmp/hostagent.log 2>&1 &
+start /tmp/hostagent.log \
+  "$HERE/hostagent" -listen vsock:any:7101 -dir "$STATE_DIR" -creds imds -setup "$SETUP"
+check_started
 
 # 4. The enclave. Never use --debug-mode or --attach-console for real
 #    keys: in debug mode all PCRs read as zero and the KMS policy fails
@@ -118,5 +135,6 @@ nitro-cli describe-enclaves
 #    Who may reach the port is set in the security group (entry_cidrs in
 #    main.tf). That limits exposure. It is not what keeps the runner safe:
 #    the mutual TLS inside the enclave is.
-nohup "$HERE/forwarder" -listen "tcp:0.0.0.0:$ENTRY_PORT" -to "vsock:$ENCLAVE_CID:7100" \
-  >/tmp/forwarder.log 2>&1 &
+start /tmp/forwarder.log \
+  "$HERE/forwarder" -listen "tcp:0.0.0.0:$ENTRY_PORT" -to "vsock:$ENCLAVE_CID:7100"
+check_started
