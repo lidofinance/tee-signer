@@ -268,7 +268,8 @@ type Role uint8
 
 const (
 	RoleNone Role = iota
-	// RoleSigning: a client certificate without a role mark that counts.
+	// RoleSigning: a client certificate with no role mark on it or on a CA
+	// of a verified chain.
 	RoleSigning
 	// RoleAttestOnly: backend.AttestOnlyClientOID on the leaf or on any CA
 	// of a verified chain.
@@ -335,7 +336,12 @@ func hasEKU(c *x509.Certificate, oid asn1.ObjectIdentifier) bool {
 //     certificate that fails rules 2 and 3 gets no rights, never the
 //     signing role. A CA file that also pins the admin intermediate
 //     gives such a leaf a two-certificate chain to that intermediate.
-//  5. Otherwise signing.
+//  5. RoleNone if any CA certificate of a verified chain lists
+//     backend.AdminClientOID: a leaf below an admin CA is admin or
+//     nothing, so the admin CA key cannot mint a signing certificate. One
+//     such chain is enough, even if another chain runs through a signing
+//     CA.
+//  6. Otherwise signing.
 //
 // No peer certificate or no verified chain: RoleNone. Every certificate of
 // the chain must still allow clientAuth (or list no extended key usage),
@@ -368,6 +374,13 @@ func RoleOf(cs *tls.ConnectionState) Role {
 	}
 	if hasEKU(cs.PeerCertificates[0], backend.AdminClientOID) {
 		return RoleNone
+	}
+	for _, chain := range cs.VerifiedChains {
+		for _, c := range chain {
+			if hasEKU(c, backend.AdminClientOID) {
+				return RoleNone
+			}
+		}
 	}
 	return RoleSigning
 }

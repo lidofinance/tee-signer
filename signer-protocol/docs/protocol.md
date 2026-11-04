@@ -902,7 +902,11 @@ A TLS client's role comes from its verified certificate chain
    for example a chain that ends at an admin intermediate listed in
    `allowed_client_ca`. The connection gets no rights, so an admin
    certificate never signs.
-5. Signing: anything else.
+5. None: a CA certificate of some verified chain lists the admin mark. A
+   leaf below an admin CA is admin or nothing, so the admin CA key cannot
+   make a signing certificate. One such chain is enough, even if the leaf
+   also verifies through a signing CA.
+6. Signing: anything else.
 
 The chain an admin certificate needs, under the root in
 `allowed_client_ca`:
