@@ -2,6 +2,8 @@ package server
 
 import (
 	"errors"
+	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -25,7 +27,13 @@ import (
 //   - DefaultMaxHandshakes 32 TLS handshakes at once. A handshake takes
 //     about a millisecond of CPU; a client pool dials 16 at once at most.
 //     A stranger who opens connections and says nothing holds at most 32
-//     slots for handshakeTimeout each, and never reaches the frame reader.
+//     slots, and never reaches the frame reader. Such a connection ends
+//     after attls.FirstByteTimeout if no byte arrives, and a slow one after
+//     handshakeTimeout.
+//   - DefaultMaxHandshakesPerAddr 16 of those handshakes from one IP
+//     address, the most one client pool dials at once. So one address
+//     alone cannot hold the whole budget. A unix socket or vsock peer has
+//     no IP address and only the global budget applies.
 //   - DefaultMaxInflight 64 MiB of large frames at once. Every frame may
 //     hold its first FreeFrameBytes (64 KiB) without counting, so SIGN,
 //     HEALTH, IDENTITY and ATTEST (all far below that) are never refused
@@ -42,23 +50,34 @@ import (
 //     on all of them. Turn it on (-idle-timeout) once the clients redial a
 //     connection the runner closed; the connection cap bounds idle
 //     connections until then.
+//
+// The cap is global, not per certificate. Any certificate under the client
+// CA, an attest-only one included, can hold all 256 connections idle and
+// keep them after it expires (dates are checked when a frame arrives), and
+// a few certificates can use up the shared budget of fresh attestations.
+// Both stop new clients until those connections close or the runner
+// restarts. Issue client certificates only to clients you run.
 const (
 	DefaultMaxConns      = 256
 	DefaultMaxHandshakes = 32
 	DefaultMaxInflight   = 64 << 20
 	DefaultIdleTimeout   = time.Duration(0)
+	// DefaultMaxHandshakesPerAddr is the handshakes one IP address may
+	// run at once.
+	DefaultMaxHandshakesPerAddr = 16
 	// FreeFrameBytes is the part of each frame that does not count
 	// against MaxInflight.
 	FreeFrameBytes = 64 << 10
 )
 
 // Limits are the connection limits of a server. A zero field takes its
-// default; a negative MaxConns, MaxHandshakes or MaxInflight turns that
-// limit off (tests).
+// default; a negative MaxConns, MaxHandshakes, MaxHandshakesPerAddr or
+// MaxInflight turns that limit off (tests).
 type Limits struct {
-	MaxConns      int
-	MaxHandshakes int
-	MaxInflight   int64
+	MaxConns             int
+	MaxHandshakes        int
+	MaxHandshakesPerAddr int
+	MaxInflight          int64
 	// IdleTimeout closes a connection that sends no frame for this long
 	// after its last answer. Zero: no limit.
 	IdleTimeout time.Duration
@@ -76,6 +95,13 @@ func (l Limits) maxHandshakes() int64 {
 		return DefaultMaxHandshakes
 	}
 	return int64(l.MaxHandshakes)
+}
+
+func (l Limits) maxHandshakesPerAddr() int64 {
+	if l.MaxHandshakesPerAddr == 0 {
+		return DefaultMaxHandshakesPerAddr
+	}
+	return int64(l.MaxHandshakesPerAddr)
 }
 
 func (l Limits) maxInflight() int64 {
@@ -107,6 +133,50 @@ func (g *gauge) take(k, limit int64) bool {
 }
 
 func (g *gauge) give(k int64) { g.n.Add(-k) }
+
+// addrGauge counts handshakes per source IP address. The zero value is
+// ready.
+type addrGauge struct {
+	mu sync.Mutex
+	n  map[string]int64
+}
+
+// addrOf is the IP address of a TCP peer, "" for any other peer.
+func addrOf(c net.Conn) string {
+	if a, ok := c.RemoteAddr().(*net.TCPAddr); ok {
+		return a.IP.String()
+	}
+	return ""
+}
+
+// take adds one for addr if its count stays within limit, and reports
+// whether it did. An empty addr or a negative limit always passes.
+func (g *addrGauge) take(addr string, limit int64) bool {
+	if addr == "" || limit < 0 {
+		return true
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.n[addr] >= limit {
+		return false
+	}
+	if g.n == nil {
+		g.n = map[string]int64{}
+	}
+	g.n[addr]++
+	return true
+}
+
+func (g *addrGauge) give(addr string, limit int64) {
+	if addr == "" || limit < 0 {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.n[addr]--; g.n[addr] <= 0 {
+		delete(g.n, addr)
+	}
+}
 
 // errInflight closes a connection whose frame would go over the
 // in-flight byte cap.

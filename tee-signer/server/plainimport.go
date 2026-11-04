@@ -34,6 +34,10 @@ func (s *Server) otherMessage(f wire.Frame) ([]byte, error) {
 	if err != nil {
 		return nil, backend.Refused(backend.StatusBadRequest, "%v", err)
 	}
+	if err := s.checkMaxima(req.Interchange); err != nil {
+		clear(req.Secret[:])
+		return nil, err
+	}
 	k, err := s.addShare(req.Pubkey, &req.Secret, req.Index, req.Interchange, "plaintext")
 	clear(req.Secret[:])
 	if err != nil {

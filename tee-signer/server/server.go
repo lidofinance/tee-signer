@@ -97,8 +97,9 @@ type Server struct {
 	// ProveSealingKey, also before Serve.
 	SealingKeyUnproven bool
 
-	started time.Time
-	wg      sync.WaitGroup
+	started   time.Time
+	startOnce sync.Once
+	wg        sync.WaitGroup
 	// panics counts the requests that panicked (recover.go).
 	panics atomic.Uint64
 	// panicked is why a state-changing request's panic stopped the
@@ -108,8 +109,6 @@ type Server struct {
 	panicHook func(wire.Frame)
 	// lostLogged: the loss of the mark log is in the log (lostRefusal).
 	lostLogged atomic.Bool
-	// sources is the device source alarm (sourcewatch.go).
-	sources sourceWatch
 	// blocked holds validators whose import raised the mark log but whose
 	// interchange maxima the core did not take: they sign nothing until a
 	// restart, which reads the raised mark.
@@ -125,6 +124,9 @@ type Server struct {
 	// orders share writes.
 	shareSetMu sync.Mutex
 	shareHash  map[backend.Pubkey][32]byte
+	// shareWritesStopped: a share write failed and so did the log record
+	// that drops its set. Share writes stop until a restart.
+	shareWritesStopped bool
 	// attestLimit counts the fresh attestations of attest-only clients
 	// (limit.go); limitNow, if set, is its clock (tests).
 	attestLimit attestLimit
@@ -136,6 +138,8 @@ type Server struct {
 	// conns, handshakes and inflight count what the limits bound, over
 	// every listener of the server.
 	conns, handshakes, inflight gauge
+	// addrHandshakes counts handshakes per source IP address.
+	addrHandshakes addrGauge
 	// connsNote, handshakesNote and inflightNote count refusals for the
 	// log (limits.go).
 	connsNote, handshakesNote, inflightNote limitNote
@@ -198,19 +202,24 @@ func (s *Server) LoadShares() (int, error) {
 // ProveSealingKey checks a sealing key that came from a stored blob
 // (platform.Platform.SealingKeyStored, AWS-KMS-02) against the stored
 // shares of names (from ListShares): it needs at least one, and every one
-// must unseal under the key. A key admin could have made the blob before
-// the key policy was locked, and the host can put any object under
-// shares/ next to it. A share this runner sealed is the one thing in the
-// store that needs the key to make. A share that does not open means the
-// blob or the share is not this runner's, so the start stops rather than
-// seal new shares under a key someone else may know. That includes a
-// share of this signer that does not open for another reason: one left
-// from an earlier life of the mark log (sealed under an older log_id) or
-// restored from another signer by mistake. LoadListedShares would log and
-// skip it; here it stops the start, the error names it, and the operator
-// removes it from shares/ before the restart. On success
-// SealingKeyUnproven is cleared. Call it before Serve, and only when the
-// image check lets the shares load.
+// must unseal under the key. The host can put any object under shares/
+// next to the blob, and a share that does not open means the blob or the
+// share is not this runner's, so the start stops rather than seal new
+// shares under a key someone else may know. That includes a share of
+// this signer that does not open for another reason: one left from an
+// earlier life of the mark log (sealed under an older log_id) or restored
+// from another signer by mistake. LoadListedShares would log and skip it;
+// here it stops the start, the error names it, and the operator removes
+// it from shares/ before the restart. On success SealingKeyUnproven is
+// cleared. Call it before Serve, and only when the image check lets the
+// shares load.
+//
+// The check has a limit. A key admin who made the blob before the key
+// policy was locked knows the key, can seal a share under it and, before
+// the lock, a mark log record too: such a blob passes, and every later
+// share is sealed under a key the admin holds. Only the deploy rule
+// prevents that (create the key with its final, locked policy,
+// platform-aws/deploy/README.md); the runner cannot check it.
 func (s *Server) ProveSealingKey(keys []string) error {
 	if err := s.checkLogID(); err != nil {
 		return err
@@ -246,14 +255,18 @@ func (s *Server) ProveSealingKey(keys []string) error {
 	return nil
 }
 
-// sharePubkey reads the public key from a share's store name.
+// sharePubkey reads the public key from a share's store name. Only the
+// name shareKey gives counts: lowercase hex, so one key has one name.
 func sharePubkey(k string) (backend.Pubkey, error) {
 	var pk backend.Pubkey
 	b, err := hex.DecodeString(strings.TrimPrefix(k, "shares/"))
-	if !strings.HasPrefix(k, "shares/") || err != nil || len(b) != len(pk) {
+	if err != nil || len(b) != len(pk) {
 		return pk, fmt.Errorf("%s: not a share name", k)
 	}
 	copy(pk[:], b)
+	if shareKey(pk) != k {
+		return pk, fmt.Errorf("%s: not a share name", k)
+	}
 	return pk, nil
 }
 
@@ -290,16 +303,10 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 	// In name order, as the file store lists them: with more shares stored
 	// than the core holds, every start loads the same ones.
 	for _, k := range slices.Sorted(slices.Values(keys)) {
-		if !strings.HasPrefix(k, "shares/") {
-			errs = append(errs, fmt.Errorf("%s: not a share name", k))
+		pk, err := sharePubkey(k)
+		if err != nil {
+			errs = append(errs, err)
 			continue
-		}
-		var pk backend.Pubkey
-		if b, err := hex.DecodeString(strings.TrimPrefix(k, "shares/")); err != nil || len(b) != len(pk) {
-			errs = append(errs, fmt.Errorf("%s: bad key name", k))
-			continue
-		} else {
-			copy(pk[:], b)
 		}
 		if _, seen := recs[pk]; seen {
 			continue
@@ -427,6 +434,9 @@ func (s *Server) putShare(pk backend.Pubkey, blob []byte) error {
 	}
 	s.shareSetMu.Lock()
 	defer s.shareSetMu.Unlock()
+	if s.shareWritesStopped {
+		return errors.New("a failed share write is still vouched in the mark log: no share write until a restart")
+	}
 	// The set before. It leaves out the key's old record, which this
 	// runner did not load and which may say the key has history: a write
 	// that fails then leaves no set the log vouches for with it, and the
@@ -453,10 +463,18 @@ func (s *Server) putShare(pk backend.Pubkey, blob []byte) error {
 		// set is the one after: keep it, so the next write names the set
 		// the store holds and a start finds it vouched.
 		if !s.landed(pk, next[pk]) {
-			// Drop the set after from the commitment the next log record
-			// carries: the host keeps the blob and could store it later.
+			// Drop the set after from the log at once: the host keeps
+			// the blob and could store it later. If that record fails
+			// too, the log still vouches for the set after, so no share
+			// write goes on until a restart.
 			s.shareHash = prev
 			s.Hooks.SetShareSet(&markstore.ShareSet{Current: before})
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			if rerr := s.Hooks.RecordShareSet(ctx, &markstore.ShareSet{Current: before}); rerr != nil {
+				s.shareWritesStopped = true
+				err = fmt.Errorf("%w; the mark log record that drops it failed too, no share write until a restart: %v", err, rerr)
+			}
+			cancel()
 			return err
 		}
 	}
@@ -482,9 +500,8 @@ func (s *Server) landed(pk backend.Pubkey, h [32]byte) bool {
 
 // Serve accepts connections until ctx ends or the listener fails.
 func (s *Server) Serve(ctx context.Context, l net.Listener) error {
-	if s.started.IsZero() {
-		s.started = time.Now()
-	}
+	// The first Serve sets the start time; the others run at the same time.
+	s.startOnce.Do(func() { s.started = time.Now() })
 	go func() {
 		<-ctx.Done()
 		l.Close()
@@ -537,7 +554,16 @@ func (s *Server) handleConn(ctx context.Context, c net.Conn) {
 	if tc, ok := c.(*tls.Conn); ok {
 		// The handshake budget: a peer that has not shown a client
 		// certificate yet holds one of a few slots (ATTEST-BUDGET-01).
+		// One IP address holds at most a part of them.
+		addr, perAddr := addrOf(c), s.Limits.maxHandshakesPerAddr()
+		if !s.addrHandshakes.take(addr, perAddr) {
+			if n := s.handshakesNote.note(); n > 0 {
+				s.Log.Warn("refused: handshake budget of one address", "max_handshakes_per_addr", perAddr, "refused_since_start", n)
+			}
+			return
+		}
 		if !s.handshakes.take(1, s.Limits.maxHandshakes()) {
+			s.addrHandshakes.give(addr, perAddr)
 			if n := s.handshakesNote.note(); n > 0 {
 				s.Log.Warn("refused: handshake budget", "max_handshakes", s.Limits.maxHandshakes(), "refused_since_start", n)
 			}
@@ -547,6 +573,7 @@ func (s *Server) handleConn(ctx context.Context, c net.Conn) {
 		err := tc.HandshakeContext(hctx)
 		cancel()
 		s.handshakes.give(1)
+		s.addrHandshakes.give(addr, perAddr)
 		if err != nil {
 			if ctx.Err() == nil {
 				s.Log.Warn("tls handshake", "remote", c.RemoteAddr().String(), "err", err)
@@ -823,11 +850,6 @@ func (s *Server) sign(req backend.SignRequest) (backend.Signature, error) {
 		}
 		s.Log.Info("refused", "kind", kind, "pubkey", req.Pubkey.String()[:18], "msg", describe(req.Message), "err", err)
 		return sig, err
-	}
-	if a, ok := req.Message.(*backend.AttestationData); ok && s.Signer.Config().DeviceMark {
-		if alarm := s.sources.note(req.Pubkey, a.Source.Epoch, a.Target.Epoch); alarm != "" {
-			s.Log.Error("device source alarm: " + alarm)
-		}
 	}
 	if repeat {
 		s.Log.Info("signed (exact repeat, same signature)", "kind", kind, "pubkey", req.Pubkey.String()[:18], "msg", describe(req.Message))
@@ -1234,7 +1256,6 @@ func (s *Server) health() (*backend.Health, error) {
 	if why := s.panicked.Load(); why != nil {
 		h.Ready, h.RequestPanic = false, *why
 	}
-	h.DeviceSourceAlarm = s.sources.status()
 	if s.Image != nil {
 		var refused bool
 		if h.Image, refused = s.Image.Status(s.Updates); refused {

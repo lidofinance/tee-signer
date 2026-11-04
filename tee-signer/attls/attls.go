@@ -25,6 +25,7 @@ import (
 	"math/big"
 	"net"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/lidofinance/tee-signer/signer-protocol"
@@ -447,5 +448,38 @@ func Listen(a transport.Addr, cfg *tls.Config, open func(transport.Addr) (net.Li
 	if cfg == nil || (a.Network != "tcp" && a.Network != "vsock") {
 		return l, false, nil
 	}
-	return tls.NewListener(l, cfg), true, nil
+	return tls.NewListener(firstByteListener{l}, cfg), true, nil
+}
+
+// FirstByteTimeout is how long a peer on a TLS listener has to send the
+// first byte of its ClientHello. A peer that connects and says nothing
+// holds a handshake slot (server/limits.go) this long, not the whole
+// handshake time limit. A variable so a test can shorten it.
+var FirstByteTimeout = 3 * time.Second
+
+// firstByteListener sets the first-byte deadline on each connection.
+type firstByteListener struct{ net.Listener }
+
+func (l firstByteListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	_ = c.SetReadDeadline(time.Now().Add(FirstByteTimeout))
+	return &firstByteConn{Conn: c}, nil
+}
+
+// firstByteConn clears the read deadline once the first byte has come.
+// The handshake then runs under the server's own time limit.
+type firstByteConn struct {
+	net.Conn
+	seen atomic.Bool
+}
+
+func (c *firstByteConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	if n > 0 && !c.seen.Swap(true) {
+		_ = c.Conn.SetReadDeadline(time.Time{})
+	}
+	return n, err
 }

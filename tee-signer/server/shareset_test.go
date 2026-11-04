@@ -3,12 +3,14 @@
 package server
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/lidofinance/tee-signer/signer-protocol"
@@ -140,14 +142,26 @@ func TestShareSetLoadsTheVouchedSet(t *testing.T) {
 }
 
 // A write cut between the log record and the store write: the log vouches
-// for the set before and after, the store holds the one before. The start
-// loads it as it is, and nothing is reset.
+// for the set before and after, the store holds the one before. Here the
+// store write fails and so does the log record that would drop the set
+// after. The runner takes no further share write. The start loads the
+// stored set as it is, and nothing is reset.
 func TestShareSetCutWriteLoadsTheSetBefore(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("the test makes the mark log unwritable with a directory mode, which root ignores")
+	}
 	e := newTgtEnv(t, "dev", nil)
 	pka, pkb, floor := historyPair(t, e)
 	skc, pkc := newKey(t)
+	t.Cleanup(func() { e.setMarksMode(0o700) })
 	e.store.mu.Lock()
-	e.store.failPut = func(k string) bool { return k == shareKey(pkc) }
+	e.store.failPut = func(k string) bool {
+		if k != shareKey(pkc) {
+			return false
+		}
+		e.setMarksMode(0o500)
+		return true
+	}
 	e.store.mu.Unlock()
 	if err := e.importSealed(pkc, skc, 7, nil); err == nil {
 		t.Fatal("an import whose store write failed succeeded")
@@ -155,8 +169,13 @@ func TestShareSetCutWriteLoadsTheSetBefore(t *testing.T) {
 	e.store.mu.Lock()
 	e.store.failPut = nil
 	e.store.mu.Unlock()
+	e.setMarksMode(0o700)
 	if sh := e.records()[len(e.records())-1].Shares; sh == nil || sh.Pending == nil {
 		t.Fatalf("the newest record's share set %+v, want the cut write's pending root", sh)
+	}
+	skd, pkd := newKey(t)
+	if err := e.importSealed(pkd, skd, 8, nil); err == nil {
+		t.Fatal("a share write went on while the log vouches for a failed one")
 	}
 	puts := e.store.putsOf(shareKey(pkb))
 	e.restart()
@@ -165,6 +184,9 @@ func TestShareSetCutWriteLoadsTheSetBefore(t *testing.T) {
 	}
 	if !e.recordOf(pkb).History || e.store.putsOf(shareKey(pkb)) != puts {
 		t.Fatal("B was reset after a cut write")
+	}
+	if err := e.importSealed(pkd, skd, 8, nil); err != nil {
+		t.Fatalf("a share write after the restart: %v", err)
 	}
 }
 
@@ -335,6 +357,35 @@ func TestShareWriteNotLandedNotVouched(t *testing.T) {
 	}
 }
 
+// A share write that did not reach the store is dropped from the log at
+// once: the runner writes a record without the set after, and needs no
+// vote or other record for that. The host stores the kept blob and
+// restarts the runner: the start finds a set the log does not vouch for
+// and resets.
+func TestShareWriteNotLandedDroppedAtOnce(t *testing.T) {
+	e := newTgtEnv(t, "dev", nil)
+	_, pkb, _ := historyPair(t, e)
+	skc, pkc := newKey(t)
+	e.store.mu.Lock()
+	e.store.failPut = func(k string) bool { return k == shareKey(pkc) }
+	e.store.mu.Unlock()
+	if err := e.importSealed(pkc, skc, 7, nil); err == nil {
+		t.Fatal("an import whose store write failed succeeded")
+	}
+	e.store.mu.Lock()
+	e.store.failPut = nil
+	blob := e.store.dropped[shareKey(pkc)]
+	e.store.mu.Unlock()
+	if sh := e.records()[len(e.records())-1].Shares; sh == nil || sh.Pending != nil {
+		t.Fatalf("the newest record after a failed write carries share set %+v, want no pending root", sh)
+	}
+	e.putRaw(pkc, blob)
+	e.restart()
+	if e.recordOf(pkb).History {
+		t.Fatal("B kept its history: the log vouched for the set with the record that was never written")
+	}
+}
+
 // A share write whose store reply was lost but which landed: the runner
 // reads it back and keeps the set after, so the import stands and the
 // next start finds the stored set vouched, with no reset.
@@ -426,4 +477,30 @@ func TestFailedReimportDoesNotVouchOldRecord(t *testing.T) {
 	e.clock.add((f + 1 - e.signer.EpochAt(e.now())) * testEpoch)
 	en := e.signer.EpochAt(e.now())
 	wantSlashSource(t, e.signMsg(pkb, vote(floor+1, en+1)), "B below its import floor "+strconv.FormatUint(f2, 10))
+}
+
+// A share stored under an uppercase name does not load: a key has one
+// store name, lowercase hex, so case variants cannot pass as shares.
+func TestShareNameOnlyLowercase(t *testing.T) {
+	e := newTgtEnv(t, "dev", nil)
+	e.looseLoad = true
+	sk, pk := newKey(t)
+	if err := e.importSealed(pk, sk, 5, nil); err != nil {
+		t.Fatal(err)
+	}
+	e.store.mu.Lock()
+	upper := "shares/" + strings.ToUpper(hex.EncodeToString(pk[:]))
+	e.store.m[upper] = e.store.m[shareKey(pk)]
+	delete(e.store.m, shareKey(pk))
+	e.store.mu.Unlock()
+	e.restart()
+	if n := len(e.signer.Keys()); n != 0 {
+		t.Fatalf("%d keys loaded from an uppercase share name", n)
+	}
+	if e.loadErr == nil || !strings.Contains(e.loadErr.Error(), upper+": not a share name") {
+		t.Fatalf("start error %v, want the uppercase name refused", e.loadErr)
+	}
+	if _, err := sharePubkey(upper); err == nil {
+		t.Fatal("sharePubkey took an uppercase name")
+	}
 }
