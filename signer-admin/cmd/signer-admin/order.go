@@ -18,8 +18,12 @@ type orderActive struct {
 	ref    ref
 }
 
+// maxOrderLife caps an import order's not_after: the order can be used
+// again until then.
+const maxOrderLife = 7 * 24 * time.Hour
+
 // parseNotAfter reads -not-after: an RFC 3339 time, or a duration from now
-// with h or d units ("2160h", "90d").
+// with h or d units ("12h", "2d").
 func parseNotAfter(s string, t time.Time) (uint64, error) {
 	if at, err := time.Parse(time.RFC3339, s); err == nil {
 		return uint64(max(at.Unix(), 0)), nil
@@ -27,13 +31,13 @@ func parseNotAfter(s string, t time.Time) (uint64, error) {
 	if n, ok := strings.CutSuffix(s, "d"); ok {
 		days, err := strconv.ParseUint(n, 10, 16)
 		if err != nil {
-			return 0, fmt.Errorf("-not-after %q: want an RFC 3339 time or a duration like 90d or 2160h", s)
+			return 0, fmt.Errorf("-not-after %q: want an RFC 3339 time or a duration like 12h or 2d", s)
 		}
 		return uint64(t.Add(time.Duration(days) * 24 * time.Hour).Unix()), nil
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil || d <= 0 {
-		return 0, fmt.Errorf("-not-after %q: want an RFC 3339 time or a duration like 90d or 2160h", s)
+		return 0, fmt.Errorf("-not-after %q: want an RFC 3339 time or a duration like 12h or 2d", s)
 	}
 	return uint64(t.Add(d).Unix()), nil
 }

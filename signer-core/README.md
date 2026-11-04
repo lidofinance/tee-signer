@@ -225,7 +225,10 @@ the device mark in memory keep their values. The validator then refuses block, P
 slot of F, targets up to F and sources below F. The core signs nothing past
 epoch(clock) + `max_epochs_ahead`, so F covers everything signed before the
 load, as long as the clock never reads an epoch more than one below an
-earlier reading. A mark that is lost, old or garbled costs signing time, not
+earlier reading. F uses the current `max_epochs_ahead`, so it covers a
+vote signed under an earlier setup only if that setup's value was not
+higher: do not lower `max_epochs_ahead` for keys that move to a new
+setup. A mark that is lost, old or garbled costs signing time, not
 safety. No clock at the load refuses the validator (`SC_ERR_CLOCK`).
 
 That condition limits the epoch length. A trusted clock that reads up to

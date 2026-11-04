@@ -188,7 +188,9 @@ back.
   longer. Without a setup, `-state-refresh` alone sets it. With a setup,
   commit times and the age come from the trusted clock the mark log uses.
   A commit or refresh fails while that clock has no reading, and an object
-  stamped after now is written again.
+  stamped after now is written again. A refresh that
+  fails is tried again at the next check; until one succeeds, HEALTH
+  reports `ready` false and `state_copy_failed` with the error.
 
 ### Where to keep it
 
@@ -218,11 +220,9 @@ shares it holds, never in a mark:
   the copy, and the hint can only make the claim refuse).
 - A share record carries `history` and `source_floor`, which bound votes.
   The mark log vouches for the set of share records (`marklog.md`, "Share
-  set"). An older commit is not that set, so a restart from it loads every
-  key without history and with a fresh source floor: each key waits for
-  its floor once, which costs liveness. With fewer shares, or the shares
-  before a later import of the same validator, the runner holds less and
-  signs every message under the log's mark either way.
+  set"). An older commit is not that set, so a restart from it loads no
+  key and reports `load_failed` in HEALTH: the operator removes every
+  share and imports them again. That costs liveness, never safety.
 - The sealing key in an older commit is the one the shares of that commit
   are sealed with (the key changes only on a first start, which the commit
   records). Nothing opens with a mixed set.

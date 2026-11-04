@@ -125,14 +125,20 @@ func TestImportOffline(t *testing.T) {
 	pk, _, splitPath := split(t, fc.dir, 3, 4, []string{"s1", "s2", "s3", "s4"})
 
 	body := fc.path("import.bin")
+	// An order can be used again until not_after: at most 7 days.
+	for _, na := range []string{"8d", "169h", time.Now().Add(30 * 24 * time.Hour).UTC().Format(time.RFC3339)} {
+		wantIn(t, failTool(t, "import-draft", "-cluster", cl, "-signer", "s2", "-split", splitPath, "-not-after", na, "-out", body),
+			"more than 7 days")
+	}
+	mustTool(t, "import-draft", "-cluster", cl, "-signer", "s2", "-split", splitPath, "-not-after", "7d", "-out", body)
 	out := mustTool(t, "import-draft", "-cluster", cl, "-signer", "s2", "-split", splitPath, "-out", body)
 	wantIn(t, out, "import order for s2", "1 validators, 3 of 4, share index 2", "order_sha256 ")
 	out = mustTool(t, "show", body)
 	wantIn(t, out, "import order", "share_index = 2", "validator = "+pk.String(), "target: s2", "signing message, direct form: signer-import-order-v1",
 		"signing message, hashed form (sign -hashed): sha256 of signer-import-order-hash-v1")
-	s0 := mustTool(t, "sign", "-key", fc.keys[0].file, body)
+	s0 := mustTool(t, "sign", "-key", fc.keys[0].file, "-expect-sha256", expectOf(t, body), body)
 	wantIn(t, s0, "direct form")
-	s1 := mustTool(t, "sign", "-key", "file:"+fc.keys[1].file, "-hashed", body)
+	s1 := mustTool(t, "sign", "-key", "file:"+fc.keys[1].file, "-hashed", "-expect-sha256", expectOf(t, body), body)
 	wantIn(t, s1, "hashed form")
 	sigs := []string{fmt.Sprintf("%s.%s.sig", body, fc.keys[0].pub[2:10]), fmt.Sprintf("%s.%s.sig", body, fc.keys[1].pub[2:10])}
 	wantIn(t, string(mustRead(t, sigs[1])), "form = hashed", "signer-import-order-hash-v1")
@@ -210,7 +216,7 @@ func TestAdminFlowDevRunner(t *testing.T) {
 	mustTool(t, "import-draft", "-cluster", cl, "-signer", "g1", "-split", splitPath, "-out", body)
 	var sigs []string
 	for _, i := range []int{0, 1} {
-		mustTool(t, "sign", "-key", keys[i].file, body)
+		mustTool(t, "sign", "-key", keys[i].file, "-expect-sha256", expectOf(t, body), body)
 		sigs = append(sigs, fmt.Sprintf("%s.%s.sig", body, keys[i].pub[2:10]))
 	}
 	signed := filepath.Join(dir, "import.signed")

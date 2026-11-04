@@ -38,8 +38,8 @@ func TestOpenPGPApprover(t *testing.T) {
 	// signBoth: approver 0 from its file, approver 1 on the card.
 	signBoth := func(body string) []string {
 		t.Helper()
-		mustTool(t, "sign", "-key", fc.keys[0].file, body)
-		wantIn(t, mustTool(t, "sign", "-key", card, body), "hashed form only", "with key "+fc.keys[1].pub[2:])
+		mustTool(t, "sign", "-key", fc.keys[0].file, "-expect-sha256", expectOf(t, body), body)
+		wantIn(t, mustTool(t, "sign", "-key", card, "-expect-sha256", expectOf(t, body), body), "hashed form only", "with key "+fc.keys[1].pub[2:])
 		sigs := []string{fmt.Sprintf("%s.%s.sig", body, fc.keys[0].pub[2:10]), fmt.Sprintf("%s.%s.sig", body, fc.keys[1].pub[2:10])}
 		wantIn(t, string(mustRead(t, sigs[1])), "form = hashed")
 		return sigs

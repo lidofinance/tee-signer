@@ -107,7 +107,7 @@ func TestFlowDevRunners(t *testing.T) {
 		step("show "+name, "show", body)
 		var sigs []string
 		for _, i := range idx {
-			mustTool(t, "sign", "-key", keys[i].file, body)
+			mustTool(t, "sign", "-key", keys[i].file, "-expect-sha256", expectOf(t, body), body)
 			sigs = append(sigs, fmt.Sprintf("%s.%s.sig", body, keys[i].pub[2:10]))
 		}
 		signed := filepath.Join(dir, name+".signed")

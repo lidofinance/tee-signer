@@ -82,7 +82,7 @@ func TestSingleModeRefusesAnotherKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := single.srv.Platform.Store.Put(shareKey(pk), blob); err != nil {
+	if err := single.srv.putShare(pk, blob); err != nil {
 		t.Fatal(err)
 	}
 	if n, err := single.srv.LoadListedShares([]string{shareKey(pk)}); n != 0 || err == nil || !strings.Contains(err.Error(), "signing_mode = single") {
@@ -125,7 +125,7 @@ func TestThresholdModeRefusesAWholeKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := threshold.srv.Platform.Store.Put(shareKey(pk), blob); err != nil {
+	if err := threshold.srv.putShare(pk, blob); err != nil {
 		t.Fatal(err)
 	}
 	if n, err := threshold.srv.LoadListedShares([]string{shareKey(pk)}); n != 0 || err == nil || !strings.Contains(err.Error(), "signing_mode = threshold") {

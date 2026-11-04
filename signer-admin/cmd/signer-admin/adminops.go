@@ -240,7 +240,7 @@ func cmdImportDraft(args []string, out io.Writer) error {
 	cf := addClusterFlags(fs)
 	target := fs.String("signer", "", "the target: the signer of cluster.json that takes the shares")
 	splitPath := fs.String("split", "", "the split file: t, n, each signer's share index and each validator's commitments (no secret)")
-	notAfter := fs.String("not-after", "12h", "the runner takes no share under the order from then on: RFC 3339 time, or a duration from now")
+	notAfter := fs.String("not-after", "12h", "the runner takes no share under the order from then on: RFC 3339 time, or a duration from now; at most 7 days")
 	outPath := fs.String("out", "import.bin", "the order body to sign; the target's setup and locked values in force go to the same name with .active")
 	allowGCPSingle := fs.Bool("allow-gcp-unsafe-single-key", false, "confirm a 1 of 1 order to a GCP signer whose setup accepts it; UNSAFE: "+setupwire.UnsafeSingleKeyWarning)
 	if err := fs.Parse(args); err != nil {
@@ -280,8 +280,12 @@ func cmdImportDraft(args []string, out io.Writer) error {
 	}
 	b := &importorder.Body{ClusterID: m.setup.ClusterID, ChainHash: m.setup.Chain.Hash(), Target: m.setupHash,
 		T: split.T, N: split.N, ShareIndex: idx}
-	if b.NotAfter, err = parseNotAfter(*notAfter, now()); err != nil {
+	t := now()
+	if b.NotAfter, err = parseNotAfter(*notAfter, t); err != nil {
 		return fmt.Errorf("-not-after: %w", err)
+	}
+	if b.NotAfter > uint64(t.Add(maxOrderLife).Unix()) {
+		return fmt.Errorf("-not-after %s: more than 7 days from now; the order can be used again until then, so keep it short", when(b.NotAfter))
 	}
 	for _, v := range split.Validators {
 		b.Validators = append(b.Validators, importorder.Entry{Pubkey: v.Pubkey, CommitmentsHash: importorder.CommitmentsHash(v.Commitments)})

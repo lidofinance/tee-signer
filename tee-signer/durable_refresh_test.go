@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"log/slog"
 	"testing"
 	"time"
 )
@@ -31,6 +34,38 @@ func TestStateRefreshFollowsLockDays(t *testing.T) {
 		// stop; that must stay inside the retention.
 		if ret := time.Duration(c.lockDays) * day; c.lockDays > 0 && got+refreshTick(got)+ret/2 >= ret {
 			t.Errorf("lock %d days: refresh at %v plus tick %v plus half the retention reaches the retention", c.lockDays, got, refreshTick(got))
+		}
+	}
+}
+
+// Each refresh reports its result: a failure, then nil once one succeeds.
+func TestRefreshLoopReports(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	results := []error{errors.New("store down"), nil}
+	got := make(chan error, len(results))
+	n := 0
+	do := func(context.Context) error {
+		if n == len(results) {
+			cancel()
+			return nil
+		}
+		n++
+		return results[n-1]
+	}
+	go refreshLoop(ctx, 4*time.Millisecond, do, slog.New(slog.DiscardHandler), func(err error) {
+		if ctx.Err() == nil {
+			got <- err
+		}
+	})
+	for i, want := range results {
+		select {
+		case err := <-got:
+			if (err == nil) != (want == nil) {
+				t.Fatalf("report %d: %v, want %v", i, err, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("report %d: none", i)
 		}
 	}
 }

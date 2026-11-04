@@ -137,15 +137,22 @@ func refreshTick(age time.Duration) time.Duration { return min(age/4, time.Hour)
 
 // refresh writes the whole state again whenever the oldest object the
 // newest commit needs is older than every, checking every refreshTick.
-func (d *durableCopy) refresh(ctx context.Context, every time.Duration) {
+// report gets each check's result (HEALTH state_copy_failed).
+func (d *durableCopy) refresh(ctx context.Context, every time.Duration, report func(error)) {
+	refreshLoop(ctx, every, func(c context.Context) error { return d.store.Refresh(c, every) }, d.log, report)
+}
+
+func refreshLoop(ctx context.Context, every time.Duration, do func(context.Context) error, log *slog.Logger, report func(error)) {
 	tick := time.NewTicker(refreshTick(every))
 	defer tick.Stop()
 	for {
 		rctx, cancel := context.WithTimeout(ctx, time.Minute)
-		if err := d.store.Refresh(rctx, every); err != nil {
-			d.log.Warn("state copy: refresh failed; it will try again", "err", err)
-		}
+		err := do(rctx)
 		cancel()
+		if err != nil {
+			log.Warn("state copy: refresh failed; it will try again", "err", err)
+		}
+		report(err)
 		select {
 		case <-ctx.Done():
 			return

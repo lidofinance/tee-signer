@@ -113,7 +113,14 @@ func (ls lostState) run(t *testing.T, pk backend.Pubkey) (uint64, uint64) {
 
 	r.start()
 	cl = ls.connect()
-	h := waitReady(t, cl)
+	// Without the state copy the log vouches for a share set the store no
+	// longer holds: the runner reports not ready until the share comes back.
+	var h *backend.Health
+	if ls.restored {
+		h = waitReady(t, cl)
+	} else {
+		h = waitHealth(t, cl, "reporting the lost shares", func(h *backend.Health) bool { return !h.Ready && h.LoadFailed != "" })
+	}
 	switch {
 	case ls.restored && h.Validators != 1:
 		t.Fatalf("%d validators after the state was wiped, want the share back from the state copy", h.Validators)
@@ -131,6 +138,7 @@ func (ls lostState) run(t *testing.T, pk backend.Pubkey) (uint64, uint64) {
 		before, firstClaim, claim, last, h.Record, h.Validators)
 	if !ls.restored {
 		ls.load(cl)
+		waitReady(t, cl)
 	}
 	start := c.stableEpoch(t)
 	surround, signed, belowFloor := 0, 0, 0
@@ -281,7 +289,7 @@ func TestE2EMarkLogLostState(t *testing.T) {
 	}
 	os.RemoveAll(r.stateDir)
 	r.start()
-	waitReady(t, client(t, addr))
+	waitHealth(t, client(t, addr), "reporting the lost shares", func(h *backend.Health) bool { return h.LoadFailed != "" })
 	text := r.logText()
 	if !strings.Contains(text, "not a valid record") || lastClaim(t, text) != fmt.Sprint(next+1) {
 		t.Fatalf("the record of position s2 under the name of s1 version %d: claim at %s", next, lastClaim(t, text))

@@ -133,8 +133,8 @@ func TestSharesBoundToSetupAndLog(t *testing.T) {
 		}
 	}
 	unclaimed := shareServer(t, store, setupA, [32]byte{})
-	if _, err := unclaimed.LoadListedShares(listed); err == nil {
-		t.Fatal("loaded shares before the mark log had a log_id")
+	if _, err := unclaimed.LoadListedShares(listed); err == nil || unclaimed.loadFailed.Load() == nil {
+		t.Fatal("loaded shares before the mark log had a log_id, or did not latch why not")
 	}
 	sk2, _ := software.NewSecret()
 	pk2, _ := core.PubkeyOf(sk2)

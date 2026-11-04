@@ -114,9 +114,17 @@ type Health struct {
 	// runner then signs and changes nothing until it restarts, and Ready
 	// is false. Empty otherwise, and from runners before it.
 	RequestPanic string `json:"request_panic,omitempty"`
-	ClockSource  string `json:"clock_source"`
-	ClockTrusted bool   `json:"clock_trusted"` // the platform claims the clock resists the host
-	ClockUnix    uint64 `json:"clock_unix"`    // whole seconds
+	// LoadFailed says why a runner loaded no stored key at start because
+	// of a mark log error. Ready is then false until a restart. Empty
+	// otherwise, and from runners before it.
+	LoadFailed string `json:"load_failed,omitempty"`
+	// StateCopyFailed says why the last refresh of the state copy failed.
+	// Ready is then false; the next refresh that succeeds clears it. Empty
+	// otherwise, and from runners before it.
+	StateCopyFailed string `json:"state_copy_failed,omitempty"`
+	ClockSource     string `json:"clock_source"`
+	ClockTrusted    bool   `json:"clock_trusted"` // the platform claims the clock resists the host
+	ClockUnix       uint64 `json:"clock_unix"`    // whole seconds
 	// ClockUnixMS is the same reading in milliseconds. Runners before it
 	// leave it out (zero).
 	ClockUnixMS uint64 `json:"clock_unix_ms,omitempty"`

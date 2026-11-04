@@ -73,7 +73,7 @@ func (fc *fakeCluster) signAll(t *testing.T, body string, idx ...int) []string {
 	t.Helper()
 	var sigs []string
 	for _, i := range idx {
-		out := mustTool(t, "sign", "-key", fc.keys[i].file, body)
+		out := mustTool(t, "sign", "-key", fc.keys[i].file, "-expect-sha256", expectOf(t, body), body)
 		wantIn(t, out, "wrote ")
 		sigs = append(sigs, fmt.Sprintf("%s.%s.sig", body, fc.keys[i].pub[2:10]))
 	}
@@ -134,7 +134,7 @@ func TestFlowFakeRunners(t *testing.T) {
 	if err := os.WriteFile(loose, key, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	wantIn(t, failTool(t, "sign", "-key", loose, body), "mode 0644")
+	wantIn(t, failTool(t, "sign", "-key", loose, "-expect-sha256", expectOf(t, body), body), "mode 0644")
 
 	sigs := fc.signAll(t, body, 0, 1)
 	signed := fc.path("update.signed")
@@ -317,11 +317,11 @@ func TestShowTampered(t *testing.T) {
 	wantIn(t, failTool(t, append([]string{"assemble", "-out", fc.path("later.signed"), later}, sigs...)...), "signs body "+drafted[:8]+", not this one")
 	prev := tamper("prev.bin", func(b []byte) []byte { b[prevAt] ^= 1; return b })
 	wantIn(t, failTool(t, "show", prev), "is not the active locked values")
-	wantIn(t, failTool(t, "sign", "-key", fc.keys[0].file, fc.path("nothing.bin")), "no such file")
+	wantIn(t, failTool(t, "sign", "-key", fc.keys[0].file, "-expect-sha256", strings.Repeat("0", 64), fc.path("nothing.bin")), "no such file")
 	if err := os.WriteFile(fc.path("setup-as-body.bin"), mustRead(t, filepath.Join(fc.dir, "setups", "s1.setup")), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	wantIn(t, failTool(t, "sign", "-key", fc.keys[0].file, fc.path("setup-as-body.bin")), "not a config update body")
+	wantIn(t, failTool(t, "sign", "-key", fc.keys[0].file, "-expect-sha256", strings.Repeat("0", 64), fc.path("setup-as-body.bin")), "not a draft that show and sign know")
 }
 
 // setup refuses a file without sections, with a cluster_id, and with

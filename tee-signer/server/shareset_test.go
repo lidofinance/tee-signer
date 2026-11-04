@@ -5,11 +5,9 @@ package server
 import (
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -88,32 +86,56 @@ func historyPair(t *testing.T, e *tgtEnv) (a, b backend.Pubkey, floor uint64) {
 	return pka, pkb, floor
 }
 
+// wantNoLoad checks that a start loaded no key because the stored records
+// are not the set the mark log vouches for, and that the error and HEALTH
+// name each of pks.
+func wantNoLoad(e *tgtEnv, pks ...backend.Pubkey) {
+	e.t.Helper()
+	if n := len(e.signer.Keys()); n != 0 || e.loadErr == nil || !strings.Contains(e.loadErr.Error(), "not the set the mark log vouches for") {
+		e.t.Fatalf("%d keys loaded, err %v", n, e.loadErr)
+	}
+	h, err := e.srv.health()
+	if err != nil || h.Ready || !strings.Contains(h.LoadFailed, "not the set the mark log vouches for") {
+		e.t.Fatalf("health: %+v %v", h, err)
+	}
+	for _, pk := range pks {
+		if !strings.Contains(e.loadErr.Error(), shareKey(pk)) || !strings.Contains(h.LoadFailed, shareKey(pk)) {
+			e.t.Fatalf("%s not named: %v", shareKey(pk), e.loadErr)
+		}
+	}
+}
+
 // The host keeps the record of an earlier import of K that had history.
-// K leaves this runner, votes elsewhere and comes back without history.
-// The host puts the old record back: K must not load with that history.
+// The operator removes every share, and K comes back without history. The
+// host puts the old record back: no key loads.
 func TestShareRecordReplayRefused(t *testing.T) {
 	e := newTgtEnv(t, "dev", nil)
-	_, pk, _ := historyPair(t, e)
+	e.looseLoad = true
+	pka, pk, _ := historyPair(t, e)
 	sk := e.secretOf(pk)
 	old, err := e.store.Get(shareKey(pk))
 	if err != nil {
 		t.Fatal(err)
 	}
-	// K leaves, votes elsewhere for 20 epochs, comes back without history.
+	e.deleteShare(pka)
 	e.deleteShare(pk)
 	e.restart()
-	e.clock.add(20 * testEpoch)
-	f2 := e.floorOf()
+	if n := len(e.signer.Keys()); n != 0 || e.loadErr != nil {
+		t.Fatalf("an empty store: %d keys loaded, err %v", n, e.loadErr)
+	}
+	// Every record hidden or removed: not ready until an import.
+	if h, err := e.srv.health(); err != nil || h.Ready || !strings.Contains(h.LoadFailed, "no readable share record") {
+		t.Fatalf("an empty store under a vouched set: health %+v %v", h, err)
+	}
 	if err := e.importSealed(pk, sk, 6, nil); err != nil {
 		t.Fatal(err)
 	}
-	// The host replays the old record.
+	if h, err := e.srv.health(); err != nil || !h.Ready || h.LoadFailed != "" {
+		t.Fatalf("after the import: health %+v %v", h, err)
+	}
 	e.putRaw(pk, old)
 	e.restart()
-	f3 := e.floorOf()
-	e.clock.add((max(f2, f3) + 1 - e.signer.EpochAt(e.now())) * testEpoch)
-	en := e.signer.EpochAt(e.now())
-	wantSlashSource(t, e.signMsg(pk, vote(f2-1, en+1)), "the replayed record: a vote below the re-import's floor")
+	wantNoLoad(e, pk)
 }
 
 // A restart right after a share write finds a set the newest log record
@@ -190,58 +212,32 @@ func TestShareSetCutWriteLoadsTheSetBefore(t *testing.T) {
 	}
 }
 
-// A record the host hid makes the set one the log does not vouch for:
-// every key left loads without history and with a fresh floor.
-func TestShareSetHiddenRecordResets(t *testing.T) {
+// A record the host hid makes the set one the log does not vouch for: no
+// key loads, and nothing is written. The record comes back: the set loads
+// as it was, B with its history.
+func TestShareSetHiddenRecordLoadsNoKey(t *testing.T) {
 	e := newTgtEnv(t, "dev", nil)
-	pka, pkb, floor := historyPair(t, e)
+	e.looseLoad = true
+	pka, pkb, _ := historyPair(t, e)
 	blob, _ := e.store.Get(shareKey(pka))
+	puts := e.store.putsOf(shareKey(pkb))
+	recs := e.records()
+	want := recs[len(recs)-1].Shares
 	e.deleteShare(pka)
 	e.restart()
-	if r := e.recordOf(pkb); r.History || r.SourceFloor <= floor {
-		t.Fatalf("B after a hidden record: history %t floor %d", r.History, r.SourceFloor)
+	wantNoLoad(e, pkb)
+	if e.store.putsOf(shareKey(pkb)) != puts {
+		t.Fatal("a record was rewritten")
 	}
-	// The record comes back: again not the vouched set.
+	recs = e.records()
+	if got := recs[len(recs)-1].Shares; got == nil || got.Current != want.Current || got.Pending != nil {
+		t.Fatalf("the log's share set is %+v, want %+v", got, want)
+	}
 	e.putRaw(pka, blob)
 	e.restart()
-	ra, rb := e.recordOf(pka), e.recordOf(pkb)
-	if ra.History || ra.SourceFloor <= floor {
-		t.Fatalf("A back: history %t floor %d", ra.History, ra.SourceFloor)
+	if n := len(e.signer.Keys()); n != 2 || e.loadErr != nil || !e.recordOf(pkb).History {
+		t.Fatalf("the record back: %d keys loaded, err %v, B history %t", n, e.loadErr, e.recordOf(pkb).History)
 	}
-	// The reset converges: a start with no change rewrites nothing.
-	puts := e.store.putsOf(shareKey(pka)) + e.store.putsOf(shareKey(pkb))
-	e.clock.add(3 * testEpoch)
-	e.restart()
-	if n := e.store.putsOf(shareKey(pka)) + e.store.putsOf(shareKey(pkb)); n != puts {
-		t.Fatalf("%d records rewritten at a start after a reset", n-puts)
-	}
-	if e.recordOf(pka).SourceFloor != ra.SourceFloor || e.recordOf(pkb).SourceFloor != rb.SourceFloor {
-		t.Fatal("the floors moved at a start after a reset")
-	}
-}
-
-// A reset whose rewrite of one record fails leaves that record out of the
-// set the log vouches for: the next start resets again and does not load
-// the replayed history. The host hides A (a reset) and fails B's rewrite.
-func TestResetRewriteFailureNotVouched(t *testing.T) {
-	e := newTgtEnv(t, "dev", nil)
-	pka, pkb, floor := historyPair(t, e)
-	e.deleteShare(pka)
-	e.store.mu.Lock()
-	e.store.failPut = func(k string) bool { return k == shareKey(pkb) }
-	e.store.mu.Unlock()
-	e.restart()
-	e.store.mu.Lock()
-	e.store.failPut = nil
-	e.store.mu.Unlock()
-	e.restart()
-	if r := e.recordOf(pkb); r.History || r.SourceFloor <= floor {
-		t.Fatalf("B after a reset whose rewrite failed: history %t floor %d", r.History, r.SourceFloor)
-	}
-	f := e.floorOf()
-	e.clock.add((f + 1 - e.signer.EpochAt(e.now())) * testEpoch)
-	en := e.signer.EpochAt(e.now())
-	wantSlashSource(t, e.signMsg(pkb, vote(floor+1, en+1)), "B below the reset floor")
 }
 
 // A share write goes to the mark log first: with the log unwritable the
@@ -293,35 +289,20 @@ func TestUnreadableRecordDoesNotReset(t *testing.T) {
 	if !e.recordOf(pkb).History {
 		t.Fatal("B lost its history for an unreadable blob of another key")
 	}
-}
-
-// A record whose write-back the store refuses at every start: every start
-// resets, and the key loads with the fresh floor.
-func TestRewriteAlwaysFailsKeepsResetting(t *testing.T) {
-	e := newTgtEnv(t, "dev", nil)
-	pka, pkb, floor := historyPair(t, e)
-	e.deleteShare(pka)
-	e.store.mu.Lock()
-	e.store.failPut = func(k string) bool { return k == shareKey(pkb) }
-	e.store.mu.Unlock()
-	for i := range 3 {
-		e.clock.add(3 * testEpoch)
-		e.restart()
-		if !e.recordOf(pkb).History {
-			t.Fatal("B's record was written back")
-		}
-		if f, on := e.hooks.SourceFloor(pkb); !on || f <= floor {
-			t.Fatalf("start %d: B loaded with floor %d (on %t)", i+1, f, on)
-		}
+	// A record that does not load is no reason to report not ready.
+	if h, err := e.srv.health(); err != nil || !h.Ready || h.LoadFailed != "" {
+		t.Fatalf("health with an unreadable blob stored: %+v %v", h, err)
 	}
 }
 
 // A share write that did not reach the store leaves its set out of the
 // commitment the next log record carries. The host kept the blob and
 // stores it after that record: the start finds a set the log does not
-// vouch for and resets, so B loses its history.
+// vouch for, loads no key and names the extra object. Once the operator
+// removes it, the set loads, B with its history.
 func TestShareWriteNotLandedNotVouched(t *testing.T) {
 	e := newTgtEnv(t, "dev", nil)
+	e.looseLoad = true
 	_, pkb, _ := historyPair(t, e)
 	skc, pkc := newKey(t)
 	e.store.mu.Lock()
@@ -352,18 +333,22 @@ func TestShareWriteNotLandedNotVouched(t *testing.T) {
 	}
 	e.putRaw(pkc, blob)
 	e.restart()
-	if e.recordOf(pkb).History {
-		t.Fatal("B kept its history: the log vouched for the set with the record that was never written")
+	wantNoLoad(e, pkc)
+	e.deleteShare(pkc)
+	e.restart()
+	if n := len(e.signer.Keys()); n != 2 || e.loadErr != nil || !e.recordOf(pkb).History {
+		t.Fatalf("the extra object removed: %d keys loaded, err %v", n, e.loadErr)
 	}
 }
 
 // A share write that did not reach the store is dropped from the log at
 // once: the runner writes a record without the set after, and needs no
 // vote or other record for that. The host stores the kept blob and
-// restarts the runner: the start finds a set the log does not vouch for
-// and resets.
+// restarts the runner: the start finds a set the log does not vouch for,
+// loads no key and names the kept record.
 func TestShareWriteNotLandedDroppedAtOnce(t *testing.T) {
 	e := newTgtEnv(t, "dev", nil)
+	e.looseLoad = true
 	_, pkb, _ := historyPair(t, e)
 	skc, pkc := newKey(t)
 	e.store.mu.Lock()
@@ -381,8 +366,9 @@ func TestShareWriteNotLandedDroppedAtOnce(t *testing.T) {
 	}
 	e.putRaw(pkc, blob)
 	e.restart()
-	if e.recordOf(pkb).History {
-		t.Fatal("B kept its history: the log vouched for the set with the record that was never written")
+	wantNoLoad(e, pkc)
+	if !e.recordOf(pkb).History {
+		t.Fatal("B's record was rewritten: a start that loads no key writes nothing")
 	}
 }
 
@@ -416,53 +402,19 @@ func TestShareWriteLostReplyLanded(t *testing.T) {
 	}
 }
 
-// A start that resets but cannot write the log record that vouches for
-// the rewritten records loads no key and rewrites nothing: the log still
-// vouches for the old set, so a key that loaded now could later load
-// again from a replayed old record, with its history and no floor.
-func TestResetLogWriteFailsLoadsNoKey(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("the test makes the mark log unwritable with a directory mode, which root ignores")
-	}
-	e := newTgtEnv(t, "dev", nil)
-	e.looseLoad = true
-	pka, pkb, _ := historyPair(t, e)
-	e.deleteShare(pkb) // the start resets
-	puts := e.store.putsOf(shareKey(pka))
-	e.beforeLoad = func() { e.setMarksMode(0o500) }
-	e.afterLoad = func() { e.setMarksMode(0o700) }
-	t.Cleanup(func() { e.setMarksMode(0o700) })
-	e.restart()
-	e.beforeLoad, e.afterLoad = nil, nil
-	if n := len(e.signer.Keys()); n != 0 || e.loadErr == nil {
-		t.Fatalf("a reset whose log record failed: %d keys loaded, err %v", n, e.loadErr)
-	}
-	if e.store.putsOf(shareKey(pka)) != puts {
-		t.Fatal("a record was rewritten before the log vouched for it")
-	}
-}
-
-// B's record (with history) is stored and vouched for but B does not load
-// at a start that resets without a clock. B is imported again without
-// history and that store write fails: the next start must not load the
-// old record with its history.
+// B's record (with history) is stored and vouched for. The host hides A,
+// so no key loads. B is imported again without history and that store
+// write fails: the next start must not load the old record of B.
 func TestFailedReimportDoesNotVouchOldRecord(t *testing.T) {
 	e := newTgtEnv(t, "dev", nil)
 	e.looseLoad = true
-	pka, pkb, floor := historyPair(t, e)
+	pka, pkb, _ := historyPair(t, e)
 	skb := e.secretOf(pkb)
 	a, _ := e.store.Get(shareKey(pka))
-	e.deleteShare(pka) // the start resets, and the reset needs the clock
-	e.beforeLoad = func() { e.clock.set(func(c *fakeClock) { c.err = errors.New("no clock") }) }
-	e.afterLoad = func() { e.clock.set(func(c *fakeClock) { c.err = nil }) }
+	e.deleteShare(pka)
 	e.restart()
-	e.beforeLoad, e.afterLoad = nil, nil
-	if n := len(e.signer.Keys()); n != 0 {
-		t.Fatalf("%d keys loaded with no clock", n)
-	}
+	wantNoLoad(e, pkb)
 	e.putRaw(pka, a)
-	e.clock.add(20 * testEpoch) // B votes elsewhere
-	f2 := e.floorOf()
 	e.store.mu.Lock()
 	e.store.failPut = func(k string) bool { return k == shareKey(pkb) }
 	e.store.mu.Unlock()
@@ -473,10 +425,17 @@ func TestFailedReimportDoesNotVouchOldRecord(t *testing.T) {
 	e.store.failPut = nil
 	e.store.mu.Unlock()
 	e.restart()
-	f := e.floorOf()
-	e.clock.add((f + 1 - e.signer.EpochAt(e.now())) * testEpoch)
-	en := e.signer.EpochAt(e.now())
-	wantSlashSource(t, e.signMsg(pkb, vote(floor+1, en+1)), "B below its import floor "+strconv.FormatUint(f2, 10))
+	wantNoLoad(e, pka, pkb)
+}
+
+// An empty store under a log with no share set, or an empty one, is a new
+// signer: it is ready.
+func TestEmptyStoreEmptySetReady(t *testing.T) {
+	e := newTgtEnv(t, "dev", nil)
+	e.restart()
+	if h, err := e.srv.health(); err != nil || !h.Ready || h.LoadFailed != "" || h.Validators != 0 {
+		t.Fatalf("health %+v %v", h, err)
+	}
 }
 
 // A share stored under an uppercase name does not load: a key has one

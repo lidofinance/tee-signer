@@ -12,8 +12,7 @@ import (
 // stored share records the runner wrote (Current), and the root of the set
 // after a write it announced and may not have made yet (Pending). A runner
 // at start loads the stored records only if their root is one of the two;
-// else it loads every key without history and with a fresh source floor
-// (marklog.md, "Share set").
+// else it loads no key (marklog.md, "Share set").
 type ShareSet struct {
 	Current [32]byte
 	Pending *[32]byte

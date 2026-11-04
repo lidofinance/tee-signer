@@ -113,7 +113,8 @@ func TestShowReadsTheDraftOnce(t *testing.T) {
 }
 
 // sign -expect-sha256 takes the direct signing message's sha256 that show
-// printed and refuses a draft whose message is another.
+// printed and refuses a draft whose message is another. sign refuses to
+// run without it.
 func TestSignExpectSHA256(t *testing.T) {
 	dir := t.TempDir()
 	keys := approvers(t, dir, 1)
@@ -127,5 +128,16 @@ func TestSignExpectSHA256(t *testing.T) {
 		t.Fatal("a signature file was written for the other draft")
 	}
 	mustTool(t, "sign", "-key", keys[0].file, "-expect-sha256", fullHex(da), pa)
+	wantIn(t, failTool(t, "sign", "-key", keys[0].file, pa), "needs -expect-sha256", "show")
 	wantIn(t, failTool(t, "sign", "-key", keys[0].file, "-expect-sha256", "00", pa), "-expect-sha256")
+}
+
+// expectOf is the -expect-sha256 value show prints for the draft at path.
+func expectOf(t *testing.T, path string) string {
+	t.Helper()
+	ctx, body, ok := signingInput(mustRead(t, path))
+	if !ok {
+		t.Fatalf("%s: not a draft", path)
+	}
+	return fullHex(sha256.Sum256(setupwire.ApprovalMessage(ctx, false, body)))
 }

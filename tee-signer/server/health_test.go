@@ -1,7 +1,9 @@
 package server
 
 import (
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,5 +54,20 @@ func TestHealthNTS(t *testing.T) {
 	var c any = clock.System{}
 	if _, ok := c.(clock.NTSReporter); ok {
 		t.Fatal("the system clock reports NTS state")
+	}
+}
+
+// A failed state copy refresh makes HEALTH not ready with the reason; the
+// next one that succeeds clears it.
+func TestHealthStateCopyFailed(t *testing.T) {
+	s := shareServer(t, &shareStore{m: map[string][]byte{}}, [32]byte{}, [32]byte{})
+	s.State, s.Platform.Clock = constState(backend.SetupState{}), clock.System{}
+	s.SetStateCopyFailed(errors.New("store down"))
+	if h, err := s.health(); err != nil || h.Ready || !strings.Contains(h.StateCopyFailed, "store down") {
+		t.Fatalf("after a failed refresh: %+v %v", h, err)
+	}
+	s.SetStateCopyFailed(nil)
+	if h, err := s.health(); err != nil || !h.Ready || h.StateCopyFailed != "" {
+		t.Fatalf("after a good refresh: %+v %v", h, err)
 	}
 }

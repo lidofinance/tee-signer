@@ -350,16 +350,19 @@ stored), and, while a write is under way, the root of the set after it.
   pending root, the runner loads the records as they are. A cut between
   the two writes leaves one of the two sets, and the set before holds the
   key's earlier record or none: never more history than the set after.
-- Any other set means a replayed, hidden or changed record, or a store
-  write that failed after it landed. The runner cannot tell which record,
-  so it loads every key without history and with a source floor of at
-  least the restart floor epoch now, the bounds of an import without
-  history. It first writes a log record that vouches for the rewritten
-  records, then rewrites them. If that log record fails, no key loads. A
-  record the reset could not write back stays out of the vouched set, so
-  the next start resets again, and every start does so until the store
-  takes that record; so does a start cut in the middle. This costs every
-  key one wait for its floor, never safety.
+- Any other set means a replayed, hidden, changed or added record, such
+  as the blob of an import whose store write failed, which the host kept
+  and stored later. The runner cannot tell which record, so it loads no
+  key and writes nothing. The start's error and HEALTH `load_failed` name
+  the stored records, and `ready` is false until a restart. The operator
+  then does one of these and restarts:
+  - An added record (an import that failed): remove that object.
+  - A hidden record: put it back, if the host still has it.
+  - A replayed or changed record, or any case the operator cannot
+    resolve: remove every share and import them again. A store with no
+    readable record under a set that is not empty loads no key and
+    reports `ready` false and `load_failed`; imports still go through,
+    and the first one clears it and has the log vouch for the new set.
 - A store write that fails is read back. If it landed, the runner keeps
   the set after; if not, it writes a log record at once that vouches for
   the set before only, so a blob the host kept and stores later is not
@@ -371,7 +374,13 @@ stored), and, while a write is under way, the root of the set after it.
   for the set before, which holds no more history.
 - A log record written before share sets (`SMARK1`), or one with no share
   set, vouches for the empty set only. The first start of this image on
-  such a log with shares resets once.
+  such a log with shares resets once: it loads every key without history
+  and with a source floor of at least the restart floor epoch now, the
+  bounds of an import without history. It first writes a log record that
+  vouches for the rewritten records, then rewrites them. If that log
+  record fails, no key loads. A record the reset could not write back
+  leaves the store outside the vouched set, so the next start loads no
+  key: remove every share and import again.
 
 The log is the anchor because the host cannot roll it back: records are
 written once under a lock, and the newest one wins (see "Rules"). The

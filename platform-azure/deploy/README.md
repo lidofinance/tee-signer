@@ -10,9 +10,9 @@ Microsoft Azure Attestation (MAA), gets the managed identity token and
 releases its key from Key Vault. No Microsoft container runs in the group.
 
 `common.sh` puts each of the three signers in its own region by default:
-West Europe, North Europe and East US (`LOCATION_N` overrides it). The
-gateway combines the first 2 of 3 partial signatures, so with all three
-signers up the two closest ones set the signing time.
+West Europe, North Europe and East US (`LOCATION_N` overrides it). A
+client that combines the first 2 of 3 partial signatures (this repo has
+no combiner) gets them from the two closest signers when all three are up.
 
 | File | What |
 | --- | --- |
@@ -587,6 +587,10 @@ mark log, and the shares imported again with their interchange maxima
   `/.well-known/openid-configuration` with its own issuer. The release
   policy `authority` and the runner's `maa_endpoint` use the same host.
   `MAA_ENDPOINT_N` sets another one.
+- The key rule lock trusts the MAA provider that `maa_endpoint` names.
+  The owner of a custom provider can change its attestation policy while
+  the release policy stays locked, so a prod setup names a Microsoft
+  shared provider, such as the three above.
 - The runner gets its Key Vault token from a user-assigned managed identity
   on the group, and that identity needs the role
   `Key Vault Crypto Service Release User` (sidecar ACI example). So the vault

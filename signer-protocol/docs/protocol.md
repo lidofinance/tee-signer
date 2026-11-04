@@ -52,6 +52,20 @@ body  = version:u8  type:u8  id:u32  payload
   and `request_panic` with the request type and the panic. A panic in one of those four only closes its
   connection. A panic that leaves a lock of the server held for 5 minutes
   stops the runner, and its supervisor starts it again.
+- A start that loads no stored key because of a mark log error (the log
+  has no log_id yet, the restart floor is unreadable, or the log record
+  of a share set reset fails), or because the stored share records are
+  not the set the mark log vouches for, keeps serving. HEALTH then
+  reports `ready` false and `load_failed` with the error until a restart.
+  For a share set that does not match, the error names the stored records:
+  remove the ones that should not be there, or every share and import
+  again (`slashing-log/docs/marklog.md`, "Share set"). A store with no
+  readable record under a vouched set that is not empty reports the same
+  until an import records a new set. A single record that does not load
+  leaves `ready` as it is.
+- A state copy refresh that fails makes HEALTH report `ready` false and
+  `state_copy_failed` with the error. The next refresh that succeeds
+  clears both.
 
 ## Responses
 
@@ -324,7 +338,7 @@ the rule:
 
 | Platform | Locked when |
 |---|---|
-| Azure | `release_policy.immutable` is true, and the policy (`release_policy.data`) has the shape of `platform-azure/deploy/skr-policy.json.tmpl`: version `1.0.0`, one `anyOf` entry whose `authority` is `https://` + the setup's `maa_endpoint` (any case, no trailing slash, path or port), and an `allOf` of `equals` tests with string values on `x-ms-compliance-status` (`azure-compliant-uvm`), `x-ms-sevsnpvm-hostdata` (64 hex digits, not all zero), `x-ms-sevsnpvm-is-debuggable` (`"false"` or JSON `false`) and `x-ms-sevsnpvm-vmpl` (`0`); a second authority, another claim or operator, a nested `anyOf` or a JSON member given twice is not locked; and `attributes.recoveryLevel` says the vault has purge protection (`Recoverable`, `CustomizedRecoverable`, or either with `+ProtectedSubscription`), so nobody can purge the key while it is deleted. The lock does not show whether the vault made the key or it was imported, or whether it was released before the policy became immutable; the deploy rule covers that (`platform-azure/deploy/README.md`) |
+| Azure | `release_policy.immutable` is true, and the policy (`release_policy.data`) has the shape of `platform-azure/deploy/skr-policy.json.tmpl`: version `1.0.0`, one `anyOf` entry whose `authority` is `https://` + the setup's `maa_endpoint` (any case, no trailing slash, path or port), and an `allOf` of `equals` tests with string values on `x-ms-compliance-status` (`azure-compliant-uvm`), `x-ms-sevsnpvm-hostdata` (64 hex digits, not all zero), `x-ms-sevsnpvm-is-debuggable` (`"false"` or JSON `false`) and `x-ms-sevsnpvm-vmpl` (`0`); a second authority, another claim or operator, a nested `anyOf` or a JSON member given twice is not locked; and `attributes.recoveryLevel` says the vault has purge protection (`Recoverable`, `CustomizedRecoverable`, or either with `+ProtectedSubscription`), so nobody can purge the key while it is deleted. The lock does not show whether the vault made the key or it was imported, or whether it was released before the policy became immutable; the deploy rule covers that (`platform-azure/deploy/README.md`). The lock trusts the MAA provider that `maa_endpoint` names, whose owner can change its attestation policy, so a prod setup names a Microsoft shared provider |
 | AWS | origin `AWS_KMS`, not multi-Region, no Allow statement of the key policy grants `kms:PutKeyPolicy`, `kms:CreateGrant`, `kms:ImportKeyMaterial`, `kms:ReplicateKey`, `kms:CreateAlias`, `kms:UpdateAlias`, `kms:DeleteAlias`, `kms:ScheduleKeyDeletion` or `kms:DisableKey` to any principal, by name, wildcard (`kms:*`, `*`, `kms:Put*`) or `NotAction` (conditions do not count), every Allow of `kms:Decrypt`, `kms:GenerateDataKey`, `kms:GenerateDataKeyPair`, `kms:ReEncryptFrom` or `kms:ReEncryptTo` has `StringEquals` or `StringEqualsIgnoreCase` tests of `kms:RecipientAttestation:PCR0`, `PCR1` and `PCR2`, so it names one image (PCR3 or PCR8 alone does not); every `kms:RecipientAttestation:*` condition of an Allow, under any operator, has a key `PCR0` to `PCR31` or `ImageSha384` and only literal values of 96 hex digits (a policy variable such as `${aws:PrincipalTag/x}` fails), and no all-zero `PCR0`, `PCR1`, `PCR2` or `ImageSha384`, the values of a debug-mode enclave; any other Allow of `kms:Encrypt` has `StringEquals` on `kms:EncryptionContext:purpose` with the one value `record-creds`, so nobody outside the enclave plants a sealing or mark log key; and `ListGrants` (every page) lists no grant: a grant is outside the key policy, stays in force after the lock, and cannot require the enclave as recipient. Grants that AWS services make count too, so the key serves no other service. KMS grants are eventually consistent, so a grant made shortly before the read may not be listed yet, and the runner cannot tell it from none; a mainnet key is therefore created with its final, locked policy, so no grant can ever exist (platform-aws/deploy/README.md). A policy that passes but whose grants the runner cannot read is `unread`, with a zero `key_release_hash`. `kms_key_id` is a key or alias ARN with the account (a bare alias or key ID resolves in the account of the parent's credentials), `DescribeKey` must answer a key in that account and region (that very key for a key ARN), and a `kms_key_id` that fails this stops the start on every chain. After `DescribeKey` the runner names the key by its key ARN in every call, so an alias ARN is resolved once per start |
 | GCP, dev | no lock exists |
 
@@ -363,7 +377,10 @@ so: `signing_mode`, a leaf of the public part of the setup (setup format
 (`setupwire.CheckThresholdOn`, issue #23): a single-mode runner takes
 t = n = 1 only and refuses any share of a split with n > 1; a
 threshold-mode runner refuses t = n = 1 and applies the threshold rule
-(2t > n, and 2t - n >= 2 on mainnet) to every other split. Both
+(2t > n, and 2t - n >= 2 on mainnet) to every other split. A
+threshold-mode runner returns a partial signature that verifies under its
+share public key; this repo has no combiner, so the client combines t
+partial signatures into the validator's signature. Both
 refusals are `BAD_KEY` and name the setup's mode. The runner also checks
 each key against the mode on every import path (sealed and the
 debug plain import) and at restart: a single-mode runner refuses a key
@@ -619,7 +636,9 @@ approvers in force sign it (`signer-import-order-v1` over the body), it
 names this runner's `cluster_id`, chain and `setup_sha256`, a `not_after`
 the trusted clock has not reached, the split (`t`, `n`, this signer's share
 index) and, for each validator, the hash of its public commitments
-(`signer-import-commitments-v1`). Without an order, or with one that does
+(`signer-import-commitments-v1`). An order can be used again until
+`not_after`, so keep it short: `signer-admin import-draft` refuses a
+`not_after` more than 7 days from now. Without an order, or with one that does
 not verify or does not name the validator, the answer is `FORBIDDEN`. A
 runner without a setup (the flag path) has no approvers and takes the share
 without an order. With the order the request carries the split: `t`,
@@ -765,7 +784,8 @@ signer-admin sign -key openpgp:KEYGRIP -expect-sha256 HEX import.bin
 `show` reads the file once and prints every value and hash from those
 bytes. `-expect-sha256` takes the direct form's sha256 that `show`
 printed, and `sign` refuses a file whose signing message is another, so a
-draft changed after the review is not signed.
+draft changed after the review is not signed. `sign` refuses to run
+without `-expect-sha256`.
 
 When the agent asks for the PIN (once per its PIN cache), the prompt
 shows the 32 bytes the card is about to sign; they must match what `show`
