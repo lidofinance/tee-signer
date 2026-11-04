@@ -429,7 +429,9 @@ the runner reads the clock epoch `E` and folds this watermark into the
 core's slashing state: block slots up to the last slot of `E+m`,
 attestation targets `<= E+m`, and sources `< E+m`, where the margin `m` is
 `max_epochs_ahead + 1` (2 with the default policy). The runner refuses to
-start with a smaller margin. Persisted commit-ahead marks, the clone
+start with a smaller margin. The margin uses the current setup's
+`max_epochs_ahead`, so do not lower it for keys that move to a new
+setup: a vote signed ahead under the old value could escape the floor. Persisted commit-ahead marks, the clone
 guard's record and the mark log add further floors; the loaded watermark
 is the field-wise maximum. Every floor bounds sources as well as targets.
 

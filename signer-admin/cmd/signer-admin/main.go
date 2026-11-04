@@ -44,11 +44,12 @@
 //	signer-admin show [-active FILE] FILE
 //	    Decode a body or a signed update offline and print its values, the
 //	    diff against the active values and the body hash.
-//	signer-admin sign -key FILE|openpgp:KEYGRIP [-hashed] [-expect-sha256 HEX] [-out FILE] update.bin
+//	signer-admin sign -key FILE|openpgp:KEYGRIP [-hashed] -expect-sha256 HEX [-out FILE] update.bin
 //	    Sign the body with one approver key: a hex seed file (mode 0600)
 //	    or an Ed25519 key in gpg-agent, such as a YubiKey's OpenPGP
-//	    signing key, which signs the hashed form only. -expect-sha256 takes
-//	    the direct form's sha256 that show printed and refuses another body.
+//	    signing key, which signs the hashed form only. -expect-sha256 is
+//	    required: it takes the direct form's sha256 that show printed and
+//	    refuses another body.
 //	signer-admin approver-key -key FILE|openpgp:KEYGRIP | -openpgp FILE [-fingerprint HEX]
 //	    Print an approver's public key as the setup's approvers line,
 //	    from the key, gpg-agent's copy of a card key's public key or an
@@ -68,7 +69,8 @@
 //	    Draft an import order for one target signer: its setup_sha256, t, n,
 //	    its share index and, per validator, the hash of the t commitments.
 //	    The split file gives each signer its own share index, 1 to n
-//	    (setupwire.CheckShareIndices).
+//	    (setupwire.CheckShareIndices). The order can be used again until
+//	    -not-after, so it is refused more than 7 days from now.
 //	    The split must pass the target's threshold rule and fit its
 //	    signing_mode (setupwire.CheckThresholdOn): 1 of 1 to a single-mode
 //	    signer only, never to a threshold-mode one. A 1 of 1 order to a GCP signer is
@@ -163,7 +165,7 @@ const usage = `usage:
   signer-admin status -cluster cluster.json [-signers NAME,...]
   signer-admin draft -cluster cluster.json -group locked|open [-margin 10m] [-out update.bin] FILE
   signer-admin show [-active FILE] FILE
-  signer-admin sign -key FILE|openpgp:KEYGRIP [-hashed] [-expect-sha256 HEX] [-out FILE] update.bin|import.bin
+  signer-admin sign -key FILE|openpgp:KEYGRIP [-hashed] -expect-sha256 HEX [-out FILE] update.bin|import.bin
   signer-admin approver-key -key FILE|openpgp:KEYGRIP | -openpgp FILE [-fingerprint HEX]
   signer-admin assemble [-active FILE] [-out update.signed] update.bin SIG...
   signer-admin push -cluster cluster.json [-raise-min] [-signers NAME,...] update.signed

@@ -395,7 +395,7 @@ func run() (err error) {
 			lockDays = boot.setup.Wire.SlashingLogMinLockDays
 		}
 		if age := refreshAge(*stateRefresh, lockDays); age > 0 {
-			go copyStore.refresh(ctx, age)
+			go copyStore.refresh(ctx, age, srv.SetStateCopyFailed)
 		}
 	}
 	log.Info("runner started", "platform", plat.Name, "version", server.Version, "config_sha256", fmt.Sprintf("%x", cfgHash),

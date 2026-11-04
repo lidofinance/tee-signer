@@ -293,16 +293,22 @@ func (r *runner) logText() string {
 
 func waitReady(t *testing.T, b backend.Backend) *backend.Health {
 	t.Helper()
+	return waitHealth(t, b, "ready", func(h *backend.Health) bool { return h.Ready })
+}
+
+// waitHealth waits until HEALTH answers and pred holds, at most 20 s.
+func waitHealth(t *testing.T, b backend.Backend, what string, pred func(*backend.Health) bool) *backend.Health {
+	t.Helper()
 	deadline := time.Now().Add(20 * time.Second)
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		h, err := b.Health(ctx)
 		cancel()
-		if err == nil && h.Ready {
+		if err == nil && pred(h) {
 			return h
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("runner not ready: %v", err)
+			t.Fatalf("runner not %s: %v", what, err)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}

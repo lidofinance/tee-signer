@@ -238,16 +238,17 @@ func cmdSign(args []string, out io.Writer) error {
 		return err
 	}
 	if *keyPath == "" || fs.NArg() != 1 {
-		return errors.New("usage: signer-admin sign -key FILE|openpgp:KEYGRIP [-hashed] [-expect-sha256 HEX] [-out FILE] update.bin|import.bin")
+		return errors.New("usage: signer-admin sign -key FILE|openpgp:KEYGRIP [-hashed] -expect-sha256 HEX [-out FILE] update.bin|import.bin")
+	}
+	if *expect == "" {
+		return errors.New("sign needs -expect-sha256: the direct form's sha256 that signer-admin show printed for the draft you reviewed")
 	}
 	raw, err := os.ReadFile(fs.Arg(0))
 	if err != nil {
 		return err
 	}
-	if *expect != "" {
-		if err := checkExpected(raw, *expect); err != nil {
-			return fmt.Errorf("%s: %w", fs.Arg(0), err)
-		}
+	if err := checkExpected(raw, *expect); err != nil {
+		return fmt.Errorf("%s: %w", fs.Arg(0), err)
 	}
 	if len(raw) > 0 && (raw[0] == 'U' || raw[0] == 'J') {
 		return fmt.Errorf("%s is signed already; sign the body that draft or import-draft wrote", fs.Arg(0))

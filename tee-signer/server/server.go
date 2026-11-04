@@ -105,6 +105,16 @@ type Server struct {
 	// panicked is why a state-changing request's panic stopped the
 	// runner's state changes until a restart (recover.go); nil before.
 	panicked atomic.Pointer[string]
+	// loadFailed is why LoadListedShares loaded no key because of a mark
+	// log error; nil otherwise. HEALTH then reports not ready.
+	loadFailed atomic.Pointer[string]
+	// noShares is why LoadListedShares found no stored record of a set the
+	// mark log vouches for that is not empty; an import that records a
+	// new share set clears it.
+	noShares atomic.Pointer[string]
+	// copyFailed is why the last state copy refresh failed; nil after one
+	// that succeeded (SetStateCopyFailed).
+	copyFailed atomic.Pointer[string]
 	// panicHook, tests only, runs before each request is served.
 	panicHook func(wire.Frame)
 	// lostLogged: the loss of the mark log is in the log (lostRefusal).
@@ -255,6 +265,37 @@ func (s *Server) ProveSealingKey(keys []string) error {
 	return nil
 }
 
+// SetStateCopyFailed records the result of a state copy refresh: an error
+// makes HEALTH report not ready with it, nil clears it.
+func (s *Server) SetStateCopyFailed(err error) {
+	if err == nil {
+		s.copyFailed.Store(nil)
+		return
+	}
+	why := "state copy refresh failed: " + err.Error()
+	s.copyFailed.Store(&why)
+}
+
+// shareNames lists the store names of pks for an error, at most 16.
+func shareNames(pks []backend.Pubkey) string {
+	var names []string
+	for i, pk := range pks {
+		if i == 16 {
+			names = append(names, fmt.Sprintf("and %d more", len(pks)-i))
+			break
+		}
+		names = append(names, shareKey(pk))
+	}
+	return strings.Join(names, ", ")
+}
+
+// failLoad latches err as the reason no key loaded and returns it.
+func (s *Server) failLoad(err error) error {
+	why := "no key loaded: " + err.Error()
+	s.loadFailed.Store(&why)
+	return err
+}
+
 // sharePubkey reads the public key from a share's store name. Only the
 // name shareKey gives counts: lowercase hex, so one key has one name.
 func sharePubkey(k string) (backend.Pubkey, error) {
@@ -277,16 +318,23 @@ func sharePubkey(k string) (backend.Pubkey, error) {
 //
 // With a mark log the stored records must be a set the log vouches for
 // (markstore.ShareSet): the root of the records that unseal and parse is
-// the newest record's current or pending root. Else the host replayed, hid
-// or changed a record, or a write was cut, and the runner cannot tell which
-// record: it loads every key without history and with a source floor of
-// at least the restart floor epoch now, the bounds of an import without
-// history, has the log vouch for the rewritten records, then writes them.
-// If that log record fails, no key loads. A replayed record never gives a
-// key history.
+// the newest record's current or pending root. Else the host replayed, hid,
+// changed or added a record, and the runner cannot tell which: it loads no
+// key, writes nothing and names the stored records, so the operator
+// removes what should not be there. A store that holds no readable record
+// of a set that is not empty loads no key and reports not ready until an
+// import records a new set. A log with no share set yet (written by
+// an image without share sets) resets once: every key loads without
+// history and with a source floor of at least the restart floor epoch now,
+// the bounds of an import without history, the log vouches for the
+// rewritten records, then the runner writes them. If that log record
+// fails, no key loads. A replayed record never gives a key history.
+//
+// A start that loads no key for one of these reasons latches load_failed
+// in HEALTH, and HEALTH reports not ready until a restart.
 func (s *Server) LoadListedShares(keys []string) (int, error) {
 	if err := s.checkLogID(); err != nil {
-		return 0, err
+		return 0, s.failLoad(err)
 	}
 	var errs []error
 	// The records that unseal and parse, and their blobs: the share set is
@@ -333,28 +381,35 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 	}
 	set, committed := s.Hooks.ShareSet()
 	reset := committed && !set.Vouches(markstore.ShareSetRoot(hashes))
+	if reset && set != nil {
+		if len(pks) > 0 {
+			return 0, errors.Join(append(errs, s.failLoad(fmt.Errorf("the stored share records are not the set the mark log vouches for, so a record was replaced, hidden or added "+
+				"(such as the share of an import that failed). Stored: %s. Remove the objects that should not be there and restart, or remove every share and import again",
+				shareNames(pks))))...)
+		}
+		why := "no key loaded: the mark log vouches for a share set that is not empty, and the store holds no readable share record. " +
+			"Put the records back, or import every share again"
+		s.noShares.Store(&why)
+		s.Log.Warn(why)
+		reset = false
+	}
 	blobs := map[backend.Pubkey][]byte{}
 	if reset {
 		var resetFloor uint64
 		f, on, err := s.Hooks.ImportFloor()
 		if err != nil {
-			return 0, fmt.Errorf("stored share records the mark log does not vouch for: %w", err)
+			return 0, s.failLoad(fmt.Errorf("stored share records the mark log does not vouch for: %w", err))
 		}
 		if on {
 			resetFloor = f
 		}
-		if set == nil {
-			// Expected once: the log was written by an image without
-			// share sets.
-			s.Log.Warn("the mark log holds no share set yet (first start of this image on it): every key loads without history, with a fresh source floor, once",
-				"records", len(recs), "floor_epoch", resetFloor)
-		} else {
-			s.Log.Warn("stored share records are not the set the mark log vouches for (a record was replaced, hidden, or not written back at "+
-				"an earlier reset; a record the store keeps refusing is named below): every key loads without history, with a fresh source floor",
-				"records", len(recs), "floor_epoch", resetFloor)
-		}
+		// Expected once: the log was written by an image without share
+		// sets.
+		s.Log.Warn("the mark log holds no share set yet (first start of this image on it): every key loads without history, with a fresh source floor, once",
+			"records", len(recs), "floor_epoch", resetFloor)
 		// The log vouches only for the rewritten records. One the reset
-		// could not seal stays out, so the next start resets again.
+		// could not seal stays out, so the next start finds it outside
+		// the vouched set and loads no key until it is removed.
 		hashes = map[backend.Pubkey][32]byte{}
 		for _, pk := range pks {
 			rec := recs[pk]
@@ -378,7 +433,7 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 			err := s.Hooks.RecordShareSet(ctx, cur)
 			cancel()
 			if err != nil {
-				return 0, errors.Join(append(errs, fmt.Errorf("the mark log does not vouch for the reset share records, no key loaded: %w", err))...)
+				return 0, errors.Join(append(errs, s.failLoad(fmt.Errorf("the mark log does not vouch for the reset share records, no key loaded: %w", err)))...)
 			}
 		} else {
 			s.Hooks.SetShareSet(cur)
@@ -392,7 +447,7 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 		k, rec := shareKey(pk), recs[pk]
 		if blob, ok := blobs[pk]; ok {
 			if err := s.Platform.Store.Put(k, blob); err != nil {
-				s.Log.Warn("share record not written back: the key loads with the fresh floor, and every start resets until the store takes this record",
+				s.Log.Warn("share record not written back: the key loads with the fresh floor, and the next start loads no key; remove every share and import again",
 					"pubkey", pk.String()[:18], "err", err)
 			}
 		}
@@ -440,7 +495,7 @@ func (s *Server) putShare(pk backend.Pubkey, blob []byte) error {
 	// The set before. It leaves out the key's old record, which this
 	// runner did not load and which may say the key has history: a write
 	// that fails then leaves no set the log vouches for with it, and the
-	// next start resets.
+	// next start loads no key.
 	prev := make(map[backend.Pubkey][32]byte, len(s.shareHash))
 	for k, v := range s.shareHash {
 		prev[k] = v
@@ -480,6 +535,7 @@ func (s *Server) putShare(pk backend.Pubkey, blob []byte) error {
 	}
 	s.shareHash = next
 	s.Hooks.SetShareSet(&markstore.ShareSet{Current: pending})
+	s.noShares.Store(nil)
 	return nil
 }
 
@@ -1255,6 +1311,14 @@ func (s *Server) health() (*backend.Health, error) {
 	}
 	if why := s.panicked.Load(); why != nil {
 		h.Ready, h.RequestPanic = false, *why
+	}
+	if why := s.loadFailed.Load(); why != nil {
+		h.Ready, h.LoadFailed = false, *why
+	} else if why := s.noShares.Load(); why != nil {
+		h.Ready, h.LoadFailed = false, *why
+	}
+	if why := s.copyFailed.Load(); why != nil {
+		h.Ready, h.StateCopyFailed = false, *why
 	}
 	if s.Image != nil {
 		var refused bool
