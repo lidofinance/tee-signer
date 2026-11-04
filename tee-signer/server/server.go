@@ -137,6 +137,9 @@ type Server struct {
 	// shareWritesStopped: a share write failed and so did the log record
 	// that drops its set. Share writes stop until a restart.
 	shareWritesStopped bool
+	// cut is a batch import that did not complete and whose records may
+	// be stored (importbatch.go); nil if none. shareSetMu guards it.
+	cut *batchCut
 	// attestLimit counts the fresh attestations of attest-only clients
 	// (limit.go); limitNow, if set, is its clock (tests).
 	attestLimit attestLimit
@@ -173,6 +176,9 @@ type shareRecord struct {
 	// (LoadListedShares), so an older record with a lower floor or none
 	// loads every key with a fresh floor instead.
 	SourceFloor uint64 `json:"source_floor,omitempty"`
+	// Batch tags the records of one batch import (importbatch.go), so a
+	// start can leave out the records of a batch that did not complete.
+	Batch []byte `json:"batch,omitempty"`
 }
 
 func shareKey(pk backend.Pubkey) string { return "shares/" + hex.EncodeToString(pk[:]) }
@@ -318,7 +324,9 @@ func sharePubkey(k string) (backend.Pubkey, error) {
 //
 // With a mark log the stored records must be a set the log vouches for
 // (markstore.ShareSet): the root of the records that unseal and parse is
-// the newest record's current or pending root. Else the host replayed, hid,
+// the newest record's current or pending root. Before that check it leaves
+// out the records of a batch import that did not complete, if the rest is
+// vouched (findCut, importbatch.go). Else the host replayed, hid,
 // changed or added a record, and the runner cannot tell which: it loads no
 // key, writes nothing and names the stored records, so the operator
 // removes what should not be there. A store that holds no readable record
@@ -380,6 +388,20 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 		pks = append(pks, pk)
 	}
 	set, committed := s.Hooks.ShareSet()
+	var cut *batchCut
+	if committed && !set.Vouches(markstore.ShareSetRoot(hashes)) {
+		// A batch that did not complete: its records leave the set.
+		if cut = findCut(set, recs, hashes); cut != nil {
+			for pk := range cut.keys {
+				clear(recs[pk].Secret)
+				delete(recs, pk)
+				delete(hashes, pk)
+			}
+			pks = slices.DeleteFunc(pks, func(pk backend.Pubkey) bool { return cut.keys[pk] })
+			s.Log.Warn("stored share records of a batch import that did not complete: they stay out and their keys do not load; import them again",
+				"records", len(cut.keys))
+		}
+	}
 	reset := committed && !set.Vouches(markstore.ShareSetRoot(hashes))
 	if reset && set != nil {
 		if len(pks) > 0 {
@@ -439,7 +461,7 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 			s.Hooks.SetShareSet(cur)
 		}
 		s.shareSetMu.Lock()
-		s.shareHash = hashes
+		s.shareHash, s.cut = hashes, cut
 		s.shareSetMu.Unlock()
 	}
 	loaded := 0
@@ -536,6 +558,7 @@ func (s *Server) putShare(pk backend.Pubkey, blob []byte) error {
 	s.shareHash = next
 	s.Hooks.SetShareSet(&markstore.ShareSet{Current: pending})
 	s.noShares.Store(nil)
+	s.cut.drop(pk)
 	return nil
 }
 
@@ -661,7 +684,7 @@ func (s *Server) handleConn(ctx context.Context, c net.Conn) {
 			return
 		}
 		if err := s.stillValid(cl, f.Type); err != nil {
-			if f.Type == wireadmin.TypeImportShare || f.Type == wireadmin.TypeImportSealed {
+			if f.Type == wireadmin.TypeImportShare || f.Type == wireadmin.TypeImportSealed || f.Type == wireadmin.TypeImportBatch {
 				clear(f.Payload)
 			}
 			s.Log.Warn("refused and closed: client certificate", "remote", c.RemoteAddr().String(), "type", f.Type.String(),
@@ -772,6 +795,8 @@ func (s *Server) dispatch(ctx context.Context, f wire.Frame) ([]byte, error) {
 			return nil, err
 		}
 		return wire.AppendKey(nil, k), nil
+	case wireadmin.TypeImportBatch:
+		return s.importBatch(f.Payload)
 	case wireadmin.TypeConfigUpdate:
 		return s.configUpdate(ctx, f.Payload)
 	}
@@ -1059,14 +1084,17 @@ func (s *Server) reserve(pk backend.Pubkey) error {
 	return nil
 }
 
-// checkSlots refuses pk when the validators stored, loaded or being added,
-// with pk, are more than the setup's max_keys. The caller holds admitMu.
-func (s *Server) checkSlots(pk backend.Pubkey) error {
+// checkSlots refuses pks when the validators stored, loaded or being added,
+// with pks, are more than the setup's max_keys. The caller holds admitMu.
+func (s *Server) checkSlots(pks ...backend.Pubkey) error {
 	names, err := ListShares(s.Platform.Store)
 	if err != nil {
 		return backend.Refused(backend.StatusStorage, "stored shares: %v", err)
 	}
-	held := map[string]bool{shareKey(pk): true}
+	held := map[string]bool{}
+	for _, pk := range pks {
+		held[shareKey(pk)] = true
+	}
 	for _, n := range names {
 		held[n] = true
 	}

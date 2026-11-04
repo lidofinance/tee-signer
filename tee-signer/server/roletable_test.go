@@ -56,7 +56,7 @@ func TestRoleTable(t *testing.T) {
 	attest := map[wire.MsgType]bool{wire.TypeHealth: true, wire.TypePublicKeys: true, wire.TypeAttest: true, wire.TypeIdentity: true}
 	adminOK := map[wire.MsgType]bool{}
 	for _, typ := range types {
-		adminOK[typ] = typ != wire.TypeSign && typ < 0x09 && typ != 0
+		adminOK[typ] = typ != wire.TypeSign && (typ < 0x09 || typ == wireadmin.TypeImportBatch) && typ != 0
 	}
 
 	// An admin leaf straight under the root: admin rights in a non-prod build

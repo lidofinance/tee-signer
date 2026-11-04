@@ -641,6 +641,19 @@ func cmdImport(args []string, out io.Writer) error {
 	ac := remoteadmin.Wrap(cl.Client)
 	failed := false
 	start, imported, skipped := time.Now(), 0, 0
+	// The shares to send, each with its secret, as IMPORT_SHARES_SEALED
+	// takes them: under one order, in batches, if the runner knows it.
+	var (
+		batch   []cloud.SealedImportRequest
+		secrets [][32]byte
+	)
+	defer clear(secrets)
+	ctx, cancel = context.WithTimeout(context.Background(), *cf.timeout)
+	batched, err := ac.BatchImport(ctx)
+	cancel()
+	if err != nil {
+		return fmt.Errorf("%s: batch import probe: %w", name, err)
+	}
 	for _, s := range shares {
 		if held[s.pubkey] {
 			skipped++
@@ -676,6 +689,11 @@ func cmdImport(args []string, out io.Writer) error {
 					w.BlockSlot, w.HasBlock, w.SourceEpoch, w.TargetEpoch, w.HasAttestation)
 			}
 		}
+		if batched {
+			extra.Pubkey, extra.SharePubkey, extra.Index, extra.Interchange, extra.Order = s.pubkey, sp, s.index, req.Interchange, nil
+			batch, secrets = append(batch, *extra), append(secrets, s.secret)
+			continue
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), *cf.timeout)
 		k, err := ac.ImportShareSealedWith(ctx, req, sp, cl.Verify, extra)
 		cancel()
@@ -689,11 +707,50 @@ func cmdImport(args []string, out io.Writer) error {
 			fprintf(out, "%s imported %s share_pubkey %s index %d (sealed to the attested import key)\n", name, k.Pubkey, k.SharePubkey, k.Index)
 		}
 	}
+	if len(batch) > 0 {
+		n, err := importBatches(ac, cl, raw, batch, secrets, *cf.timeout, out, name, len(shares) <= 16)
+		imported += n
+		if err != nil {
+			failed = true
+			fprintf(out, "%s: %v\n", name, err)
+		}
+	}
 	fprintf(out, "%s: imported %d shares, skipped %d already held, in %s\n", name, imported, skipped, time.Since(start).Round(time.Millisecond))
 	if failed {
 		return errReported
 	}
 	return nil
+}
+
+// importBatches seals the shares of batch to the runner's import key and
+// sends them in IMPORT_SHARES_SEALED requests under order, one after
+// another, until one is refused. Each request is stored all or none. It
+// returns how many shares the runner took; each one if list is set.
+func importBatches(ac *remoteadmin.Client, cl *runnerclient.Client, order []byte, batch []cloud.SealedImportRequest, secrets [][32]byte,
+	timeout time.Duration, out io.Writer, name string, list bool) (int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	batches, err := ac.SealBatches(ctx, order, batch, secrets, cl.Verify)
+	cancel()
+	if err != nil {
+		return 0, fmt.Errorf("seal the shares: %w", err)
+	}
+	done := 0
+	for i, b := range batches {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		keys, err := ac.ImportBatch(ctx, order, b)
+		cancel()
+		if err != nil {
+			return done, fmt.Errorf("batch %d of %d (%d shares, from %s) refused, it and the %d shares after it are not imported: %w",
+				i+1, len(batches), len(b), b[0].Pubkey, len(batch)-done-len(b), err)
+		}
+		for _, k := range keys {
+			if list {
+				fprintf(out, "%s imported %s share_pubkey %s index %d (sealed to the attested import key, batch %d)\n", name, k.Pubkey, k.SharePubkey, k.Index, i+1)
+			}
+		}
+		done += len(keys)
+	}
+	return done, nil
 }
 
 // ---- sign and assemble of import orders ----

@@ -193,3 +193,71 @@ func FuzzDecodeConfigUpdateResponse(f *testing.F) {
 		}
 	})
 }
+
+// batchSeed is an IMPORT_SHARES_SEALED request of two shares, one with a
+// split and interchange maxima, under an order.
+func batchSeed() ([]byte, []backend.SealedImportRequest) {
+	order := []byte("signed import order")
+	reqs := []backend.SealedImportRequest{
+		{Pubkey: backend.Pubkey{1}, SharePubkey: backend.Pubkey{2}, Index: 3, Sealed: []byte("sealed one"), T: 2, N: 3, ShareIndex: 1,
+			Commitments: []backend.Pubkey{{7}, {8}}, Interchange: &backend.Watermark{HasAttestation: true, SourceEpoch: 5, TargetEpoch: 6}},
+		{Pubkey: backend.Pubkey{4}, SharePubkey: backend.Pubkey{5}, Index: 6, Sealed: []byte("sealed two")},
+	}
+	for i := range reqs {
+		reqs[i].Order = order
+	}
+	return order, reqs
+}
+
+// IMPORT_SHARES_SEALED round trips, BatchLen and BatchShareLen size it, and
+// a bad version, a split without an order and trailing bytes are refused.
+func TestImportBatch(t *testing.T) {
+	order, reqs := batchSeed()
+	p, err := EncodeImportBatch(order, reqs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := BatchLen(order) + BatchShareLen(&reqs[0]) + BatchShareLen(&reqs[1]); n != len(p) {
+		t.Fatalf("BatchLen and BatchShareLen give %d, the payload has %d bytes", n, len(p))
+	}
+	got, err := DecodeImportBatch(p)
+	if err != nil || !reflect.DeepEqual(got, reqs) {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if got, err := DecodeImportBatch(must(EncodeImportBatch(nil, nil))); err != nil || len(got) != 0 {
+		t.Fatalf("empty batch: %+v %v", got, err)
+	}
+	if _, err := EncodeImportBatch(nil, reqs); err == nil {
+		t.Fatal("a split without an order encoded")
+	}
+	bad := map[string][]byte{"version 2": append([]byte{2}, p[1:]...), "trailing": append(append([]byte(nil), p...), 0), "cut": p[:len(p)-1]}
+	for name, b := range bad {
+		if _, err := DecodeImportBatch(b); err == nil {
+			t.Errorf("%s: decoded", name)
+		}
+	}
+}
+
+func FuzzDecodeImportBatch(f *testing.F) {
+	order, reqs := batchSeed()
+	f.Add(must(EncodeImportBatch(order, reqs)))
+	f.Add(must(EncodeImportBatch(nil, reqs[1:])))
+	f.Fuzz(func(t *testing.T, b []byte) {
+		fuzzcheck.Watch(t)
+		reqs, err := DecodeImportBatch(b)
+		if err != nil {
+			return
+		}
+		var order []byte
+		if len(reqs) > 0 {
+			order = reqs[0].Order
+		}
+		again, err := EncodeImportBatch(order, reqs)
+		if err != nil {
+			t.Fatalf("decoded batch does not encode: %v", err)
+		}
+		if reqs2, err := DecodeImportBatch(again); err != nil || !reflect.DeepEqual(reqs2, reqs) {
+			t.Fatalf("IMPORT_SHARES_SEALED value round trip: %+v %v", reqs2, err)
+		}
+	})
+}

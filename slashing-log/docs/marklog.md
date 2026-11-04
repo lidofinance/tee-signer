@@ -368,6 +368,27 @@ stored), and, while a write is under way, the root of the set after it.
   the set before only, so a blob the host kept and stores later is not
   vouched for. If that record fails too, the runner takes no share write
   until a restart.
+- A batch import (IMPORT_SHARES_SEALED) writes one log record whose
+  current root is the set before and whose pending root is the set after
+  all its records, then the records, 16 at once. A batch adds keys only,
+  so the set before holds no record of its keys. Each record carries the
+  batch's tag (`batch`, random). If a write fails and the read back does
+  not find it, the batch fails as a whole and the runner writes a log
+  record at once that vouches for the set before only. If that record
+  fails too, the runner takes no share write until a restart.
+- A batch that did not complete (a write failed, or the runner stopped
+  halfway) may leave some of its records in the store. A start whose
+  stored records are not vouched for first leaves out the records of one
+  tag; if the rest is the current or pending root, it loads the rest as
+  it is, and none of the batch's keys. Else it loads no key, as above.
+  Later records vouch for sets without those records, so later starts
+  leave them out too, until the operator imports the keys again. The
+  next batch must hold every key of that batch and takes its tag, so the
+  store never holds records of two batches that did not complete; a key
+  of it imported on its own leaves it. Leaving records out never loads a
+  key the log does not vouch for: what loads is still a vouched set. A
+  batch whose writes all landed loads as the set after, through the
+  pending root.
 - After a share write the newest record keeps its pending root until the
   next record, which carries the set after as current. So a pending root
   in the newest record does not mean a write was cut. It also vouches

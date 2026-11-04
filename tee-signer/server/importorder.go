@@ -20,23 +20,34 @@ func (s *Server) checkImportOrder(req *backend.SealedImportRequest) (*importorde
 		return nil, nil, backend.Refused(backend.StatusForbidden,
 			"IMPORT_SHARE_SEALED needs an import order signed by the approvers in force; the request has none")
 	}
-	o, err := importorder.Decode(req.Order)
-	if err != nil {
-		return nil, nil, backend.Refused(backend.StatusBadRequest, "%v", err)
-	}
-	// One trusted time for the approvers in force and the expiry.
-	locked, now, err := s.Updates.lockedNow()
+	o, now, err := s.verifyImportOrder(req.Order)
 	if err != nil {
 		return nil, nil, err
-	}
-	if err := o.Verify(&locked.Approvers); err != nil {
-		return nil, nil, backend.Refused(backend.StatusForbidden, "%v", err)
 	}
 	e, err := o.Body.Matches(s.Updates.SetupWire(), s.SetupHash, now, req.Pubkey)
 	if err != nil {
 		return nil, nil, backend.Refused(backend.StatusForbidden, "%v", err)
 	}
 	return &o.Body, e, nil
+}
+
+// verifyImportOrder decodes an import order and checks its approvals
+// against the approvers in force. It returns the order and the trusted
+// time, for the expiry check (importorder.Body.Matches).
+func (s *Server) verifyImportOrder(raw []byte) (*importorder.Order, uint64, error) {
+	o, err := importorder.Decode(raw)
+	if err != nil {
+		return nil, 0, backend.Refused(backend.StatusBadRequest, "%v", err)
+	}
+	// One trusted time for the approvers in force and the expiry.
+	locked, now, err := s.Updates.lockedNow()
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := o.Verify(&locked.Approvers); err != nil {
+		return nil, 0, backend.Refused(backend.StatusForbidden, "%v", err)
+	}
+	return o, now, nil
 }
 
 // singleKey is HEALTH's single_key for the platform part p of the setup

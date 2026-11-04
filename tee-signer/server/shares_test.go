@@ -32,6 +32,17 @@ type shareStore struct {
 	// landPut, if set, stores each write it returns true for and then
 	// fails it, as a write whose reply was lost.
 	landPut func(k string) bool
+	// delay, if set, is the time each call takes, as a remote store's
+	// round trip.
+	delay time.Duration
+}
+
+// wait sleeps for the store's delay.
+func (s *shareStore) wait() {
+	s.mu.Lock()
+	d := s.delay
+	s.mu.Unlock()
+	time.Sleep(d)
 }
 
 // putsOf is how many times k was written.
@@ -42,6 +53,7 @@ func (s *shareStore) putsOf(k string) int {
 }
 
 func (s *shareStore) Get(k string) ([]byte, error) {
+	s.wait()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if v, ok := s.m[k]; ok {
@@ -50,6 +62,7 @@ func (s *shareStore) Get(k string) ([]byte, error) {
 	return nil, platform.ErrNotFound
 }
 func (s *shareStore) Put(k string, v []byte) error {
+	s.wait()
 	s.mu.Lock()
 	fail := s.failPut
 	s.mu.Unlock()
@@ -75,6 +88,7 @@ func (s *shareStore) Put(k string, v []byte) error {
 	return nil
 }
 func (s *shareStore) List(prefix string) ([]string, error) {
+	s.wait()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []string

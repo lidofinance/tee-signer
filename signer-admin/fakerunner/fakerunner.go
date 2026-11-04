@@ -57,6 +57,9 @@ type Runner struct {
 	chain runnerchain.Chain
 	// sign, if set (SetSigner), answers SIGN.
 	sign func(cloud.SignRequest) (cloud.Signature, error)
+	// batch: it takes IMPORT_SHARES_SEALED (ServeBatch); else it refuses
+	// the type, as an older runner does.
+	batch bool
 }
 
 // SetSigner adds k to the runner's keys and makes it answer SIGN with sign.
@@ -65,6 +68,13 @@ func (r *Runner) SetSigner(k cloud.ValidatorKey, sign func(cloud.SignRequest) (c
 	defer r.mu.Unlock()
 	r.keys = append(r.keys, k)
 	r.sign = sign
+}
+
+// ServeBatch makes the runner take IMPORT_SHARES_SEALED.
+func (r *Runner) ServeBatch() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.batch = true
 }
 
 // SetAfterImport makes the runner report s from the first share it
@@ -243,6 +253,8 @@ func (r *Runner) serve(c net.Conn) {
 			answer = wire.EncodeOK(wire.EncodeKeys(r.Keys()))
 		case wireadmin.TypeImportSealed:
 			answer = r.importSealed(f.Payload)
+		case wireadmin.TypeImportBatch:
+			answer = r.importBatch(f.Payload)
 		case wireadmin.TypeConfigUpdate:
 			answer = r.configUpdate(f.Payload)
 		case wire.TypeSign:
@@ -295,6 +307,34 @@ func (r *Runner) identity(nonce []byte) ([]byte, error) {
 	}
 	id.Attestation = &cloud.Attestation{Platform: "dev", Format: "dev-json", UserData: ud, Document: doc}
 	return wire.EncodeIdentity(id)
+}
+
+// importBatch opens each share of the batch and keeps their keys, all or
+// none. It does not check the shares against their public keys.
+func (r *Runner) importBatch(p []byte) []byte {
+	r.mu.Lock()
+	batch := r.batch
+	r.mu.Unlock()
+	if !batch {
+		return wire.EncodeError(cloud.Refused(cloud.StatusForbidden, "message type 0x%02x not served", uint8(wireadmin.TypeImportBatch)))
+	}
+	reqs, err := wireadmin.DecodeImportBatch(p)
+	if err != nil {
+		return wire.EncodeError(cloud.Refused(cloud.StatusDecode, "%v", err))
+	}
+	keys := make([]cloud.ValidatorKey, 0, len(reqs))
+	for i := range reqs {
+		secret, err := r.importer.Open(&reqs[i])
+		clear(secret[:])
+		if err != nil {
+			return wire.EncodeError(cloud.Refused(cloud.StatusBadKey, "share %d: %v", i, err))
+		}
+		keys = append(keys, cloud.ValidatorKey{Pubkey: reqs[i].Pubkey, SharePubkey: reqs[i].SharePubkey, Index: reqs[i].Index})
+	}
+	r.mu.Lock()
+	r.keys = append(r.keys, keys...)
+	r.mu.Unlock()
+	return wire.EncodeOK(wire.EncodeKeys(keys))
 }
 
 // importSealed opens the share and keeps its key. It does not check the

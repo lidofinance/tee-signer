@@ -47,6 +47,7 @@ const (
 var typeNames = map[MsgType]string{
 	0x01: "HEALTH", 0x02: "PUBLIC_KEYS", 0x03: "SIGN", 0x04: "ATTEST", 0x05: "IMPORT_SHARE",
 	0x06: "IDENTITY", 0x07: "IMPORT_SHARE_SEALED", 0x08: "CONFIG_UPDATE",
+	0x0a: "IMPORT_SHARES_SEALED",
 }
 
 func (t MsgType) String() string {
