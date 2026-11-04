@@ -1,9 +1,8 @@
 // Command signer-admin is the admin tool of the cloud signers: it builds
 // the setups of one cluster, changes their config with approver-signed
-// updates and drafts, signs and pushes orders. It keeps the commands and
-// flags of an earlier operator tool, signer-config, and builds from this
-// repo's packages: the codecs
-// of backend/ and the client of attest/runnerclient, which checks each
+// updates and drafts, signs and pushes orders. It builds from this repo's
+// packages: the codecs
+// of governance/ and signer-protocol/ and the client of attest/runnerclient, which checks each
 // signer's attestation and setup pins on every connection. A runner takes
 // the admin messages only from a client certificate of the admin role
 // (docs/protocol.md, "Client roles"), so each connection file names an

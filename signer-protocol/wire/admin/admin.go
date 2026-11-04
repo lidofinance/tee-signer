@@ -339,7 +339,7 @@ const (
 )
 
 // EncodeConfigUpdate is the CONFIG_UPDATE request: the signed update as
-// approvers and signer-config make it (backend/setupwire, the 'U' layout),
+// signer-admin assemble writes it (governance/setupwire, the 'U' layout),
 // 1 to MaxConfigUpdate bytes. The runner decodes it strictly.
 func EncodeConfigUpdate(update []byte) ([]byte, error) {
 	if len(update) == 0 || len(update) > MaxConfigUpdate {

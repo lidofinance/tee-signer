@@ -20,7 +20,7 @@ package azure
 // identity answers when there are several and no client_id is given.
 //
 // The identity needs the role "Key Vault Crypto Service Release User" on
-// its key (cloud/azure/deploy.sh key-role).
+// its key (platform-azure/deploy/deploy.sh key-role).
 //
 // UNVERIFIED on Azure: whether a confidential group serves the metadata
 // endpoint to its containers the same way.

@@ -44,7 +44,7 @@ import (
 // Salts: salt.NAME is the salt of the policy leaf NAME (a key of the public,
 // locked or open part), platform_salt the salt of platform_commitment. A
 // file gives every salt of its kind or none: an operator's setup file has
-// none, and signer-config setup draws them; Format writes them all, so a
+// none, and signer-admin setup draws them; Format writes them all, so a
 // setup read back from its human form has the same setup_hash.
 //
 // Values: decimal integers; hex with or without 0x; true or false; amounts
@@ -483,7 +483,7 @@ func (p *parser) salts(names []string) setupwire.Salts {
 
 // ParseSetup reads a human setup file. name is used in errors. A file
 // without salts gives a setup that passes CheckValues but not Check:
-// signer-config setup draws its salts.
+// signer-admin setup draws its salts.
 func ParseSetup(name string, data []byte) (*setupwire.Setup, error) {
 	p, err := newParser(name, data)
 	if err != nil {
@@ -562,7 +562,7 @@ func ParseOpen(name string, data []byte) (*setupwire.Open, error) {
 }
 
 // ParseUpdateBody reads the human form of an update body (what
-// FormatUpdateBody writes for signer-config show). Without salts it passes CheckValues
+// FormatUpdateBody writes for signer-admin show). Without salts it passes CheckValues
 // only.
 func ParseUpdateBody(name string, data []byte) (*setupwire.UpdateBody, error) {
 	p, err := newParser(name, data)

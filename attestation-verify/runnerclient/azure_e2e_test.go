@@ -695,7 +695,7 @@ func fastChainAttester() backend.Root {
 	return backend.ComputeDomain(backend.DomainBeaconAttester, backend.Version{0, 0, 0, 1}, gvr)
 }
 
-// A BLS key for the lost-state test (made with backend/core, which this
+// A BLS key for the lost-state test (made with signer-core/core, which this
 // module does not link): secret and public key.
 const (
 	lostStateSecret = "70a0039da91e3c6d9993cfa2f2f446ee1747b47ebd247b03f36afabecb23beef"

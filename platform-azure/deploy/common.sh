@@ -20,8 +20,8 @@ if [ -n "$SUFFIX" ]; then
   case "$IMAGE_TAG" in *"$SUFFIX") ;; *) IMAGE_TAG="$IMAGE_TAG$SUFFIX" ;; esac
 fi
 
-# Setup of signer N: SETUP_FILE_N, a binary setup. signer-config setup (the signing
-# client's tool) writes one per signer of a cluster with one cluster_id;
+# Setup of signer N: SETUP_FILE_N, a binary setup. signer-admin setup writes
+# one per signer of a cluster with one cluster_id;
 # signer-admin/cmd/setup-tool encode makes a single one. It holds what were
 # per-signer flags: chain config, client CA, MAA host, vault and key, mark
 # and state stores (the mark log is required; an Azure store names its

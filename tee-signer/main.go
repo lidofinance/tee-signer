@@ -1,6 +1,6 @@
 // Command runner is the enclave side of the pluggable signer backend. It
 // links the C signer core, holds the shares, and serves the wire protocol
-// (backend/wire) on TCP, unix sockets or vsock. TCP and vsock listeners
+// (signer-protocol/wire) on TCP, unix sockets or vsock. TCP and vsock listeners
 // serve mutual TLS (-tls-client-ca).
 //
 //	runner -platform dev -config chain.json -state-dir ./state -listen tcp:127.0.0.1:7100

@@ -38,7 +38,7 @@ import (
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
 )
 
-// These tests run the real client (backend/remote) against a fake runner: a
+// These tests run the real client (signer-protocol/remote) against a fake runner: a
 // TLS 1.3 server with a self-signed key that demands a client certificate
 // and answers IDENTITY and HEALTH with the wire protocol. The attestation
 // documents are the dev platform's unsigned one and synthetic MAA tokens

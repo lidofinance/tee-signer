@@ -42,7 +42,7 @@
 #   teardown          delete everything except the KMS key ring and key
 #
 # Settings (environment): see common.sh. The ones you set for a test:
-#   SETUP_FILE    vm-create: the signer's binary setup (signer-config setup
+#   SETUP_FILE    vm-create: the signer's binary setup (signer-admin setup
 #                 for the signers of a cluster, or signer-admin/cmd/setup-tool
 #                 encode). vm-create checks it with the runner's decoder (a
 #                 GCP setup of chain CHAIN, naming this project's WIF

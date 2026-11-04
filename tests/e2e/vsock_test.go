@@ -2,7 +2,7 @@
 
 package e2e
 
-// The vsock tests. Only the AWS build has vsock (backend/transport/vsock.go),
+// The vsock tests. Only the AWS build has vsock (signer-protocol/transport/vsock.go),
 // so they need -tags platform_aws, and they run on the AWS debug build with
 // the dev platform too (RUNNER_AWS_DEBUG_BIN, tags platform_aws,platform_dev,
 // debugimport): the dev build has no vsock. The runner code under test, the

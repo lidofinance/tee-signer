@@ -265,7 +265,7 @@ var RunnerChainOID = asn1.ObjectIdentifier{1, 2, 840, 113556, 1, 8000, 2554,
 const AttestOnlyPerMinute = 4
 
 // The contexts of the two user data hashes. They are entries of the
-// registry in backend/setupwire (CtxRunnerIdentity, CtxRunnerAttest), which
+// registry in governance/setupwire (CtxRunnerIdentity, CtxRunnerAttest), which
 // imports this package; a test there checks that the names agree.
 const (
 	IdentityContext = "signer-runner-identity-v1"
@@ -327,7 +327,7 @@ type KeyOrigin struct {
 }
 
 // KeyReleaseContext is the context of KeyReleaseHash, an entry of the
-// registry in backend/setupwire (CtxKeyRelease).
+// registry in governance/setupwire (CtxKeyRelease).
 const KeyReleaseContext = "signer-key-release-v1"
 
 // The platform byte of KeyReleaseHash: the numbers of the setup's private

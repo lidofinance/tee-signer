@@ -406,7 +406,7 @@ func (cd condition) eval(c Claims) error {
 
 // policyEquals compares a policy value with a claim. A string policy value
 // also matches a bool or number claim with the same text ("false", "0"),
-// because cloud/azure/skr-policy.json.tmpl writes them as strings; the
+// because platform-azure/deploy/skr-policy.json.tmpl writes them as strings; the
 // grammar page does not say how Key Vault compares types.
 func policyEquals(want, got any) bool {
 	switch w := want.(type) {

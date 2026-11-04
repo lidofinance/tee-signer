@@ -70,7 +70,7 @@
 #
 # Setup: the image and the command hold no chain config, client CA, vault,
 # key, attestation provider or mark log. Each signer's setup holds them, made with
-# signer-config setup (one per signer of a cluster) or signer-admin/cmd/setup-tool
+# signer-admin setup (one per signer of a cluster) or signer-admin/cmd/setup-tool
 # encode from a human file. group-deploy N checks
 # SETUP_FILE_N with the runner's decoder: an Azure setup, of chain CHAIN
 # (governance/chains/chain.sh picks its chain config), naming this deploy's

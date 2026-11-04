@@ -11,7 +11,7 @@ File:       attestation-doc-bytes, the COSE_Sign1 bytes as the runner sent them
 sha256:     435e4fd1207f93ff588bc1fc391eadb0b9cd30ad88532d84f05d07dfd41da0fb
 Time:       2026-10-16T16:43:27.353Z (the document's timestamp)
 Module id:  i-048d4ea8214906fb3-enc01a1459504d38712
-Image:      the arm64 EIF of cloud/aws/README.md, "Result on AWS"
+Image:      the arm64 EIF of platform-aws/deploy/README.md, "Graviton (arm64)"
 PCR0:       34da454a0ed6db9276ffdb53eebe73c4f4cacd08f88f12fe3ccb0e88f6d3b37168cca5a4a0029bc1c5546d41c84e29b6
 PCR1:       745004eab9a0fb4a67973b261c6e7fa5418dc870292927591574385649338e54686cdeb659f3c6c2e72ba11aba2158a8
 PCR2:       614e21b3378d13214bafd07296d7d1278962832d70a90a6261a361e85abd14fc331f0054cf4f6fef5c1c9b578a85fc78

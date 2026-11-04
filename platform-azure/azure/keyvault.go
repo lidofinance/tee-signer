@@ -137,7 +137,7 @@ func (kv *KeyVault) Release(ctx context.Context, name, target string) ([]byte, e
 // https://<vault>/keys/<name>?api-version=7.4, the KeyBundle of
 // Microsoft's REST reference). See keyRuleOf for the hash and the lock.
 // The managed identity needs read access to the key (Key Vault Reader on
-// it, cloud/azure/deploy.sh key-role); the release role alone does not
+// it, platform-azure/deploy/deploy.sh key-role); the release role alone does not
 // allow Get Key. UNVERIFIED on Azure: the code ran against a fake.
 func (kv *KeyVault) KeyRule(ctx context.Context, name string) (platform.KeyRule, error) {
 	r, _, err := kv.CheckKey(ctx, name)

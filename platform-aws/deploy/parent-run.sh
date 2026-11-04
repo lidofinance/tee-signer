@@ -16,7 +16,7 @@
 # security group's egress for them (main.tf nts_egress).
 #
 # The EIF is the same for every signer (scripts/nitro-eif.sh). What makes it
-# this signer is its setup: the binary file signer-config setup (or signer-admin/cmd/setup-tool)
+# this signer is its setup: the binary file signer-admin setup (or signer-admin/cmd/setup-tool encode)
 # makes, with the chain, the client CA, the KMS key and region, the mark
 # bucket and the signer name.
 # The host agent checks it with the runner's decoder and hands it to the
