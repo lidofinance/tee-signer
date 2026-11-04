@@ -125,13 +125,15 @@ aggregate its form (Gloas's progressive Attestation from the Gloas fork
 epoch on, `SC_ERR_POLICY_FORK` otherwise). The signer TA and the cloud
 runner both sign these messages through them.
 
-`sc_sign_root` signs a caller-supplied object root for the six types that
+`sc_sign_root` signs a caller-supplied object root for the nine types that
 need no slashing protection (RANDAO, selection proof, aggregate and proof,
 sync committee message, sync committee selection proof, contribution and
-proof) and refuses every other domain type with `SC_ERR_POLICY_DOMAIN`. The
-epoch must pass the clock horizon, and a RANDAO root must equal
-`hash_tree_root(epoch)`. For the other five types the core does not see the
-message content. Only the cloud runner's generic path calls it: a bare root
+proof, and the three Gloas types beacon builder, PTC attester and proposer
+preferences, from the Gloas fork epoch on) and refuses every other domain
+type with `SC_ERR_POLICY_DOMAIN`. The epoch must pass the clock horizon, and
+a RANDAO root must equal `hash_tree_root(epoch)`. For the other eight types
+the core does not see the message content (see "Gloas" below for what the
+bare Gloas roots skip). Only the cloud runner's generic path calls it: a bare root
 from a generic `Sign` of a stock client, behind the runner's
 `allow_unverified_nonslashable` switch.
 

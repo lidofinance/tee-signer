@@ -1028,8 +1028,9 @@ int sc_sign_contribution_and_proof(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_
  * the fork version active at epoch, and epoch must pass the clock horizon.
  * The Gloas types return SC_ERR_POLICY_FORK unless Gloas is in force at
  * epoch. As bare roots they skip the checks of the typed Gloas calls (one
- * PTC vote and one envelope per slot, the envelope's block, builder index,
- * fee recipient and gas limit); none of them is slashable.
+ * PTC vote and one envelope per slot, the envelope's block, builder index
+ * and fee recipient, the bound index, fee recipient and gas limit of
+ * proposer preferences); none of them is slashable.
  * For RANDAO, object_root must equal hash_tree_root(epoch) (SC_ERR_ARG
  * otherwise). For the other types the caller computes object_root, so
  * the core does not see their content. Only the cloud runner's generic path

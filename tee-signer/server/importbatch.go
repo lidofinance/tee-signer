@@ -211,6 +211,11 @@ func (s *Server) storeBatch(reqs []backend.SealedImportRequest, secrets [][32]by
 		}
 		batch[pk] = true
 	}
+	// A start that loaded no key for a share set reason: only a batch of
+	// every share it listed is taken.
+	if err := s.batchLoadRefusal(batch); err != nil {
+		return err
+	}
 	tag := []byte(rand.Text())
 	if s.cut != nil {
 		for pk := range s.cut.keys {
@@ -265,7 +270,8 @@ func (s *Server) storeBatch(reqs []backend.SealedImportRequest, secrets [][32]by
 // set after, then the records. If one does not land, it writes a log
 // record at once that vouches for the set before only, and the batch
 // becomes the cut batch; if that record fails too, share writes stop until
-// a restart, as in putShare. The caller holds shareSetMu.
+// a restart, as in putShare. The caller holds shareSetMu and checked
+// batchLoadRefusal.
 func (s *Server) putShares(blobs map[backend.Pubkey][]byte, tag []byte) error {
 	if _, committed := s.Hooks.ShareSet(); !committed {
 		return s.putAll(blobs)
@@ -305,7 +311,13 @@ func (s *Server) putShares(blobs map[backend.Pubkey][]byte, tag []byte) error {
 	}
 	s.shareHash, s.cut = next, nil
 	s.Hooks.SetShareSet(&markstore.ShareSet{Current: after})
+	// As in putShare: a start with no record listed is ready after this.
+	// So is one that listed records it did not load: this batch held
+	// every one of them (batchLoadRefusal) and replaced their records.
 	s.noShares.Store(nil)
+	s.loadFailed.Store(nil)
+	s.noSharesListed.Store(false)
+	s.listedShares = nil
 	return nil
 }
 

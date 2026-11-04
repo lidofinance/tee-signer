@@ -32,6 +32,10 @@ type shareStore struct {
 	// landPut, if set, stores each write it returns true for and then
 	// fails it, as a write whose reply was lost.
 	landPut func(k string) bool
+	// failGet, if set, fails each read it returns true for, as a host
+	// that lists a record but denies its read. The store calls it outside
+	// its lock.
+	failGet func(k string) bool
 	// delay, if set, is the time each call takes, as a remote store's
 	// round trip.
 	delay time.Duration
@@ -54,6 +58,12 @@ func (s *shareStore) putsOf(k string) int {
 
 func (s *shareStore) Get(k string) ([]byte, error) {
 	s.wait()
+	s.mu.Lock()
+	fail := s.failGet
+	s.mu.Unlock()
+	if fail != nil && fail(k) {
+		return nil, errors.New("test store: read denied")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if v, ok := s.m[k]; ok {

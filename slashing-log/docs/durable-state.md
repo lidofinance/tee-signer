@@ -221,8 +221,11 @@ shares it holds, never in a mark:
 - A share record carries `history` and `source_floor`, which bound votes.
   The mark log vouches for the set of share records (`marklog.md`, "Share
   set"). An older commit is not that set, so a restart from it loads no
-  key and reports `load_failed` in HEALTH: the operator removes every
-  share and imports them again. That costs liveness, never safety.
+  key, reports `load_failed` in HEALTH and refuses imports, but one: the
+  operator imports every share the start listed again in one
+  IMPORT_SHARES_SEALED batch, which replaces the restored records. The
+  copy puts those records back at every start, so removing them is no
+  way out here. That costs liveness, never safety.
 - The sealing key in an older commit is the one the shares of that commit
   are sealed with (the key changes only on a first start, which the commit
   records). Nothing opens with a mixed set.

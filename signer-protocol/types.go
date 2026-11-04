@@ -184,8 +184,8 @@ func (t RootType) DomainType() (DomainType, bool) {
 // committee message and a sync selection proof carry a slot, a block root
 // or a subcommittee the root message does not hold. The Gloas roots skip
 // the typed kinds' checks: one PTC vote and one envelope per slot, the
-// envelope's block and builder index, and the fee recipient and gas limit
-// of an envelope or proposer preferences. Only the switch
+// envelope's block, builder index and fee recipient, and the bound index,
+// fee recipient and gas limit of proposer preferences. Only the switch
 // allow_unverified_nonslashable lets them through; the typed kinds carry
 // the whole message.
 func (t RootType) Unverified() bool {

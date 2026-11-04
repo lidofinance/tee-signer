@@ -62,13 +62,27 @@ body  = version:u8  type:u8  id:u32  payload
   has no log_id yet, the restart floor is unreadable, or the log record
   of a share set reset fails), or because the stored share records are
   not the set the mark log vouches for, keeps serving. HEALTH then
-  reports `ready` false and `load_failed` with the error until a restart.
-  For a share set that does not match, the error names the stored records:
-  remove the ones that should not be there, or every share and import
-  again (`slashing-log/docs/marklog.md`, "Share set"). A store with no
-  readable record under a vouched set that is not empty reports the same
-  until an import records a new set. A single record that does not load
-  leaves `ready` as it is.
+  reports `ready` false and `load_failed` with the error until a restart,
+  and the runner refuses IMPORT_SHARE_SEALED and IMPORT_SHARES_SEALED
+  with `NOT_READY` and that error: an import then would have the log
+  vouch for a set without the stored records, for good. For a share set
+  that does not match, the error names the stored records: remove the
+  ones that should not be there, or put back the ones that are missing
+  (`slashing-log/docs/marklog.md`, "Share set"). One import is taken: an
+  IMPORT_SHARES_SEALED batch that holds every share name the start
+  listed. It replaces the stored records, so none is left out of the new
+  set; the keys load without history, and `ready` is true after it. A
+  batch that leaves a listed name out is refused. A store that lists
+  share records but gives none the runner can read, under a vouched set
+  that is not empty or under a log with no share set yet, reports the
+  same and refuses imports the same way, but that batch: put the records
+  back and restart, import every listed share in one batch, or remove
+  every share record and restart, then import. A
+  store that lists no share record under a vouched set that is not empty
+  (the state is lost, or every share was removed) reports `ready` false
+  and `load_failed` too, but takes imports: the first import records a
+  new set, and `ready` is true after it. What counts is the listing the
+  start saw. A single record that does not load leaves `ready` as it is.
 - A state copy refresh that fails makes HEALTH report `ready` false and
   `state_copy_failed` with the error. The next refresh that succeeds
   clears both.

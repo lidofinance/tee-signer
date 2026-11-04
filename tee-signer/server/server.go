@@ -106,12 +106,26 @@ type Server struct {
 	// runner's state changes until a restart (recover.go); nil before.
 	panicked atomic.Pointer[string]
 	// loadFailed is why LoadListedShares loaded no key because of a mark
-	// log error; nil otherwise. HEALTH then reports not ready.
+	// log error; nil otherwise. HEALTH then reports not ready, and imports
+	// are refused (loadRefusal), until a restart.
 	loadFailed atomic.Pointer[string]
-	// noShares is why LoadListedShares found no stored record of a set the
-	// mark log vouches for that is not empty; an import that records a
-	// new share set clears it.
+	// noShares is why LoadListedShares found no readable share record
+	// although the store lists some, or the mark log vouches for a set
+	// that is not empty; nil otherwise. HEALTH then reports not ready.
+	// With no record listed, an import clears it: it records a new set.
+	// With records listed (noSharesListed), imports are refused
+	// (loadRefusal) until a restart.
 	noShares atomic.Pointer[string]
+	// noSharesListed: the start that latched noShares saw share records
+	// listed that it did not load. An import then would write a set
+	// without them, so imports are refused (loadRefusal) until a restart.
+	noSharesListed atomic.Bool
+	// listedShares is the keys of the share names the start listed, when
+	// it latched loadFailed or noSharesListed for a share set reason; nil
+	// otherwise. A batch that imports every one of them replaces the
+	// stored set and is taken (batchLoadRefusal). Set before Serve, read
+	// under shareSetMu.
+	listedShares map[backend.Pubkey]bool
 	// copyFailed is why the last state copy refresh failed; nil after one
 	// that succeeded (SetStateCopyFailed).
 	copyFailed atomic.Pointer[string]
@@ -331,16 +345,29 @@ func sharePubkey(k string) (backend.Pubkey, error) {
 // changed or added a record, and the runner cannot tell which: it loads no
 // key, writes nothing and names the stored records, so the operator
 // removes what should not be there. A store that holds no readable record
-// of a set that is not empty loads no key and reports not ready until an
-// import records a new set. A log with no share set yet (written by
-// an image without share sets) resets once: every key loads without
-// history and with a source floor of at least the restart floor epoch now,
-// the bounds of an import without history, the log vouches for the
-// rewritten records, then the runner writes them. If that log record
-// fails, no key loads. A replayed record never gives a key history.
+// of a set that is not empty loads no key and reports not ready; the log
+// keeps vouching for the set it had, so the records put back load at the
+// next start. If that store lists no record at all (the state is lost, or
+// the operator removed every share), an import goes through and records
+// a new set over the old one. A log with no share set yet (written by an image without
+// share sets) resets once: every key loads without history and with a
+// source floor of at least the restart floor epoch now, the bounds of an
+// import without history, the log vouches for the rewritten records, then
+// the runner writes them. If that log record fails, no key loads. Such a
+// log with no readable record commits nothing: a store that lists no
+// record is a new signer, ready for its first import; one that lists
+// records it does not give reports not ready, and the records put back
+// take the reset at the next start. A replayed record never gives a key
+// history.
 //
 // A start that loads no key for one of these reasons latches load_failed
-// in HEALTH, and HEALTH reports not ready until a restart.
+// in HEALTH, and HEALTH reports not ready. While the store listed records
+// the start did not load, the runner refuses imports (loadRefusal) until
+// a restart: an import would record a set without the stored records,
+// and the log would never vouch for them again. One import is taken: a
+// batch that holds every share the start listed (batchLoadRefusal). It
+// replaces the stored records, so none is left out of the new set. The
+// decision is the start's listing, not a later one.
 func (s *Server) LoadListedShares(keys []string) (int, error) {
 	if err := s.checkLogID(); err != nil {
 		return 0, s.failLoad(err)
@@ -352,6 +379,9 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 	recs := map[backend.Pubkey]*shareRecord{}
 	hashes := map[backend.Pubkey][32]byte{}
 	var pks []backend.Pubkey
+	// listed: the keys of every share name, readable or not. A batch that
+	// imports all of them replaces the stored set (batchLoadRefusal).
+	listed := map[backend.Pubkey]bool{}
 	defer func() {
 		for _, r := range recs {
 			clear(r.Secret)
@@ -368,6 +398,7 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 		if _, seen := recs[pk]; seen {
 			continue
 		}
+		listed[pk] = true
 		blob, err := s.Platform.Store.Get(k)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", k, err))
@@ -404,17 +435,48 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 		}
 	}
 	reset := committed && !set.Vouches(markstore.ShareSetRoot(hashes))
+	// hidden: the store holds no readable record, and the log vouches for
+	// a set that is not empty, or has no share set yet. The commitment
+	// stays as the log has it.
+	hidden := false
 	if reset && set != nil {
 		if len(pks) > 0 {
+			s.listedShares = listed
 			return 0, errors.Join(append(errs, s.failLoad(fmt.Errorf("the stored share records are not the set the mark log vouches for, so a record was replaced, hidden or added "+
-				"(such as the share of an import that failed). Stored: %s. Remove the objects that should not be there and restart, or remove every share and import again",
+				"(such as the share of an import that failed). Stored: %s. Remove the objects that should not be there, or put back the ones that are missing, and restart; "+
+				"or import every listed share again in one batch, which replaces the stored records; or remove every share record and restart, then import the shares again. "+
+				"Other imports are refused until then",
 				shareNames(pks))))...)
 		}
-		why := "no key loaded: the mark log vouches for a share set that is not empty, and the store holds no readable share record. " +
-			"Put the records back, or import every share again"
+		why := "no key loaded: the mark log vouches for a share set that is not empty, and the store lists no share record. " +
+			"Put the records back and restart, or import the shares again"
+		if len(keys) > 0 {
+			why = "no key loaded: the mark log vouches for a share set that is not empty, and the store lists share records but holds no readable share record. " +
+				"Put the records back and restart, or import every listed share again in one batch, or remove every share record and restart, then import the shares again; other imports are refused until then"
+			s.noSharesListed.Store(true)
+			s.listedShares = listed
+		}
 		s.noShares.Store(&why)
 		s.Log.Warn(why)
-		reset = false
+		reset, hidden = false, true
+	}
+	if committed && set == nil && len(hashes) == 0 {
+		// A log with no share set and no readable record: the commitment
+		// stays nil, which vouches for the empty set already, so records
+		// that show up later take the one-time reset rather than failing
+		// against a committed empty set. A store that lists no record is
+		// a new signer. One that lists records it does not give is not:
+		// the records are hidden, or the objects are not records of this
+		// signer.
+		hidden = true
+		if len(keys) > 0 {
+			why := "no key loaded: the mark log holds no share set yet, and the store lists share records but holds no readable share record. " +
+				"Put the records back and restart, or import every listed share again in one batch, or remove every share record and restart, then import the shares again; other imports are refused until then"
+			s.noSharesListed.Store(true)
+			s.listedShares = listed
+			s.noShares.Store(&why)
+			s.Log.Warn(why)
+		}
 	}
 	blobs := map[backend.Pubkey][]byte{}
 	if reset {
@@ -458,9 +520,15 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 			if err != nil {
 				return 0, errors.Join(append(errs, s.failLoad(fmt.Errorf("the mark log does not vouch for the reset share records, no key loaded: %w", err)))...)
 			}
-		} else {
+		} else if !hidden {
 			s.Hooks.SetShareSet(cur)
 		}
+		// hidden: the log keeps the set it vouches for. The next record of
+		// any kind (a keep-alive, a config activation) carries that set on,
+		// so the records put back load at the next start. With records
+		// listed, imports are refused (loadRefusal) but a batch of every
+		// listed share (batchLoadRefusal); with none listed, an import
+		// records a new set over it (putShare, putShares).
 		s.shareSetMu.Lock()
 		s.shareHash, s.cut = hashes, cut
 		s.shareSetMu.Unlock()
@@ -470,7 +538,7 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 		k, rec := shareKey(pk), recs[pk]
 		if blob, ok := blobs[pk]; ok {
 			if err := s.Platform.Store.Put(k, blob); err != nil {
-				s.Log.Warn("share record not written back: the key loads with the fresh floor, and the next start loads no key; remove every share and import again",
+				s.Log.Warn("share record not written back: the key loads with the fresh floor, and the next start loads no key and names it (the mark log vouches for the rewritten record only); then import every listed share again in one batch, or remove every share record, restart and import the shares again",
 					"pubkey", pk.String()[:18], "err", err)
 			}
 		}
@@ -515,6 +583,9 @@ func (s *Server) putShare(pk backend.Pubkey, blob []byte) error {
 	if s.shareWritesStopped {
 		return errors.New("a failed share write is still vouched in the mark log: no share write until a restart")
 	}
+	if err := s.loadRefusal(); err != nil {
+		return err
+	}
 	// The set before. It leaves out the key's old record, which this
 	// runner did not load and which may say the key has history: a write
 	// that fails then leaves no set the log vouches for with it, and the
@@ -558,6 +629,8 @@ func (s *Server) putShare(pk backend.Pubkey, blob []byte) error {
 	}
 	s.shareHash = next
 	s.Hooks.SetShareSet(&markstore.ShareSet{Current: pending})
+	// A start with no record listed under a vouched set: this write
+	// recorded the new set, the runner is ready.
 	s.noShares.Store(nil)
 	s.cut.drop(pk)
 	return nil
@@ -738,6 +811,16 @@ func (s *Server) dispatch(ctx context.Context, f wire.Frame) ([]byte, error) {
 		}
 	}
 	switch f.Type {
+	case wireadmin.TypeImportShare, wireadmin.TypeImportSealed:
+		// A start that loaded no key for a share set reason: an import
+		// would record a set without the stored records (loadRefusal). A
+		// batch is checked against its keys (storeBatch).
+		if err := s.loadRefusal(); err != nil {
+			clear(f.Payload)
+			return nil, err
+		}
+	}
+	switch f.Type {
 	case wire.TypeHealth:
 		h, err := s.health()
 		if err != nil {
@@ -804,6 +887,56 @@ func (s *Server) dispatch(ctx context.Context, f wire.Frame) ([]byte, error) {
 	// IMPORT_SHARE is served only by debug builds (plainimport.go); a
 	// release build answers it as an unknown type (noplainimport.go).
 	return s.otherMessage(f)
+}
+
+// loadRefusal is the refusal of an import while a start that loaded no
+// key is latched with share records listed that it did not load
+// (loadFailed, or noShares with noSharesListed), nil otherwise. An import
+// then would write a share set without the stored records, and the log
+// would never vouch for them again (marklog.md, "Share set"). A start
+// that listed no record takes imports: the import records a new set.
+func (s *Server) loadRefusal() error {
+	if why := s.loadWhy(); why != nil {
+		return backend.Refused(backend.StatusNotReady, "%s", *why)
+	}
+	return nil
+}
+
+// loadWhy is the latched reason of loadRefusal, nil without one.
+func (s *Server) loadWhy() *string {
+	why := s.loadFailed.Load()
+	if why == nil && s.noSharesListed.Load() {
+		why = s.noShares.Load()
+	}
+	return why
+}
+
+// batchLoadRefusal is loadRefusal for a batch of keys. A batch that holds
+// the key of every share name the start listed (listedShares) is taken:
+// it writes a record for each of them, so the new set leaves no stored
+// record out, which is what the refusal is for. The set before is the
+// empty root: a start that latched the refusal set no share hash. The
+// caller holds shareSetMu.
+func (s *Server) batchLoadRefusal(batch map[backend.Pubkey]bool) error {
+	why := s.loadWhy()
+	if why == nil {
+		return nil
+	}
+	if s.listedShares == nil {
+		return backend.Refused(backend.StatusNotReady, "%s", *why)
+	}
+	var missing []string
+	for pk := range s.listedShares {
+		if !batch[pk] {
+			missing = append(missing, shareKey(pk))
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	slices.Sort(missing)
+	return backend.Refused(backend.StatusNotReady, "a batch that imports every share the start listed replaces the stored records and is taken; this one leaves out %d of %d (%s). %s",
+		len(missing), len(s.listedShares), missing[0], *why)
 }
 
 // lostRefusal is the refusal of a runner whose mark log latched

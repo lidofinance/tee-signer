@@ -363,15 +363,48 @@ stored), and, while a write is under way, the root of the set after it.
   as the blob of an import whose store write failed, which the host kept
   and stored later. The runner cannot tell which record, so it loads no
   key and writes nothing. The start's error and HEALTH `load_failed` name
-  the stored records, and `ready` is false until a restart. The operator
-  then does one of these and restarts:
-  - An added record (an import that failed): remove that object.
-  - A hidden record: put it back, if the host still has it.
-  - A replayed or changed record, or any case the operator cannot
-    resolve: remove every share and import them again. A store with no
-    readable record under a set that is not empty loads no key and
-    reports `ready` false and `load_failed`; imports still go through,
-    and the first one clears it and has the log vouch for the new set.
+  the stored records, and `ready` is false until a restart. The runner
+  refuses imports (IMPORT_SHARE_SEALED, IMPORT_SHARES_SEALED) with
+  `NOT_READY` and that error while it is in that state: an import would
+  have the log vouch for a set without the stored records, and they
+  would never load again. One import is taken: an IMPORT_SHARES_SEALED
+  batch that holds every share name the start listed (every `shares/`
+  name that is a lowercase hex key; a name that is not can never load
+  and does not count). It writes a record for each of them, so the new
+  set leaves no stored record out. The set before is the empty root,
+  the keys load without history, `ready` is true, and the next start
+  loads the batch's records as vouched. A batch that leaves a listed
+  name out is refused. The operator then does one of these:
+  - An added record (an import that failed): remove that object and
+    restart.
+  - A hidden record: put it back, if the host still has it, and restart.
+  - A replayed or changed record whose vouched version is gone for good:
+    the set cannot be put back. Import every listed share again in one
+    batch. Or remove every share record and restart; the runner then
+    takes imports again (next bullet). Either way the keys come back
+    without history. Where the records come back at every start (a
+    state copy that rolled back, `durable-state.md`), the batch is the
+    only way short of a new setup.
+- A store that lists share records but gives none the runner can read
+  (hidden, unreadable, or sealed under another setup or log) under a set
+  that is not empty loads no key and reports `ready` false and
+  `load_failed`. The log keeps vouching for the set it had, and every
+  record written meanwhile (a keep-alive, a config activation) carries it
+  on, so the records put back load at the next start. Imports are refused
+  with `NOT_READY` until then, for the reason above, but a batch of every
+  listed share, as above: the operator puts the records back and
+  restarts, imports every listed share in one batch, or removes every
+  share record and restarts, then imports.
+- A store that lists no share record at all under a set that is not
+  empty (the state is lost, or the operator removed every share) loads no
+  key and reports `ready` false and `load_failed` the same way, and the
+  log keeps vouching for the set it had, so the records put back load at
+  the next start. But it takes imports: there is no stored record an
+  import could orphan. The first import records a new set over the old
+  one (the set before is empty), the key loads without history, and
+  `ready` is true. The old records put back after that are no longer
+  vouched for and do not load. What counts is the listing the start saw,
+  not a later one.
 - A store write that fails is read back. If it landed, the runner keeps
   the set after; if not, it writes a log record at once that vouches for
   the set before only, so a blob the host kept and stores later is not
@@ -410,7 +443,17 @@ stored), and, while a write is under way, the root of the set after it.
   vouches for the rewritten records, then rewrites them. If that log
   record fails, no key loads. A record the reset could not write back
   leaves the store outside the vouched set, so the next start loads no
-  key: remove every share and import again.
+  key and names it; the rewritten record was never stored, so the
+  operator imports every listed share again in one batch, or removes
+  every share record, restarts and imports again, as above. Such a log
+  with no readable record commits nothing, so the log stays one with no
+  share set: a store that lists no record is a new signer, ready for its
+  first import; one that lists records it does not give (hidden records,
+  or objects that are not records of this signer) reports `ready` false
+  and `load_failed` and refuses imports with `NOT_READY`, but a batch of
+  every listed share: the operator puts the records back and restarts,
+  and they take the reset, or imports every listed share in one batch,
+  or removes every share record and restarts, then imports.
 
 The log is the anchor because the host cannot roll it back: records are
 written once under a lock, and the newest one wins (see "Rules"). The
