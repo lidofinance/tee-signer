@@ -36,8 +36,9 @@ body  = version:u8  type:u8  id:u32  payload
 - Connection limits (ATTEST-BUDGET-01, `tee-signer/server/limits.go`, each a
   runner flag). At most 256 connections are open at once (`-max-conns`),
   TLS handshakes included; more are closed at once. At most 32 TLS
-  handshakes run at once (`-max-handshakes`), and a peer has 10 seconds
-  for one. A frame must arrive within 30 seconds of its first byte. Each
+  handshakes run at once (`-max-handshakes`), at most 16 of them from one
+  IP address. A peer has 3 seconds to send its first byte and 10 seconds
+  for the whole handshake. A frame must arrive within 30 seconds of its first byte. Each
   frame may hold its first 64 KiB freely; the bytes past that count
   against 64 MiB for all frames together (`-max-inflight-mib`), and a
   frame that would go over closes its connection. So SIGN, HEALTH,
@@ -51,12 +52,6 @@ body  = version:u8  type:u8  id:u32  payload
   and `request_panic` with the request type and the panic. A panic in one of those four only closes its
   connection. A panic that leaves a lock of the server held for 5 minutes
   stops the runner, and its supervisor starts it again.
-- HEALTH's `device_source_alarm` says that a signed vote raised the
-  device mark's source bound by more than one epoch above the votes of
-  the epoch before. After a restart every key would refuse votes below
-  that source until the chain justifies it
-  (`slashing-log/docs/marklog.md`, "What it does not cover"). `ready`
-  stays true; the alarm clears at a restart.
 
 ## Responses
 

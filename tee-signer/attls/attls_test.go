@@ -22,6 +22,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -582,6 +583,52 @@ func TestListenWrapsNetworkAddressesOnly(t *testing.T) {
 	}
 	if _, _, err := Listen(vsockAddr, cfg, func(transport.Addr) (net.Listener, error) { return nil, errors.New("no vsock") }); err == nil {
 		t.Fatal("an open error was swallowed")
+	}
+}
+
+// A peer on a TLS listener that sends nothing is cut after
+// FirstByteTimeout. Once a byte has come the deadline is gone, and the
+// handshake runs under the server's own time limit.
+func TestFirstByteDeadline(t *testing.T) {
+	defer func(d time.Duration) { FirstByteTimeout = d }(FirstByteTimeout)
+	FirstByteTimeout = 200 * time.Millisecond
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fl := firstByteListener{l}
+	defer fl.Close()
+	accept := func() (peer, c net.Conn) {
+		peer, err := net.Dial("tcp", l.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { peer.Close() })
+		c, err = fl.Accept()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { c.Close() })
+		return peer, c
+	}
+	buf := make([]byte, 1)
+	_, silent := accept()
+	if _, err := silent.Read(buf); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("a silent peer: read %v, want the deadline", err)
+	}
+	peer, c := accept()
+	if _, err := peer.Write([]byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Read(buf); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(2 * FirstByteTimeout)
+		_, _ = peer.Write([]byte{2})
+	}()
+	if n, err := c.Read(buf); n != 1 || err != nil {
+		t.Fatalf("after the first byte: read %d, %v; want the next byte", n, err)
 	}
 }
 

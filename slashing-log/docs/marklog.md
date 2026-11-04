@@ -361,8 +361,10 @@ stored), and, while a write is under way, the root of the set after it.
   takes that record; so does a start cut in the middle. This costs every
   key one wait for its floor, never safety.
 - A store write that fails is read back. If it landed, the runner keeps
-  the set after; if not, the next log record vouches for the set before
-  only, so a blob the host kept and stores later is not vouched for.
+  the set after; if not, it writes a log record at once that vouches for
+  the set before only, so a blob the host kept and stores later is not
+  vouched for. If that record fails too, the runner takes no share write
+  until a restart.
 - After a share write the newest record keeps its pending root until the
   next record, which carries the set after as current. So a pending root
   in the newest record does not mean a write was cut. It also vouches
@@ -529,18 +531,10 @@ holds its true mark.
   bring about. In signing_mode single the whole validator set behind the
   signer stops attesting; in threshold mode one member of the cluster
   does. It cannot cause a slashing: it only refuses votes. The
-  runner raises an alarm when such a vote is signed, before any restart
-  (`tee-signer/server/sourcewatch.go`): a vote whose source is more than
-  one epoch above the highest source of the votes it signed for the
-  epoch before logs at error level, and HEALTH shows
-  `device_source_alarm` until the runner restarts. The alarm also fires
-  when a long non-finality period ends and the chain justifies a much
-  newer epoch at once; then the operator checks that the chain justified
-  the epoch the alarm names. Do not restart a runner with the alarm on
-  until the chain has justified that epoch. The planned fix is a source
-  bound per key in the record, with batched writes, so a restart gives
-  the raised bound only to the key that signed it.
-- An admin who also controls key release (the AWS KMS key policy, the GCP
+  restart floor makes this cost nothing extra: a vote never has a source
+  above the epoch of the clock when it was signed, and after a restart the
+  floor already holds every key's votes until the chain justifies the
+  floor epoch, which is higher.- An admin who also controls key release (the AWS KMS key policy, the GCP
   WIF provider and the KMS key's IAM, the Azure key's release policy) can
   decrypt the sealed share, make key blobs and forge records. The store
   resists the admin exactly as far as key release does (research note,

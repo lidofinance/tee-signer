@@ -113,7 +113,8 @@ func TestHandshakeBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{Log: quiet}
+	// All peers here come from 127.0.0.1: no cap per address.
+	s := &Server{Log: quiet, Limits: Limits{MaxHandshakesPerAddr: -1}}
 	addr := serveOn(t, s, func(l net.Listener) net.Listener { return tls.NewListener(l, cfg) })
 	silent := dialN(t, addr, 32)
 	// Wait until the server has taken all 32 into their handshakes.
@@ -129,6 +130,38 @@ func TestHandshakeBudget(t *testing.T) {
 	}
 	if closedBy(silent[0], 100*time.Millisecond) {
 		t.Fatal("a handshake within the budget was closed")
+	}
+}
+
+// ATTEST-BUDGET-01: one IP address runs at most 16 handshakes at once
+// (the default cap per address). Its next peer is closed at once, and a
+// peer from another address still gets a slot of the global budget.
+func TestHandshakeBudgetPerAddr(t *testing.T) {
+	cfg, _, err := attls.ServerConfig(selfSignedCA(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{Log: quiet}
+	addr := serveOn(t, s, func(l net.Listener) net.Listener { return tls.NewListener(l, cfg) })
+	silent := dialN(t, addr, 16)
+	for deadline := time.Now().Add(10 * time.Second); s.handshakes.n.Load() < 16; {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d handshakes running, want 16", s.handshakes.n.Load())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	extra := dialN(t, addr, 1)[0]
+	if !closedBy(extra, 2*time.Second) {
+		t.Fatal("handshake 17 from one address waits over the cap of 16")
+	}
+	d := net.Dialer{LocalAddr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 2)}}
+	other, err := d.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if closedBy(other, 200*time.Millisecond) || closedBy(silent[0], 100*time.Millisecond) {
+		t.Fatal("a handshake within the caps was closed")
 	}
 }
 
@@ -219,5 +252,18 @@ func TestIdleTimeout(t *testing.T) {
 	}
 	if !closedBy(idle, 2*time.Second) {
 		t.Fatal("an idle connection outlived the idle timeout")
+	}
+}
+
+// A server on two listeners sets its start time once, with no data race
+// between the two Serve calls (go test -race).
+func TestServeTwoListenersStartTime(t *testing.T) {
+	s := &Server{Log: quiet}
+	a := serveOn(t, s, nil)
+	b := serveOn(t, s, nil)
+	for _, addr := range []string{a, b} {
+		if err := health(t, addr); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

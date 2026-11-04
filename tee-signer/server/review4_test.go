@@ -4,6 +4,7 @@ package server
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/lidofinance/tee-signer/governance/importorder"
@@ -110,11 +111,10 @@ func newKey(t *testing.T) ([32]byte, backend.Pubkey) {
 	return sk, pk
 }
 
-// Issue #4 F1 (issue #5 R5): a client with an ordinary client certificate
-// (no admin role) and no real share makes its own BLS secret, seals it to
-// the runner's import key with interchange maxima of 2^64-1 and imports it.
-// The runner must refuse the import and must never write a mark above the
-// clock horizon. Before the fix it raised the mark log to the tombstone
+// Issue #4 F1 (issue #5 R5): a client with no real share makes its own BLS
+// secret, seals it to the runner's import key with interchange maxima of
+// 2^64-1 and imports it. The runner must refuse the import for its maxima
+// and must never write a mark above the clock horizon. Before the fix it raised the mark log to the tombstone
 // mark: the honest key stopped signing and a restart read the log as
 // handed over.
 func TestReview4F1SealedImportRaisesMarkBeyondClock(t *testing.T) {
@@ -131,19 +131,15 @@ func TestReview4F1SealedImportRaisesMarkBeyondClock(t *testing.T) {
 		t.Fatalf("honest vote before the hostile import: %v", err)
 	}
 
-	// The hostile import, over mutual TLS with a plain client certificate.
-	root := newTestCA(t, nil, nil, nil)
-	c, err := dial(t, e.srv, root.pem(), root.leaf(t, clientAuth, nil))
-	if err != nil {
-		t.Fatal(err)
-	}
+	// The hostile import, sent with every right: a client without the
+	// admin role is refused before the payload is read
+	// (TestReview4F1SealedImportNeedsAdminRole), so only an admin import
+	// reaches the maxima check.
 	ask, apk := newKey(t)
 	maxima := markstore.Tombstone
-	_, err = c.call(wireadmin.TypeImportSealed, e.sealedImportPayload(apk, ask, 99, &maxima))
-	if err == nil {
-		t.Errorf("IMPORT_SHARE_SEALED with maxima 2^64-1 from an ordinary client certificate was accepted")
-	} else {
-		t.Logf("hostile import refused: %v", err)
+	err := e.importSealed(apk, ask, 99, &maxima)
+	if refusedWith(err) != backend.StatusBadRequest || !strings.Contains(err.Error(), "above the clock horizon") {
+		t.Errorf("IMPORT_SHARE_SEALED with maxima 2^64-1: %v, want BAD_REQUEST for the clock horizon", err)
 	}
 	horizon := now + e.setup.Safety.MaxSignEpochsAheadOfClock + 1
 	if m, _ := e.marks.Mark(); m.TargetEpoch > horizon || m.SourceEpoch > horizon || m.BlockSlot/8 > horizon {
