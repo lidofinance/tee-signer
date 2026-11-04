@@ -60,6 +60,13 @@ make nts      # Rust NTS library: crates from crates.io, then an offline build i
 make build    # the runners, one per cloud, and the host tools; each passes the release gate
 ```
 
+Ubuntu 26.04 is not a supported workbench. Known differences there:
+`qemu-user-static` is a virtual package (install `qemu-user-binfmt`),
+the `docker.io` package has no buildx, and the image builds fail on the
+default Docker builder with `exporter option "rewrite-timestamp" conflicts
+with "unpack"`. A docker-container builder works:
+`docker buildx create --use --driver docker-container`.
+
 ## Test
 
 ```sh
