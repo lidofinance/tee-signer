@@ -30,11 +30,13 @@
 #              pinned source is enough) it runs cargo and apt, which download.
 #              An offline build sets this and stops if the image is missing.
 #
-# The CHAIN, CHAIN_JSON, CLIENT_CA, REGION, KMS_KEY_ARN and MARK_BUCKET
-# settings of the per-operator images are gone. The build stops if one is
-# set: the value belongs in the setup. Make the setup with
-# signer-admin/cmd/setup-tool (encode, then check -platform nitro -chain
-# governance/chains/CHAIN.json).
+# CHAIN picks the build (scripts/common.sh): the mainnet runner when unset,
+# else the non-prod runner of that chain. Its chain config (CHAIN_JSON,
+# which a devnet needs) is checked, not put into the image. The CLIENT_CA,
+# REGION, KMS_KEY_ARN, MARK_BUCKET and MARK_SIGNER settings of the
+# per-operator images are gone. The build stops if one is set: the value
+# belongs in the setup. Make the setup with signer-admin/cmd/setup-tool
+# (encode, then check -platform nitro -chain governance/chains/CHAIN.json).
 #
 # Other arch than the host (for example an arm64 EIF for Graviton on an
 # x86_64 machine): nitro-cli 1.5.2 picks the kernel blob name from the arch

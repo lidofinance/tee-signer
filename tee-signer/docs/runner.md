@@ -279,9 +279,10 @@ at one epoch, the last is the one in force, and the setup holds that one
   printed as scheme and host only.
 - `identify FILE` and `verify NAME FILE` tell the chain of a chain config.
 
-The image builds take no chain and refuse `CHAIN` and `CHAIN_JSON`. The
-deploy steps that hand over a setup (`platform-azure/deploy/deploy.sh
-group-deploy`, `platform-gcp/deploy/deploy.sh vm-create`) need `CHAIN`; on
+`CHAIN` picks the runner build of the image builds, and the chain config
+is checked, not put into the image. The deploy steps that hand over a
+setup (`platform-azure/deploy/deploy.sh group-deploy`,
+`platform-gcp/deploy/deploy.sh vm-create`) need `CHAIN`; on
 AWS run `setup-tool check -platform nitro -chain` before
 `platform-aws/deploy/parent-run.sh`.
 

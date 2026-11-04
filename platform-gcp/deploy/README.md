@@ -82,9 +82,10 @@ CHAIN=<chain> CHAIN_JSON=chain.json SETUP_FILE=signer-3.bin CONFIRM=yes platform
   grants it to itself, a binding inherited from the project or the
   organization) can still plant one, and the runner cannot see such
   bindings. GCP is outside the admin-proof goal.
-- `build-image.sh` refuses `CHAIN`, `CHAIN_JSON` and `CLIENT_CA`, and
-  `render_dockerfile` refuses `STATE_STORE` and `MARK_SIGNER`: those are
-  setup fields.
+- `CHAIN` picks the runner build of `build-image.sh` (the mainnet runner
+  when unset); the chain config is checked, not put into the image. The
+  script refuses `CLIENT_CA`, and `render_dockerfile` refuses `STATE_STORE`
+  and `MARK_SIGNER`: those are setup fields.
 
 ## Hardware: default and production
 
@@ -176,7 +177,8 @@ copy (`slashing-log/docs/durable-state.md`) are the setup's
 platform-gcp/deploy/build-image.sh
 ```
 
-The build takes no chain and no CA. `build-image.sh` builds twice per run and
+No chain config and no CA go into the image; `CHAIN` picks the runner build,
+the mainnet runner when unset. `build-image.sh` builds twice per run and
 compares the digests. The context file gets an explicit mode (`install -m`,
 `COPY --chmod`), as in `platform-azure/deploy`, so the digest does not depend
 on the builder's umask. A change to the runner or the flags changes the

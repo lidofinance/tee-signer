@@ -73,8 +73,10 @@ CHAIN=<chain> CHAIN_JSON=chain.json SETUP_FILE_1=signer-1.bin CONFIRM=yes platfo
 - The runner stores no data key. Anyone with the released key's public half
   could make an RSA-OAEP blob and put it in a host-writable state folder, so
   a stored, wrapped data key could be planted.
-- `build-image.sh` refuses `CHAIN`, `CHAIN_JSON` and `CLIENT_CA` and checks
-  that the image holds no `/etc/signer`.
+- `CHAIN` picks the runner build of `build-image.sh` (the mainnet runner
+  when unset); the chain config is checked, not put into the image. The
+  script refuses `CLIENT_CA` and checks that the image holds no
+  `/etc/signer`.
 
 ## What one signer looks like
 
