@@ -329,11 +329,13 @@ int sc_slashing_import(sc_slashing_state *st, const sc_watermark *imported,
         return SC_ERR_ARG;
     next = st->committed;
     wm_merge(&next, imported);
+    /* RAM first: a higher RAM mark only refuses more, so it holds even when
+     * the store fails and the host keeps signing. */
+    wm_merge(&st->ram, imported);
     if (!wm_equal(&next, &st->committed)) {
         if (store(ctx, pubkey, &next) != SC_OK)
             return SC_ERR_STORAGE;
         st->committed = next;
     }
-    wm_merge(&st->ram, imported);
     return SC_OK;
 }

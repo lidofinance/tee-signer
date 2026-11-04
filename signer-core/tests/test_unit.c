@@ -1158,6 +1158,100 @@ static sc_beacon_block_header blk(uint64_t slot, uint8_t tag)
     return b;
 }
 
+/*
+ * An import whose store fails returns SC_ERR_STORAGE and leaves the stored
+ * and committed marks as they were, but still raises the RAM marks: a host
+ * that keeps signing gets no vote or block inside the imported history.
+ */
+static void test_import_store_failure(void)
+{
+    for (uint32_t scope = SC_MARKS_PER_VALIDATOR; scope <= SC_MARKS_PER_DEVICE; scope++) {
+        host_t h = {0};
+        sc_config cfg;
+        sc_slashing_state before, after;
+        uint8_t sig[96];
+        make_config(&cfg);
+        cfg.mark_scope = scope;
+        sc_signer *s = new_signer(&h, &cfg, 2, 0);
+        vkeys k = add_validator(s, 70, SC_INDEX_UNKNOWN);
+
+        set_epoch(&h, E + 10);
+        sc_attestation_data a = att(E + 3, E + 10, 1);
+        CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_OK);
+        CHECK_RC(sc_signer_get_state(s, k.pk, &before), SC_OK);
+
+        sc_watermark imp = {(E + 15) * 32, E + 5, E + 20,
+                            SC_WM_HAS_BLOCK | SC_WM_HAS_ATTESTATION};
+        int writes = h.writes;
+        h.fail_store = 1;
+        CHECK_RC(sc_signer_import(s, k.pk, cfg.genesis_validators_root, &imp), SC_ERR_STORAGE);
+        h.fail_store = 0;
+        CHECK(h.writes == writes);
+        CHECK_RC(sc_signer_get_state(s, k.pk, &after), SC_OK);
+        CHECK(memcmp(&before.committed, &after.committed, sizeof before.committed) == 0);
+        CHECK(after.ram.block_slot == imp.block_slot && after.ram.source_epoch == E + 5 &&
+              after.ram.target_epoch == E + 20);
+
+        /* A double vote on the imported target, a vote that the imported
+         * (E + 5, E + 20) surrounds, and a block at the imported slot are
+         * refused. A vote past the history signs. */
+        set_epoch(&h, E + 20);
+        a = att(E + 6, E + 20, 2);
+        CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_ERR_SLASH_TARGET);
+        set_epoch(&h, E + 21);
+        a = att(E + 4, E + 21, 2);
+        CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_ERR_SLASH_SOURCE);
+        sc_beacon_block_header b = blk(imp.block_slot, 2);
+        CHECK_RC(sc_sign_block(s, k.pk, &b, sig), SC_ERR_SLASH_BLOCK);
+        a = att(E + 6, E + 21, 2);
+        CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_OK);
+    }
+}
+
+/*
+ * An import at or below the restart floor is stored: the floor is in RAM
+ * only, and the next restart may compute a lower one. Here
+ * max_epochs_ahead 1 gives floor F = E + 2 at epoch E; the import's target
+ * E + 2 must be durable, since a restart with the clock one epoch back
+ * floors at E + 1 and would otherwise sign (E + 1, E + 2).
+ */
+static void test_import_below_floor(void)
+{
+    for (uint32_t scope = SC_MARKS_PER_VALIDATOR; scope <= SC_MARKS_PER_DEVICE; scope++) {
+        host_t h = {0};
+        sc_config cfg;
+        sc_slashing_state st;
+        uint8_t sig[96];
+        vkeys k;
+        make_config(&cfg);
+        cfg.mark_scope = scope;
+        cfg.max_epochs_ahead = 1;
+
+        set_epoch(&h, E);
+        sc_signer *s1 = new_signer(&h, &cfg, 2, 0);
+        CHECK_RC(add_at_clock(s1, 71, &k), SC_OK);
+        CHECK_RC(sc_signer_get_state(s1, k.pk, &st), SC_OK);
+        CHECK(st.ram.target_epoch == E + 2);
+        CHECK(h.writes == 0);
+        sc_watermark imp = {0, E - 50, E + 2, SC_WM_HAS_ATTESTATION};
+        CHECK_RC(sc_signer_import(s1, k.pk, cfg.genesis_validators_root, &imp), SC_OK);
+        CHECK(h.writes == 1);
+
+        /* Restart with the clock one epoch back: floor E + 1. */
+        set_epoch(&h, E - 1);
+        sc_signer *s2 = new_signer(&h, &cfg, 2, 0);
+        CHECK_RC(add_at_clock(s2, 71, &k), SC_OK);
+        CHECK_RC(sc_signer_get_state(s2, k.pk, &st), SC_OK);
+        CHECK(st.ram.target_epoch == E + 2 && st.ram.source_epoch == E + 1);
+        set_epoch(&h, E + 2);
+        sc_attestation_data a = att(E + 1, E + 2, 1);
+        CHECK_RC(sc_sign_attestation(s2, k.pk, &a, sig), SC_ERR_SLASH_TARGET);
+        set_epoch(&h, E + 3);
+        a = att(E + 1, E + 3, 1);
+        CHECK_RC(sc_sign_attestation(s2, k.pk, &a, sig), SC_OK);
+    }
+}
+
 /* One run: the last attestation and the last block repeat with the same
  * signature and no write; an older vote or another root does not. */
 static void test_repeats_in_run(void)
@@ -3680,6 +3774,8 @@ int main(int argc, char **argv)
     test_restart();
     test_store_failure();
     test_import();
+    test_import_store_failure();
+    test_import_below_floor();
     test_hash_cache();
     test_table_and_errors();
     test_duplicate_share();
