@@ -11,9 +11,9 @@ from files and never printed or put on a command line.
 
 ## What the test shows
 
-- One image per cloud runs any signer of any chain. The signer's values
-  come in its setup at start, through the platform's channel: the host
-  agent over vsock on Nitro, `SIGNER_SETUP` on Azure, the metadata
+- One image per cloud runs any signer of its build's chain. The signer's
+  values come in its setup at start, through the platform's channel: the
+  host agent over vsock on Nitro, `SIGNER_SETUP` on Azure, the metadata
   attribute `signer-setup` on GCP.
 - The key policy (AWS), the release policy (Azure) and the WIF condition
   (GCP) pin the image once. A new chain or a new signer is a new setup, not

@@ -7,7 +7,8 @@ package main
 // chains.go), so it never holds keys of mainnet or another public chain. It
 // checks the chain of the setup before the platform starts, so before any
 // key release and any store, and refuses to start on any other chain. The
-// mainnet build has none of this and runs on any chain.
+// mainnet build runs on mainnet only, on its cloud platforms
+// (prodchain.go).
 //
 // The check hooks into the two registries the platform files fill
 // (platforms.go), so the mainnet build's code stays as it is:

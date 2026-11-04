@@ -58,15 +58,32 @@ func TestTableMatchesSources(t *testing.T) {
 	}
 }
 
-// The mainnet build runs on any chain.
-func TestMainnetRunsAnywhere(t *testing.T) {
+// The mainnet build runs on mainnet with its exact values only. It
+// refuses the other public networks, devnets, and a non-prod row's fork
+// version with mainnet's root.
+func TestMainnetOwnChainOnly(t *testing.T) {
+	mf, mr := fork(t, public["mainnet"][0]), root(t, public["mainnet"][1])
+	if err := Mainnet.CheckChain(mf, mr); err != nil {
+		t.Fatalf("mainnet: %v", err)
+	}
 	for name, v := range public {
-		if err := Mainnet.CheckChain(fork(t, v[0]), root(t, v[1])); err != nil {
+		if name == "mainnet" {
+			continue
+		}
+		if err := Mainnet.CheckChain(fork(t, v[0]), root(t, v[1])); err == nil || !strings.Contains(err.Error(), "a mainnet build runs on mainnet") {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
-	if err := Mainnet.CheckChain(otherFork, otherRoot); err != nil {
-		t.Error(err)
+	for what, v := range map[string]values{
+		"devnet": {otherFork, otherRoot}, "ci-test": {ciTestFork, ciTestRoot},
+		"hoodi fork version, mainnet root":   {fork(t, public["hoodi"][0]), mr},
+		"ci-test fork version, mainnet root": {ciTestFork, mr},
+		"devnet fork version, mainnet root":  {otherFork, mr},
+		"mainnet fork version, other root":   {mf, otherRoot},
+	} {
+		if err := Mainnet.CheckChain(v.f, v.r); err == nil {
+			t.Errorf("%s: accepted", what)
+		}
 	}
 }
 
