@@ -514,7 +514,11 @@ func (s *Signer) AddValidator(pubkey backend.Pubkey, secret [32]byte, index uint
 	*sec = secret
 	var share [48]byte
 	rc := C.sc_signer_add_validator(s.s, u8(pubkey[:]), (*C.uint8_t)(unsafe.Pointer(sec)), C.uint64_t(index), u8(share[:]))
-	if err := s.refusal(rc, "add validator"); err != nil {
+	what := "add validator"
+	if rc == C.SC_ERR_DUPLICATE && !s.hasKey(pubkey) {
+		what = "add validator: this share is loaded under another pubkey"
+	}
+	if err := s.refusal(rc, what); err != nil {
 		return backend.ValidatorKey{}, err
 	}
 	k := backend.ValidatorKey{Pubkey: pubkey, SharePubkey: share, Index: index}
@@ -531,6 +535,16 @@ func (s *Signer) AddValidator(pubkey backend.Pubkey, secret [32]byte, index uint
 		}
 	}
 	return k, nil
+}
+
+// hasKey reports whether pubkey is loaded. The caller holds s.mu.
+func (s *Signer) hasKey(pubkey backend.Pubkey) bool {
+	for _, k := range s.keys {
+		if k.Pubkey == pubkey {
+			return true
+		}
+	}
+	return false
 }
 
 // Keys lists the loaded validators in load order.

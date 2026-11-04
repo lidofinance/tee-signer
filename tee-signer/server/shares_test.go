@@ -11,6 +11,7 @@ import (
 	"github.com/lidofinance/tee-signer/platform/dev"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-core/software"
+	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/tee-signer/state"
 	"github.com/lidofinance/tee-signer/trusted-time/clock"
 )
@@ -172,5 +173,46 @@ func TestOnlyTheFirstListLoads(t *testing.T) {
 	}
 	if n, err := s.LoadListedShares([]string{"sealing/key"}); n != 0 || err == nil {
 		t.Fatalf("a name outside shares/: %d %v", n, err)
+	}
+}
+
+// One share under two pubkeys: an import of the second is refused before
+// it is stored, and at a start the second record does not load while the
+// other keys do.
+func TestDuplicateShareRefused(t *testing.T) {
+	store := &shareStore{m: map[string][]byte{}}
+	sk, _ := software.NewSecret()
+	pk1, _ := core.PubkeyOf(sk)
+	other, _ := software.NewSecret()
+	pk2, _ := core.PubkeyOf(other)
+	s := shareServer(t, store, [32]byte{}, [32]byte{})
+	if _, err := s.addShare(pk1, &sk, 7, nil, "test"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.addShare(pk2, &sk, 8, nil, "test")
+	if backend.StatusOf(err) != backend.StatusDuplicate || !strings.Contains(err.Error(), "another pubkey") {
+		t.Fatalf("second pubkey for one share: %v", err)
+	}
+	if l, _ := ListShares(store); len(l) != 1 {
+		t.Fatalf("the refused import wrote a share: %v", l)
+	}
+
+	// A store that holds both records, written by runners that each held
+	// one: the start loads one of them and goes on.
+	if _, err := shareServer(t, store, [32]byte{}, [32]byte{}).addShare(pk2, &sk, 8, nil, "test"); err != nil {
+		t.Fatal(err)
+	}
+	sk3, _ := software.NewSecret()
+	pk3, _ := core.PubkeyOf(sk3)
+	if _, err := shareServer(t, store, [32]byte{}, [32]byte{}).addShare(pk3, &sk3, 9, nil, "test"); err != nil {
+		t.Fatal(err)
+	}
+	start := shareServer(t, store, [32]byte{}, [32]byte{})
+	n, err := start.LoadShares()
+	if n != 2 || backend.StatusOf(err) != backend.StatusDuplicate || !strings.Contains(err.Error(), "another pubkey") {
+		t.Fatalf("start: %d loaded, %v", n, err)
+	}
+	if _, err := start.Signer.State(pk3); err != nil {
+		t.Fatalf("the other key did not load: %v", err)
 	}
 }

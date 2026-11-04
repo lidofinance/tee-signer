@@ -252,6 +252,16 @@ int sc_signer_add_validator(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
     memcpy(v->pubkey, pubkey, SC_PUBKEY_LEN);
     blst_sk_to_pk_in_g1(&pk, &v->sk);
     blst_p1_compress(v->share_pubkey, &pk);
+    /* One share, one set of marks. Under a second pubkey the same share
+     * would sign again for a slot or target with marks of its own, and
+     * attestation data names no validator, so that vote is a valid partial
+     * for the first pubkey. Share pubkeys are public: memcmp is fine. */
+    for (uint32_t i = 0; i < s->count; i++) {
+        if (memcmp(s->validators[i].share_pubkey, v->share_pubkey, SC_PUBKEY_LEN) == 0) {
+            sc_wipe(v, sizeof *v);
+            return SC_ERR_DUPLICATE;
+        }
+    }
     v->index = validator_index;
     if (share_pubkey_out)
         memcpy(share_pubkey_out, v->share_pubkey, SC_PUBKEY_LEN);

@@ -619,6 +619,8 @@ void sc_signer_wipe(sc_signer *s);
  * public key of that share. Calls ops.now (SC_ERR_CLOCK if it fails) and
  * ops.load_watermark, or ops.load_device_mark for the first validator, and
  * applies the restart floor. The validator starts with no repeat roots.
+ * SC_ERR_DUPLICATE if pubkey is loaded, or if the same share is loaded
+ * under another pubkey: one share has one set of marks.
  */
 int sc_signer_add_validator(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
                             const uint8_t secret[SC_SECRET_LEN], uint64_t validator_index,
