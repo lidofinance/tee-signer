@@ -43,7 +43,8 @@ import (
 // gateway must find the indices from the share keys. The validator client
 // reaches the gateway over TLS with a client certificate of the client
 // CA; a client named by its fingerprint gets in too, and clients without
-// an accepted certificate, and plain HTTP, get no service.
+// an accepted certificate, and plain HTTP, get no service. The metrics
+// listener is mtls too and is scraped with the same client certificate.
 func TestE2EGateway(t *testing.T) {
 	c := newChain(t)
 	dir := t.TempDir()
@@ -106,6 +107,7 @@ func TestE2EGateway(t *testing.T) {
 	gtls := newGatewayTLS(t, dir)
 	cfg := fmt.Sprintf(`listen: %s
 metrics: %s
+metrics_access: mtls
 tls:
   cert: %s
   key: %s
@@ -240,8 +242,22 @@ signers:
 	// The metrics after these requests: each of the 3 signers has its 3
 	// connections up, the requests counted by type and result, and the
 	// certificate in force is the one in the file.
-	metricsURL := "http://" + metricsAddr + "/metrics"
-	m := scrapePools(t, metricsURL, 3, 3)
+	// The metrics listener is mtls too (metrics_access), with the same
+	// server certificate and accepted clients.
+	metricsURL := "https://" + metricsAddr + "/metrics"
+	for name, get := range map[string]func() (*http.Response, error){
+		"no client certificate":  func() (*http.Response, error) { return gtls.noCert.Get(metricsURL) },
+		"a client of another CA": func() (*http.Response, error) { return gtls.stranger.Get(metricsURL) },
+		"plain HTTP":             func() (*http.Response, error) { return http.Get("http://" + metricsAddr + "/metrics") },
+	} {
+		if resp, err := get(); err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				t.Fatalf("metrics, %s: served", name)
+			}
+		}
+	}
+	m := scrapePools(t, gtls.client, metricsURL, 3, 3)
 	for series, want := range map[string]float64{
 		`teesigner_gateway_requests_total{type="ATTESTATION",result="ok"}`:             1,
 		`teesigner_gateway_requests_total{type="ATTESTATION",result="denied"}`:         1,
@@ -250,6 +266,7 @@ signers:
 		`teesigner_gateway_keys`:                                   1,
 		`teesigner_gateway_client_cert_not_after_seconds`:          certNotAfter(t, certFile),
 		`teesigner_gateway_client_cert_reloads_total{result="ok"}`: 0,
+		`teesigner_gateway_server_cert_not_after_seconds`:          certNotAfter(t, gtls.certFile),
 	} {
 		if got := m[series]; got != want {
 			t.Fatalf("%s = %v, want %v", series, got, want)
@@ -301,7 +318,7 @@ signers:
 	if n := strings.Count(gw.logText(), "signer attested") - attestedBefore; n < wantMoved {
 		t.Fatalf("%d new attested connections for the new certificate, want %d", n, wantMoved)
 	}
-	m = scrapePools(t, metricsURL, 3, 3)
+	m = scrapePools(t, gtls.client, metricsURL, 3, 3)
 	if got, want := m[`teesigner_gateway_client_cert_not_after_seconds`], certNotAfter(t, certFile); got != want || got == firstNotAfter {
 		t.Fatalf("certificate expiry after the reload %v, want %v (before %v)", got, want, firstNotAfter)
 	}
@@ -355,9 +372,9 @@ signers:
 
 // scrapeMetrics reads the gateway's /metrics: each sample as its series
 // (name and labels) and value.
-func scrapeMetrics(t *testing.T, url string) map[string]float64 {
+func scrapeMetrics(t *testing.T, cl *http.Client, url string) map[string]float64 {
 	t.Helper()
-	resp, err := http.Get(url)
+	resp, err := cl.Get(url)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,11 +400,11 @@ func scrapeMetrics(t *testing.T, url string) map[string]float64 {
 
 // scrapePools scrapes until each of the signers gw-runner-1 to n has
 // want connections up; a connection counts once a request went on it.
-func scrapePools(t *testing.T, url string, n int, want float64) map[string]float64 {
+func scrapePools(t *testing.T, cl *http.Client, url string, n int, want float64) map[string]float64 {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		m := scrapeMetrics(t, url)
+		m := scrapeMetrics(t, cl, url)
 		ok := true
 		for i := range n {
 			ok = ok && m[fmt.Sprintf(`teesigner_gateway_signer_connections_up{signer="gw-runner-%d"}`, i+1)] == want

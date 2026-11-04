@@ -221,8 +221,8 @@ func TestMetricsSetting(t *testing.T) {
 	}
 }
 
-// The tls section and the plain HTTP rule: defaults, relative paths, and
-// every refusal.
+// The tls section: defaults, relative paths, fingerprints, and the
+// refusals of its own fields.
 func TestTLSSettings(t *testing.T) {
 	fp := strings.Repeat("ab", 32)
 	fpColons := strings.ToUpper(strings.TrimSuffix(strings.Repeat("CD:", 32), ":"))
@@ -230,69 +230,128 @@ func TestTLSSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !c.TLSOn() || c.TLS.MinVersion != "1.2" || c.TLS.ReloadInterval != 10*time.Second || !filepath.IsAbs(c.TLS.Cert) ||
-		!filepath.IsAbs(c.TLS.Key) || !filepath.IsAbs(c.TLS.ClientCA) {
-		t.Fatalf("defaults: %+v", c.TLS)
+	if !c.TLSOn() || c.Access != AccessMTLS || c.TLS.MinVersion != "1.3" || c.TLS.ReloadInterval != 10*time.Second ||
+		!filepath.IsAbs(c.TLS.Cert) || !filepath.IsAbs(c.TLS.Key) || !filepath.IsAbs(c.TLS.ClientCA) {
+		t.Fatalf("defaults: %s %+v", c.Access, c.TLS)
 	}
 	s := c.ServerTLS()
-	if s.MinVersion != tls.VersionTLS12 || s.ClientCAFile != c.TLS.ClientCA || s.NoClientAuth || len(s.ClientFingerprints) != 0 {
+	if s.MinVersion != tls.VersionTLS13 || s.ClientCAFile != c.TLS.ClientCA || len(s.ClientFingerprints) != 0 {
 		t.Fatalf("settings: %+v", s)
 	}
-	c, err = load(t, pin+"listen: \"[::]:19000\"\ntls:\n  cert: /s.pem\n  key: /s-key.pem\n  min_version: \"1.3\"\n  reload_interval: 1m\n"+
+	c, err = load(t, pin+"listen: \"[::]:19000\"\ntls:\n  cert: /s.pem\n  key: /s-key.pem\n  min_version: \"1.2\"\n  reload_interval: 1m\n"+
 		"  client_fingerprints: [\""+fp+"\", \""+fpColons+"\"]\n")
 	if err != nil {
 		t.Fatal(err)
 	}
 	s = c.ServerTLS()
-	if s.MinVersion != tls.VersionTLS13 || s.ClientCAFile != "" || len(s.ClientFingerprints) != 2 || s.ClientFingerprints[0][0] != 0xab ||
+	if s.MinVersion != tls.VersionTLS12 || s.ClientCAFile != "" || len(s.ClientFingerprints) != 2 || s.ClientFingerprints[0][0] != 0xab ||
 		s.ClientFingerprints[1][31] != 0xcd || c.TLS.ReloadInterval != time.Minute || c.TLS.Cert != "/s.pem" {
 		t.Fatalf("fingerprints: %+v %+v", c.TLS, s)
 	}
-	if c, err = load(t, pin+"tls:\n  cert: s.pem\n  key: k.pem\n  insecure_no_client_auth: true\n"); err != nil || !c.ServerTLS().NoClientAuth {
-		t.Fatalf("insecure_no_client_auth: %v", err)
-	}
-
-	// Plain HTTP: loopback always; another address only with the opt-out.
-	for _, l := range []string{"127.0.0.1:19000", "127.0.0.2:1", "localhost:19000", "\"[::1]:19000\""} {
-		if c, err := load(t, pin+"listen: "+l+"\n"); err != nil || c.TLSOn() || !c.ListenLoopback() {
-			t.Errorf("listen %s without tls: %v", l, err)
-		}
-	}
-	for _, l := range []string{"0.0.0.0:19000", "\":19000\"", "192.168.1.10:19000", "\"[::]:19000\"", "gateway.lan:19000"} {
-		if _, err := load(t, pin+"listen: "+l+"\n"); err == nil || !strings.Contains(err.Error(), "not a loopback address") {
-			t.Errorf("listen %s without tls: %v", l, err)
-		}
-		if c, err := load(t, pin+"listen: "+l+"\ninsecure_plain_http_on_network: true\n"); err != nil || c.ListenLoopback() {
-			t.Errorf("listen %s with insecure_plain_http_on_network: %v", l, err)
-		}
-	}
 
 	for name, body := range map[string]string{
-		"listen not HOST:PORT":           "listen: 19000\n",
-		"key without cert":               "tls:\n  key: k.pem\n  client_ca: ca.pem\n",
-		"client_ca without cert":         "tls:\n  client_ca: ca.pem\n",
-		"fingerprints without cert":      "tls:\n  client_fingerprints: [\"" + fp + "\"]\n",
-		"min_version without cert":       "tls:\n  min_version: \"1.3\"\n",
-		"no client auth without cert":    "tls:\n  insecure_no_client_auth: true\n",
-		"reload without cert":            "tls:\n  reload_interval: 1s\n",
-		"cert without key":               "tls:\n  cert: s.pem\n  client_ca: ca.pem\n",
-		"no clients named":               "tls:\n  cert: s.pem\n  key: k.pem\n",
-		"no client auth and a CA":        "tls:\n  cert: s.pem\n  key: k.pem\n  client_ca: ca.pem\n  insecure_no_client_auth: true\n",
-		"no client auth and fingerprint": "tls:\n  cert: s.pem\n  key: k.pem\n  client_fingerprints: [\"" + fp + "\"]\n  insecure_no_client_auth: true\n",
-		"short fingerprint":              "tls:\n  cert: s.pem\n  key: k.pem\n  client_fingerprints: [\"abcd\"]\n",
-		"fingerprint not hex":            "tls:\n  cert: s.pem\n  key: k.pem\n  client_fingerprints: [\"" + strings.Repeat("zz", 32) + "\"]\n",
+		"listen not HOST:PORT":      "listen: 19000\n",
+		"key without cert":          "tls:\n  key: k.pem\n  client_ca: ca.pem\n",
+		"cert without key":          "tls:\n  cert: s.pem\n  client_ca: ca.pem\n",
+		"client_ca without cert":    "tls:\n  client_ca: ca.pem\n",
+		"fingerprints without cert": "tls:\n  client_fingerprints: [\"" + fp + "\"]\n",
+		"min_version without cert":  "tls:\n  min_version: \"1.3\"\n",
+		"reload without cert":       "tls:\n  reload_interval: 1s\n",
+		"short fingerprint":         "tls:\n  cert: s.pem\n  key: k.pem\n  client_fingerprints: [\"abcd\"]\n",
+		"fingerprint not hex":       "tls:\n  cert: s.pem\n  key: k.pem\n  client_fingerprints: [\"" + strings.Repeat("zz", 32) + "\"]\n",
 		"same fingerprint twice": "tls:\n  cert: s.pem\n  key: k.pem\n  client_fingerprints: [\"" + fp + "\", \"" +
 			strings.ToUpper(fp) + "\"]\n",
-		"min_version 1.1":         "tls:\n  cert: s.pem\n  key: k.pem\n  client_ca: ca.pem\n  min_version: \"1.1\"\n",
-		"negative reload":         "tls:\n  cert: s.pem\n  key: k.pem\n  client_ca: ca.pem\n  reload_interval: -1s\n",
-		"unknown tls key":         "tls:\n  cert: s.pem\n  key: k.pem\n  client_ca: ca.pem\n  verify_client: false\n",
-		"opt-out with tls":        "tls:\n  cert: s.pem\n  key: k.pem\n  client_ca: ca.pem\ninsecure_plain_http_on_network: true\n",
-		"opt-out misspelt":        "listen: 0.0.0.0:1\ninsecure_plain_http: true\n",
-		"opt-out not a bool":      "listen: 0.0.0.0:1\ninsecure_plain_http_on_network: yes please\n",
-		"tls on network, no auth": "listen: 0.0.0.0:1\ntls:\n  cert: s.pem\n  key: k.pem\n",
+		"min_version 1.1": "tls:\n  cert: s.pem\n  key: k.pem\n  client_ca: ca.pem\n  min_version: \"1.1\"\n",
+		"negative reload": "tls:\n  cert: s.pem\n  key: k.pem\n  client_ca: ca.pem\n  reload_interval: -1s\n",
+		"unknown tls key": "tls:\n  cert: s.pem\n  key: k.pem\n  client_ca: ca.pem\n  verify_client: false\n",
+		// The booleans access replaced: unknown keys.
+		"old insecure_no_client_auth":        "tls:\n  cert: s.pem\n  key: k.pem\n  insecure_no_client_auth: true\n",
+		"old insecure_plain_http_on_network": "listen: 0.0.0.0:1\ninsecure_plain_http_on_network: true\n",
 	} {
 		if _, err := load(t, pin+body); err == nil {
 			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+// access and metrics_access: each value with the address and the tls
+// section it needs, the defaults, and every refusal on both listeners.
+func TestAccess(t *testing.T) {
+	const (
+		tlsCA   = "tls:\n  cert: s.pem\n  key: k.pem\n  client_ca: ca.pem\n"
+		tlsFP   = "tls:\n  cert: s.pem\n  key: k.pem\n  client_fingerprints: [\"" + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" + "\"]\n"
+		tlsOnly = "tls:\n  cert: s.pem\n  key: k.pem\n"
+		net     = "listen: 0.0.0.0:19000\n"
+		mNet    = "metrics: 0.0.0.0:19001\n"
+		mLocal  = "metrics: 127.0.0.1:19001\n"
+	)
+	for _, tc := range []struct{ name, body, access, metrics string }{
+		{"defaults, no metrics", "", AccessLocal, ""},
+		{"defaults with metrics", mLocal, AccessLocal, AccessLocal},
+		{"local on localhost", "listen: localhost:19000\naccess: local\n", AccessLocal, ""},
+		{"local on ::1", "listen: \"[::1]:19000\"\n", AccessLocal, ""},
+		{"local on 127.0.0.2", "listen: 127.0.0.2:19000\n", AccessLocal, ""},
+		{"tls gives mtls", net + tlsCA, AccessMTLS, ""},
+		{"mtls by fingerprints", net + "access: mtls\n" + tlsFP, AccessMTLS, ""},
+		{"mtls on loopback", "access: mtls\n" + tlsCA, AccessMTLS, ""},
+		{"unsafe_open_tls", net + "access: unsafe_open_tls\n" + tlsOnly, AccessUnsafeOpenTLS, ""},
+		{"unsafe_plain_http", net + "access: unsafe_plain_http\n", AccessUnsafePlainHTTP, ""},
+		{"unsafe_plain_http on loopback", "access: unsafe_plain_http\n", AccessUnsafePlainHTTP, ""},
+		{"metrics local, API mtls", net + tlsCA + mLocal, AccessMTLS, AccessLocal},
+		{"metrics mtls", net + tlsCA + mNet + "metrics_access: mtls\n", AccessMTLS, AccessMTLS},
+		{"metrics unsafe_open_tls, API mtls", net + tlsCA + mNet + "metrics_access: unsafe_open_tls\n", AccessMTLS, AccessUnsafeOpenTLS},
+		{"metrics unsafe_open_tls, API unsafe_open_tls", net + "access: unsafe_open_tls\n" + tlsOnly + mNet +
+			"metrics_access: unsafe_open_tls\n", AccessUnsafeOpenTLS, AccessUnsafeOpenTLS},
+		{"metrics unsafe_plain_http, API local", mNet + "metrics_access: unsafe_plain_http\n", AccessLocal, AccessUnsafePlainHTTP},
+		{"metrics unsafe_plain_http, API mtls", net + tlsCA + mNet + "metrics_access: unsafe_plain_http\n", AccessMTLS, AccessUnsafePlainHTTP},
+	} {
+		c, err := load(t, pin+tc.body)
+		if err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+			continue
+		}
+		if c.Access != tc.access || c.MetricsAccess != tc.metrics || c.TLSOn() != UsesTLS(tc.access) {
+			t.Errorf("%s: access %q metrics_access %q tls %v", tc.name, c.Access, c.MetricsAccess, c.TLSOn())
+		}
+	}
+
+	for _, tc := range []struct{ name, body, want string }{
+		{"default local on 0.0.0.0", net, "access: local is plain HTTP and needs a loopback listen"},
+		{"local on every interface", "listen: \":19000\"\n", "needs a loopback listen"},
+		{"local on [::]", "listen: \"[::]:19000\"\n", "needs a loopback listen"},
+		{"local on a LAN address", "listen: 192.168.1.10:19000\n", "needs a loopback listen"},
+		{"local on a host name", "listen: gateway.lan:19000\n", "needs a loopback listen"},
+		{"local with tls", "access: local\n" + tlsCA, "access: local is plain HTTP"},
+		{"unsafe_plain_http with tls", net + "access: unsafe_plain_http\n" + tlsCA, "access: unsafe_plain_http is plain HTTP"},
+		{"mtls without tls", net + "access: mtls\n", "access: mtls needs tls.cert and tls.key"},
+		{"mtls naming no client", net + tlsOnly, "access: mtls needs the clients"},
+		{"unsafe_open_tls without tls", net + "access: unsafe_open_tls\n", "access: unsafe_open_tls needs tls.cert"},
+		{"unsafe_open_tls with client_ca", net + "access: unsafe_open_tls\n" + tlsCA, "unsafe_open_tls checks no client certificate"},
+		{"unsafe_open_tls with fingerprints", net + "access: unsafe_open_tls\n" + tlsFP, "unsafe_open_tls checks no client certificate"},
+		{"unknown access", "access: open\n", "access \"open\""},
+		{"access in capitals", "access: MTLS\n" + tlsCA, "access \"MTLS\""},
+		{"metrics local on 0.0.0.0", mNet, "metrics_access: local is plain HTTP and needs a loopback metrics"},
+		{"metrics local on a LAN address, API mtls", net + tlsCA + "metrics: 10.0.0.5:19001\n", "needs a loopback metrics"},
+		{"metrics mtls without tls", mNet + "metrics_access: mtls\n", "metrics_access: mtls needs tls.cert"},
+		{"metrics mtls naming no client", net + "access: unsafe_open_tls\n" + tlsOnly + mNet + "metrics_access: mtls\n",
+			"metrics_access: mtls needs the clients"},
+		{"metrics unsafe_open_tls without tls", mNet + "metrics_access: unsafe_open_tls\n", "metrics_access: unsafe_open_tls needs tls.cert"},
+		{"unknown metrics_access", mLocal + "metrics_access: public\n", "metrics_access \"public\""},
+		{"metrics_access without metrics", "metrics_access: local\n", "metrics_access is set without metrics"},
+	} {
+		if _, err := load(t, pin+tc.body); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: %v, want %q", tc.name, err, tc.want)
+		}
+	}
+}
+
+func TestLoopback(t *testing.T) {
+	for addr, want := range map[string]bool{
+		"127.0.0.1:1": true, "127.9.9.9:1": true, "localhost:1": true, "[::1]:1": true,
+		"0.0.0.0:1": false, ":1": false, "[::]:1": false, "10.0.0.1:1": false, "gateway.lan:1": false, "127.0.0.1": false,
+	} {
+		if got := Loopback(addr); got != want {
+			t.Errorf("Loopback(%q) = %v", addr, got)
 		}
 	}
 }

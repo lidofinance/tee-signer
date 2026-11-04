@@ -132,14 +132,17 @@ func (p *pki) settings() Settings {
 
 // serve starts an HTTPS server with s that answers OK, and returns its
 // address.
-func serve(t *testing.T, s *Server) string {
+func serve(t *testing.T, s *Server) string { return serveWith(t, s, true) }
+
+// serveWith is serve with the client check of Config(verifyClients).
+func serveWith(t *testing.T, s *Server, verifyClients bool) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "OK") }),
-		TLSConfig: s.Config(), ErrorLog: slog.NewLogLogger(slog.DiscardHandler, slog.LevelWarn)}
+		TLSConfig: s.Config(verifyClients), ErrorLog: slog.NewLogLogger(slog.DiscardHandler, slog.LevelWarn)}
 	go func() { _ = srv.ServeTLS(ln, "", "") }()
 	t.Cleanup(func() { srv.Close() })
 
@@ -291,15 +294,38 @@ func TestPlainHTTPToTLSPort(t *testing.T) {
 	}
 }
 
-// No client authentication: any client gets service, with or without a
-// certificate.
-func TestNoClientAuth(t *testing.T) {
+// Without the client check (unsafe_open_tls) any client gets service,
+// with or without a certificate, even when clients are named for another
+// listener. With the check and no client named, none does.
+func TestClientCheckOff(t *testing.T) {
 	p := newPKI(t)
+	srv, err := New(p.settings(), p.log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	open := serveWith(t, srv, false)
+	stranger := clientCert(t, newCA(t, "other CA"), time.Time{}, time.Time{})
+	for name, chain := range map[string][]*issued{"no certificate": nil, "another CA": {stranger}, "the CA's client": {p.client}} {
+		if body, err := p.get(t, open, 0, chain...); err != nil || body != "OK" {
+			t.Errorf("open listener, %s: %q %v", name, body, err)
+		}
+	}
+	// The same Server, checked, on a second listener.
+	if body, err := p.get(t, serve(t, srv), 0, stranger); err == nil {
+		t.Errorf("checked listener of the same server, another CA: served %q", body)
+	}
+
 	s := p.settings()
-	s.ClientCAFile, s.NoClientAuth = "", true
-	addr := mustServe(t, p, s)
-	if body, err := p.get(t, addr, 0); err != nil || body != "OK" {
-		t.Fatalf("no certificate: %q %v", body, err)
+	s.ClientCAFile = ""
+	none, err := New(s, p.log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := serve(t, none)
+	for name, chain := range map[string][]*issued{"no certificate": nil, "the CA's client": {p.client}} {
+		if body, err := p.get(t, addr, 0, chain...); err == nil {
+			t.Errorf("checked, no client named, %s: served %q", name, body)
+		}
 	}
 }
 
@@ -334,14 +360,12 @@ func TestNewRefuses(t *testing.T) {
 	write(t, badCA, []byte("not PEM"))
 	write(t, keyInCA, append(certPEM(p.clientCA), keyPEM(t, p.client)...))
 	for name, mod := range map[string]func(*Settings){
-		"expired certificate":      func(s *Settings) { s.CertFile, s.KeyFile = expiredFile, filepath.Join(p.dir, "x") },
-		"key of another cert":      func(s *Settings) { s.KeyFile = otherKeyFile },
-		"missing cert file":        func(s *Settings) { s.CertFile = filepath.Join(p.dir, "missing") },
-		"client CA not PEM":        func(s *Settings) { s.ClientCAFile = badCA },
-		"client CA holds a key":    func(s *Settings) { s.ClientCAFile = keyInCA },
-		"no client named":          func(s *Settings) { s.ClientCAFile = "" },
-		"no client auth with a CA": func(s *Settings) { s.NoClientAuth = true },
-		"TLS 1.1":                  func(s *Settings) { s.MinVersion = tls.VersionTLS11 },
+		"expired certificate":   func(s *Settings) { s.CertFile, s.KeyFile = expiredFile, filepath.Join(p.dir, "x") },
+		"key of another cert":   func(s *Settings) { s.KeyFile = otherKeyFile },
+		"missing cert file":     func(s *Settings) { s.CertFile = filepath.Join(p.dir, "missing") },
+		"client CA not PEM":     func(s *Settings) { s.ClientCAFile = badCA },
+		"client CA holds a key": func(s *Settings) { s.ClientCAFile = keyInCA },
+		"TLS 1.1":               func(s *Settings) { s.MinVersion = tls.VersionTLS11 },
 	} {
 		s := p.settings()
 		mod(&s)
@@ -408,5 +432,59 @@ func TestReload(t *testing.T) {
 	}
 	if n := strings.Count(p.logBuf.String(), msgReloaded); n != 1 {
 		t.Fatalf("%d reloads logged, want 1", n)
+	}
+}
+
+// The server certificate is logged as expiring when it ends within 30
+// days: at start, after a reload, and again a day later, not at every
+// poll. A certificate with longer left is not.
+func TestExpiryWarning(t *testing.T) {
+	p := newPKI(t) // the server certificate ends in an hour
+	clock := time.Now()
+	now := func() time.Time { return clock }
+	srv, err := newServer(p.settings(), p.log, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := func() int { return strings.Count(p.logBuf.String(), msgExpiring) }
+	if count() != 1 {
+		t.Fatalf("%d expiry warnings at start, want 1:\n%s", count(), p.logBuf)
+	}
+	clock = clock.Add(time.Minute)
+	srv.Poll()
+	if count() != 1 {
+		t.Fatalf("%d expiry warnings after a poll, want 1", count())
+	}
+
+	renew := func(validFor time.Duration) {
+		t.Helper()
+		c := serverCert(t, p.serverCA, clock.Add(-time.Hour), clock.Add(validFor))
+		write(t, p.certFile, certPEM(c, p.serverCA))
+		write(t, p.keyFile, keyPEM(t, c))
+		if !srv.Poll() {
+			t.Fatalf("renewed certificate not reloaded:\n%s", p.logBuf)
+		}
+	}
+	renew(90 * 24 * time.Hour)
+	if count() != 1 {
+		t.Fatalf("%d expiry warnings after a 90-day certificate, want 1", count())
+	}
+	clock = clock.Add(time.Minute)
+	renew(10 * 24 * time.Hour)
+	if count() != 2 {
+		t.Fatalf("%d expiry warnings after a 10-day certificate, want 2", count())
+	}
+	clock = clock.Add(time.Hour)
+	srv.Poll()
+	if count() != 2 {
+		t.Fatalf("%d expiry warnings an hour later, want 2", count())
+	}
+	clock = clock.Add(24 * time.Hour)
+	srv.Poll()
+	if count() != 3 {
+		t.Fatalf("%d expiry warnings a day later, want 3", count())
+	}
+	if !strings.Contains(p.logBuf.String(), "days_left=8") {
+		t.Fatalf("no days_left=8 in\n%s", p.logBuf)
 	}
 }

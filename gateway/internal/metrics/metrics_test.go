@@ -204,3 +204,25 @@ func TestGatewaySeries(t *testing.T) {
 		}
 	}
 }
+
+type fakeLeaf struct{ c *x509.Certificate }
+
+func (f fakeLeaf) Leaf() *x509.Certificate { return f.c }
+
+// The server certificate gauge reads the certificate in force at each
+// scrape.
+func TestServerCertSeries(t *testing.T) {
+	g := New()
+	if out := render(t, g.Registry); strings.Contains(out, "server_cert") {
+		t.Fatalf("server certificate metric without TLS:\n%s", out)
+	}
+	src := &fakeLeaf{c: &x509.Certificate{NotAfter: time.Unix(1_800_000_000, 0)}}
+	g.ServerCert(src)
+	if out := render(t, g.Registry); !strings.Contains(out, "teesigner_gateway_server_cert_not_after_seconds "+formatFloat(1_800_000_000)+"\n") {
+		t.Fatalf("no server certificate expiry in\n%s", out)
+	}
+	src.c = &x509.Certificate{NotAfter: time.Unix(1_900_000_000, 0)}
+	if out := render(t, g.Registry); !strings.Contains(out, "server_cert_not_after_seconds "+formatFloat(1_900_000_000)+"\n") {
+		t.Fatalf("expiry not read at the scrape:\n%s", out)
+	}
+}

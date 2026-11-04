@@ -75,7 +75,12 @@ func (a *Attestation) UnmarshalYAML(n *yaml.Node) error {
 // Config is the gateway configuration file.
 type Config struct {
 	Listen string `yaml:"listen"`
-	// TLS of the listen address. Without tls.cert the API is plain HTTP.
+	// Access is how the API listener is exposed: local, mtls,
+	// unsafe_open_tls or unsafe_plain_http. Default: mtls with tls.cert,
+	// local without.
+	Access string `yaml:"access"`
+	// TLS is the server certificate and the accepted clients of the
+	// listeners whose access is mtls or unsafe_open_tls.
 	TLS struct {
 		// Cert is the server certificate chain (PEM, leaf first), Key its key.
 		Cert string `yaml:"cert"`
@@ -86,22 +91,18 @@ type Config struct {
 		// ClientFingerprints are SHA-256 fingerprints of client certificates
 		// accepted whatever their issuer.
 		ClientFingerprints []string `yaml:"client_fingerprints"`
-		// InsecureNoClientAuth asks for no client certificate: any client
-		// that reaches listen gets service.
-		InsecureNoClientAuth bool `yaml:"insecure_no_client_auth"`
-		// MinVersion is "1.2" (default) or "1.3". Clients that support
-		// TLS 1.3 get it either way.
+		// MinVersion is "1.3" (default) or "1.2", which Teku needs.
 		MinVersion string `yaml:"min_version"`
 		// ReloadInterval is how often the files are read again (default 10s).
 		ReloadInterval time.Duration `yaml:"reload_interval"`
 	} `yaml:"tls"`
-	// InsecurePlainHTTPOnNetwork lets listen be an address other than
-	// loopback without tls.
-	InsecurePlainHTTPOnNetwork bool `yaml:"insecure_plain_http_on_network"`
-	// Metrics, if set, is the HOST:PORT of the Prometheus endpoint: plain
-	// HTTP, GET /metrics only. Absent: no endpoint.
+	// Metrics, if set, is the HOST:PORT of the Prometheus endpoint, GET
+	// /metrics only. Absent: no endpoint.
 	Metrics string `yaml:"metrics"`
-	Chain   struct {
+	// MetricsAccess is Access for the metrics listener (default local). Its
+	// TLS is the tls section.
+	MetricsAccess string `yaml:"metrics_access"`
+	Chain         struct {
 		// Preset is mainnet (all public networks) or minimal (spec tests, Web3Signer examples).
 		Preset string `yaml:"preset"`
 		// SlotsPerEpoch overrides the preset value when set.
@@ -172,9 +173,6 @@ func Load(path string) (*Config, error) {
 	if c.Listen == "" {
 		c.Listen = "127.0.0.1:19000"
 	}
-	if err := c.loadTLS(filepath.Dir(path)); err != nil {
-		return nil, err
-	}
 	if c.Metrics != "" {
 		if _, _, err := net.SplitHostPort(c.Metrics); err != nil {
 			return nil, fmt.Errorf("metrics: %w", err)
@@ -182,6 +180,9 @@ func Load(path string) (*Config, error) {
 		if c.Metrics == c.Listen {
 			return nil, errors.New("metrics must be another address than listen")
 		}
+	}
+	if err := c.loadAccess(filepath.Dir(path)); err != nil {
+		return nil, err
 	}
 	if c.Chain.Preset == "" {
 		c.Chain.Preset = "mainnet"
@@ -213,14 +214,31 @@ func Load(path string) (*Config, error) {
 	return &c, nil
 }
 
-// TLSOn reports whether the API listener serves TLS.
+// The values of access and metrics_access.
+const (
+	// AccessLocal is plain HTTP on a loopback address.
+	AccessLocal = "local"
+	// AccessMTLS is TLS with client certificates, on any address.
+	AccessMTLS = "mtls"
+	// AccessUnsafeOpenTLS is TLS without a client certificate check, on
+	// any address.
+	AccessUnsafeOpenTLS = "unsafe_open_tls"
+	// AccessUnsafePlainHTTP is plain HTTP on any address.
+	AccessUnsafePlainHTTP = "unsafe_plain_http"
+)
+
+// UsesTLS reports whether a listener of access a serves TLS.
+func UsesTLS(a string) bool { return a == AccessMTLS || a == AccessUnsafeOpenTLS }
+
+// TLSOn reports whether the tls section is set. Load accepts it only
+// when the API listener serves TLS.
 func (c *Config) TLSOn() bool { return c.TLS.Cert != "" }
 
-// ListenLoopback reports whether listen is a loopback address:
+// Loopback reports whether HOST:PORT addr is a loopback address:
 // localhost, 127.0.0.0/8 or ::1. A host name other than localhost, or
 // no host (every interface), is not.
-func (c *Config) ListenLoopback() bool {
-	host, _, err := net.SplitHostPort(c.Listen)
+func Loopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return false
 	}
@@ -232,38 +250,80 @@ func (c *Config) ListenLoopback() bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// loadTLS checks the tls section and the rule for plain HTTP: a listen
-// address other than loopback needs tls, or
-// insecure_plain_http_on_network.
-func (c *Config) loadTLS(base string) error {
+// checkAccess checks the access value a of one listener (field names it,
+// addrField and addr are its address) against its address and the tls
+// section.
+func checkAccess(field, a, addrField, addr string, tlsSet, named bool) error {
+	switch a {
+	case AccessLocal:
+		if !Loopback(addr) {
+			return fmt.Errorf("%s: local is plain HTTP and needs a loopback %s, not %s; for another address set %s: mtls "+
+				"with a tls section", field, addrField, addr, field)
+		}
+	case AccessMTLS:
+		if !tlsSet {
+			return fmt.Errorf("%s: mtls needs tls.cert and tls.key", field)
+		}
+		if !named {
+			return fmt.Errorf("%s: mtls needs the clients it accepts: tls.client_ca, tls.client_fingerprints, or both", field)
+		}
+	case AccessUnsafeOpenTLS:
+		if !tlsSet {
+			return fmt.Errorf("%s: unsafe_open_tls needs tls.cert and tls.key", field)
+		}
+	case AccessUnsafePlainHTTP:
+	default:
+		return fmt.Errorf("%s %q: local, mtls, unsafe_open_tls or unsafe_plain_http", field, a)
+	}
+
+	return nil
+}
+
+// loadAccess checks access, metrics_access and the tls section, and
+// sets their defaults.
+func (c *Config) loadAccess(base string) error {
 	if _, _, err := net.SplitHostPort(c.Listen); err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
 	t := &c.TLS
-	if !c.TLSOn() {
-		if t.Key != "" || t.ClientCA != "" || len(t.ClientFingerprints) > 0 || t.InsecureNoClientAuth || t.MinVersion != "" ||
-			t.ReloadInterval != 0 {
-			return errors.New("tls: tls.cert is required with any other tls setting")
+	tlsSet := t.Cert != "" || t.Key != ""
+	named := t.ClientCA != "" || len(t.ClientFingerprints) > 0
+	if !tlsSet && (named || t.MinVersion != "" || t.ReloadInterval != 0) {
+		return errors.New("tls: tls.cert and tls.key are required with any other tls setting")
+	}
+	if c.Access == "" {
+		c.Access = AccessLocal
+		if tlsSet {
+			c.Access = AccessMTLS
 		}
-		if !c.ListenLoopback() && !c.InsecurePlainHTTPOnNetwork {
-			return fmt.Errorf("listen %s is not a loopback address: set tls (server certificate and client certificates), "+
-				"or insecure_plain_http_on_network: true to serve plain HTTP without authentication there", c.Listen)
+	}
+	if err := checkAccess("access", c.Access, "listen", c.Listen, tlsSet, named); err != nil {
+		return err
+	}
+	switch {
+	case !UsesTLS(c.Access) && tlsSet:
+		return fmt.Errorf("access: %s is plain HTTP; remove the tls section, or set access: mtls", c.Access)
+	case c.Access == AccessUnsafeOpenTLS && named:
+		return errors.New("access: unsafe_open_tls checks no client certificate; remove tls.client_ca and " +
+			"tls.client_fingerprints, or set access: mtls")
+	}
+	if c.Metrics == "" {
+		if c.MetricsAccess != "" {
+			return errors.New("metrics_access is set without metrics")
 		}
-
+	} else {
+		if c.MetricsAccess == "" {
+			c.MetricsAccess = AccessLocal
+		}
+		if err := checkAccess("metrics_access", c.MetricsAccess, "metrics", c.Metrics, tlsSet, named); err != nil {
+			return err
+		}
+	}
+	if !tlsSet {
 		return nil
 	}
-	if c.InsecurePlainHTTPOnNetwork {
-		return errors.New("insecure_plain_http_on_network is for a listener without tls; remove it")
-	}
-	if t.Key == "" {
-		return errors.New("tls.key is required with tls.cert")
-	}
-	named := t.ClientCA != "" || len(t.ClientFingerprints) > 0
-	if !named && !t.InsecureNoClientAuth {
-		return errors.New("tls: name the clients allowed in: tls.client_ca, tls.client_fingerprints, or both")
-	}
-	if named && t.InsecureNoClientAuth {
-		return errors.New("tls.insecure_no_client_auth is set together with tls.client_ca or tls.client_fingerprints; keep one")
+	if t.Cert == "" || t.Key == "" {
+		return errors.New("tls: tls.cert and tls.key go together")
 	}
 	seen := map[[32]byte]bool{}
 	for i, s := range t.ClientFingerprints {
@@ -278,7 +338,7 @@ func (c *Config) loadTLS(base string) error {
 	}
 	switch t.MinVersion {
 	case "":
-		t.MinVersion = "1.2"
+		t.MinVersion = "1.3"
 	case "1.2", "1.3":
 	default:
 		return fmt.Errorf("tls.min_version %q: 1.2 or 1.3", t.MinVersion)
@@ -302,10 +362,10 @@ func (c *Config) loadTLS(base string) error {
 // when TLSOn.
 func (c *Config) ServerTLS() servertls.Settings {
 	t := c.TLS
-	s := servertls.Settings{CertFile: t.Cert, KeyFile: t.Key, ClientCAFile: t.ClientCA, NoClientAuth: t.InsecureNoClientAuth,
-		MinVersion: tls.VersionTLS12}
-	if t.MinVersion == "1.3" {
-		s.MinVersion = tls.VersionTLS13
+	s := servertls.Settings{CertFile: t.Cert, KeyFile: t.Key, ClientCAFile: t.ClientCA,
+		MinVersion: tls.VersionTLS13}
+	if t.MinVersion == "1.2" {
+		s.MinVersion = tls.VersionTLS12
 	}
 	for _, f := range t.ClientFingerprints {
 		fp, _ := servertls.ParseFingerprint(f) // checked by Load

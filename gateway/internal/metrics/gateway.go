@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"crypto/x509"
 	"time"
 
 	"github.com/lidofinance/tee-signer/gateway/internal/certreload"
@@ -128,6 +129,20 @@ func (g *Gateway) Certs(w CertSource) {
 	r.Func(prefix+"client_cert_last_reload_timestamp_seconds",
 		"Unix time the client certificate in force took effect: the start, or the last successful reload.", "gauge", nil,
 		func(emit func(float64, ...string)) { emit(unix(w.Stats().Since)) })
+}
+
+// ServerCertSource is the server certificate in force of the API
+// listener (servertls.Server).
+type ServerCertSource interface {
+	Leaf() *x509.Certificate
+}
+
+// ServerCert adds the server certificate metric, read from s at each
+// scrape. Without TLS there is no such metric.
+func (g *Gateway) ServerCert(s ServerCertSource) {
+	g.Registry.Func(prefix+"server_cert_not_after_seconds",
+		"Unix time the server certificate in force of the API listener expires.", "gauge", nil,
+		func(emit func(float64, ...string)) { emit(unix(s.Leaf().NotAfter)) })
 }
 
 func unix(t time.Time) float64 { return float64(t.Unix()) + float64(t.Nanosecond())/1e9 }

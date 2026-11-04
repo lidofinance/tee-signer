@@ -86,14 +86,11 @@ func run(cfgPath string, log *slog.Logger) error {
 			"not_after", leaf.NotAfter.UTC().Format(time.RFC3339), "min_version", cfg.TLS.MinVersion,
 			"client_ca", cfg.TLS.ClientCA, "client_fingerprints", len(cfg.TLS.ClientFingerprints),
 			"reload_interval", cfg.TLS.ReloadInterval.String())
-		if cfg.TLS.InsecureNoClientAuth {
-			log.Warn("tls.insecure_no_client_auth: no client certificate asked, any client that reaches listen can request signatures",
-				"listen", cfg.Listen)
-		}
 		go serverTLS.Run(ctx, cfg.TLS.ReloadInterval)
-	} else if !cfg.ListenLoopback() {
-		log.Warn("insecure_plain_http_on_network: plain HTTP without authentication on a network address, "+
-			"any host that reaches listen can request signatures", "listen", cfg.Listen)
+	}
+	warnAccess(log, "access", cfg.Access, "listen", cfg.Listen, "can request signatures")
+	if cfg.Metrics != "" {
+		warnAccess(log, "metrics_access", cfg.MetricsAccess, "metrics", cfg.Metrics, "can read the metrics")
 	}
 
 	certs, err := certreload.New(cfg.Signers.ClientCert, cfg.Signers.ClientKey, log)
@@ -106,6 +103,9 @@ func run(cfgPath string, log *slog.Logger) error {
 	go certs.Run(ctx, cfg.Signers.CertReloadInterval)
 	m := metrics.New()
 	m.Certs(certs)
+	if serverTLS != nil {
+		m.ServerCert(serverTLS)
+	}
 
 	bcfg := backend.Config{
 		Connections: cfg.Signers.Connections, Timeout: cfg.Signers.Timeout, DialTimeout: cfg.Signers.DialTimeout,
@@ -131,10 +131,10 @@ func run(cfgPath string, log *slog.Logger) error {
 		}
 		mux := http.NewServeMux()
 		mux.Handle("GET /metrics", m.Registry)
-		msrv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
-		go func() { errCh <- fmt.Errorf("metrics: %w", msrv.Serve(ln)) }()
+		msrv := httpServer(cfg.MetricsAccess, serverTLS, mux, log)
+		go func() { errCh <- fmt.Errorf("metrics: %w", serve(msrv, ln)) }()
 		defer msrv.Close()
-		log.Info("metrics", "addr", cfg.Metrics, "path", "/metrics")
+		log.Info("metrics", "addr", cfg.Metrics, "path", "/metrics", "access", cfg.MetricsAccess)
 	}
 	// The signers may still be starting; retry the first key load for a minute.
 	for attempt := 1; ; attempt++ {
@@ -156,24 +156,13 @@ func run(cfgPath string, log *slog.Logger) error {
 	}
 	log.Info("coalesce", "enabled", *cfg.Coalesce.Enabled, "cache_slots", *cfg.Coalesce.CacheSlots,
 		"seconds_per_slot", cfg.Chain.SecondsPerSlot)
-	srv := &http.Server{
-		Handler:           handler.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-		// Failed handshakes (a client without an accepted certificate) go
-		// to the log as warnings.
-		ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn),
-	}
+	srv := httpServer(cfg.Access, serverTLS, handler.Handler(), log)
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return err
 	}
-	if serverTLS != nil {
-		srv.TLSConfig = serverTLS.Config()
-		go func() { errCh <- srv.ServeTLS(ln, "", "") }()
-	} else {
-		go func() { errCh <- srv.Serve(ln) }()
-	}
-	log.Info("listening", "addr", cfg.Listen, "tls", serverTLS != nil)
+	go func() { errCh <- serve(srv, ln) }()
+	log.Info("listening", "addr", cfg.Listen, "access", cfg.Access)
 
 	select {
 	case err := <-errCh:
@@ -187,4 +176,39 @@ func run(cfgPath string, log *slog.Logger) error {
 	}
 
 	return nil
+}
+
+// httpServer is the HTTP server of one listener: TLS from st for access
+// mtls and unsafe_open_tls, with the client check for mtls only, and
+// plain HTTP for local and unsafe_plain_http. Failed handshakes (a client
+// without an accepted certificate) go to the log as warnings.
+func httpServer(access string, st *servertls.Server, h http.Handler, log *slog.Logger) *http.Server {
+	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second, ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
+	if config.UsesTLS(access) {
+		srv.TLSConfig = st.Config(access == config.AccessMTLS)
+	}
+
+	return srv
+}
+
+// serve serves srv on ln, over TLS when srv has a TLS config.
+func serve(srv *http.Server, ln net.Listener) error {
+	if srv.TLSConfig != nil {
+		return srv.ServeTLS(ln, "", "")
+	}
+
+	return srv.Serve(ln)
+}
+
+// warnAccess logs a warning at start for the unsafe access values of a
+// listener.
+func warnAccess(log *slog.Logger, field, access, addrField, addr, what string) {
+	switch access {
+	case config.AccessUnsafeOpenTLS:
+		log.Warn(field+": unsafe_open_tls, no client certificate is checked: any client that reaches "+addrField+" "+what,
+			addrField, addr)
+	case config.AccessUnsafePlainHTTP:
+		log.Warn(field+": unsafe_plain_http, plain HTTP without authentication: any host that reaches "+addrField+" "+what,
+			addrField, addr)
+	}
 }

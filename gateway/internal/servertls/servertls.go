@@ -29,9 +29,16 @@ import (
 const (
 	msgReloaded = "server TLS files reloaded"
 	msgRefused  = "server TLS files on disk refused, keeping the ones in force"
+	msgExpiring = "server certificate expires in under 30 days"
 )
 
-// Settings are the files and the client rule of the listener.
+// ExpiryWarning is how long before its end the server certificate in
+// force is logged as expiring: at start, at a reload, and once a day.
+const ExpiryWarning = 30 * 24 * time.Hour
+
+// Settings are the files and the accepted clients. A listener that
+// checks clients (Config(true)) accepts a client that ClientCAFile or
+// ClientFingerprints names, and none when both are empty.
 type Settings struct {
 	// CertFile is the server certificate chain, leaf first; KeyFile its key.
 	CertFile, KeyFile string
@@ -41,8 +48,6 @@ type Settings struct {
 	// ClientFingerprints are the SHA-256 digests of client certificates
 	// (DER) that are accepted whatever their issuer.
 	ClientFingerprints [][32]byte
-	// NoClientAuth asks for no client certificate at all.
-	NoClientAuth bool
 	// MinVersion is tls.VersionTLS12 or tls.VersionTLS13.
 	MinVersion uint16
 }
@@ -77,6 +82,8 @@ type Server struct {
 	mu      sync.Mutex
 	cur     *files
 	refused [32]byte
+	// expiryLogged is when the expiry of cur was last logged.
+	expiryLogged time.Time
 }
 
 // New reads the files. It fails if they do not pass the checks of a
@@ -89,9 +96,6 @@ func newServer(s Settings, log *slog.Logger, now func() time.Time) (*Server, err
 	if s.MinVersion != tls.VersionTLS12 && s.MinVersion != tls.VersionTLS13 {
 		return nil, errors.New("servertls: MinVersion must be TLS 1.2 or 1.3")
 	}
-	if s.NoClientAuth != (s.ClientCAFile == "" && len(s.ClientFingerprints) == 0) {
-		return nil, errors.New("servertls: name the allowed clients, or set NoClientAuth and name none")
-	}
 	srv := &Server{s: s, log: log, now: now}
 	raw, err := srv.read()
 	if err != nil {
@@ -102,8 +106,23 @@ func newServer(s Settings, log *slog.Logger, now func() time.Time) (*Server, err
 		return nil, err
 	}
 	srv.cur = f
+	srv.logExpiry(now())
 
 	return srv, nil
+}
+
+// logExpiry warns when the certificate in force ends within
+// ExpiryWarning, at most once a day. The caller holds mu, or no other
+// goroutine has srv yet.
+func (srv *Server) logExpiry(now time.Time) {
+	leaf := srv.cur.cert.Leaf
+	left := leaf.NotAfter.Sub(now)
+	if left >= ExpiryWarning || (!srv.expiryLogged.IsZero() && now.Sub(srv.expiryLogged) < 24*time.Hour) {
+		return
+	}
+	srv.expiryLogged = now
+	srv.log.Warn(msgExpiring, "cert", srv.s.CertFile, "serial", leaf.SerialNumber.String(),
+		"not_after", leaf.NotAfter.UTC().Format(time.RFC3339), "days_left", int(left.Hours()/24))
 }
 
 // read returns the content of the certificate, the key and the client CA
@@ -205,6 +224,8 @@ func (srv *Server) Poll() bool {
 	}
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
+	// Runs last, under mu, on the certificate in force after this poll.
+	defer func() { srv.logExpiry(now) }()
 	if err == nil && d == srv.cur.digest {
 		srv.refused = [32]byte{}
 		return false
@@ -220,7 +241,7 @@ func (srv *Server) Poll() bool {
 		}
 		return false
 	}
-	srv.cur, srv.refused = f, [32]byte{}
+	srv.cur, srv.refused, srv.expiryLogged = f, [32]byte{}, time.Time{}
 	srv.log.Info(msgReloaded, "cert", srv.s.CertFile, "serial", f.cert.Leaf.SerialNumber.String(),
 		"not_after", f.cert.Leaf.NotAfter.UTC().Format(time.RFC3339))
 
@@ -241,10 +262,11 @@ func (srv *Server) Run(ctx context.Context, interval time.Duration) {
 	}
 }
 
-// Config is the tls.Config of the listener. Each handshake uses the files
-// in force at that moment. A client that is not accepted fails the
-// handshake and never reaches the HTTP handlers.
-func (srv *Server) Config() *tls.Config {
+// Config is the tls.Config of a listener. Each handshake uses the files
+// in force at that moment. With verifyClients, a client that is not
+// accepted fails the handshake and never reaches the HTTP handlers;
+// without, no client certificate is asked for.
+func (srv *Server) Config(verifyClients bool) *tls.Config {
 	c := &tls.Config{
 		MinVersion: srv.s.MinVersion,
 		// TLS 1.2: forward secret AEAD suites only. TLS 1.3 has its own.
@@ -258,7 +280,7 @@ func (srv *Server) Config() *tls.Config {
 		},
 		ClientAuth: tls.NoClientCert,
 	}
-	if !srv.s.NoClientAuth {
+	if verifyClients {
 		// VerifyClient does the whole check, so a listed fingerprint can
 		// accept a certificate that no CA of the bundle issued.
 		c.ClientAuth = tls.RequireAnyClientCert
