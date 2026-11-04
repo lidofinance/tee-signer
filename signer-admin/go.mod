@@ -19,6 +19,7 @@ require (
 	github.com/lidofinance/tee-signer/platform v0.0.0
 	github.com/lidofinance/tee-signer/signer-core v0.0.0
 	github.com/lidofinance/tee-signer/signer-protocol v0.0.0
+	golang.org/x/crypto v0.52.0
 )
 
 replace (

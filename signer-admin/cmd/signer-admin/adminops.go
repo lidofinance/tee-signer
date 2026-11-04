@@ -112,10 +112,13 @@ type splitFile struct {
 	T          uint8            `json:"t"`
 	N          uint8            `json:"n"`
 	Shares     map[string]uint8 `json:"shares"`
-	Validators []struct {
-		Pubkey      cloud.Pubkey   `json:"pubkey"`
-		Commitments []cloud.Pubkey `json:"commitments"`
-	} `json:"validators"`
+	Validators []splitValidator `json:"validators"`
+}
+
+// splitValidator is one validator of a split file.
+type splitValidator struct {
+	Pubkey      cloud.Pubkey   `json:"pubkey"`
+	Commitments []cloud.Pubkey `json:"commitments"`
 }
 
 func readSplit(path string) (*splitFile, error) {
