@@ -56,6 +56,19 @@ done < <(bash "$GATE" list release)
 [ "$(bash "$GATE" list default | wc -l)" -ge 5 ] || { echo "release gate self-test: default list too short" >&2; fails=$((fails + 1)); }
 [ "$(bash "$GATE" list release | wc -l)" -ge 4 ] || { echo "release gate self-test: release list too short" >&2; fails=$((fails + 1)); }
 
+# RELEASE_GATE_FORBID_FILE: a b64: entry counts, and a b64: line that does
+# not decode fails the gate instead of cutting the list short.
+build_with evil "xEVILSTRINGx"
+printf 'b64:%s
+' "$(printf 'default:EVILSTRING' | base64)" >"$tmp/forbid-b64"
+printf 'b64:@@@notbase64@@@
+default:EVILSTRING
+' >"$tmp/forbid-bad"
+expect fail "forbid file: b64 entry" env RELEASE_GATE_FORBID_FILE="$tmp/forbid-b64" bash "$GATE" binary "$tmp/evil" debug
+expect pass "forbid file: b64 entry, clean binary" env RELEASE_GATE_FORBID_FILE="$tmp/forbid-b64" bash "$GATE" binary "$tmp/clean" debug
+expect fail "forbid file: bad b64 line" env RELEASE_GATE_FORBID_FILE="$tmp/forbid-bad" bash "$GATE" binary "$tmp/clean" debug
+expect fail "forbid file: bad b64 line, list" env RELEASE_GATE_FORBID_FILE="$tmp/forbid-bad" bash "$GATE" list default
+
 # Compile real package dependencies from local fixture modules. Unlike an
 # injected literal, their -trimpath filenames contain module@v0.0.0, and
 # only the helper file is linked. This needs no C libraries or network.

@@ -52,8 +52,16 @@ test-modules: core nts ## gofmt, vet and unit tests of every Go module (or those
 
 race: test-modules ## same as test-modules (the race detector is on unless RACE=)
 
+# The runners make build puts in build/<arch>/bin, named as scripts/test.sh
+# names them (bin_env), so tests/e2e checks those and not its own builds.
+E2E_BIN := $(ROOT)/build/$(shell uname -m)/bin
+E2E_ENV := RUNNER_BIN=$(E2E_BIN)/runner-dev RUNNER_DEBUG_BIN=$(E2E_BIN)/runner-dev-debugimport \
+  RUNNER_AWS_BIN=$(E2E_BIN)/runner-aws RUNNER_AWS_DEBUG_BIN=$(E2E_BIN)/runner-aws-debugimport \
+  RUNNER_AZURE_BIN=$(E2E_BIN)/runner-azure RUNNER_AZURE_DEBUG_BIN=$(E2E_BIN)/runner-azure-debugimport \
+  RUNNER_GCP_BIN=$(E2E_BIN)/runner-gcp RUNNER_GCP_DEBUG_BIN=$(E2E_BIN)/runner-gcp-debugimport
+
 e2e: build ## tests/e2e against the built runners
-	cd $(ROOT)/tests && go test $(RACE) -count=1 -v -timeout 40m -tags platform_aws ./e2e/
+	cd $(ROOT)/tests && $(E2E_ENV) go test $(RACE) -count=1 -v -timeout 40m -tags platform_aws ./e2e/
 
 e2e-nonprod: core nts ## tests/e2e of the non-prod builds: each starts on its own chain only; a ci-test runner's 7-minute images wait
 	cd $(ROOT)/tests && go test $(RACE) -count=1 -v -timeout 30m -tags platform_aws,nonprod,chain_ci_test -run 'TestE2ENonProd' ./e2e/

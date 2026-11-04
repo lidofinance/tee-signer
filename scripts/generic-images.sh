@@ -9,9 +9,8 @@
 #   scripts/generic-images.sh build [DIR]   build the three images and write
 #                                           their fingerprints to DIR/fingerprints.txt
 #                                           (default build/generic)
-#   scripts/generic-images.sh check [FILE]  compare the current build outputs
-#                                           with FILE (default cloud/generic-images.txt,
-#                                           the recorded values)
+#   scripts/generic-images.sh check FILE    compare the current build outputs
+#                                           with FILE, the recorded values
 #
 # CHAIN (scripts/common.sh) picks the build: mainnet when unset. With
 # CHAIN=hoodi, devnet or ci-test both work on that chain's non-prod images
@@ -21,7 +20,7 @@
 # Their runners, folders, local names, registry tags and records carry
 # "-<chain>": runner-<cloud>-hoodi, build/nitro-hoodi,
 # signer-cloud/azure-runner-hoodi, tags generic-hoodi (GCP) and
-# generic-hoodi-ts (Azure), cloud/generic-images-hoodi.txt. CHAIN=devnet
+# generic-hoodi-ts (Azure). CHAIN=devnet
 # needs CHAIN_JSON, the devnet's chain config (scripts/build-runner.sh).
 #
 # What build runs, with the settings fixed here:
@@ -70,7 +69,6 @@ fi
 AZ_OUT="$(env ${AZ_ENV[@]+"${AZ_ENV[@]}"} bash -c '. "$1/platform-azure/deploy/common.sh" && echo "$OUT"' _ "$ROOT")"
 GCP_OUT="$BUILD/gcp$SUFFIX"
 NITRO_OUT="$BUILD/nitro$SUFFIX"
-RECORD="$ROOT/cloud/generic-images$SUFFIX.txt"
 
 sha() { sha256sum <"$1" | cut -d' ' -f1; }
 pcr() { python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["Measurements"][sys.argv[2]])' "$NITRO_OUT/build-enclave-aarch64.json" "$1"; }
@@ -122,9 +120,10 @@ cmd_build() {
   log "done in $(( $(date +%s) - start )) s: $dir/fingerprints.txt"
 }
 
-# check [FILE]: every "name value" line of FILE equals the current build's.
+# check FILE: every "name value" line of FILE equals the current build's.
 cmd_check() {
-  local file="${1:-$RECORD}" ok=1 name want got
+  local file="${1:-}" ok=1 name want got
+  [ -n "$file" ] || die "check needs FILE, the recorded fingerprints"
   [ -s "$file" ] || die "no $file"
   while read -r name want; do
     case "$name" in "" | \#*) continue ;; esac

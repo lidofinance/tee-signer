@@ -328,6 +328,8 @@ func parseCondition(m map[string]any) (condition, error) {
 	switch {
 	case nClaim == 1 && (c.value == nil || groups > 0):
 		return c, fmt.Errorf("%w: claim %q needs exactly one equals", ErrFormat, c.claim)
+	case nClaim == 0 && c.value != nil:
+		return c, fmt.Errorf("%w: equals needs a claim", ErrFormat)
 	case nClaim == 0 && groups != 1:
 		return c, fmt.Errorf("%w: condition needs a claim, anyOf or allOf", ErrFormat)
 	}

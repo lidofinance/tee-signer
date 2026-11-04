@@ -239,6 +239,7 @@ func TestMAA(t *testing.T) {
 			`{"version":"1.0.0","anyOf":[{"authority":"x","allOf":[{"claim":"a","equals":{"o":1}}]}]}`,
 			`{"version":"1.0.0","anyOf":[{"authority":"x","claim":"a","equals":"b"}]}`,
 			`{"version":"1.0.0","anyOf":[]}`,
+			`{"version":"1.0.0","anyOf":[{"authority":"x","allOf":[{"equals":"b","allOf":[{"claim":"a","equals":"b"}]}]}]}`,
 		} {
 			if _, err := ParseReleasePolicy([]byte(p)); err == nil {
 				t.Fatalf("accepted %s", p)

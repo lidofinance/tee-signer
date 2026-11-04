@@ -217,15 +217,24 @@ unchanged.
 
 ### Restart floor
 
-`sc_signer_add_validator` reads the clock and raises the loaded mark (the
-validator's own, or the device mark) to the restart floor: epoch
+`sc_signer_add_validator` reads the clock and raises a copy of the loaded
+mark (the validator's own, or the device mark) to the restart floor: epoch
 F = epoch(now) + `max_epochs_ahead` + `SC_RESTART_FLOOR_EPOCHS` (1). The
-validator then refuses block, PTC vote and envelope slots up to the last
+new validator's slashing state starts from that copy. The stored mark and
+the device mark in memory keep their values. The validator then refuses block, PTC vote and envelope slots up to the last
 slot of F, targets up to F and sources below F. The core signs nothing past
 epoch(clock) + `max_epochs_ahead`, so F covers everything signed before the
 load, as long as the clock never reads an epoch more than one below an
 earlier reading. A mark that is lost, old or garbled costs signing time, not
 safety. No clock at the load refuses the validator (`SC_ERR_CLOCK`).
+
+That condition limits the epoch length. A trusted clock that reads up to
+60 s ahead before a restart and correct after it reads one epoch lower only
+if an epoch is longer than that error. The NTS clock allows up to about
+61 s (its 60 s age limit plus its bound), so the floor holds for epochs
+longer than that. Mainnet and Hoodi epochs are 384 s. The minimal preset
+(48 s epochs) is for devnets and tests only; a host there that speeds up
+the local timer could make the floor miss an epoch.
 
 The cost: after each load, votes sign from target F + 1 with a source of F
 or above, so about `max_epochs_ahead` + 2 epochs of attestations are missed,

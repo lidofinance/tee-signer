@@ -190,8 +190,8 @@ type MarkLog interface {
 	// Raise makes the log's mark at least wm (one record if it is not yet).
 	Raise(ctx context.Context, wm backend.Watermark) error
 	// Lost is the error the log latched: markstore.ErrLost after another
-	// instance wrote it, markstore.ErrHandedOver for a log that ends with a
-	// tombstone.
+	// instance wrote it, markstore.ErrNoLock once its store is no longer
+	// locked.
 	Lost() error
 	// SourceGate is the source gate the log holds; SetSourceGate sets the
 	// one the next record carries.
@@ -349,7 +349,8 @@ func (h *Hooks) RecordShareSet(ctx context.Context, s *markstore.ShareSet) error
 }
 
 // MarkLogLost is markstore.ErrLost once another runner instance took the
-// mark log over (RBRLOG-03), nil otherwise; a tombstone is not a loss.
+// mark log over (RBRLOG-03), nil otherwise; a store that lost its lock is
+// not a loss (see MarkLogStopped).
 func (h *Hooks) MarkLogLost() error {
 	if h.marks == nil {
 		return nil

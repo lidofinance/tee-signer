@@ -671,8 +671,8 @@ void sc_signer_get_stats(const sc_signer *s, sc_signer_stats *out);
 
 /*
  * Replaces the policy part of a running signer's config with the same fields
- * of policy: fee recipients, gas limit range and
- * registration_max_future_seconds. Chain, clock horizon and slashing settings
+ * of policy: fee recipients, gas limit range,
+ * registration_max_future_seconds and builder_auth_roots. Chain, clock horizon and slashing settings
  * stay as they are, and so do the loaded validators and their slashing state,
  * so a policy update needs no restart. SC_ERR_ARG (and no change) if the
  * merged config fails the checks sc_signer_init makes.

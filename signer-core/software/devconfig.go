@@ -9,7 +9,8 @@ import (
 
 // DevConfig is a made-up test chain: arbitrary fork versions, a genesis
 // validators root of sha256("tee-signer dev chain"), one fork at
-// epoch 10, exit allowlist {7}. Tests and the dev runner use it.
+// epoch 10, a fixed voluntary exit fork version. Tests and the dev runner
+// use it.
 func DevConfig(genesisTime, secondsPerSlot, slotsPerEpoch uint64) core.Config {
 	var fee backend.Address
 	for i := range fee {

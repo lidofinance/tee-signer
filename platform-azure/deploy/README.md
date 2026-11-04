@@ -616,6 +616,13 @@ mark log, and the shares imported again with their interchange maxima
   (`signer-protocol/docs/protocol.md`, "Key rule lock"). Keys are RSA-HSM,
   2048 bit by default (`KEY_SIZE`), enough to wrap one data key in a test.
   Use 3072 in production.
+- Create the key in the vault, never import it, and make it immutable at
+  creation (`deploy.sh` does both with `KEY_IMMUTABLE=true`). The runner
+  cannot see how the key was made. Whoever holds a copy of an imported
+  key, or got the key released while its policy could still change, can
+  derive the sealing key from it and the public `setup_hash`, and open
+  every sealed share. Validator keys are imported as usual; this rule is
+  about the vault key only.
 - Key names are `signer-kek-N` (`KEY_NAME_PREFIX`, `KEY_NAME_N`).
   `key-create` refuses a key name that exists and never makes a new version:
   the runner releases the newest version of its key, so a new version would

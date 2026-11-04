@@ -46,8 +46,8 @@ func NewSecret() ([32]byte, error) {
 	return scalarBytes(k), nil
 }
 
-// Split makes an t-of-n Shamir split of secret with IDs 1..n. Dev and test
-// use only: in production distributed key generation makes shares.
+// Split makes a t-of-n Shamir split of secret with IDs 1..n. Dev and test
+// use only.
 func Split(secret [32]byte, t, n int) ([]Share, error) {
 	shares, _, err := SplitWithCommitments(secret, t, n)
 	return shares, err
