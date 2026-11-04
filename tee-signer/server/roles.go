@@ -21,9 +21,13 @@ import (
 // payload is read. A TLS client's role comes from its verified certificate
 // chain (attls.RoleOf). A connection without TLS (a unix socket, or a dev
 // runner without a client CA; release builds allow neither off dev) is a
-// local client: the admin role's messages and SIGN. An admin certificate
-// cannot SIGN, so a stolen one makes no signature; a local client has no
-// certificate to steal, and the dev runners and their tests sign over it.
+// local client: the admin role's messages and SIGN. A voluntary exit is
+// the one SIGN of the admin role, and the signing role may SIGN every
+// kind but an exit (signGrant): an exit cannot be undone and stays valid
+// for good (EIP-7044), so a signing client must not make one. A stolen
+// admin certificate makes exits and no other signature; a local client
+// has no certificate to steal, and the dev runners and their tests sign
+// over it.
 
 // client is what the server knows about the peer of a connection.
 type client struct {
@@ -187,12 +191,36 @@ func grantFor(cl *client, t wire.MsgType) grant {
 	return allows[cl.role][t]
 }
 
+// exitRoles are the roles that may SIGN a voluntary exit, and no other
+// kind. Admin-root-direct only in a non-prod build, as in allows.
+var exitRoles = map[attls.Role]bool{attls.RoleAdmin: true, attls.RoleAdminRootDirect: buildchain.AdminRootDirect}
+
+// signGrant is what cl may do with the SIGN payload p
+// (pubkey[48] kind:u8 ..., wire.DecodeSign): an exit for the exit roles
+// only, every other kind for the roles of the table.
+func signGrant(cl *client, p []byte) grant {
+	if cl == nil || cl.local || cl.undated {
+		return grantFor(cl, wire.TypeSign)
+	}
+	if len(p) > 48 && backend.Kind(p[48]) == backend.KindVoluntaryExit {
+		if exitRoles[cl.role] {
+			return allow
+		}
+		return deny
+	}
+	return allows[cl.role][wire.TypeSign]
+}
+
 // dispatchFor serves f for cl. A type the role table does not grant cl's
 // role gets FORBIDDEN before anything of
 // the payload is read; a refused import's payload is wiped. Limited types
 // count against the certificate's attestation limit (limit.go).
 func (s *Server) dispatchFor(ctx context.Context, f wire.Frame, cl *client) ([]byte, error) {
-	switch grantFor(cl, f.Type) {
+	g := grantFor(cl, f.Type)
+	if f.Type == wire.TypeSign {
+		g = signGrant(cl, f.Payload)
+	}
+	switch g {
 	case allow:
 		return s.dispatch(ctx, f)
 	case limited:

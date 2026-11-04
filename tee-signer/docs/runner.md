@@ -533,7 +533,8 @@ forwards bytes into the enclave, so TLS ends inside the enclave
 (`platform-aws/deploy/README.md`, "Network entry", which also has the
 suggested root and intermediate pattern for client certificates). Client
 roles (signing, attest-only, admin) come from the certificate chain
-(`signer-protocol/docs/protocol.md`).
+(`signer-protocol/docs/protocol.md`). Only the admin role signs a
+voluntary exit; the signing role signs every other kind.
 
 ## Exact repeats
 

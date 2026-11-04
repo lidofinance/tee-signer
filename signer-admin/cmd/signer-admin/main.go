@@ -80,6 +80,15 @@
 //	    Probe the role, check the runner's attestation, seal each share of
 //	    FILE (mode 0600) to the attested import key and send
 //	    IMPORT_SHARE_SEALED under the order.
+//	signer-admin exit -cluster cluster.json [-signers NAME,...] [-split FILE] -pubkey 0x... -index N -epoch E -out exit.json
+//	    Sign a voluntary exit: send SIGN of the exit to the signers in turn
+//	    until t partial signatures verify under their share keys (t and the
+//	    share indices from the split file of import-draft; a cluster of one
+//	    single-mode signer needs none), combine them, check the result
+//	    under the validator key and write the beacon API body. Only the
+//	    admin role may sign an exit. The tool posts nothing; to broadcast:
+//	      curl -X POST -H 'Content-Type: application/json' --data @exit.json \
+//	        http://BEACON:5052/eth/v1/beacon/pool/voluntary_exits
 //	signer-admin issue-client-cert -ca-cert FILE -ca-key FILE -role admin|attest|signing -name CN -out DIR
 //	signer-admin issue-client-cert -ca-cert FILE -ca-key FILE -make-intermediate ROLE -name CN -out DIR
 //	    Issue one client certificate of a role, or a role intermediate from
@@ -161,6 +170,7 @@ const usage = `usage:
   signer-admin probe -cluster cluster.json [-signers NAME,...]
   signer-admin import-draft -cluster cluster.json -signer NAME -split FILE [-not-after 12h] [-allow-gcp-unsafe-single-key] [-out import.bin]
   signer-admin import -cluster cluster.json -signer NAME -order import.signed -shares FILE -commitments FILE
+  signer-admin exit -cluster cluster.json [-signers NAME,...] [-split FILE] -pubkey 0x... -index N -epoch E -out exit.json
   signer-admin issue-client-cert -ca-cert FILE -ca-key FILE -role admin|attest|signing|-make-intermediate ROLE -name CN -out DIR`
 
 func run(args []string, out io.Writer) error {
@@ -170,7 +180,7 @@ func run(args []string, out io.Writer) error {
 	cmds := map[string]func([]string, io.Writer) error{
 		"setup": cmdSetup, "pin": cmdPin, "status": cmdStatus, "draft": cmdDraft,
 		"show": cmdShow, "sign": cmdSign, "assemble": cmdAssemble, "push": cmdPush,
-		"probe": cmdProbe, "import-draft": cmdImportDraft, "import": cmdImport,
+		"probe": cmdProbe, "import-draft": cmdImportDraft, "import": cmdImport, "exit": cmdExit,
 		"issue-client-cert": cmdIssueClientCert, "approver-key": cmdApproverKey,
 	}
 	cmd, ok := cmds[args[0]]
