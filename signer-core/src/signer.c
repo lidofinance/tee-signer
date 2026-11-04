@@ -212,9 +212,12 @@ static int load_marks(sc_signer *s, sc_validator *v, const uint8_t pubkey[SC_PUB
         else if (rc != SC_OK)
             return SC_ERR_STORAGE;
     }
-    sc_slashing_floor(&wm, floor, s->cfg.slots_per_epoch);
+    /* The floor is not stored, so only RAM takes it. committed stays the
+     * stored mark (as s->device does per device): a store decision, commit
+     * ahead or import, then compares against what is durable. */
     sc_slashing_restore(&v->slash, &wm);
-    gloas_restore(v, &wm);
+    sc_slashing_floor(&v->slash.ram, floor, s->cfg.slots_per_epoch);
+    gloas_restore(v, &v->slash.ram);
     return SC_OK;
 }
 

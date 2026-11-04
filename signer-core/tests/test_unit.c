@@ -1174,6 +1174,50 @@ static void test_import_store_failure(void)
     }
 }
 
+/*
+ * An import at or below the restart floor is stored: the floor is in RAM
+ * only, and the next restart may compute a lower one. Here
+ * max_epochs_ahead 1 gives floor F = E + 2 at epoch E; the import's target
+ * E + 2 must be durable, since a restart with the clock one epoch back
+ * floors at E + 1 and would otherwise sign (E + 1, E + 2).
+ */
+static void test_import_below_floor(void)
+{
+    for (uint32_t scope = SC_MARKS_PER_VALIDATOR; scope <= SC_MARKS_PER_DEVICE; scope++) {
+        host_t h = {0};
+        sc_config cfg;
+        sc_slashing_state st;
+        uint8_t sig[96];
+        vkeys k;
+        make_config(&cfg);
+        cfg.mark_scope = scope;
+        cfg.max_epochs_ahead = 1;
+
+        set_epoch(&h, E);
+        sc_signer *s1 = new_signer(&h, &cfg, 2, 0);
+        CHECK_RC(add_at_clock(s1, 71, &k), SC_OK);
+        CHECK_RC(sc_signer_get_state(s1, k.pk, &st), SC_OK);
+        CHECK(st.ram.target_epoch == E + 2);
+        CHECK(h.writes == 0);
+        sc_watermark imp = {0, E - 50, E + 2, SC_WM_HAS_ATTESTATION};
+        CHECK_RC(sc_signer_import(s1, k.pk, cfg.genesis_validators_root, &imp), SC_OK);
+        CHECK(h.writes == 1);
+
+        /* Restart with the clock one epoch back: floor E + 1. */
+        set_epoch(&h, E - 1);
+        sc_signer *s2 = new_signer(&h, &cfg, 2, 0);
+        CHECK_RC(add_at_clock(s2, 71, &k), SC_OK);
+        CHECK_RC(sc_signer_get_state(s2, k.pk, &st), SC_OK);
+        CHECK(st.ram.target_epoch == E + 2 && st.ram.source_epoch == E + 1);
+        set_epoch(&h, E + 2);
+        sc_attestation_data a = att(E + 1, E + 2, 1);
+        CHECK_RC(sc_sign_attestation(s2, k.pk, &a, sig), SC_ERR_SLASH_TARGET);
+        set_epoch(&h, E + 3);
+        a = att(E + 1, E + 3, 1);
+        CHECK_RC(sc_sign_attestation(s2, k.pk, &a, sig), SC_OK);
+    }
+}
+
 /* One run: the last attestation and the last block repeat with the same
  * signature and no write; an older vote or another root does not. */
 static void test_repeats_in_run(void)
@@ -3697,6 +3741,7 @@ int main(int argc, char **argv)
     test_store_failure();
     test_import();
     test_import_store_failure();
+    test_import_below_floor();
     test_hash_cache();
     test_table_and_errors();
     test_fork_versions();

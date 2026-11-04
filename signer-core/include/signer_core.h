@@ -379,7 +379,9 @@ typedef struct {
  * Slashing state of one validator.
  *   ram:       exact highest values signed in this run (or imported).
  *   committed: durable upper bounds; everything signed is at or below them.
- * After a restart both start from the persisted committed watermark.
+ * After a restart both start from the persisted committed watermark. The
+ * signer then raises ram alone to its restart floor (SC_RESTART_FLOOR_EPOCHS),
+ * so committed stays what is stored.
  */
 typedef struct {
     sc_watermark ram;
