@@ -14,15 +14,14 @@ import (
 )
 
 // fullState has every field of the setup state set: locked version 2 with
-// version 3 pending until 2027-01-15T08:00:00Z, open version 1, a pending
-// handover order, a key-release hash, a key origin.
+// version 3 pending until 2027-01-15T08:00:00Z, open version 1, a
+// key-release hash, a key origin.
 var fullState = cloud.SetupState{
 	SetupHash: cloud.Root{0x5e, 0x70},
 	Locked: cloud.ConfigGroup{Version: 2, Hash: cloud.Root{1},
 		Pending: cloud.PendingUpdate{Version: 3, Hash: cloud.Root{2}, EffectiveAt: 1_800_000_000}},
 	Open:            cloud.ConfigGroup{Version: 1, Hash: cloud.Root{3}},
 	ApproverSetHash: cloud.Root{4},
-	Order:           cloud.Order{Kind: 1, Hash: cloud.Root{5}, ActAt: 1_900_000_000},
 	KeyReleaseHash:  cloud.Root{6},
 	KeyOrigin:       cloud.KeyOrigin{Imported: 3},
 }
@@ -70,7 +69,7 @@ func TestProofFileSetupShape(t *testing.T) {
 		t.Fatalf("setup object\n got %s\nwant %s (the example in setupView's comment)", got, want)
 	}
 	r := result{Name: "aws-2", OK: true, Setup: viewOf(&fullState, fullAtt, before)}
-	if l := setupLine(r); l != "locked=v2 open=v1 approvers=04000000 pending=locked:v3@2027-01-15T08:00:00Z order=handover@2030-03-17T17:46:40Z keys=imported:3" {
+	if l := setupLine(r); l != "locked=v2 open=v1 approvers=04000000 pending=locked:v3@2027-01-15T08:00:00Z keys=imported:3" {
 		t.Fatalf("log line %q", l)
 	}
 
@@ -85,10 +84,10 @@ func TestProofFileSetupShape(t *testing.T) {
 		t.Fatalf("log line in force %q", l)
 	}
 
-	// Nothing pending, no order, no key-release hash, no pin: those fields
+	// Nothing pending, no key-release hash, no pin: those fields
 	// are left out, and the log line says unpinned.
 	quiet := fullState
-	quiet.Locked.Pending, quiet.Order, quiet.KeyReleaseHash = cloud.PendingUpdate{}, cloud.Order{}, cloud.Root{}
+	quiet.Locked.Pending, quiet.KeyReleaseHash = cloud.PendingUpdate{}, cloud.Root{}
 	quiet.KeyOrigin = cloud.KeyOrigin{}
 	got, _ = json.Marshal(viewOf(&quiet, &runnerclient.Attestation{Verifier: runnerclient.VerifierDev, AllowUnpinnedSetup: true}, before))
 	want := `{"setup_hash":"5e700000","pinned":false,"flag_path":false,` +

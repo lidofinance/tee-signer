@@ -299,15 +299,12 @@ func TestSetupStateHelpers(t *testing.T) {
 	}
 	order := open
 	order.Order = backend.Order{Kind: 1, Hash: backend.Root{5}, ActAt: effectiveAt}
-	if err := verify.CheckPending(&order, at); err == nil || !strings.Contains(err.Error(), "a handover order is pending") {
+	if err := verify.CheckPending(&order, at); err == nil || !strings.Contains(err.Error(), "an order of kind 1 is pending") {
 		t.Fatalf("pending order: %v", err)
 	}
 
 	if verify.UnixTime(effectiveAt) != "2027-01-15T08:00:00Z" || verify.UnixTime(math.MaxUint64) != "unix 18446744073709551615" {
 		t.Fatalf("UnixTime %s %s", verify.UnixTime(effectiveAt), verify.UnixTime(math.MaxUint64))
-	}
-	if verify.OrderKind(1) != "handover" || verify.OrderKind(2) != "kind 2" || verify.OrderKind(7) != "kind 7" {
-		t.Fatal("OrderKind")
 	}
 
 	d := verify.DescribeSetup(&s, before)
@@ -326,10 +323,9 @@ func TestSetupStateHelpers(t *testing.T) {
 	}
 	order.KeyReleaseHash = backend.Root{6}
 	order.KeyOrigin = backend.KeyOrigin{Imported: 1}
-	if d := verify.DescribeSetup(&order, at); !strings.Contains(d, "order=handover order_sha256=05") ||
-		!strings.Contains(d, "order_act_at=2027-01-15T08:00:00Z") || !strings.Contains(d, "key_release_sha256=06") ||
+	if d := verify.DescribeSetup(&order, at); strings.Contains(d, "order") || !strings.Contains(d, "key_release_sha256=06") ||
 		!strings.HasSuffix(d, " imported_keys=1") {
-		t.Fatalf("order: %q", d)
+		t.Fatalf("key release: %q", d)
 	}
 	flagPath := backend.SetupState{SetupHash: fakeConfigHash}
 	if d := verify.DescribeSetup(&flagPath, at); d != "setup_sha256=010203"+strings.Repeat("0", 58)+" flag_path=true" {

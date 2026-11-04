@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -11,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/verify"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	cloud "github.com/lidofinance/tee-signer/signer-protocol"
 )
@@ -128,9 +126,6 @@ func describe(st *signerState) string {
 			fmt.Fprintf(&b, " pending=%s:%s@%s(%s)", g, pendingRef(gs), when(gs.Pending.EffectiveAt), left(gs.Pending.EffectiveAt, t))
 		}
 	}
-	if o := s.Order; o.Kind != 0 {
-		fmt.Fprintf(&b, " order=%s:%s@%s(%s)", verify.OrderKind(o.Kind), hex.EncodeToString(o.Hash[:4]), when(o.ActAt), left(o.ActAt, t))
-	}
 	if h := st.health; h != nil {
 		trust := "untrusted"
 		if h.ClockTrusted {
@@ -156,15 +151,10 @@ func facets(st *signerState) map[string]string {
 		}
 		f[g.String()+"_pending"] = p
 	}
-	o := "none"
-	if s.Order.Kind != 0 {
-		o = hex8(s.Order.Hash)
-	}
-	f["order"] = o
 	return f
 }
 
-var facetOrder = []string{"locked", "open", "approvers", "locked_pending", "open_pending", "order", "build"}
+var facetOrder = []string{"locked", "open", "approvers", "locked_pending", "open_pending", "build"}
 
 // differs returns, for each signer, the facets in which it differs from
 // the value most signers have (the first one seen on a tie). Signers

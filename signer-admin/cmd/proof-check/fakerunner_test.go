@@ -218,7 +218,6 @@ func TestProbeMarkLog(t *testing.T) {
 	}
 	for record, state := range map[string]string{
 		"marklog gs://b signer=gcp-3 owner=00 version=9 writes=0 target=5 source=4 block=0 skipped=2 LOST": "lost",
-		"marklog azblob://a/c signer=azure-1 owner=00 version=3 HANDED-OVER":                               "handed-over",
 	} {
 		if m := markOf(record); m == nil || m.State != state {
 			t.Errorf("%q: %+v, want state %s", record, m, state)
