@@ -29,7 +29,6 @@ import (
 	"strings"
 
 	"github.com/lidofinance/tee-signer/governance/setupwire"
-	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/buildchain"
 )
 
@@ -153,8 +152,8 @@ func (c Chain) Limits() Limits {
 
 // MinTimeLock is setupwire.MinChangeDelay under l: the floor of the time
 // lock on a prod chain, l's default; none on another chain.
-func (l Limits) MinTimeLock(genesisForkVersion backend.Version) uint64 {
-	if setupwire.ProdChain(genesisForkVersion) {
+func (l Limits) MinTimeLock(c *setupwire.Chain) uint64 {
+	if c.Prod() {
 		return l.DefaultTimeLock
 	}
 	return 0
@@ -162,25 +161,25 @@ func (l Limits) MinTimeLock(genesisForkVersion backend.Version) uint64 {
 
 // TimeLock is setupwire's Locked.ChangeDelayOn under l: the group's time
 // lock, never below the chain's floor.
-func (l Limits) TimeLock(genesisForkVersion backend.Version, lk *setupwire.Locked) uint64 {
+func (l Limits) TimeLock(c *setupwire.Chain, lk *setupwire.Locked) uint64 {
 	w := l.DefaultTimeLock
 	if lk.ChangeDelaySeconds != nil {
 		w = *lk.ChangeDelaySeconds
 	}
-	return max(w, l.MinTimeLock(genesisForkVersion))
+	return max(w, l.MinTimeLock(c))
 }
 
 // CheckTimeLock is the time lock cap of setupwire's Locked.Check and the
 // floor of Locked.CheckChangeDelay under l.
-func (l Limits) CheckTimeLock(genesisForkVersion backend.Version, lk *setupwire.Locked) error {
+func (l Limits) CheckTimeLock(c *setupwire.Chain, lk *setupwire.Locked) error {
 	if lk.ChangeDelaySeconds == nil {
 		return nil
 	}
 	if *lk.ChangeDelaySeconds > l.MaxTimeLock {
 		return fmt.Errorf("locked: change_delay_seconds %d, at most %d in a %s build", *lk.ChangeDelaySeconds, l.MaxTimeLock, l.kind())
 	}
-	if floor := l.MinTimeLock(genesisForkVersion); *lk.ChangeDelaySeconds < floor {
-		return fmt.Errorf("locked: change_delay_seconds %d on a prod chain (mainnet, or a chain without a row in the chain table), at least %d in a %s build", *lk.ChangeDelaySeconds, floor, l.kind())
+	if floor := l.MinTimeLock(c); *lk.ChangeDelaySeconds < floor {
+		return fmt.Errorf("locked: change_delay_seconds %d on a prod chain (mainnet, or genesis values no row of the chain table matches), at least %d in a %s build", *lk.ChangeDelaySeconds, floor, l.kind())
 	}
 	return nil
 }
@@ -188,11 +187,11 @@ func (l Limits) CheckTimeLock(genesisForkVersion backend.Version, lk *setupwire.
 // Wait is setupwire.Wait under l: 0 for an open update; for a locked one
 // the active time lock (never below the chain's floor), or the images
 // minimum when that is larger and the allowed list gains an entry.
-func (l Limits) Wait(genesisForkVersion backend.Version, active *setupwire.Locked, u *setupwire.UpdateBody) uint64 {
+func (l Limits) Wait(c *setupwire.Chain, active *setupwire.Locked, u *setupwire.UpdateBody) uint64 {
 	if u.Group != setupwire.GroupLocked {
 		return 0
 	}
-	w := l.TimeLock(genesisForkVersion, active)
+	w := l.TimeLock(c, active)
 	if u.Locked != nil && setupwire.GainsImage(active.AllowedImageMeasurements, u.Locked.AllowedImageMeasurements) {
 		w = max(w, l.ImagesMinTimeLock)
 	}

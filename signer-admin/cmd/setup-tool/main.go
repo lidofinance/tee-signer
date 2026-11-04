@@ -110,13 +110,13 @@ func encode(human, out string) error {
 	if err != nil {
 		return err
 	}
-	if err := setupwire.CheckSingleKeyProd(&s.Platform, s.Chain.GenesisForkVersion); err != nil {
+	if err := setupwire.CheckSingleKeyProd(&s.Platform, &s.Chain); err != nil {
 		return err
 	}
 	// A new setup takes no change delay below the chain's floor; the
 	// decoder does not check it, so a stored setup from before the floor
 	// still reads.
-	if err := s.Locked.CheckChangeDelay(s.Chain.GenesisForkVersion); err != nil {
+	if err := s.Locked.CheckChangeDelay(&s.Chain); err != nil {
 		return fmt.Errorf("%s: %w", human, err)
 	}
 	if err := s.CheckOwnImageListed(); err != nil {

@@ -325,43 +325,81 @@ func (c *Connection) tlsConfig(cert tls.Certificate) *tls.Config {
 // the attested identity names (checked after the handshake), so the mark
 // comes from the runner's code. Without a mark the setting alone
 // decides.
+//
+// The chain is prod by both genesis values, as on the runner. A mark of
+// the fork version alone, from a runner built before the root was in the
+// mark, cannot show the root; it counts as no mark, so the setting alone
+// decides. The dev verifier refuses such a mark: it cannot tell a prod
+// chain, and runners built from this code carry the root. Such runners
+// were built for test networks only.
 func checkChain(cs tls.ConnectionState, mainnet, dev bool) error {
 	if len(cs.PeerCertificates) == 0 {
 		return nil // the dial refuses a runner without a certificate
 	}
-	gfv, ok, err := runnerChain(cs.PeerCertificates[0])
-	switch {
-	case err != nil:
+	m, ok, err := runnerChain(cs.PeerCertificates[0])
+	if err != nil {
 		return err
-	case !ok:
+	}
+	if !ok {
 		return nil
-	case setupwire.ProdChain(gfv) && dev:
-		return fmt.Errorf("the runner signs for a prod chain (genesis fork version %#x in its certificate), and the dev verifier proves nothing about it; "+
-			"use the verifier of its platform (azure-maa, aws-nitro or gcp-cs)", gfv[:])
-	case setupwire.ProdChain(gfv) && !mainnet:
-		return fmt.Errorf("the runner signs for a prod chain: mainnet or a chain without a row in the chain table (genesis fork version %#x in its certificate); "+
-			"set mainnet in its attestation settings, which makes key_release_sha256 mandatory for azure-maa and aws-nitro", gfv[:])
-	case !setupwire.ProdChain(gfv) && mainnet:
-		return fmt.Errorf("the attestation settings say mainnet, but the runner signs for genesis fork version %#x", gfv[:])
+	}
+	if !m.hasRoot {
+		if dev {
+			return fmt.Errorf("the runner's chain mark holds no genesis validators root (%s in its certificate), so it may sign for a prod chain, and the dev verifier proves nothing about it; "+
+				"use the verifier of its platform (azure-maa, aws-nitro or gcp-cs)", m)
+		}
+		return nil
+	}
+	prod := setupwire.ProdChain(m.gfv, m.gvr)
+	switch {
+	case prod && dev:
+		return fmt.Errorf("the runner signs for a prod chain (%s in its certificate), and the dev verifier proves nothing about it; "+
+			"use the verifier of its platform (azure-maa, aws-nitro or gcp-cs)", m)
+	case prod && !mainnet:
+		return fmt.Errorf("the runner signs for a prod chain: mainnet, or genesis values no row of the chain table matches (%s in its certificate); "+
+			"set mainnet in its attestation settings, which makes key_release_sha256 mandatory for azure-maa and aws-nitro", m)
+	case !prod && mainnet:
+		return fmt.Errorf("the attestation settings say mainnet, but the runner signs for %s", m)
 	}
 	return nil
 }
 
+// chainMark is the chain mark of a runner's certificate: the genesis fork
+// version, and the genesis validators root unless the runner is older
+// than the root in the mark.
+type chainMark struct {
+	gfv     backend.Version
+	gvr     backend.Root
+	hasRoot bool
+}
+
+func (m chainMark) String() string {
+	if !m.hasRoot {
+		return fmt.Sprintf("genesis fork version %#x, no root", m.gfv[:])
+	}
+	return fmt.Sprintf("genesis fork version %#x and genesis validators root %#x", m.gfv[:], m.gvr[:])
+}
+
 // runnerChain reads the chain mark of a runner's certificate
-// (backend.RunnerChainOID). ok is false without one.
-func runnerChain(c *x509.Certificate) (gfv backend.Version, ok bool, err error) {
+// (backend.RunnerChainOID): 36 bytes, the fork version and the root, or 4
+// bytes, the fork version alone. ok is false without one.
+func runnerChain(c *x509.Certificate) (m chainMark, ok bool, err error) {
 	for _, e := range c.Extensions {
 		if !e.Id.Equal(backend.RunnerChainOID) {
 			continue
 		}
 		var b []byte
-		if rest, err := asn1.Unmarshal(e.Value, &b); err != nil || len(rest) != 0 || len(b) != len(gfv) {
-			return gfv, false, errors.New("the runner's certificate has a chain mark that does not read as 4 bytes")
+		if rest, err := asn1.Unmarshal(e.Value, &b); err != nil || len(rest) != 0 || (len(b) != len(m.gfv) && len(b) != len(m.gfv)+len(m.gvr)) {
+			return m, false, errors.New("the runner's certificate has a chain mark that does not read as 4 or 36 bytes")
 		}
-		copy(gfv[:], b)
-		return gfv, true, nil
+		copy(m.gfv[:], b)
+		if len(b) > len(m.gfv) {
+			copy(m.gvr[:], b[len(m.gfv):])
+			m.hasRoot = true
+		}
+		return m, true, nil
 	}
-	return gfv, false, nil
+	return m, false, nil
 }
 
 // checkBuild refuses a runner of a non-prod build unless allow is its

@@ -3,6 +3,8 @@ package runnerclient
 import (
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"encoding/hex"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,21 +15,38 @@ import (
 )
 
 // runnerChainOID is the extension of the runner's TLS certificate that
-// names its chain: the genesis fork version, an OCTET STRING of 4 bytes.
+// names its chain: the genesis fork version and the genesis validators
+// root, an OCTET STRING of 36 bytes (4 from older runners).
 var runnerChainOID = asn1.ObjectIdentifier{1, 2, 840, 113556, 1, 8000, 2554,
 	49247, 57036, 45844, 17649, 38356, 1811430, 10320378, 3}
 
-// The chain marks of the tests: mainnet, hoodi, and a fork version no
-// row of the chain table names (prod, since the table fails closed).
+// The genesis values of the tests: mainnet, hoodi, the devnet row's fork
+// version, a fork version no row of the chain table names, and a root
+// that is no public network's.
 var (
-	mainnetMark = backend.Version{0, 0, 0, 0}
-	hoodiMark   = backend.Version{0x10, 0, 0x09, 0x10}
-	unknownMark = backend.Version{0xde, 0xad, 0xbe, 0xef}
+	mainnetFork = backend.Version{0, 0, 0, 0}
+	hoodiFork   = backend.Version{0x10, 0, 0x09, 0x10}
+	devnetFork  = backend.Version{0x10, 0, 0, 0x38}
+	unknownFork = backend.Version{0xde, 0xad, 0xbe, 0xef}
+	hoodiRoot   = mustRoot("212f13fc4df078b6cb7db228f1c8307566dcecf900867401a92023d7ba99cb5f")
+	mainnetRoot = mustRoot("4b363db94e286120d76eb905340fdd4e54bfe9f06bf33ff6cf5ad27f511bfe95")
+	devnetRoot  = backend.Root{0xd0}
 )
 
-func chainExt(t *testing.T, gfv backend.Version) []pkix.Extension {
+func mustRoot(s string) (r backend.Root) {
+	if n, err := hex.Decode(r[:], []byte(s)); err != nil || n != len(r) {
+		panic(s)
+	}
+	return r
+}
+
+func chainExt(t *testing.T, gfv backend.Version, gvr ...backend.Root) []pkix.Extension {
 	t.Helper()
-	v, err := asn1.Marshal(gfv[:])
+	raw := gfv[:]
+	for _, r := range gvr {
+		raw = append(raw, r[:]...)
+	}
+	v, err := asn1.Marshal(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +85,7 @@ func TestMainnetRunnerNeedsMainnetSetting(t *testing.T) {
 	env := newMAAEnv(t, mainKeySet(t))
 	opts := []Option{verify.WithHTTPClient(env.srv.Client())}
 
-	mainnet := maaRunner(t, ca, env, chainExt(t, mainnetMark))
+	mainnet := maaRunner(t, ca, env, chainExt(t, mainnetFork, mainnetRoot))
 	c := mainnetConn(t, ca, mainnet, env)
 	c.Attestation.Mainnet = false
 	wantErr(t, health(t, c, opts...), "mainnet")
@@ -77,7 +96,7 @@ func TestMainnetRunnerNeedsMainnetSetting(t *testing.T) {
 		t.Fatalf("mainnet runner, client set to mainnet: %v", err)
 	}
 
-	hoodi := maaRunner(t, ca, env, chainExt(t, hoodiMark))
+	hoodi := maaRunner(t, ca, env, chainExt(t, hoodiFork, hoodiRoot))
 	c = mainnetConn(t, ca, hoodi, env)
 	c.Attestation.Mainnet = false
 	if err := health(t, c, opts...); err != nil {
@@ -86,21 +105,39 @@ func TestMainnetRunnerNeedsMainnetSetting(t *testing.T) {
 	wantErr(t, health(t, mainnetConn(t, ca, hoodi, env), opts...), "mainnet")
 
 	// Fail closed: a chain without a row in the chain table is prod, so the
-	// client takes its runner only with the mainnet rules.
-	unknown := maaRunner(t, ca, env, chainExt(t, unknownMark))
-	c = mainnetConn(t, ca, unknown, env)
-	c.Attestation.Mainnet = false
-	wantErr(t, health(t, c, opts...), "set mainnet")
-	if err := health(t, mainnetConn(t, ca, unknown, env), opts...); err != nil {
-		t.Fatalf("unknown chain runner, client set to mainnet: %v", err)
+	// client takes its runner only with the mainnet rules. So is a test
+	// network's fork version with mainnet's root: it signs mainnet
+	// messages.
+	for name, ext := range map[string][]pkix.Extension{
+		"unknown chain":             chainExt(t, unknownFork, hoodiRoot),
+		"hoodi fork, mainnet root":  chainExt(t, hoodiFork, mainnetRoot),
+		"devnet fork, mainnet root": chainExt(t, devnetFork, mainnetRoot),
+	} {
+		r := maaRunner(t, ca, env, ext)
+		c := mainnetConn(t, ca, r, env)
+		c.Attestation.Mainnet = false
+		if err := health(t, c, opts...); err == nil || !strings.Contains(err.Error(), "set mainnet") {
+			t.Errorf("%s, client without mainnet: %v, want refused", name, err)
+		}
+		if err := health(t, mainnetConn(t, ca, r, env), opts...); err != nil {
+			t.Errorf("%s, client set to mainnet: %v", name, err)
+		}
 	}
 
-	old := maaRunner(t, ca, env, nil)
-	for _, m := range []bool{false, true} {
-		c := mainnetConn(t, ca, old, env)
-		c.Attestation.Mainnet = m
-		if err := health(t, c, opts...); err != nil {
-			t.Fatalf("runner without a chain mark, client mainnet %v: %v", m, err)
+	// A runner without a mark, or with the fork version alone (built before
+	// the root was in the mark): the setting alone decides.
+	for name, ext := range map[string][]pkix.Extension{
+		"no chain mark":         nil,
+		"hoodi fork, no root":   chainExt(t, hoodiFork),
+		"mainnet fork, no root": chainExt(t, mainnetFork),
+	} {
+		r := maaRunner(t, ca, env, ext)
+		for _, m := range []bool{false, true} {
+			c := mainnetConn(t, ca, r, env)
+			c.Attestation.Mainnet = m
+			if err := health(t, c, opts...); err != nil {
+				t.Errorf("runner with %s, client mainnet %v: %v", name, m, err)
+			}
 		}
 	}
 }
@@ -111,7 +148,8 @@ func TestMainnetRunnerNeedsMainnetSetting(t *testing.T) {
 // whose certificate names a prod chain when the verifier is dev, whatever
 // mainnet says. So one wrong flag cannot seal a share to a fake runner
 // that claims the mainnet chain. A non-prod chain mark, or none, stays
-// open to the dev verifier.
+// open to the dev verifier, and so does a mark of the fork version alone,
+// which counts as none.
 func TestDevVerifierNeverReachesMainnet(t *testing.T) {
 	ca := newTestCA(t)
 	const want = "the dev verifier proves nothing"
@@ -131,22 +169,32 @@ func TestDevVerifierNeverReachesMainnet(t *testing.T) {
 		wantErr(t, err, want)
 	}
 
-	// The handshake: a prod chain mark, mainnet or a chain without a row.
-	for name, mark := range map[string]backend.Version{"mainnet": mainnetMark, "unknown": unknownMark} {
-		f := startFakeRunnerExt(t, ca, devAttest, runnerchain.MainnetCertName, "0.1.0", chainExt(t, mark))
+	// The handshake: a prod chain mark, mainnet, a chain without a row, a
+	// test network's fork version with mainnet's root, or an old mark with
+	// the fork version alone.
+	for name, ext := range map[string][]pkix.Extension{
+		"mainnet":                  chainExt(t, mainnetFork, mainnetRoot),
+		"unknown":                  chainExt(t, unknownFork, devnetRoot),
+		"hoodi fork, mainnet root": chainExt(t, hoodiFork, mainnetRoot),
+		"mainnet fork, no root":    chainExt(t, mainnetFork),
+		"hoodi fork, no root":      chainExt(t, hoodiFork),
+	} {
+		f := startFakeRunnerExt(t, ca, devAttest, runnerchain.MainnetCertName, "0.1.0", ext)
 		wantErr(t, health(t, devConn(t, ca, f)), want)
 		if n := f.seen(wire.TypeIdentity) + f.seen(wire.TypeHealth); n != 0 {
 			t.Errorf("%s: the client sent %d requests to a refused runner", name, n)
 		}
 	}
 
-	hoodi := startFakeRunnerExt(t, ca, devAttest, runnerchain.MainnetCertName, "0.1.0", chainExt(t, hoodiMark))
-	if err := health(t, devConn(t, ca, hoodi)); err != nil {
-		t.Fatalf("test network runner, dev verifier: %v", err)
-	}
-	old := startFakeRunner(t, ca, devAttest)
-	if err := health(t, devConn(t, ca, old)); err != nil {
-		t.Fatalf("runner without a chain mark, dev verifier: %v", err)
+	for name, ext := range map[string][]pkix.Extension{
+		"test network":  chainExt(t, hoodiFork, hoodiRoot),
+		"devnet":        chainExt(t, devnetFork, devnetRoot),
+		"no chain mark": nil,
+	} {
+		f := startFakeRunnerExt(t, ca, devAttest, runnerchain.MainnetCertName, "0.1.0", ext)
+		if err := health(t, devConn(t, ca, f)); err != nil {
+			t.Errorf("runner with %s, dev verifier: %v", name, err)
+		}
 	}
 }
 

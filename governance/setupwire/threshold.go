@@ -30,12 +30,12 @@ var MainnetForkVersion = backend.Version{0, 0, 0, 0}
 // signer whose mark fails, plus a hostile gateway, can sign a slashable
 // pair. Its protection is the mark log and the key rule lock, not a
 // quorum. Every real split (n > 1) keeps the mainnet rule.
-func CheckThreshold(genesisForkVersion backend.Version, t, n int) error {
+func CheckThreshold(genesisForkVersion backend.Version, genesisValidatorsRoot backend.Root, t, n int) error {
 	if t < 1 || t > n || 2*t <= n {
 		return fmt.Errorf("threshold %d of %d: want more than half and at most all", t, n)
 	}
-	if ProdChain(genesisForkVersion) && n > 1 && 2*t-n < 2 {
-		return fmt.Errorf("threshold %d of %d on a prod chain (mainnet, or a chain without a row in the chain table): two signing sets overlap in %d signer, want 2t - n >= 2 (3 of 4, 4 of 5)", t, n, 2*t-n)
+	if ProdChain(genesisForkVersion, genesisValidatorsRoot) && n > 1 && 2*t-n < 2 {
+		return fmt.Errorf("threshold %d of %d on a prod chain (mainnet, or genesis values no row of the chain table matches): two signing sets overlap in %d signer, want 2t - n >= 2 (3 of 4, 4 of 5)", t, n, 2*t-n)
 	}
 	return nil
 }
@@ -76,7 +76,7 @@ func CheckThresholdOn(s *Setup, t, n int) error {
 	default:
 		return fmt.Errorf("signing_mode %d: unknown, want threshold or single", s.SigningMode)
 	}
-	return CheckThreshold(s.Chain.GenesisForkVersion, t, n)
+	return CheckThreshold(s.Chain.GenesisForkVersion, s.Chain.GenesisValidatorsRoot, t, n)
 }
 
 // CheckMembers is the rule that one key is held by one runner, for the
@@ -130,10 +130,10 @@ func CheckShareIndices(n int, shares map[string]uint8) error {
 // with no_lock_accepted (platform.Options.CheckNoLock), so such a setup
 // makes a runner that never starts. signer-admin setup and setup-tool
 // encode both run it before they write a setup.
-func CheckSingleKeyProd(p *PlatformConfig, genesisForkVersion backend.Version) error {
+func CheckSingleKeyProd(p *PlatformConfig, c *Chain) error {
 	k := &p.SealingKeyRelease
-	if k.UnsafeSingleKeyAccepted && !k.NoLockAccepted && ProdChain(genesisForkVersion) {
-		return errors.New("the setup accepts a key held alone on GCP (sealing_key_release.unsafe_single_key_accepted) on a prod chain (mainnet, or a chain without a row in the chain table), where a GCP runner starts only with the separate acceptance of a key rule without a lock: put sealing_key_release.no_lock_accepted = true")
+	if k.UnsafeSingleKeyAccepted && !k.NoLockAccepted && c.Prod() {
+		return errors.New("the setup accepts a key held alone on GCP (sealing_key_release.unsafe_single_key_accepted) on a prod chain (mainnet, or genesis values no row of the chain table matches), where a GCP runner starts only with the separate acceptance of a key rule without a lock: put sealing_key_release.no_lock_accepted = true")
 	}
 	return nil
 }

@@ -248,11 +248,14 @@ var AdminClientOID = asn1.ObjectIdentifier{1, 2, 840, 113556, 1, 8000, 2554,
 	49247, 57036, 45844, 17649, 38356, 1811430, 10320378, 2}
 
 // RunnerChainOID is a non-critical extension of the runner's TLS
-// certificate: an OCTET STRING of 4 bytes, the genesis fork version of
-// the chain the runner signs for. The certificate's key is the one the
-// attested identity names, so the value comes from the runner's code.
-// Clients refuse a runner whose value says mainnet unless their settings
-// say mainnet, and the reverse (attestation-verify/runnerclient). A
+// certificate: an OCTET STRING of 36 bytes, the genesis fork version and
+// the genesis validators root of the chain the runner signs for. The
+// certificate's key is the one the attested identity names, so the value
+// comes from the runner's code. Clients refuse a runner whose values make
+// a prod chain unless their settings say mainnet, and the reverse
+// (attestation-verify/runnerclient). Older runners wrote the fork version
+// alone (4 bytes); clients treat such a mark like no mark, since it
+// cannot show the root (those runners were test network builds). A
 // certificate without it leaves the decision to the client's setting.
 // Same GUID arc as AttestOnlyClientOID, last arc 3.
 var RunnerChainOID = asn1.ObjectIdentifier{1, 2, 840, 113556, 1, 8000, 2554,

@@ -37,24 +37,25 @@ var (
 		"sepolia": {"90000069", "d8ea171f3c94aea21ebc42a1ed61052acf3f9209c00e4efbaaddac09ed9b8078"},
 		"chiado":  {"0000006f", "9d642dac73058fbf39c0ae41ab1e34e4d889043cb199851ded7095bc99eb4c1e"},
 	}
-	ciTestFork = [4]byte{0, 0, 0, 1}
-	ciTestRoot = sha256.Sum256([]byte("tee-signer dev chain"))
-	otherRoot  = sha256.Sum256([]byte("a devnet's own genesis"))
-	otherFork  = [4]byte{0x10, 0x00, 0x00, 0x38} // ethereum-package's default
+	ciTestFork      = [4]byte{0, 0, 0, 1}
+	ciTestRootBytes = sha256.Sum256([]byte("tee-signer dev chain"))
+	otherRoot       = sha256.Sum256([]byte("a devnet's own genesis"))
+	otherFork       = [4]byte{0x10, 0x00, 0x00, 0x38} // ethereum-package's default
 )
 
 func TestTableMatchesSources(t *testing.T) {
-	if len(networks) != len(public) {
-		t.Fatalf("%d networks, want %d", len(networks), len(public))
-	}
-	for _, n := range networks {
-		if want := public[n.name]; n.fork != want[0] || n.root != want[1] {
-			t.Errorf("%s: %+v, want %v", n.name, n, want)
+	for name, want := range public {
+		f, r, ok := setupwire.PublicNetworkValues(name)
+		if !ok || f != fork(t, want[0]) || r != root(t, want[1]) {
+			t.Errorf("%s: %x %x %v, want %v", name, f, r, ok, want)
 		}
-		n.values() // panics on bad hex
+		if n, exact := PublicNetwork(fork(t, want[0]), root(t, want[1])); n != name || !exact {
+			t.Errorf("%s: PublicNetwork %q %v", name, n, exact)
+		}
 	}
-	if f, r := ciTest.values(); f != ciTestFork || r != ciTestRoot {
-		t.Errorf("ci-test: %x %x", f, r)
+	ci, ok := setupwire.ChainRowByName(string(CITest))
+	if !ok || ci.ForkVersion != ciTestFork || ciTestRoot != hex.EncodeToString(ciTestRootBytes[:]) {
+		t.Errorf("ci-test row %+v, root %s", ci, ciTestRoot)
 	}
 }
 
@@ -75,7 +76,7 @@ func TestMainnetOwnChainOnly(t *testing.T) {
 		}
 	}
 	for what, v := range map[string]values{
-		"devnet": {otherFork, otherRoot}, "ci-test": {ciTestFork, ciTestRoot},
+		"devnet": {otherFork, otherRoot}, "ci-test": {ciTestFork, ciTestRootBytes},
 		"hoodi fork version, mainnet root":   {fork(t, public["hoodi"][0]), mr},
 		"ci-test fork version, mainnet root": {ciTestFork, mr},
 		"devnet fork version, mainnet root":  {otherFork, mr},
@@ -97,7 +98,7 @@ type values struct {
 // public network's fork version or root with other values.
 func TestNonProdBuildsOwnChainOnly(t *testing.T) {
 	devnet := values{otherFork, otherRoot}
-	ci := values{ciTestFork, ciTestRoot}
+	ci := values{ciTestFork, ciTestRootBytes}
 	hoodi := values{fork(t, public["hoodi"][0]), root(t, public["hoodi"][1])}
 	own := map[Chain][]values{Hoodi: {hoodi}, CITest: {ci}, Devnet: {devnet}}
 	for c, oks := range own {

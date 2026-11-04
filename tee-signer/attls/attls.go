@@ -92,7 +92,7 @@ func ServerConfig(caPEM []byte, now func() (time.Time, error), opts ...Option) (
 		BasicConstraintsValid: true,
 	}
 	if o.chain != nil {
-		v, err := asn1.Marshal(o.chain[:])
+		v, err := asn1.Marshal(o.chain)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -215,15 +215,18 @@ func VerifyAt(roots *x509.CertPool, peer []*x509.Certificate, t time.Time) ([][]
 type Option func(*options)
 
 type options struct {
-	chain *backend.Version
+	chain []byte
 }
 
 // WithChain names the chain the runner signs for in its TLS certificate:
-// the genesis fork version in extension backend.RunnerChainOID. A client
-// refuses a mainnet runner unless its settings say mainnet, so a client
-// that leaves the setting out cannot skip the mainnet rules.
-func WithChain(genesisForkVersion backend.Version) Option {
-	return func(o *options) { o.chain = &genesisForkVersion }
+// the genesis fork version and the genesis validators root, 36 bytes, in
+// extension backend.RunnerChainOID. A client refuses a runner of a prod
+// chain (setupwire.ProdChain, which needs both values) unless its
+// settings say mainnet, so a client that leaves the setting out cannot
+// skip the mainnet rules.
+func WithChain(genesisForkVersion backend.Version, genesisValidatorsRoot backend.Root) Option {
+	mark := append(append([]byte(nil), genesisForkVersion[:]...), genesisValidatorsRoot[:]...)
+	return func(o *options) { o.chain = mark }
 }
 
 // noTrustedTime is what cfg.Time gives crypto/tls when the trusted clock

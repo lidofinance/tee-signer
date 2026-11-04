@@ -79,8 +79,9 @@ builds apart:
   with its exact genesis fork version and genesis validators root, the
   ci-test build on the chain of `governance/chains/chain.ci-test.json`, the
   devnet build on a chain with the devnet row's genesis fork version
-  (`0x10000038`, ethereum-package's) and a root of its own. A fork version
-  without a row in the chain table is prod. Each refuses
+  (`0x10000038`, ethereum-package's) and a root of its own. Genesis values
+  no row of the chain table matches, by fork version and root, are prod.
+  Each refuses
   mainnet, Gnosis, Holesky, LUKSO, Sepolia and Chiado, the other builds'
   chains, any chain with one of the public networks' values and not both,
   and the flag path (`governance/runnerchain/chains.go` names the source of

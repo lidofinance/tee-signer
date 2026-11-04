@@ -348,7 +348,7 @@ func run() (err error) {
 	}
 	var tlsCfg *tls.Config
 	if caPEM != nil {
-		if tlsCfg, srv.TLSKeyHash, err = attls.ServerConfig(caPEM, plat.Clock.Now, attls.WithChain(cfg.GenesisForkVersion)); err != nil {
+		if tlsCfg, srv.TLSKeyHash, err = attls.ServerConfig(caPEM, plat.Clock.Now, attls.WithChain(cfg.GenesisForkVersion, cfg.GenesisValidatorsRoot)); err != nil {
 			return err
 		}
 		srv.ClientCAs = tlsCfg.ClientCAs

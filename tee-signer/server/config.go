@@ -727,7 +727,7 @@ func (u *Updates) Accept(ctx context.Context, raw []byte) (uint8, backend.SetupS
 	// After the again paths: an update from before the floor that is in
 	// force or pending must be taken again, to restore a lost body.
 	if b.Group == setupwire.GroupLocked && b.Locked != nil {
-		if err := b.Locked.CheckChangeDelay(u.opt.Setup.Chain.GenesisForkVersion); err != nil {
+		if err := b.Locked.CheckChangeDelay(&u.opt.Setup.Chain); err != nil {
 			return 0, none, backend.Refused(backend.StatusBadRequest, "config update: %v", err)
 		}
 	}
@@ -747,7 +747,7 @@ func (u *Updates) Accept(ctx context.Context, raw []byte) (uint8, backend.SetupS
 	if err := upd.Verify(&v.locked.Approvers); err != nil {
 		return 0, none, backend.Refused(backend.StatusBadRequest, "config update: %v", err)
 	}
-	wait := setupwire.Wait(u.opt.Setup.Chain.GenesisForkVersion, v.locked, b)
+	wait := setupwire.Wait(&u.opt.Setup.Chain, v.locked, b)
 	if err := setupwire.CheckActivateAt(b.ActivateAt, now, wait); err != nil {
 		return 0, none, backend.Refused(backend.StatusBadRequest, "config update: %v", err)
 	}

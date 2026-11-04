@@ -83,7 +83,7 @@ func TestStartMainnetKeyRule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if setupwire.ProdChain(st.Chain.GenesisForkVersion) {
+	if st.Chain.Prod() {
 		t.Fatal("the sample setup is on mainnet")
 	}
 	write := func(s *setupwire.Setup) string {

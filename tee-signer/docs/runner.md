@@ -69,15 +69,20 @@ chain, `prod`, from the chain table in `governance/setupwire/chains.go`:
 | `devnet` | no | the same | `nonprod,chain_devnet` | `0.1.0+devnet` | `signer-runner devnet` |
 | `ci-test` | no | the same | `nonprod,chain_ci_test` | `0.1.0+ci-test` | `signer-runner ci-test` |
 
-The table fails closed: a genesis fork version without a row is prod, so
-a setup of an unknown chain gets the strict checks (the threshold rule's
-2t - n >= 2, the change delay floor: `change_delay_seconds` at least the
-default time lock in a new setup the tools make and in every new `locked`
-update the runner takes, while a pinned setup or a stored update with a
-lower value is not refused, its wait is raised to the floor, the key rule
-lock, the GCP single-key rule), and clients treat its runner as a mainnet
-one. The devnet row names the fork version
-of ethereum-package devnets, `0x10000038`, the one
+A setup's chain is non-prod only when both its genesis fork version and
+its genesis validators root match a non-prod row: Hoodi's exact root for
+`hoodi`, and for `devnet` and `ci-test` a root that is no public
+network's. Signing domains come from the root and the fork schedule, so a
+test network's fork version with mainnet's root signs mainnet messages;
+such a setup is prod. The table fails closed: genesis values no row
+matches are prod, so a setup of an unknown chain gets the strict checks
+(the threshold rule's 2t - n >= 2, the change delay floor:
+`change_delay_seconds` at least the default time lock in a new setup the
+tools make and in every new `locked` update the runner takes, while a
+pinned setup or a stored update with a lower value is not refused, its
+wait is raised to the floor, the key rule lock, the GCP single-key rule),
+and clients treat its runner as a mainnet one. The devnet row names the
+fork version of ethereum-package devnets, `0x10000038`, the one
 `governance/chains/chain.sh identify` takes as a devnet; a devnet with a
 fork version of its own counts as prod.
 
@@ -93,8 +98,8 @@ hoodi build on Hoodi with its exact genesis fork version and genesis
 validators root, the ci-test build on the chain of
 `governance/chains/chain.ci-test.json`, the devnet build on a chain with
 the devnet row's fork version and a root of its own. Each refuses every
-prod chain (mainnet, and any fork version without a row), every other public
-network, and a chain with one of their genesis values and not both.
+prod chain (mainnet, and genesis values no row matches), every other
+public network, and a chain with one of their genesis values and not both.
 Clients refuse a non-prod runner unless `allow_chain_build` in their
 settings names its chain. The binaries of a non-prod build carry the chain
 in their names (`runner-azure-hoodi`, `runner-dev-ci-test`).

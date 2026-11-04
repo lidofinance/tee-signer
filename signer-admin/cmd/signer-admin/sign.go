@@ -123,10 +123,10 @@ func cmdShow(args []string, out io.Writer) error {
 			fprintf(out, "rotation: the approver set changes from %s to %s; every new key must sign\n", hex8(set.Hash()), hex8(body.Locked.Approvers.Hash()))
 		}
 		if body.Group == setupwire.GroupLocked {
-			gfv := a.setup.Chain.GenesisForkVersion
-			fprintf(out, "wait: at least %d s after arrival (the active time lock%s)%s\n", runnerchain.Mainnet.Limits().Wait(gfv, a.locked, body),
+			ch := &a.setup.Chain
+			fprintf(out, "wait: at least %d s after arrival (the active time lock%s)%s\n", runnerchain.Mainnet.Limits().Wait(ch, a.locked, body),
 				map[bool]string{true: ", or the images minimum: the allowed list gains an image", false: ""}[setupwire.GainsImage(a.locked.AllowedImageMeasurements, body.Locked.AllowedImageMeasurements)],
-				nonProdWait(runnerchain.Mainnet.Limits().Wait(gfv, a.locked, body), runnerchain.Devnet.Limits().Wait(gfv, a.locked, body)))
+				nonProdWait(runnerchain.Mainnet.Limits().Wait(ch, a.locked, body), runnerchain.Devnet.Limits().Wait(ch, a.locked, body)))
 		}
 	}
 	if signed != nil {

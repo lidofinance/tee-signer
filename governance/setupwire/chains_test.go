@@ -14,7 +14,26 @@ import (
 	"github.com/lidofinance/tee-signer/signer-protocol/buildchain"
 )
 
-// The chain table: mainnet is the one prod chain.
+var (
+	hoodiFork   = backend.Version{0x10, 0, 0x09, 0x10}
+	devnetFork  = backend.Version{0x10, 0, 0, 0x38}
+	ciTestFork  = backend.Version{0, 0, 0, 1}
+	hoodiRoot   = hexRoot("212f13fc4df078b6cb7db228f1c8307566dcecf900867401a92023d7ba99cb5f")
+	mainnetRoot = hexRoot("4b363db94e286120d76eb905340fdd4e54bfe9f06bf33ff6cf5ad27f511bfe95")
+	ciTestRoot  = hexRoot("535276eb9690335cc5e4cb926858a79ece25caaf930a7dfad44757c8b7bef420")
+	devnetRoot  = backend.Root{0xde, 0x7e, 31: 0x01} // a devnet's own root
+)
+
+func hexRoot(s string) (r backend.Root) {
+	if n, err := hex.Decode(r[:], []byte(s)); err != nil || n != len(r) {
+		panic(s)
+	}
+	return r
+}
+
+// The chain table: mainnet is the one prod chain. Each non-prod row is
+// non-prod only with its own genesis values: hoodi with Hoodi's root,
+// devnet and ci-test with a root that is no public network's.
 func TestChainTableProd(t *testing.T) {
 	m, ok := ChainRowByName("mainnet")
 	if !ok || !m.Prod || m.ForkVersion != MainnetForkVersion {
@@ -25,13 +44,24 @@ func TestChainTableProd(t *testing.T) {
 			t.Errorf("%s: prod %v", r.Name, r.Prod)
 		}
 	}
-	if !ProdChain(MainnetForkVersion) {
-		t.Error("a setup of mainnet is not prod")
+	for _, rt := range []backend.Root{mainnetRoot, devnetRoot, {}} {
+		if !ProdChain(MainnetForkVersion, rt) {
+			t.Errorf("mainnet fork version, root %x: not prod", rt[:4])
+		}
 	}
-	for name, v := range map[string]backend.Version{"hoodi": {0x10, 0, 0x09, 0x10}, "ci-test": {0, 0, 0, 1}, "devnet": {0x10, 0, 0, 0x38}} {
-		r, ok := ChainRowOf(v)
-		if !ok || r.Name != name || ProdChain(v) {
-			t.Errorf("fork version %x: row %+v %v, prod %v; want %s, not prod", v, r, ok, ProdChain(v), name)
+	for _, c := range []struct {
+		name string
+		fv   backend.Version
+		root backend.Root
+	}{
+		{"hoodi", hoodiFork, hoodiRoot},
+		{"devnet", devnetFork, devnetRoot},
+		{"ci-test", ciTestFork, ciTestRoot},
+		{"ci-test", ciTestFork, devnetRoot},
+	} {
+		r, ok := ChainRowOf(c.fv, c.root)
+		if !ok || r.Name != c.name || ProdChain(c.fv, c.root) {
+			t.Errorf("%x/%x: row %+v %v, prod %v; want %s, not prod", c.fv, c.root[:4], r, ok, ProdChain(c.fv, c.root), c.name)
 		}
 	}
 	// No two rows name one fork version.
@@ -44,49 +74,112 @@ func TestChainTableProd(t *testing.T) {
 	}
 }
 
-// Fail closed: a fork version no row names is prod, so a setup of an
+// A non-prod row's fork version with mainnet's root signs mainnet
+// messages: signing domains come from the fork schedule and the root, not
+// from the genesis fork version. Such a setup is prod, and so is any
+// other partial match of a non-prod row: its fork version with another
+// public network's root, or Hoodi's fork version with a root not Hoodi's.
+func TestPartialMatchIsProd(t *testing.T) {
+	var public []backend.Root
+	for _, n := range networks {
+		_, r := n.values()
+		public = append(public, r)
+	}
+	for _, r := range ChainRows() {
+		if r.Prod {
+			continue
+		}
+		for _, root := range public {
+			if r.Name == "hoodi" && root == hoodiRoot {
+				continue
+			}
+			if !ProdChain(r.ForkVersion, root) {
+				t.Errorf("%s fork version %x with public root %x: not prod", r.Name, r.ForkVersion, root[:4])
+			}
+			if err := CheckThreshold(r.ForkVersion, root, 2, 3); err == nil {
+				t.Errorf("%s fork version with public root %x: 2 of 3 passes the threshold rule", r.Name, root[:4])
+			}
+			s := samples(t)["setup-gcp"]
+			s.Chain.GenesisForkVersion, s.Chain.GenesisValidatorsRoot = r.ForkVersion, root
+			k := &s.Platform.SealingKeyRelease
+			k.UnsafeSingleKeyAccepted, k.NoLockAccepted = true, false
+			if CheckSingleKeyProd(&s.Platform, &s.Chain) == nil || !s.Chain.Prod() {
+				t.Errorf("%s fork version with public root %x: the single-key rule passes", r.Name, root[:4])
+			}
+		}
+	}
+	if !ProdChain(hoodiFork, devnetRoot) {
+		t.Error("hoodi fork version with a devnet's root: not prod")
+	}
+}
+
+// Fail closed: genesis values no row matches are prod, so a setup of an
 // unknown chain gets the strict checks. Sepolia, Gnosis and a devnet with
 // a fork version of its own are such chains.
 func TestUnknownChainIsProd(t *testing.T) {
 	for _, v := range []backend.Version{{0x90, 0, 0, 0x69}, {0, 0, 0, 0x64}, {0xde, 0xad, 0xbe, 0xef}, {0x10, 0, 0, 0x39}} {
-		if _, ok := ChainRowOf(v); ok {
-			t.Errorf("fork version %x has a row", v)
-		}
-		if !ProdChain(v) {
-			t.Errorf("fork version %x: not prod", v)
-		}
-		if err := CheckThreshold(v, 2, 3); err == nil {
-			t.Errorf("fork version %x: 2 of 3 passes the threshold rule, want the prod rule", v)
-		}
-		if err := CheckThreshold(v, 3, 4); err != nil {
-			t.Errorf("fork version %x: 3 of 4: %v", v, err)
+		for _, rt := range []backend.Root{devnetRoot, mainnetRoot, hoodiRoot} {
+			if _, ok := ChainRowOf(v, rt); ok {
+				t.Errorf("fork version %x root %x has a row", v, rt[:4])
+			}
+			if !ProdChain(v, rt) {
+				t.Errorf("fork version %x root %x: not prod", v, rt[:4])
+			}
+			if err := CheckThreshold(v, rt, 2, 3); err == nil {
+				t.Errorf("fork version %x: 2 of 3 passes the threshold rule, want the prod rule", v)
+			}
+			if err := CheckThreshold(v, rt, 3, 4); err != nil {
+				t.Errorf("fork version %x: 3 of 4: %v", v, err)
+			}
 		}
 	}
 }
 
 // A missing row can only make things stricter: drop each row in turn, and
-// no fork version becomes non-prod that was prod.
+// no chain becomes non-prod that was prod.
 func TestMissingRowIsStricter(t *testing.T) {
 	saved := chainTable
 	t.Cleanup(func() { chainTable = saved })
-	probe := []backend.Version{{0xde, 0xad, 0xbe, 0xef}}
-	for _, r := range saved {
-		probe = append(probe, r.ForkVersion)
+	type values struct {
+		fv backend.Version
+		rt backend.Root
 	}
-	before := map[backend.Version]bool{}
+	probe := []values{{backend.Version{0xde, 0xad, 0xbe, 0xef}, devnetRoot}}
+	for _, r := range saved {
+		for _, rt := range []backend.Root{devnetRoot, mainnetRoot, hoodiRoot, ciTestRoot} {
+			probe = append(probe, values{r.ForkVersion, rt})
+		}
+	}
+	before := map[values]bool{}
 	for _, v := range probe {
-		before[v] = ProdChain(v)
+		before[v] = ProdChain(v.fv, v.rt)
 	}
 	for i, r := range saved {
 		chainTable = append(append([]ChainRow(nil), saved[:i]...), saved[i+1:]...)
 		for _, v := range probe {
-			if before[v] && !ProdChain(v) {
-				t.Errorf("without the %s row, fork version %x is no longer prod", r.Name, v)
+			if before[v] && !ProdChain(v.fv, v.rt) {
+				t.Errorf("without the %s row, %x/%x is no longer prod", r.Name, v.fv, v.rt[:4])
 			}
 		}
-		if !ProdChain(r.ForkVersion) {
+		if !ProdChain(r.ForkVersion, devnetRoot) {
 			t.Errorf("without the %s row, its fork version is not prod", r.Name)
 		}
+	}
+}
+
+// The public networks table: each network is found by its exact values.
+func TestPublicNetworks(t *testing.T) {
+	for _, n := range networks {
+		f, r := n.values()
+		if name, exact := PublicNetwork(f, r); name != n.name || !exact {
+			t.Errorf("%s: %q %v", n.name, name, exact)
+		}
+		if !publicRoot(r) {
+			t.Errorf("%s: root not public", n.name)
+		}
+	}
+	if name, _ := PublicNetwork(devnetFork, devnetRoot); name != "" || publicRoot(devnetRoot) {
+		t.Errorf("a devnet's values name %q", name)
 	}
 }
 
@@ -160,13 +253,17 @@ func TestChainTableMatchesBuildSwitch(t *testing.T) {
 			continue
 		}
 		var c struct {
-			GenesisForkVersion string `json:"genesis_fork_version"`
+			GenesisForkVersion    string `json:"genesis_fork_version"`
+			GenesisValidatorsRoot string `json:"genesis_validators_root"`
 		}
 		if err := json.Unmarshal(raw, &c); err != nil {
 			t.Fatal(err)
 		}
 		if got := strings.TrimPrefix(c.GenesisForkVersion, "0x"); got != hex.EncodeToString(r.ForkVersion[:]) {
 			t.Errorf("%s: %s has fork version %s, row %x", r.Name, file, got, r.ForkVersion)
+		}
+		if got := strings.TrimPrefix(c.GenesisValidatorsRoot, "0x"); r.Root != "" && got != r.Root {
+			t.Errorf("%s: %s has root %s, row %s", r.Name, file, got, r.Root)
 		}
 	}
 }

@@ -430,7 +430,7 @@ func cmdDraft(args []string, out io.Writer) error {
 		return fmt.Errorf("-margin %v: want 0 to %v, the activation horizon of a %s build", *margin, time.Duration(lim.ActivationHorizon)*time.Second, fl)
 	}
 	if body.Locked != nil {
-		if err := lim.CheckTimeLock(c.members[0].setup.Chain.GenesisForkVersion, body.Locked); err != nil {
+		if err := lim.CheckTimeLock(&c.members[0].setup.Chain, body.Locked); err != nil {
 			return err
 		}
 		if err := checkOwnImages(c.members, body.Locked); err != nil {
@@ -482,7 +482,7 @@ func cmdDraft(args []string, out io.Writer) error {
 	body.ClusterID, body.ChainHash = s.ClusterID, s.Chain.Hash()
 	body.Version = max(r.version, pend[body.Group]) + 1
 	body.PrevHash = r.hash
-	wait := lim.Wait(s.Chain.GenesisForkVersion, a.locked, body)
+	wait := lim.Wait(&s.Chain, a.locked, body)
 	t := uint64(max(now().Unix(), 0))
 	body.ActivateAt = setupwire.SatAdd(setupwire.SatAdd(t, wait), uint64(margin.Seconds()))
 	// Fresh salts for every leaf of the new group: the approvers sign their

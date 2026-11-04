@@ -83,7 +83,7 @@ func TestWait(t *testing.T) {
 	for _, c := range cases {
 		a := active
 		a.ChangeDelaySeconds = c.timeLock
-		if got := Wait(c.chain, &a, &c.body); got != c.want {
+		if got := Wait(chainWith(c.chain), &a, &c.body); got != c.want {
 			t.Errorf("%s: wait %d, want %d", c.name, got, c.want)
 		}
 	}
@@ -98,7 +98,7 @@ func TestWait(t *testing.T) {
 // to its setup (Matches) carry no floor: they run on stored values too,
 // which ChangeDelayOn raises instead.
 func TestProdChangeDelayFloor(t *testing.T) {
-	if MinChangeDelay(MainnetForkVersion) != DefaultTimeLock || MinChangeDelay(sampleChain().GenesisForkVersion) != 0 {
+	if MinChangeDelay(chainWith(MainnetForkVersion)) != DefaultTimeLock || MinChangeDelay(chainWith(sampleChain().GenesisForkVersion)) != 0 {
 		t.Fatal("MinChangeDelay")
 	}
 	for _, c := range []struct {
@@ -117,15 +117,15 @@ func TestProdChangeDelayFloor(t *testing.T) {
 		s := samples(t)["setup-azure"]
 		s.Chain.GenesisForkVersion = c.chain
 		s.Locked.ChangeDelaySeconds = c.delay
-		err := s.Locked.CheckChangeDelay(c.chain)
+		err := s.Locked.CheckChangeDelay(chainWith(c.chain))
 		if (err == nil) != c.ok {
 			t.Errorf("%s: CheckChangeDelay %v, want ok %v", c.name, err, c.ok)
 		}
 		if err != nil && !strings.Contains(err.Error(), "locked: change_delay_seconds") {
 			t.Errorf("%s: %v does not name change_delay_seconds", c.name, err)
 		}
-		if w := s.Locked.ChangeDelayOn(c.chain); w < MinChangeDelay(c.chain) || (c.ok && w != s.Locked.ChangeDelay()) {
-			t.Errorf("%s: ChangeDelayOn %d, floor %d, stored %d", c.name, w, MinChangeDelay(c.chain), s.Locked.ChangeDelay())
+		if w := s.Locked.ChangeDelayOn(chainWith(c.chain)); w < MinChangeDelay(chainWith(c.chain)) || (c.ok && w != s.Locked.ChangeDelay()) {
+			t.Errorf("%s: ChangeDelayOn %d, floor %d, stored %d", c.name, w, MinChangeDelay(chainWith(c.chain)), s.Locked.ChangeDelay())
 		}
 		if err := s.CheckValues(); err != nil {
 			t.Errorf("setup %s: CheckValues %v, want the value rules without the floor", c.name, err)
@@ -155,8 +155,8 @@ func TestStoredChangeDelayBelowFloorDecodes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%x: a stored setup with change_delay_seconds 0 does not decode: %v", chain, err)
 		}
-		if got.Locked.ChangeDelay() != 0 || got.Locked.ChangeDelayOn(chain) != DefaultTimeLock {
-			t.Fatalf("%x: stored %d, in force %d, want 0 and the floor %d", chain, got.Locked.ChangeDelay(), got.Locked.ChangeDelayOn(chain), DefaultTimeLock)
+		if got.Locked.ChangeDelay() != 0 || got.Locked.ChangeDelayOn(chainWith(chain)) != DefaultTimeLock {
+			t.Fatalf("%x: stored %d, in force %d, want 0 and the floor %d", chain, got.Locked.ChangeDelay(), got.Locked.ChangeDelayOn(chainWith(chain)), DefaultTimeLock)
 		}
 		if again, err := got.Encode(); err != nil || !bytes.Equal(again, raw) {
 			t.Fatalf("%x: Encode of the stored setup: %v", chain, err)
@@ -175,7 +175,7 @@ func TestStoredChangeDelayBelowFloorDecodes(t *testing.T) {
 			t.Fatalf("%x: the stored update does not match its setup: %v", chain, err)
 		}
 		next := lockedBody(s)
-		if w := Wait(chain, dec.Body.Locked, &next); w != DefaultTimeLock {
+		if w := Wait(chainWith(chain), dec.Body.Locked, &next); w != DefaultTimeLock {
 			t.Fatalf("%x: the wait under the stored 0 is %d, want the floor %d", chain, w, DefaultTimeLock)
 		}
 	}

@@ -157,7 +157,7 @@ func TestEncodeMainnetGCPSingleNeedsNoLockAccepted(t *testing.T) {
 	if k := s.Platform.SealingKeyRelease; !k.UnsafeSingleKeyAccepted || !k.NoLockAccepted {
 		t.Fatalf("the setup carries unsafe_single_key_accepted %v, no_lock_accepted %v, want both", k.UnsafeSingleKeyAccepted, k.NoLockAccepted)
 	}
-	if !setupwire.ProdChain(s.Chain.GenesisForkVersion) {
+	if !s.Chain.Prod() {
 		t.Fatal("the setup is not on mainnet")
 	}
 }
