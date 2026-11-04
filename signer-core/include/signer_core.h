@@ -963,7 +963,7 @@ typedef struct {
 int sc_decode_aggregate_and_proof(const uint8_t *ssz, size_t len, int form,
                                   const sc_preset *p, uint8_t *scratch,
                                   sc_aggregate_info *out);
-/* SSZ size of a ContributionAndProof under preset p. */
+/* SSZ size of a ContributionAndProof under preset p; 0 if p has no subnets. */
 size_t sc_contribution_and_proof_len(const sc_preset *p);
 /* Decodes a ContributionAndProof and computes its root. */
 int sc_decode_contribution_and_proof(const uint8_t *ssz, size_t len, const sc_preset *p,

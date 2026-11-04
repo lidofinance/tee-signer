@@ -1063,6 +1063,8 @@ static void test_table_and_errors(void)
     sc_host_ops ops = host_ops(&h);
     sc_signer *tmp;
     size_t sz = sc_signer_mem_size(2, 2);
+    CHECK(sc_signer_mem_size(1u << 24, 0) > 0 || SIZE_MAX < UINT64_MAX);
+    CHECK(sc_signer_mem_size((1u << 24) + 1, 0) == 0);
     uint8_t *mem = malloc(sz + 8);
     CHECK_RC(sc_signer_init(mem + 1, sz, 2, 2, &cfg, &ops, &tmp), SC_ERR_ARG);
     CHECK_RC(sc_signer_init(mem, sz - 1, 2, 2, &cfg, &ops, &tmp), SC_ERR_NOMEM);
@@ -2945,6 +2947,9 @@ static void test_typed(void)
     /* Contribution and proof. */
     account_sign(3, D_SYNC_SEL, V_FULU, gvr, obj, proof);
     CHECK(sc_contribution_and_proof_len(p) == 264);
+    sc_preset nosub = *p;
+    nosub.sync_committee_subnet_count = 0;
+    CHECK(sc_contribution_and_proof_len(&nosub) == 0);
     n = contribution_ssz(ssz, 777, slot, 2, proof);
     CHECK_RC(sc_decode_contribution_and_proof(ssz, n, p, &ci), SC_OK);
     CHECK(ci.slot == slot && ci.subcommittee_index == 2 && ci.aggregator_index == 777);

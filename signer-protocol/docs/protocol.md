@@ -221,6 +221,9 @@ Root message types (Web3Signer names):
 | 4 | SYNC_COMMITTEE_MESSAGE | 0x07000000 |
 | 5 | SYNC_COMMITTEE_SELECTION_PROOF | 0x08000000 |
 | 6 | SYNC_COMMITTEE_CONTRIBUTION_AND_PROOF | 0x09000000 |
+| 7 | PAYLOAD_ATTESTATION_MESSAGE, PAYLOAD_ATTESTATION (Gloas PTC vote) | 0x0c000000 |
+| 8 | EXECUTION_PAYLOAD_ENVELOPE (Gloas) | 0x0b000000 |
+| 9 | PROPOSER_PREFERENCES (Gloas) | 0x0d000000 |
 
 The runner recomputes the domain from the type, the epoch and its own
 chain config. It refuses a mismatch (`DOMAIN_MISMATCH`), refuses an epoch
@@ -239,6 +242,12 @@ selection proof, contribution) are signed only when the chain config sets
 unverified. HEALTH reports the switch
 (`allow_unverified_nonslashable`) and the count since start
 (`unverified_signatures`).
+
+Types 7 to 9 sign from the Gloas fork epoch on, under the same switch.
+A root carries an epoch, not a slot, so the runner cannot apply the checks
+of the typed kinds to them: one PTC vote and one envelope per slot, the
+fee recipient and the gas limit. None of these messages is slashable.
+A client that has the message sends the typed kind instead.
 
 Web3Signer BLOCK and BLOCK_V2 map to kind 2: the caller sends the block
 header. Not covered: DEPOSIT, and BLS_TO_EXECUTION_CHANGE (signed by the

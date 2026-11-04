@@ -60,6 +60,9 @@ size_t sc_signer_mem_size(uint32_t max_validators, uint32_t hash_cache_entries)
     if (max_validators == 0 || max_validators > MAX_VALIDATORS_LIMIT ||
         hash_cache_entries > 65536)
         return 0;
+    /* Keeps the sum below SIZE_MAX on a 32-bit size_t. */
+    if ((uint64_t)max_validators * sizeof(sc_validator) > SIZE_MAX / 2)
+        return 0;
     return align8(sizeof(struct sc_signer)) +
            align8((size_t)max_validators * sizeof(sc_validator)) +
            align8((size_t)table_size_for(max_validators) * sizeof(uint32_t)) +
