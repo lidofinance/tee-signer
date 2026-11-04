@@ -259,6 +259,15 @@ func cmdSign(args []string, out io.Writer) error {
 			return fmt.Errorf("%s: %w", fs.Arg(0), err)
 		}
 	}
+	// draft checks the image list against every signer of the cluster;
+	// the active file holds one signer's setup, so sign checks that one.
+	if body != nil && body.Locked != nil {
+		if a, err := optionalActive(fs.Arg(0)+".active", true, body); err == nil && a != nil {
+			if err := checkOwnImages([]*member{{name: a.setup.SignerName, setup: a.setup}}, body.Locked); err != nil {
+				return fmt.Errorf("%s: %w; nothing signed", fs.Arg(0), err)
+			}
+		}
+	}
 	key, err := adminapprover.Open(*keyPath)
 	if err != nil {
 		return err
