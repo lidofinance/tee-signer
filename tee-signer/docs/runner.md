@@ -241,6 +241,24 @@ with; and a binary built with no platform tag.
 A release build also refuses to start on `nitro`, `azure` or `gcp` without
 `-setup` (dev and debug builds keep the flag path).
 
+On a prod chain the runner also refuses, after the platform starts, a key
+rule that is not locked or not readable, before any share is unsealed
+(`signer-protocol/docs/protocol.md`, "Key rule lock").
+
+Two checks keep the runner up but withhold the shares, as an exit would
+close the recovery (a locked update reaches the log only through a
+serving runner) and would loop through key releases and mark log claim
+records: the image check, when `allowed_image_measurements` in force
+does not name this image (`imagecheck.go`), and on a prod chain the
+image rule of the key rule lock, when a locked Nitro key policy releases
+the key to an image the list does not name, or when the list cannot be
+read (`keyruleimages.go`; off prod a warning). The runner then loads no
+share, answers SIGN and the imports with `NOT_READY`, serves HEALTH
+(`image.state` `not_allowed`, `key_rule_unlisted` or `unknown`, and
+`why`), PUBLIC_KEYS, ATTEST, IDENTITY and CONFIG_UPDATE, and says
+`restart_needed` once a locked update in force names every image. A
+restart then loads the shares.
+
 Every cloud image bakes its flags into the measured image. On Azure the
 flags are the container's `command`, which the CCE policy measures. The host
 cannot pass arguments to an enclave, and must not be able to: a host that

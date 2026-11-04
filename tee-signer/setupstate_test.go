@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -64,11 +65,11 @@ func TestKeyRuleAtStart(t *testing.T) {
 			}
 			continue
 		}
-		if err != nil || got != c.want {
+		if err != nil || !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: %+v %v, want %+v", c.name, got, err, c.want)
 		}
 	}
-	if got, err := keyRule(false, true, false, &platform.Platform{KeyRule: open}, quietLog); err != nil || got != (platform.KeyRule{}) {
+	if got, err := keyRule(false, true, false, &platform.Platform{KeyRule: open}, quietLog); err != nil || !reflect.DeepEqual(got, platform.KeyRule{}) {
 		t.Fatalf("flag path: %+v %v", got, err)
 	}
 }

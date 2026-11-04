@@ -12,6 +12,12 @@ const (
 	// restart loads the shares. Until then the runner serves as for
 	// ImageNotAllowed.
 	ImageRestartNeeded = "restart_needed"
+	// ImageKeyRuleUnlisted: the key rule releases the sealing key to an
+	// image allowed_image_measurements in force does not name (the image
+	// rule of the key rule lock, AWS, on a prod chain), so the start loaded
+	// no share; the runner serves as for ImageNotAllowed. Once the list
+	// names every such image the state is ImageRestartNeeded.
+	ImageKeyRuleUnlisted = "key_rule_unlisted"
 	// ImageUnknown: the runner cannot tell its own image, or cannot read the
 	// list in force; it serves as for ImageNotAllowed.
 	ImageUnknown = "unknown"

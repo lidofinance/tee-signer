@@ -346,7 +346,7 @@ the rule:
 | Platform | Locked when |
 |---|---|
 | Azure | `release_policy.immutable` is true, and the policy (`release_policy.data`) has the shape of `platform-azure/deploy/skr-policy.json.tmpl`: version `1.0.0`, one `anyOf` entry whose `authority` is `https://` + the setup's `maa_endpoint` (any case, no trailing slash, path or port), and an `allOf` of `equals` tests with string values on `x-ms-compliance-status` (`azure-compliant-uvm`), `x-ms-sevsnpvm-hostdata` (64 hex digits, not all zero), `x-ms-sevsnpvm-is-debuggable` (`"false"` or JSON `false`) and `x-ms-sevsnpvm-vmpl` (`0`); a second authority, another claim or operator, a nested `anyOf` or a JSON member given twice is not locked; and `attributes.recoveryLevel` says the vault has purge protection (`Recoverable`, `CustomizedRecoverable`, or either with `+ProtectedSubscription`), so nobody can purge the key while it is deleted. The lock does not show whether the vault made the key or it was imported, or whether it was released before the policy became immutable; the deploy rule covers that (`platform-azure/deploy/README.md`). The lock trusts the MAA provider that `maa_endpoint` names, whose owner can change its attestation policy, so a prod setup names a Microsoft shared provider |
-| AWS | origin `AWS_KMS`, not multi-Region, no Allow statement of the key policy grants `kms:PutKeyPolicy`, `kms:CreateGrant`, `kms:ImportKeyMaterial`, `kms:ReplicateKey`, `kms:CreateAlias`, `kms:UpdateAlias`, `kms:DeleteAlias`, `kms:ScheduleKeyDeletion` or `kms:DisableKey` to any principal, by name, wildcard (`kms:*`, `*`, `kms:Put*`) or `NotAction` (conditions do not count), every Allow of `kms:Decrypt`, `kms:GenerateDataKey`, `kms:GenerateDataKeyPair`, `kms:ReEncryptFrom` or `kms:ReEncryptTo` has `StringEquals` or `StringEqualsIgnoreCase` tests of `kms:RecipientAttestation:PCR0`, `PCR1` and `PCR2`, so it names one image (PCR3 or PCR8 alone does not); every `kms:RecipientAttestation:*` condition of an Allow, under any operator, has a key `PCR0` to `PCR31` or `ImageSha384` and only literal values of 96 hex digits (a policy variable such as `${aws:PrincipalTag/x}` fails), and no all-zero `PCR0`, `PCR1`, `PCR2` or `ImageSha384`, the values of a debug-mode enclave; any other Allow of `kms:Encrypt` has `StringEquals` on `kms:EncryptionContext:purpose` with the one value `record-creds`, so nobody outside the enclave plants a sealing or mark log key; and `ListGrants` (every page) lists no grant: a grant is outside the key policy, stays in force after the lock, and cannot require the enclave as recipient. Grants that AWS services make count too, so the key serves no other service. KMS grants are eventually consistent, so a grant made shortly before the read may not be listed yet, and the runner cannot tell it from none; a mainnet key is therefore created with its final, locked policy, so no grant can ever exist (platform-aws/deploy/README.md). A policy that passes but whose grants the runner cannot read is `unread`, with a zero `key_release_hash`. `kms_key_id` is a key or alias ARN with the account (a bare alias or key ID resolves in the account of the parent's credentials), `DescribeKey` must answer a key in that account and region (that very key for a key ARN), and a `kms_key_id` that fails this stops the start on every chain. After `DescribeKey` the runner names the key by its key ARN in every call, so an alias ARN is resolved once per start |
+| AWS | origin `AWS_KMS`, not multi-Region, no Allow statement of the key policy grants `kms:PutKeyPolicy`, `kms:CreateGrant`, `kms:ImportKeyMaterial`, `kms:ReplicateKey`, `kms:CreateAlias`, `kms:UpdateAlias`, `kms:DeleteAlias`, `kms:ScheduleKeyDeletion` or `kms:DisableKey` to any principal, by name, wildcard (`kms:*`, `*`, `kms:Put*`) or `NotAction` (conditions do not count), every Allow of `kms:Decrypt`, `kms:GenerateDataKey`, `kms:GenerateDataKeyPair`, `kms:ReEncryptFrom` or `kms:ReEncryptTo` has `StringEquals` or `StringEqualsIgnoreCase` tests of `kms:RecipientAttestation:PCR0`, `PCR1` and `PCR2`, so it names one image or a fixed list of images (PCR3 or PCR8 alone does not; the image rule below holds each of them to `allowed_image_measurements`); every `kms:RecipientAttestation:*` condition of an Allow, under any operator, has a key `PCR0` to `PCR31` or `ImageSha384` and only literal values of 96 hex digits (a policy variable such as `${aws:PrincipalTag/x}` fails), and no all-zero `PCR0`, `PCR1`, `PCR2` or `ImageSha384`, the values of a debug-mode enclave; any other Allow of `kms:Encrypt` has `StringEquals` on `kms:EncryptionContext:purpose` with the one value `record-creds`, so nobody outside the enclave plants a sealing or mark log key; and `ListGrants` (every page) lists no grant: a grant is outside the key policy, stays in force after the lock, and cannot require the enclave as recipient. Grants that AWS services make count too, so the key serves no other service. KMS grants are eventually consistent, so a grant made shortly before the read may not be listed yet, and the runner cannot tell it from none; a mainnet key is therefore created with its final, locked policy, so no grant can ever exist (platform-aws/deploy/README.md). A policy that passes but whose grants the runner cannot read is `unread`, with a zero `key_release_hash`. `kms_key_id` is a key or alias ARN with the account (a bare alias or key ID resolves in the account of the parent's credentials), `DescribeKey` must answer a key in that account and region (that very key for a key ARN), and a `kms_key_id` that fails this stops the start on every chain. After `DescribeKey` the runner names the key by its key ARN in every call, so an alias ARN is resolved once per start |
 | GCP, dev | no lock exists |
 
 On Azure the runner releases exactly the key version whose release
@@ -376,6 +376,34 @@ platform has no real attestation`, and on other chains HEALTH's
 chains the runner starts; a failed read, or a rule that is not locked,
 leaves `key_release_hash` zero and logs a warning, so no
 `key_release_sha256` pin matches the runner.
+
+Image rule (AWS): a locked policy may release the key to more than one
+image, by a list of PCR0 values (a rollback image, `prev_pcrs` in
+`platform-aws/deploy/main.tf`) or by two enclave statements. The lock
+only asks that each release is bound to some image. So the platform
+collects every PCR0 (and `ImageSha384`, which equals PCR0) that a bound
+Allow of a key action or of `kms:Encrypt` names, under `StringEquals` or
+`StringEqualsIgnoreCase`, as `platform.KeyRule.Images`, and the runner
+compares them with `allowed_image_measurements` in force (the image
+check's list, "Image check") once at start, after the config updates
+and before any share is unsealed (`tee-signer/keyruleimages.go`). An
+image the list does not name would get the sealing key and open every
+sealed share without the image check, which only the listed runner runs
+on itself. On a prod chain the runner then stays up and withholds the
+shares, as the image check does when it refuses: no share is unsealed,
+SIGN and the imports get `NOT_READY`, and HEALTH reports `image.state`
+`key_rule_unlisted` with the PCR0 values the list lacks in `why`.
+HEALTH, PUBLIC_KEYS, ATTEST, IDENTITY and CONFIG_UPDATE are served, so
+the locked update that lists the image can reach this runner. Once that
+update is in force HEALTH says `restart_needed`, and a restart loads the
+shares. An exit would close that path, since a locked update reaches the
+log only through a serving runner. The same holds when the runner cannot
+read the list in force, for example when the body of the locked update
+in force is missing from the store (state `unknown`; sending the update
+again restores it). On other chains the runner logs a warning. A locked
+update that later drops an image the policy names does not stop a
+running signer; the next start on a prod chain withholds the shares.
+Azure and GCP report no image set, so no check runs there.
 
 A signer holds keys alone (single-node, 1 of 1) only when its setup says
 so: `signing_mode`, a leaf of the public part of the setup (setup format
@@ -539,7 +567,8 @@ What "allowed" means on each path:
   nothing a setup sealed.
 
 HEALTH reports `image`: `state` (`allowed`, `not_allowed`,
-`restart_needed`, `unknown`, `override`, `not_applicable`), the runner's
+`restart_needed`, `key_rule_unlisted`, `unknown`, `override`,
+`not_applicable`), the runner's
 `kind` and `measurement` (hex), the `locked_version` whose list it read,
 and `why`. `ready` is false while the check refuses. The start log line
 `runner started` carries `image_check`, and every change of the state is

@@ -359,9 +359,11 @@ func run() (err error) {
 	var n int
 	imageState := "not_applicable"
 	if boot.setup != nil {
-		// The image check, before any share is unsealed (imagecheck.go).
+		// The image check and the image rule of the key rule lock, before
+		// any share is unsealed (imagecheck.go, keyruleimages.go). Either
+		// leaves the shares sealed on refusal; the runner stays up.
 		var load bool
-		if srv.Image, load, err = startImageCheck(ctx, plat, updates, log); err != nil {
+		if srv.Image, load, err = startImageCheck(ctx, plat, boot.prod, rule, updates, log); err != nil {
 			return err
 		}
 		h, _ := srv.Image.Status(updates)

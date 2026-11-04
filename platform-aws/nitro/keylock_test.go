@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -132,8 +133,12 @@ func TestKeyRuleLock(t *testing.T) {
 	if err != nil || r.Lock != backend.KeyLockLocked || r.Hash == ([32]byte{}) {
 		t.Fatalf("locked policy: %+v %v", r, err)
 	}
+	// A locked rule carries the images it releases the key to: PCR0.
+	if len(r.Images) != 1 || string(r.Images[0]) != strings.Repeat("\xaa", 48) {
+		t.Fatalf("locked policy images: %x", r.Images)
+	}
 	f.policy = strings.Replace(lockedPolicy, `"kms:CancelKeyDeletion"`, `"kms:CancelKeyDeletion", "kms:PutKeyPolicy"`, 1)
-	if r, _, err = keys.KeyRule(context.Background()); err != nil || r.Lock != backend.KeyLockNotLocked || !strings.Contains(r.Why, "AdminReads allows kms:PutKeyPolicy") {
+	if r, _, err = keys.KeyRule(context.Background()); err != nil || r.Lock != backend.KeyLockNotLocked || !strings.Contains(r.Why, "AdminReads allows kms:PutKeyPolicy") || r.Images != nil {
 		t.Fatalf("policy with PutKeyPolicy: %+v %v", r, err)
 	}
 }
@@ -270,6 +275,54 @@ func TestPolicyLockImageBinding(t *testing.T) {
 		got, why := policyLock(stmt(c.cond), "AWS_KMS", false)
 		if got != c.want || !strings.Contains(why, c.why) {
 			t.Errorf("%s: %s %q, want %s with %q", c.name, got, why, c.want, c.why)
+		}
+	}
+}
+
+// policyImages is the set of PCR0 values a locked policy releases the key
+// to: from one bound statement, from two, from a two-value PCR0 list
+// (prev_pcrs), and from ImageSha384, which equals PCR0; in any hex case,
+// without repeats, sorted. A bound statement that gives out no key, and
+// an unbound statement, add nothing.
+func TestPolicyImages(t *testing.T) {
+	withStmt := func(stmt string) string {
+		return strings.Replace(lockedPolicy, `{"Sid": "NoOneElse"`, stmt+`,
+    {"Sid": "NoOneElse"`, 1)
+	}
+	const admin = `"Principal": {"AWS": "arn:aws:iam::111122223333:role/admin"}, "Resource": "*"`
+	cond := func(pcr0 string) string {
+		return `{"StringEquals": {"kms:RecipientAttestation:PCR0": ` + pcr0 + `, "kms:RecipientAttestation:PCR1": "` + pcrB +
+			`", "kms:RecipientAttestation:PCR2": "` + pcrC + `"}}`
+	}
+	a, d := strings.Repeat("\xaa", 48), strings.Repeat("\xdd", 48)
+	for _, c := range []struct {
+		name, policy string
+		want         []string
+	}{
+		{"one statement", lockedPolicy, []string{a}},
+		{"two statements, two images", withStmt(`{"Sid": "Prev", "Effect": "Allow", ` + admin + `, "Action": "kms:Decrypt", "Condition": ` + cond(`"`+pcrD+`"`) + `}`), []string{a, d}},
+		{"two statements, one image", withStmt(`{"Sid": "Same", "Effect": "Allow", ` + admin + `, "Action": "kms:Decrypt", "Condition": ` + cond(`"`+strings.ToUpper(pcrA)+`"`) + `}`), []string{a}},
+		{"two-value list", strings.Replace(lockedPolicy, `"kms:RecipientAttestation:PCR0": "`+pcrA+`"`, `"kms:RecipientAttestation:PCR0": ["`+pcrD+`", "`+pcrA+`"]`, 1), []string{a, d}},
+		{"ImageSha384 next to PCR0", strings.Replace(lockedPolicy, `"kms:RecipientAttestation:PCR0": "`+pcrA+`"`,
+			`"kms:RecipientAttestation:PCR0": "`+pcrA+`", "kms:RecipientAttestation:ImageSha384": "`+pcrD+`"`, 1), []string{a, d}},
+		{"bound Encrypt", withStmt(`{"Sid": "Enc", "Effect": "Allow", ` + admin + `, "Action": "kms:Encrypt", "Condition": ` + cond(`"`+pcrD+`"`) + `}`), []string{a, d}},
+		{"bound read only", withStmt(`{"Sid": "Read", "Effect": "Allow", ` + admin + `, "Action": "kms:DescribeKey", "Condition": ` + cond(`"`+pcrD+`"`) + `}`), []string{a}},
+		{"record-creds Encrypt, not bound", withStmt(`{"Sid": "Rec", "Effect": "Allow", ` + admin + `, "Action": "kms:Encrypt",
+     "Condition": {"StringEquals": {"kms:EncryptionContext:purpose": "record-creds"}}}`), []string{a}},
+		{"Deny adds nothing", withStmt(`{"Sid": "No", "Effect": "Deny", ` + admin + `, "Action": "kms:Decrypt", "Condition": ` + cond(`"`+pcrD+`"`) + `}`), []string{a}},
+		{"not JSON", `{"Statement":`, nil},
+	} {
+		if got, why := policyLock(c.policy, "AWS_KMS", false); c.want != nil && got != backend.KeyLockLocked {
+			t.Errorf("%s: not locked: %s", c.name, why)
+			continue
+		}
+		got := policyImages(c.policy)
+		var want [][]byte
+		for _, w := range c.want {
+			want = append(want, []byte(w))
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: %x, want %x", c.name, got, want)
 		}
 	}
 }
@@ -448,7 +501,7 @@ func TestKeyRuleKeyID(t *testing.T) {
 		k := keys
 		k.KeyID = c.id
 		r, arn, err := k.KeyRule(ctx)
-		if !errors.Is(err, errWrongKey) || !strings.Contains(err.Error(), c.why) || arn != "" || r != (platform.KeyRule{}) {
+		if !errors.Is(err, errWrongKey) || !strings.Contains(err.Error(), c.why) || arn != "" || !reflect.DeepEqual(r, platform.KeyRule{}) {
 			t.Errorf("%s: %+v %q %v, want a refusal with %q", c.name, r, arn, err, c.why)
 		}
 		_, _, err = readKeyRule(ctx, platform.Options{SetupHash: [32]byte{7}}, k)

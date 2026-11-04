@@ -62,6 +62,33 @@ SETUP=signer-2.bin platform-aws/deploy/parent-run.sh               # on the pare
   template does not pass that check. The no-grants rule counts grants
   that AWS services make too (EBS, S3 or DynamoDB encryption with the
   key), so the signer's key must serve no other service.
+- The locked policy may name more than one image: a second value in the
+  PCR0 list (`prev_pcrs`) or a second enclave statement. The lock check
+  passes either, so the runner also compares every PCR0 the policy names
+  (`ImageSha384` counts as PCR0) with `allowed_image_measurements` in
+  force at start, before any share is unsealed. On a prod chain an image
+  the list does not name keeps the shares sealed: an enclave of that
+  image would get the sealing key and open every share without the image
+  check, which only the listed runner runs on itself. The runner stays
+  up, signs nothing, says `key_rule_unlisted` in HEALTH and takes the
+  locked update that lists the image; after it is in force a restart
+  loads the shares. Off prod the runner logs a warning. So keep every
+  image the policy names on the list, the rollback image too, until the
+  shares move to a new key. A locked update that drops such an image
+  later does not stop a running signer; the next start on a prod chain
+  withholds the shares.
+- A locked policy lets no principal manage the key. AWS calls such a key
+  unmanageable, and its guide says the account owner then contacts AWS
+  Support to regain access
+  ([KMS: default key policy](https://docs.aws.amazon.com/kms/latest/developerguide/key-policy-default.html)).
+  So the lock holds against the account's own admins only as far as AWS
+  Support refuses such a request from the account's root user. That is a
+  residual trust in AWS and in whoever holds the root user. Reduce it:
+  hardware MFA on the root user, no root access keys, an AWS
+  Organizations SCP that limits what the root user can do, and a
+  CloudTrail alert on `PutKeyPolicy` for the key. The runner cannot close
+  it: a later start reads the changed policy as not locked and refuses,
+  but by then the shares could already be decrypted.
 - Before the lock the admin can still allow itself `kms:Encrypt` under
   the sealing context and leave a blob of a key it knows at
   `sealing/datakey.kms`. The runner uses a stored sealing blob only when
@@ -246,12 +273,15 @@ The signing client connects to the forwarder over TCP and never sees vsock (see
   so the policy fails closed for debug enclaves.
 - What stops a start on Nitro, before any share loads: a stored sealing
   blob that does not decrypt under this KMS key and setup_hash; on
-  mainnet, a key policy someone can still change (see "Setup"); and,
+  mainnet, a key policy someone can still change; and,
   when the sealing key came from the stored blob, any object under
   `shares/` that does not open under that key and the current log_id,
   including shares left from an earlier log life or restored by mistake,
   or an empty `shares/` listing (`server.ProveSealingKey`). The exit line
-  names the shares; remove them on the parent and restart.
+  names the shares; remove them on the parent and restart. A key policy
+  that releases the key to an image `allowed_image_measurements` in force
+  does not name does not stop the start: the runner stays up with the
+  shares sealed and says `key_rule_unlisted` in HEALTH (see "Setup").
 - A document of a running enclave carries PCR0 to PCR2 of the EIF, PCR3 of
   the parent role, PCR4 (the instance), PCR5 to PCR8 as zero, debug off,
   the enclave id as module id, and a leaf certificate with the subject
