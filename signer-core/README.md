@@ -405,9 +405,12 @@ Gloas (EIP-7732) adds three message types a validator signs
 Each is refused with `SC_ERR_POLICY_FORK` unless `gloas_scheduled` is 1 and
 the message's epoch is at or past `gloas_fork_epoch`. A zeroed config leaves
 Gloas off, and `sc_signer_init` refuses a Gloas epoch that is not an epoch of
-`forks[]`. `sc_sign_root` refuses the three new domain types, so no path signs
-them as a bare root. Validators never sign a bid: a self-build bid carries
-the point at infinity (`validator.md`).
+`forks[]`. `sc_sign_root` also signs the three new domain types as bare
+roots, from the Gloas fork epoch on, for the runner's generic path
+(`signer_core.h`, `sc_sign_root`). A bare root carries an epoch, not a slot,
+so that path skips every rule in the table above except the clock horizon
+and the fork gate. Validators never sign a bid: a self-build bid carries the
+point at infinity (`validator.md`).
 
 The envelope comes as `sc_payload_envelope`: every fixed-size field as a
 value, and `logs_bloom`, `extra_data`, `transactions`, `withdrawals`,
@@ -417,11 +420,15 @@ those fields with progressive merkleization (`sc_merkleize_progressive`,
 EIP-7916, and the active-fields mix-in of EIP-7495), and reads the slot, fee
 recipient, builder index and block roots itself.
 
-None of the three is slashable in the spec. A threshold signer still must
+None of the three is slashable in the spec. A threshold signer still should
 not let two quorums of shares sign two PTC votes or two envelopes for one
-slot, so the core refuses a PTC vote or envelope at or below the slot of the
-last one it signed (`SC_ERR_EQUIVOCATION`), except an exact repeat of that
-last one. The two slot bounds need no new field in the stored mark: they
+slot, so the typed calls refuse a PTC vote or envelope at or below the slot
+of the last one signed (`SC_ERR_EQUIVOCATION`), except an exact repeat of
+that last one. The bare-root path does not keep this rule: it signs any
+number of PTC or envelope roots for one epoch. The runner takes bare roots
+of these types only when the chain config sets
+`allow_unverified_nonslashable` (`signer-protocol/docs/protocol.md`), and
+a client that has the typed message sends the typed kind instead. The two slot bounds need no new field in the stored mark: they
 share the block bound. Before signing a PTC vote or envelope above the stored
 block bound, the core raises that bound (`sc_slashing_cover_slot` per
 validator, `sc_slashing_cover_device` per device, one write); after a restart
@@ -486,8 +493,6 @@ No EIP-3076 test is skipped. Two notes on how they apply:
   Provisioning sets it from the CA-signed record, and after that the normal
   world can move it only forward, in bounded steps (`clock_max_step`). QEMU
   has no secure real-time clock.
-- Attestation `slot` is not checked against `target.epoch`, in the core or
-  in the trusted app.
 - Restart while the chain justifies nothing, with per-validator marks and
   `commit_ahead.source_epochs` above 0: the stored source bound can sit above
   the last justified epoch until justification reaches it. Per-device marks
