@@ -411,7 +411,9 @@ int sc_slashing_approve_attestation(sc_slashing_state *st, const sc_commit_ahead
 
 /*
  * EIP-3076 import, minimal strategy: raise both watermarks to at least the
- * imported maxima (max block slot, max source, max target) and persist.
+ * imported maxima (max block slot, max source, max target) and persist. If
+ * the store fails, it returns SC_ERR_STORAGE with committed unchanged, but
+ * the RAM state is raised anyway: that only refuses more.
  */
 int sc_slashing_import(sc_slashing_state *st, const sc_watermark *imported,
                        sc_store_fn store, void *ctx, const uint8_t pubkey[SC_PUBKEY_LEN]);
@@ -632,7 +634,8 @@ int sc_signer_add_validator(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
  * also raises the validator's Gloas slot bounds: no PTC vote or envelope at
  * or below it signs afterwards. Every import first drops the validator's
  * repeat roots (attestation, block, PTC vote, envelope): no exact repeat
- * signs until the next new signature of that kind.
+ * signs until the next new signature of that kind. On SC_ERR_STORAGE the
+ * stored mark is unchanged, but the validator's RAM bounds are raised.
  */
 int sc_signer_import(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
                      const uint8_t genesis_validators_root[SC_ROOT_LEN],

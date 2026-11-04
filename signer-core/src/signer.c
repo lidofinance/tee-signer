@@ -371,19 +371,19 @@ int sc_signer_import(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
     drop_repeat(v);
     if (s->cfg.mark_scope == SC_MARKS_PER_VALIDATOR) {
         rc = sc_slashing_import(&v->slash, imported, counted_store, s, pubkey);
+    } else {
+        /* Per device: the import raises the device mark and this validator's RAM. */
+        tmp.ram = v->slash.ram;
+        tmp.committed = s->device;
+        rc = sc_slashing_import(&tmp, imported, counted_store_device_pk, s, pubkey);
+        if (rc == SC_OK || rc == SC_ERR_STORAGE)
+            v->slash.ram = tmp.ram;
         if (rc == SC_OK)
-            gloas_raise(v, imported);
-        return rc;
+            s->device = tmp.committed;
     }
-    /* Per device: the import raises the device mark and this validator's RAM. */
-    tmp.ram = v->slash.ram;
-    tmp.committed = s->device;
-    rc = sc_slashing_import(&tmp, imported, counted_store_device_pk, s, pubkey);
-    if (rc == SC_OK) {
-        v->slash.ram = tmp.ram;
-        s->device = tmp.committed;
+    /* A failed store still leaves the RAM bounds raised: they only refuse more. */
+    if (rc == SC_OK || rc == SC_ERR_STORAGE)
         gloas_raise(v, imported);
-    }
     return rc;
 }
 
