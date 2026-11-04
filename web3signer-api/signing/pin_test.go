@@ -176,3 +176,27 @@ func TestForkEpochInsideItsPeriod(t *testing.T) {
 		t.Fatal("a fork epoch inside the fork's period must be known")
 	}
 }
+
+// A fork_info.fork.epoch after the fork's start gives the fork's version for
+// a message epoch between the two, not previous_version.
+func TestForkEpochInsideItsPeriodDomain(t *testing.T) {
+	chain := mustChain("mainnet")
+	chain.Pin = mainnetPin(t)
+	fulu := pinForkInfo("0x05000000", "0x06000000", 411392+100, mainnetGVR)
+	job, err := Parse([]byte(attestationBody(fulu, 411392+99)), chain)
+	if err != nil {
+		t.Fatalf("Fulu epoch before fork_info's epoch: %v", err)
+	}
+	want, err := eth2.ComputeDomain(eth2.DomainBeaconAttester, phase0.Version{6, 0, 0, 0}, chain.Pin.GenesisValidatorsRoot)
+	if err != nil || job.Domain != want {
+		t.Fatalf("domain %#x, want the Fulu domain %#x (%v)", job.Domain, want, err)
+	}
+	// Before the Fulu start the same fork_info gives the Electra version.
+	job, err = Parse([]byte(attestationBody(fulu, 411000)), chain)
+	if err != nil {
+		t.Fatalf("Electra epoch: %v", err)
+	}
+	if want, _ = eth2.ComputeDomain(eth2.DomainBeaconAttester, phase0.Version{5, 0, 0, 0}, chain.Pin.GenesisValidatorsRoot); job.Domain != want {
+		t.Fatalf("domain %#x, want the Electra domain %#x", job.Domain, want)
+	}
+}

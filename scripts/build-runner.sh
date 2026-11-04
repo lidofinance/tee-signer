@@ -217,7 +217,7 @@ for arch in "${archs[@]}"; do
   done
   # Keep redistribution notices beside every binary, including the legacy alias.
   license_bins=()
-  for name in "${RUNNER_BINS[@]}" "${RUNNER_DKG_BINS[@]}" hostagent forwarder udprelay setup-tool; do
+  for name in "${RUNNER_BINS[@]}" hostagent forwarder udprelay setup-tool; do
     license_bins+=("$out/$name")
   done
   ! chain_is_prod "$CHAIN" || license_bins+=("$out/runner-debugimport")

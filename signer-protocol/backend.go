@@ -503,9 +503,11 @@ func MAARuntimeData(userData []byte) []byte {
 }
 
 // SealedImportRequest loads a share that the dealer encrypted with HPKE to
-// the runner's attested import key (Identity.ImportKey). Every field but
-// Sealed is bound into the HPKE associated data, so the host cannot change
-// them in transit.
+// the runner's attested import key (Identity.ImportKey). The HPKE
+// associated data binds Pubkey, SharePubkey, Index and Interchange
+// (wireadmin.SealedHeader), so the host cannot change them in transit. It
+// does not bind Order or the split fields: the runner checks those against
+// the signed order before it opens the share.
 type SealedImportRequest struct {
 	Pubkey      Pubkey // validator (account) key
 	SharePubkey Pubkey // public key of the share inside Sealed; the runner checks it

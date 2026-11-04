@@ -27,9 +27,8 @@ import (
 // protocol over TLS 1.3 and can be slow or stall. They cover what happens to
 // the connection when a request times out, and what the callers see.
 //
-// The signing client's callers end their request as soon as a threshold of the
-// other signers has answered, usually long before a new dial to a cloud
-// signer (TLS handshake, IDENTITY, attestation check) can finish. A client
+// A caller with a short deadline can end its request long before a new dial
+// to a cloud signer (TLS handshake, IDENTITY, attestation check) can finish. A client
 // that ties the dial to the request's context never gets a new connection:
 // every dial is cancelled with its request. That is how one timed out request
 // once left a signing client without its Azure signer until it restarted.

@@ -41,7 +41,7 @@ from files and never printed or put on a command line.
 ## Images
 
 `scripts/generic-images.sh build` builds the three images and writes their
-measurements; `scripts/generic-images.sh check` compares a later build with
+measurements; `scripts/generic-images.sh check FILE` compares a later build with
 the recorded values before any push. Build twice and compare: the values
 must be the same.
 
@@ -106,8 +106,7 @@ Build, offline: `CHAIN=hoodi scripts/generic-images.sh build`
 (`CHAIN=devnet` also needs `CHAIN_JSON`). The chain goes into every name:
 runners `runner-<cloud>-hoodi`, folders `build/nitro-hoodi` and
 `build/gcp-hoodi`, local images `signer-cloud/{azure,gcp}-runner-hoodi`,
-registry tags `generic-hoodi-ts` (Azure) and `generic-hoodi` (GCP), record
-`cloud/generic-images-hoodi.txt`.
+registry tags `generic-hoodi-ts` (Azure) and `generic-hoodi` (GCP).
 
 The non-prod tests: `tests/e2e` built with `-tags nonprod,chain_ci_test`
 (from `tests/`: `go test -tags nonprod,chain_ci_test -timeout 20m -run
@@ -165,7 +164,7 @@ Set these once per shell, from the deploy settings of each cloud.
 
 ## Step 0: local, no cloud
 
-1. Images: `scripts/generic-images.sh check` passes.
+1. Images: `scripts/generic-images.sh check FILE` passes on the recorded values.
 2. Tools: `signer-config`, `cloud-import` and `proof-check` from the signing
    client,
    `identity-check` and `setup-tool` from this repo (`signer-admin/cmd`).

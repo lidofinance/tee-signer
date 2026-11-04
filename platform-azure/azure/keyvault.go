@@ -241,6 +241,12 @@ var purgeProtected = map[string]bool{"Recoverable": true, "Recoverable+Protected
 // turned off. The public
 // key (key.n, key.e) is not in the hash; the runner compares it with the
 // released key.
+//
+// The lock does not show how the key was made. A key imported into the
+// vault, or released while its policy could still change, may be known
+// outside the TEE, and the sealing key derives from it. The deploy rule
+// (platform-azure/deploy/README.md) is to create the key in the vault,
+// immutable from the start.
 func keyRuleOf(resp []byte, maaHost string) (platform.KeyRule, CheckedKey, error) {
 	var out struct {
 		Key struct {

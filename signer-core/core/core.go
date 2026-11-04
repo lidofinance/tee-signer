@@ -50,7 +50,7 @@ const RestartFloorEpochs = C.SC_RESTART_FLOOR_EPOCHS
 
 // Hooks are the host callbacks of the core: durable watermark storage and
 // the trusted clock. The runner composes them from platform hooks and the
-// restart rule (runner/state).
+// restart rule (tee-signer/state).
 type Hooks interface {
 	// LoadWatermark returns the watermark to start a validator from.
 	// found=false means "never signed anything". The core raises it to its

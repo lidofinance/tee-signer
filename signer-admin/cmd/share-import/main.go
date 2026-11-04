@@ -112,6 +112,9 @@ func run() error {
 	if err := pk.UnmarshalText([]byte(*pubkeyHex)); err != nil {
 		return fmt.Errorf("-pubkey: %w", err)
 	}
+	if *commFile != "" && *orderFile == "" {
+		return errors.New("-commitments needs -order")
+	}
 	extra := &backend.SealedImportRequest{}
 	if *orderFile != "" {
 		raw, err := os.ReadFile(*orderFile)
@@ -160,6 +163,9 @@ func run() error {
 	} else {
 		if *keyPin != "" {
 			return errors.New("-tls-key-pin needs -tls-cert and -tls-key")
+		}
+		if *chainBuild != "" {
+			return errors.New("-allow-chain-build needs -tls-cert and -tls-key")
 		}
 		if c, err = remote.New(*addr); err != nil {
 			return err

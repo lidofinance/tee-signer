@@ -44,8 +44,8 @@ type VerifyFunc func(ctx context.Context, nonce []byte, id *backend.Identity) er
 //
 // A caller whose context ends stops waiting at once, whether it waits for
 // its turn or for a dial. Two rules keep the client working when many
-// callers give up while one connection is down, as the signing client's callers
-// do when a threshold of other signers has answered:
+// callers give up while one connection is down, as callers with a short
+// deadline do:
 //
 //   - A dial does not belong to the request that starts it. It runs in its
 //     own context (bounded by the client timeout), so the cancellation of

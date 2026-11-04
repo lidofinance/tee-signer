@@ -921,6 +921,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
             fz_patch_config(&W.cfg0, &h);
         if (flags & F_SLOT_TIMES)
             fz_slot_times(&W.times0, &h);
+        /* The first start uses the header's slot times in every mode. */
+        W.times = W.times0;
     }
 
     if (start_signer() != SC_OK)

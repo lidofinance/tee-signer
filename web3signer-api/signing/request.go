@@ -160,16 +160,16 @@ func (p *Pin) domain(fi *forkInfo, domainType phase0.DomainType, epoch phase0.Ep
 		return phase0.Domain{}, badRequest("fork_info.fork (previous_version %#x, current_version %#x, epoch %d) is not in the configured fork schedule",
 			fi.fork.PreviousVersion, fi.fork.CurrentVersion, fi.fork.Epoch)
 	}
-	asked := fi.fork.CurrentVersion
-	if epoch < fi.fork.Epoch {
-		asked = fi.fork.PreviousVersion
-	}
-	if want := p.versionAt(epoch); asked != want {
-		return phase0.Domain{}, badRequest("fork_info gives fork version %#x for epoch %d; the configured chain has %#x",
-			asked, epoch, want)
+	// fork_info.fork.epoch may lie inside the fork's period (see knows), so
+	// the pinned schedule picks the version for epoch. It must be one of the
+	// two fork_info names.
+	want := p.versionAt(epoch)
+	if want != fi.fork.CurrentVersion && want != fi.fork.PreviousVersion {
+		return phase0.Domain{}, badRequest("fork_info gives fork versions %#x and %#x for epoch %d; the configured chain has %#x",
+			fi.fork.PreviousVersion, fi.fork.CurrentVersion, epoch, want)
 	}
 
-	return eth2.ComputeDomain(domainType, asked, p.GenesisValidatorsRoot)
+	return eth2.ComputeDomain(domainType, want, p.GenesisValidatorsRoot)
 }
 
 // Job is a parsed, validated signing request.

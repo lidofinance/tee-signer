@@ -53,6 +53,8 @@ jobs:
           fetch-depth: 0
       # Sets CI_MODULES, FUZZ_MODULES, CI_CORE, CI_E2E and CI_TESTS.
       - name: scope
+        # shell: bash runs with pipefail, so a failing ci-scope.sh fails the step.
+        shell: bash
         run: bash scripts/ci-scope.sh | tee -a "$GITHUB_ENV"
       - name: no tests
         if: env.CI_MODULES == 'none'
@@ -92,6 +94,8 @@ jobs:
           fetch-depth: 0
       # Sets CI_MODULES, FUZZ_MODULES, CI_CORE, CI_E2E and CI_TESTS.
       - name: scope
+        # shell: bash runs with pipefail, so a failing ci-scope.sh fails the step.
+        shell: bash
         run: bash scripts/ci-scope.sh | tee -a "$GITHUB_ENV"
       - name: no tests
         if: env.CI_CORE != '1'
@@ -117,6 +121,8 @@ jobs:
           fetch-depth: 0
       # Sets CI_MODULES, FUZZ_MODULES, CI_CORE, CI_E2E and CI_TESTS.
       - name: scope
+        # shell: bash runs with pipefail, so a failing ci-scope.sh fails the step.
+        shell: bash
         run: bash scripts/ci-scope.sh | tee -a "$GITHUB_ENV"
       - name: no tests
         if: env.CI_TESTS != '1'

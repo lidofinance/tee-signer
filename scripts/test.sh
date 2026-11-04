@@ -98,7 +98,7 @@ if [ "$e2e" = 1 ]; then
     log "e2e: static aarch64 runners under qemu-aarch64"
     # shellcheck disable=SC2046 # the variables of bin_env, split on purpose
     (cd "$ROOT/tests" && env RUNNER_WRAPPER=qemu-aarch64 $(bin_env aarch64) \
-      go test $RACE -count=1 -v -tags platform_aws -run 'TestE2E$|TestE2EClockSkewBreaksFloor|TestE2ESealedImport|TestE2EMutualTLS|TestE2EClientCertificateUsesTheRunnerClock|TestE2EVsockListenerIsTLS|TestE2ECloneSharedRecord|TestE2ECloudFlagChecks|TestE2EEachBinaryHasItsOwnPlatformOnly' ./e2e/) \
+      go test $RACE -count=1 -v -tags platform_aws -run 'TestE2E$|TestE2EClockSkewBreaksFloor|TestE2ESealedImport|TestE2EMutualTLS|TestE2EClientCertificateUsesTheRunnerClock|TestE2EVsockListenerIsTLS|TestE2EMarkLogClone|TestE2ECloudFlagChecks|TestE2EEachBinaryHasItsOwnPlatformOnly' ./e2e/) \
       >"$LOGS/e2e-aarch64-qemu.log" 2>&1 || { tail -80 "$LOGS/e2e-aarch64-qemu.log"; exit 1; }
     summary "$LOGS/e2e-aarch64-qemu.log" | grep -E '^(ok|FAIL)'
   fi

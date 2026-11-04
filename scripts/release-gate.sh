@@ -37,7 +37,10 @@ extra() {
   [ -r "$f" ] || { echo "release gate: cannot read RELEASE_GATE_FORBID_FILE=$f" >&2; exit 2; }
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in '' | '#'*) continue ;; esac
-    [ "${line#b64:}" = "$line" ] || line="$(base64 -d <<<"${line#b64:}")"
+    if [ "${line#b64:}" != "$line" ]; then
+      line="$(base64 -d <<<"${line#b64:}" 2>/dev/null)" ||
+        { echo "release gate: RELEASE_GATE_FORBID_FILE has a b64: line that is not base64" >&2; exit 2; }
+    fi
     [ "${line#"$1":}" = "$line" ] || printf '%s\n' "${line#"$1":}"
   done <"$f"
 }
@@ -84,9 +87,11 @@ L
   extra release
 }
 
-if [ -n "${RELEASE_GATE_FORBID_FILE:-}" ] && [ ! -r "$RELEASE_GATE_FORBID_FILE" ]; then
-  echo "release gate: cannot read RELEASE_GATE_FORBID_FILE=$RELEASE_GATE_FORBID_FILE" >&2
-  exit 2
+# Read the whole forbid file once here: extra decodes every b64: line and
+# exits on a bad one. The list readers below run in subshells, where a
+# failed decode would only cut the list short.
+if [ -n "${RELEASE_GATE_FORBID_FILE:-}" ]; then
+  extra default >/dev/null
 fi
 
 # Commits and branches that may not be in a release tree's history; a
