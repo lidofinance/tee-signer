@@ -459,7 +459,7 @@ keeps the durable state copy under `state/` with the same client and roles
 
 ## Verifier settings
 
-For the signing client, `cloud-import` and `share-import`
+For the signing client, `signer-admin import` and `share-import`
 (`attestation-verify/runnerclient`, verifier `gcp-cs`). `deploy.sh
 verifier-config` writes them to `$GCP_TEST_DIR/gcp-signer.json` (directory
 700, file 600, no secrets; some chains add a suffix to the file name). With `HARDWARE=amd-sev` it writes a `NOTE.txt` next to it
@@ -567,8 +567,8 @@ assumes the launcher's log is named `confidential-space-launcher`).
 
 - `attest.VerifyConfidentialSpace` checks Confidential Space tokens
   (Google key set, claims, nonce). `attestation-verify/runnerclient` has
-  it as the verifier `gcp-cs`, so the dealer tool `share-import`, the signing
-  client's `cloud-import` and its adapter can select it. Its settings are
+  it as the verifier `gcp-cs`, so the dealer tool `share-import`,
+  `signer-admin import` and the signing client can select it. Its settings are
   `gcp_image_digest`, `gcp_audience` and `gcp_hwmodels`, and optionally
   `gcp_issuer`, `gcp_jwks_file` and `gcp_service_account` (see
   `attestation-verify/README.md`).

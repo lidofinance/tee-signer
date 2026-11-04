@@ -54,7 +54,7 @@ The azure branch is `azureid.Verify`, a small package of its own so that
 ### runnerclient: the runner client of signing clients and import tools
 
 `runnerclient` builds a runner client from settings. The signing
-client (`backend.cloud.config`), its `cloud-import` tool and
+client (`backend.cloud.config`), `signer-admin import` and
 `signer-admin/cmd/share-import` all use it, so they apply the same checks.
 The settings and the verifiers are in `runnerclient/verify`;
 `runnerclient.Attestation` is `verify.Attestation`. No runner links this
@@ -99,9 +99,9 @@ cl, err := c.New() // refuses a bad or incomplete configuration
   | `mainnet` | `-mainnet` | The runner signs for Ethereum mainnet. An `azure-maa` or `aws-nitro` setting then needs `key_release_sha256`; a `gcp-cs` setting needs `gcp_project_id` and `gcp_service_account`, since GCP has no key rule hash to pin. |
   | `allow_unpinned_setup` | `-allow-unpinned-setup` | Tests only: accepts a runner with a setup and no `setup_sha256`. Refused with any verifier but `dev`, and together with `setup_sha256`. |
 
-  The signing client, `cloud-import` (again on the identity it seals
-  each share to), `proof-check`, `share-import` and `identity-check`
-  all apply these rules. `WithVerified` hands each passed
+  The signing client, `signer-admin import` (again on the identity it
+  seals each share to), `proof-check`, `share-import` and
+  `identity-check` all apply these rules. `WithVerified` hands each passed
   identity to the caller, and `SetupLog`, `DescribeSetup`,
   `EffectiveVersion` and `CheckPending` read the state for logs and tools.
 - It refuses to build a client for a missing, unreadable, expired or

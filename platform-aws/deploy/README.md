@@ -209,8 +209,8 @@ The signing client connects to the forwarder over TCP and never sees vsock (see
   COSE_Sign1, ES384 ([AWS: verify root](https://docs.aws.amazon.com/enclaves/latest/user/verify-root.html)).
   Verifiers check it against the AWS Nitro root and compare PCR0/1/2.
   `attest.VerifyNitro` does that. `attestation-verify/runnerclient` has it as
-  the verifier `aws-nitro`, so the dealer tool `share-import`, the signing
-  client's `cloud-import` and its adapter can select it. Its settings are
+  the verifier `aws-nitro`, so the dealer tool `share-import`,
+  `signer-admin import` and the signing client can select it. Its settings are
   `nitro_pcrs` (PCR0, PCR1 and PCR2 of the image; `scripts/nitro-eif.sh`
   prints them), and optionally more PCRs and `nitro_root_sha256` (see
   `attestation-verify/README.md`). The NSM writes the payload's top-level map

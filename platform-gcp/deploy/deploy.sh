@@ -9,8 +9,9 @@
 #                     runs no gcloud, docker or network command at all
 #   preflight         read-only gcloud calls: project number, enabled APIs,
 #                     free names, quota, the newest Confidential Space image
-#   verifier-config   write the gcp-cs settings for the signing client, cloud-import
-#                     and share-import to a local file (no secrets). Without
+#   verifier-config   write the gcp-cs settings for the signing client,
+#                     signer-admin import and share-import to a local file
+#                     (no secrets). Without
 #                     SIGNER_ADDRESS it reads the reserved address, read-only
 #   logs              read-only: the VM's serial console and Cloud Logging
 #

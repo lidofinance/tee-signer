@@ -837,7 +837,7 @@ mismatch`.
 
 ## What the signing client and the dealer check
 
-The signing client, its `cloud-import` tool and
+The signing client, `signer-admin import` and
 `signer-admin/cmd/share-import` build their client with
 `attestation-verify/runnerclient` (`attest.VerifyMAA` through
 `attestation-verify/azureid`). On every connection they check the MAA token

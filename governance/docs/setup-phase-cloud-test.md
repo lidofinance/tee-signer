@@ -92,7 +92,7 @@ builds apart:
 - Every client refuses it in the TLS handshake unless the connection sets
   `"allow_chain_build"` to its chain: cloud.json of the signing client and
   signer-admin's runner entries and identity-check;
-  `-allow-chain-build CHAIN` for cloud-import and share-import.
+  `-allow-chain-build CHAIN` for share-import.
   `platform-gcp/deploy/deploy.sh verifier-config` writes it for a non-prod
   image. A runner whose certificate names no known build is refused.
 - Its measurements are its own, so key-release policies, `allowed_image_measurements`
@@ -152,9 +152,9 @@ Set these once per shell, from the deploy settings of each cloud.
 ## Step 0: local, no cloud
 
 1. Images: `scripts/generic-images.sh check FILE` passes on the recorded values.
-2. Tools: `signer-config`, `cloud-import` and `proof-check` from the signing
-   client,
-   `identity-check` and `setup-tool` from this repo (`signer-admin/cmd`).
+2. Tools: `signer-config` and `proof-check` from the signing client,
+   `signer-admin`, `identity-check` and `setup-tool` from this repo
+   (`signer-admin/cmd`).
 3. Approver keys: three test keys `approver-1.key` to `approver-3.key`
    (never real keys). For the rotation make a fourth test key:
    `umask 077; openssl rand -hex 32 >approver-4.key` in a private folder.
@@ -345,7 +345,7 @@ Then `signer-config pin -cluster cluster.json` (C1) and the share import.
 | # | Check | How | Expected |
 | --- | --- | --- | --- |
 | C1 | Setup read, hash in IDENTITY | `signer-config pin`, `identity-check -config cloud.json` | each IDENTITY shows the `setup_sha256` that `signer-config setup` printed; pin writes it into each `cloud.json` |
-| C2 | Pins | describe-enclaves PCRs; the group's `ccePolicy` hash (`az container show`, base64 -d, sha256sum); the GCP token's `image_digest` (`identity-check`); a copy of `cloud.json` with one hex digit of `setup_sha256` changed | measurements equal the build; the wrong pin is refused (`identity-check` and `cloud-import` name 8-digit prefixes of both hashes) |
+| C2 | Pins | describe-enclaves PCRs; the group's `ccePolicy` hash (`az container show`, base64 -d, sha256sum); the GCP token's `image_digest` (`identity-check`); a copy of `cloud.json` with one hex digit of `setup_sha256` changed | measurements equal the build; the wrong pin is refused (`identity-check` names 8-digit prefixes of both hashes) |
 | C3 | Lock self-check | positive: the start logs `mark log ready` after the lock line. Negative: start the `lockneg-N` setup (`slashing_log_min_lock_days = 2`, the stores hold 1 day). AWS before the real start (step 4). Azure and GCP are optional: a deploy before the real one, which may leave a network entry node `lockneg-N` to remove | positive starts; negative stops before the claim with the lock error (AWS `last-exit.txt`, Azure container log, GCP serial or Cloud Logging) |
 | C4 | `locked` update, time lock 0 | change `fee_recipients` or `gas_limit_max`: `signer-config draft -group locked`, `show`, `sign` with approvers 1 and 2, `assemble`, `push`, then `status` | pending with the effective time `activate_at` (draft margin 10 minutes), then active: locked version 1 on all three, same hash |
 | C5 | Fork-schedule update | `draft -group open` with one more fork far ahead (current epoch plus 100,000, an unused version); push; then a second open update that restores the schedule. Negative: a fork at the next epoch | both accepted and active at once; signing goes on; the near fork is refused by the fork rule (`max_epochs_ahead + 2` epochs) |
@@ -353,7 +353,7 @@ Then `signer-config pin -cluster cluster.json` (C1) and the share import.
 | C7 | Supersede | `draft -margin 30m` a `locked` update, push; before it activates, push one with a higher version and the active values; while a rotation is pending, push an update signed by the new set only. Optional: add an `allowed_image_measurements` entry | the second replaces the first and starts its own wait; the update of the pending set is refused; the image entry shows an effective time 7 days out (the image minimum), then a supersede cancels it |
 | C8 | Restart keeps the effective config | AWS: terminate the enclave and run `parent-run.sh` again with the same setup; Azure: `az container restart`; GCP: `gcloud compute instances reset` | `signer-config status` shows the same setup hash, versions, hashes and approver set as before the restart; signing resumes after the restart floor |
 | C9 | Planting attempt on AWS | as the key admin: `aws kms encrypt` with the context `purpose=sealing,signer-setup=<hex>`, with no context, and with `purpose=record-creds` plus one more key; then put 32 random bytes encrypted under `purpose=record-creds` as `sealing/datakey.kms` into a store of its own (`STATE_DIR=/var/lib/signer-runner-plant`, with the record blob) and start a setup there, before step 4's real start | the three encrypt calls are denied (AccessDeniedException); the runner does not use the planted key: the store has no shares, so it ignores the blob, makes a new sealing key and overwrites `sealing/datakey.kms`. With a file under `shares/` in that store its Decrypt under `{purpose: sealing, signer-setup}` fails and it stops (`last-exit.txt`) |
-| C10 | Signing | import a few test validators with `cloud-import` (setup pins in `cloud.json`), start their signing clients and validator client | attestations included; HEALTH shows the NTS clock |
+| C10 | Signing | import a few test validators with `signer-admin import-draft`, `sign` and `import` (setup pins in each signer's `cloud.json`), start their signing clients and validator client | attestations included; HEALTH shows the NTS clock |
 
 Keep each check's output as the test's evidence.
 
