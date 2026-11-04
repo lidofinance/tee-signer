@@ -11,7 +11,9 @@
 #                    binary links the code of a cloud it does not run on
 #   chains           scripts/chain-test.sh
 #   modules          scripts/test-modules.sh: gofmt, vet and unit tests of every
-#                    Go module, under the race detector
+#                    Go module, under the race detector; the signer-admin
+#                    tests that start a dev runner get the runner-dev of
+#                    build/<arch>/bin (SIGNER_ADMIN_RUNNER)
 #   e2e (native)     tests/e2e against the static runners of build/<arch>/bin
 #   e2e (other arch) the static aarch64 runners under qemu-aarch64 (x86_64 hosts)
 #   signer-core      its own suites (signer-core/scripts/test.sh: unit, SSZ and
@@ -45,6 +47,11 @@ bash "$ROOT/scripts/check-forbidden.sh"
 
 if [ "$e2e" = 1 ]; then
   bash "$ROOT/scripts/build-runner.sh"
+  # The signer-admin tests start this dev runner (scripts/test-modules.sh
+  # builds one when the build has no runner-dev, as with CHAIN=hoodi).
+  if [[ " ${RUNNER_BINS[*]} " == *" runner-dev "* ]]; then
+    export SIGNER_ADMIN_RUNNER="${SIGNER_ADMIN_RUNNER:-$BUILD/$HOST_ARCH/bin/runner-dev}"
+  fi
 
   log "release gate: self-test, and this tree's history holds no forbidden commit"
   bash "$ROOT/scripts/release-gate-test.sh"

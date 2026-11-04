@@ -12,6 +12,8 @@
 # Tags: the runner modules test with all four platform tags at once, as the
 # platform packages need; tee-signer also with each tag alone (package main),
 # with the tags of each non-prod chain and with the tags of a release runner.
+# The signer-admin tests start a dev runner: SIGNER_ADMIN_RUNNER, else one
+# built here (dev_runner).
 # Logs: logs/test-<module>.log.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
@@ -34,6 +36,22 @@ vet_builds() {
     done
   done
   go vet -tags "$ALL_TAGS" ./... && go vet -tags "$ALL_TAGS,debugimport" ./...
+}
+
+# dev_runner: prints the dev runner the signer-admin tests start. That is
+# SIGNER_ADMIN_RUNNER when set (scripts/test.sh sets it to the runner-dev
+# of scripts/build-runner.sh), else a runner-dev built here for this
+# machine, as build-runner.sh builds it but not static.
+dev_runner() {
+  if [ -n "${SIGNER_ADMIN_RUNNER:-}" ]; then
+    echo "$SIGNER_ADMIN_RUNNER"
+    return
+  fi
+  local bin="$BUILD/$HOST_ARCH/test-bin/runner-dev"
+  mkdir -p "$(dirname "$bin")" || return 1
+  (cd "$ROOT/tee-signer" && CGO_ENABLED=1 CC="$(cc_for "$HOST_ARCH")" \
+    go build -trimpath -buildvcs=false -tags "$(runner_tags runner-dev)" -o "$bin" .) >&2 || return 1
+  echo "$bin"
 }
 
 # checks <module>: every command ends in "|| return 1"; set -e does not apply
@@ -69,10 +87,16 @@ checks() {
       done
       # The tags a release runner is built with (scripts/common.sh runner_tags).
       go test $RACE -count=1 -tags "$(runner_tags runner-dev)" ./server . || return 1 ;;
-    platform|slashing-log|platform-aws|platform-azure|platform-gcp|trusted-time|signer-admin)
-      # The operator tools and the clock build without the runner tags.
-      case "$1" in trusted-time|signer-admin) ;; *) vet_builds || return 1 ;; esac
+    platform|slashing-log|platform-aws|platform-azure|platform-gcp|trusted-time)
+      # The clock builds without the runner tags.
+      [ "$1" = trusted-time ] || vet_builds || return 1
       go test $RACE -count=1 -v -tags "$ALL_TAGS" ./... || return 1 ;;
+    signer-admin)
+      # The operator tools build without the runner tags. Some tests drive
+      # a real dev runner (SIGNER_ADMIN_RUNNER).
+      local runner
+      runner="$(dev_runner)" || return 1
+      SIGNER_ADMIN_RUNNER="$runner" go test $RACE -count=1 -v -tags "$ALL_TAGS" ./... || return 1 ;;
     attestation-verify)
       # The clients against the debug runners, when they are built.
       # Pass a debug runner only when it was built, so the tests skip instead of failing.

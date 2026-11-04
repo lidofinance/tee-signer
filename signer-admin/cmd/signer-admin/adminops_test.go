@@ -154,11 +154,11 @@ func TestImportOffline(t *testing.T) {
 // probe, import and exits against a dev runner with a setup: probe tells
 // the admin leaf from a signing leaf; import seals a share under an
 // import order with the admin leaf and gets FORBIDDEN with a signing leaf;
-// the signing leaf's VOLUNTARY_EXIT signs for the share's index, and not
-// for another.
+// a VOLUNTARY_EXIT through the signing leaf gets FORBIDDEN, and through
+// the admin leaf it signs for the share's index, and not for another.
 //
 // SIGNER_ADMIN_RUNNER names a dev runner of this repo with the role
-// check; without it the test is skipped.
+// check. scripts/test-modules.sh sets it; without it the test is skipped.
 func TestAdminFlowDevRunner(t *testing.T) {
 	bin := os.Getenv("SIGNER_ADMIN_RUNNER")
 	if bin == "" {
@@ -240,16 +240,21 @@ func TestAdminFlowDevRunner(t *testing.T) {
 	wantIn(t, mustTool(t, "import", "-conn", filepath.Join(dir, "g1", "cloud.json"), "-order", signed, "-commitments", splitPath,
 		"-shares", seedShares, "-skip-loaded"), "imported 0 shares, skipped 1 already held")
 
-	// The signing leaf's client, as the signing client's.
-	conn, err := loadConn(filepath.Join(dir, "lane", "cloud.json"))
-	if err != nil {
-		t.Fatal(err)
+	// Only the admin role signs an exit: the signing leaf's client, as the
+	// signing client's, gets FORBIDDEN, the admin leaf's client signs.
+	dial := func(name string) *runnerclient.Client {
+		conn, err := loadConn(filepath.Join(dir, name, "cloud.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := conn.New(runnerclient.WithTimeout(10 * time.Second))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { c.Close() })
+		return c
 	}
-	lane, err := conn.New(runnerclient.WithTimeout(10 * time.Second))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lane.Close()
+	lane, admin := dial("lane"), dial("g1")
 	setup, err := setupwire.DecodeSetup(mustRead(t, filepath.Join(dir, "setups", "g1.setup")))
 	if err != nil {
 		t.Fatal(err)
@@ -258,12 +263,15 @@ func TestAdminFlowDevRunner(t *testing.T) {
 	exitReq := backend.SignRequest{Pubkey: pk, Message: &backend.VoluntaryExit{Epoch: epoch, ValidatorIndex: 7},
 		Domain: backend.ComputeDomain(backend.DomainVoluntaryExit, setup.Chain.VoluntaryExitForkVersion, setup.Chain.GenesisValidatorsRoot)}
 	ctx := context.Background()
-	if _, err := lane.Sign(ctx, exitReq); err != nil {
+	if _, err := lane.Sign(ctx, exitReq); err == nil || !strings.Contains(err.Error(), "FORBIDDEN") {
+		t.Fatalf("exit through the signing leaf: %v, want FORBIDDEN", err)
+	}
+	if _, err := admin.Sign(ctx, exitReq); err != nil {
 		t.Fatalf("exit: %v", err)
 	}
 	other := exitReq
 	other.Message = &backend.VoluntaryExit{Epoch: epoch, ValidatorIndex: 8}
-	if _, err := lane.Sign(ctx, other); err == nil || !strings.Contains(err.Error(), "SC_ERR_POLICY_INDEX") {
+	if _, err := admin.Sign(ctx, other); err == nil || !strings.Contains(err.Error(), "SC_ERR_POLICY_INDEX") {
 		t.Fatalf("exit for another index: %v", err)
 	}
 	b, _ := json.Marshal(exitReq.Message)
