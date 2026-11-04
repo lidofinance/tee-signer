@@ -453,6 +453,7 @@ type Header struct {
 	Setup   [32]byte
 	Signer  string
 	Version uint64
+	Owner   [16]byte // the process that wrote it
 	KeyBlob []byte
 	Signed  []byte                      // the bytes before the signature
 	Sig     [ed25519.SignatureSize]byte // the last 64 bytes
@@ -479,7 +480,8 @@ func RecordHeader(enc []byte) (*Header, bool) {
 	rd.fixed(h.Setup[:])
 	h.Signer = string(rd.take(int(rd.u8())))
 	h.Version = rd.u64()
-	rd.take(8 + 32 + 32 + 16)
+	rd.take(8 + 32 + 32) // prev_version, prev_hash, log_id
+	rd.fixed(h.Owner[:])
 	kb := int(rd.u16())
 	if rd.bad || kb == 0 || kb > maxKeyBlob {
 		return nil, false

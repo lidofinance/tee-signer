@@ -276,7 +276,10 @@ their interchange maxima or under the import floor.
 On AWS and GCP the KMS key policy and the WIF provider condition can name
 the new measurement next to the old one: the old ciphertext, the old log's
 record keys and the state copy stay readable, and the new image reads its
-predecessor's log as on a restart. Those policies are mutable: an account
+predecessor's log as on a restart. If the old image still runs when the
+new one claims the log, its next write finds the new image's record, which
+it may not be able to read, and it stops (`marklog.md`, "Clone"). Those
+policies are mutable: an account
 admin who edits them can let another workload release the key without
 anyone's signature.
 

@@ -58,17 +58,22 @@ a tombstone, a pending update at or below the active version, a body past
 version 0 without a copy, or an order of an unknown kind.
 
 Fail-closed reader rule. A record the reader refuses is skipped, unless
-it sits at or above the newest valid record, its start (magic `SMARK`
-and a digit of 1 or more, setup hash, signer, version, previous version,
-previous hash, log ID, owner, key blob) names this setup, signer and
-version with a key blob the runner's key release opens, and its last 64
-bytes are an Ed25519 signature under the key inside that blob, with the
-context `signer-mark-v1`, over every byte before them. Then a runner
-under this key release signed it, most likely a newer image with a field
-this one does not know (a digit above 1), and the runner refuses to start
-(`markstore.ErrUnreadable`). Skipping it would fall back to the mark below
-it, and the runner could sign votes around the newer image's marks. Every later record format keeps that
-start, the magic's form and the signed tail. A digit of 0 is no record.
+its start (magic `SMARK` and a digit of 1 or more, setup hash, signer,
+version, previous version, previous hash, log ID, owner, key blob) names
+this setup, signer and version with a key blob the runner's key release
+opens, and its last 64 bytes are an Ed25519 signature under the key inside
+that blob, with the context `signer-mark-v1`, over every byte before them.
+Then a runner under this key release signed it, most likely a newer image
+with a field this one does not know (a digit above 2). The rule runs in
+three places. At start, on the versions at and above the newest valid
+record and in the chain walk below it, down to the record it links to: the
+runner refuses to start (`markstore.ErrUnreadable`). On a write, when the
+name the runner wants is taken by such a record: the other instance is
+live, so the runner signs nothing new (`ErrLost`, see "Clone") and writes
+nothing. Skipping the record in either place would fall back to the mark
+below it, and the runner could sign votes around the newer image's marks.
+Every later record format keeps that start, the magic's form and the
+signed tail. A digit of 0 is no record.
 
 The key blob alone proves nothing: it is a public field, and anyone who
 can read the log can copy it from a real record into an object of their
@@ -285,11 +290,15 @@ roll the mark back.
   hint's version stops the start. The host can roll the hint back, not
   forward, so it can only make the hint say less.
 - Clone. A second instance (from the same sealed state, or a second group
-  or VM of the same image) claims the log with its own record. The first
+  or VM of the same image, or a newer image under the same key release
+  during an image swap) claims the log with its own record. The first
   instance's next write then finds its name taken by a valid record of
-  another owner: from then on it signs nothing new (`ErrLost`, refusals
-  with `SC_ERR_STORAGE`). Names stay write-once, so two live instances
-  conflict on create.
+  another owner, or by a signed record of this signer it cannot read (the
+  fail-closed reader rule): from then on it signs nothing new (`ErrLost`,
+  refusals with `SC_ERR_STORAGE`). Names stay write-once, so two live
+  instances conflict on create. A restart of the first instance over a
+  log that holds such a record below its newest readable one refuses too
+  (`ErrUnreadable`).
 - Store down while running. The core keeps signing inside the committed
   mark and refuses what lies above it until a write succeeds again.
 - Restart floor. The core sets it on every load, sources included

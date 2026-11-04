@@ -30,11 +30,13 @@ var ErrLost = errors.New("markstore: another runner instance wrote this signer's
 // it.
 var ErrHandedOver = errors.New("markstore: this signer was handed over to another image; it signs nothing new")
 
-// ErrUnreadable: at or above the newest valid record lies a record of this
-// signer, signed under a key of this key release, that this runner cannot
-// parse (a newer image wrote it). The runner refuses to start rather than go back to an
-// older mark (Claim, the fail-closed reader rule).
-var ErrUnreadable = errors.New("markstore: the newest record of this signer is one this runner cannot read")
+// ErrUnreadable: a record of this signer, signed under a key of this key
+// release, that this runner cannot parse (a newer image wrote it) lies at
+// or above the newest valid record, or between it and the record it links
+// to. The runner refuses to start rather than go back to an older mark
+// (Claim, the fail-closed reader rule). On the write path the same find
+// latches ErrLost: the other instance is live.
+var ErrUnreadable = errors.New("markstore: a record of this signer is one this runner cannot read")
 
 // ErrTooOld: the newest record is older than half of slashing_log_min_lock_days,
 // so update bodies may have expired (section 5, age check). That signer
@@ -331,16 +333,17 @@ func (m *MarkLog) pubOf(ctx context.Context, blob []byte) (ed25519.PublicKey, er
 // signature under the key inside, right setup, signer and version) with
 // their encodings.
 //
-// strict is the fail-closed reader rule for the versions at and above the
-// newest valid record (Claim): an object this runner cannot parse whose
-// header (RecordHeader) names this setup, signer and version, whose key
-// blob the key release opens, and whose last 64 bytes are a signature
-// under that key over the bytes before them is a record a runner of this
-// key release wrote, most likely a newer image with a field this one does
-// not know. Skipping it would fall back to an older mark, so validAt fails
-// instead and the runner does not start. Any other object is skipped: a
-// key blob alone proves nothing, since anyone who reads the log can copy
-// one from a real record.
+// strict is the fail-closed reader rule: an object this runner cannot
+// parse whose header (RecordHeader) names this setup, signer and version,
+// whose key blob the key release opens, and whose last 64 bytes are a
+// signature under that key over the bytes before them is a record a
+// runner of this key release wrote, most likely a newer image with a field
+// this one does not know. Skipping it would fall back to an older mark, so
+// validAt returns ErrUnreadable instead. The claim applies it at and above
+// the newest valid record and in the chain walk below it (newest), the
+// writer when a name it wants is taken (appendLocked). Any other object is
+// skipped: a key blob alone proves nothing, since anyone who reads the log
+// can copy one from a real record.
 func (m *MarkLog) validAt(ctx context.Context, v uint64, es []Entry, strict bool) ([]*Record, [][]byte, error) {
 	var recs []*Record
 	var encs [][]byte
@@ -358,8 +361,8 @@ func (m *MarkLog) validAt(ctx context.Context, v uint64, es []Entry, strict bool
 				pub, perr := m.pubOf(ctx, h.KeyBlob)
 				switch {
 				case perr == nil && h.Verify(pub):
-					return nil, nil, fmt.Errorf("%w: version %d (%s, magic %q) is a record of this signer under this key release that this runner cannot read (%v); "+
-						"a newer image wrote it, and going back to the record below it would lose its mark (refusing to start)", ErrUnreadable, v, e.Name, h.Magic, err)
+					return nil, nil, fmt.Errorf("%w: version %d (%s, magic %q, owner %s) is a record of this signer under this key release that this runner cannot read (%v); "+
+						"a newer image wrote it, and going back to the record below it would lose its mark", ErrUnreadable, v, e.Name, h.Magic, hex.EncodeToString(h.Owner[:4]), err)
 				case perr != nil && !errors.Is(perr, platform.ErrNotAuthentic):
 					return nil, nil, perr
 				}
@@ -416,12 +419,14 @@ func (m *MarkLog) newest(ctx context.Context) (r *Record, enc []byte, present in
 		r, enc = recs[0], encs[0]
 		// The chain: no valid record between the one it names and itself,
 		// and the one it names, if still there (records expire oldest
-		// first), is the one it hashed and belongs to the same log.
+		// first), is the one it hashed and belongs to the same log. The
+		// walk is strict too: a signed record this runner cannot read
+		// below r is a fork an older image wrote past (ErrUnreadable).
 		for _, lower := range vs[i+1:] {
 			if lower.v < r.PrevVersion {
 				break
 			}
-			lr, lenc, err := m.validAt(ctx, lower.v, lower.entries, false)
+			lr, lenc, err := m.validAt(ctx, lower.v, lower.entries, true)
 			if err != nil {
 				return nil, nil, 0, err
 			}
@@ -807,7 +812,18 @@ func (m *MarkLog) appendLocked(ctx context.Context, wm backend.Watermark) error 
 					mine = append(mine, e)
 				}
 			}
-			recs, encs, gerr := m.validAt(ctx, v, mine, false)
+			// Strict: a signed record this runner cannot read is another
+			// instance's write, from a newer image. Skipping it would put
+			// this runner's next record past it and keep it signing next to
+			// the other, so it latches like a readable record of another
+			// owner. A key release that cannot answer fails this write only.
+			recs, encs, gerr := m.validAt(ctx, v, mine, true)
+			if errors.Is(gerr, ErrUnreadable) {
+				m.lost = ErrLost
+				m.opt.Log.Error("mark log: another instance of a newer image wrote this signer's log; refusing all signing",
+					"version", v, "my_owner", hex.EncodeToString(m.owner[:4]), "err", gerr)
+				return fmt.Errorf("%w: %v", ErrLost, gerr)
+			}
 			if gerr != nil {
 				return fmt.Errorf("markstore: version %d exists and cannot be read back: %w", v, gerr)
 			}
