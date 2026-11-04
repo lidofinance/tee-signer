@@ -22,10 +22,6 @@ const (
 	PortSTS        = 8001
 	PortCoarse     = 8002 // the third coarse-time host
 	PortMarkBucket = 8004
-	// The peer endpoint block: the setup's peer_attestation_hosts, in their sorted
-	// order, on 8010 up to 8025.
-	PortPeerFirst  = 8010
-	NitroPeerPorts = 16
 )
 
 // NitroNTSKE are the NTS-KE servers of the NTS clock (runner/nts.
@@ -53,11 +49,8 @@ func (r Route) hostPort() string { return r.Host + ":" + strconv.Itoa(r.HostPort
 
 // NitroRoutes is the proxy route list of a setup's platform part: KMS and
 // STS in the key release region, the coarse-time host, the mark bucket and
-// the NTS-KE servers, each on its fixed port, then the peer attestation hosts on
-// the peer block. It refuses more peer attestation hosts than the block holds and
-// a peer endpoint that a fixed route already serves. Nothing else gets a
-// route.
-func NitroRoutes(p *setupwire.PlatformConfig) ([]Route, error) {
+// the NTS-KE servers, each on its fixed port. Nothing else gets a route.
+func NitroRoutes(p *setupwire.PlatformConfig) []Route {
 	region := p.SealingKeyRelease.Region
 	routes := []Route{
 		{Port: PortKMS, Host: "kms." + region + ".amazonaws.com", HostPort: 443},
@@ -65,27 +58,7 @@ func NitroRoutes(p *setupwire.PlatformConfig) ([]Route, error) {
 		{Port: PortCoarse, Host: CoarseHost, HostPort: 443},
 		{Port: PortMarkBucket, Host: MarkBucketHost(&p.SlashingLogStore), HostPort: 443},
 	}
-	routes = append(routes, NitroNTSKE...)
-	if n := len(p.PeerAttestationHosts); n > NitroPeerPorts {
-		return nil, fmt.Errorf("setup: %d peer_attestation_hosts, but the nitro port map has %d ports for them (%d to %d)",
-			n, NitroPeerPorts, PortPeerFirst, PortPeerFirst+NitroPeerPorts-1)
-	}
-	fixed := map[string]uint32{}
-	for _, r := range routes {
-		fixed[r.hostPort()] = r.Port
-	}
-	for i, e := range p.PeerAttestationHosts {
-		if err := setupwire.CheckEndpoint(e); err != nil {
-			return nil, fmt.Errorf("setup: %w", err)
-		}
-		if port, ok := fixed[e]; ok {
-			return nil, fmt.Errorf("setup: peer_attestation_hosts %s is the fixed route of port %d; leave it out", e, port)
-		}
-		host, portText, _ := strings.Cut(e, ":")
-		port, _ := strconv.Atoi(portText)
-		routes = append(routes, Route{Port: uint32(PortPeerFirst + i), Host: host, HostPort: port})
-	}
-	return routes, nil
+	return append(routes, NitroNTSKE...)
 }
 
 // MarkBucketHost is the virtual-hosted S3 name of the mark bucket, the
@@ -110,10 +83,7 @@ func NitroProxyLines(s *Setup) (string, error) {
 	if s.Wire.Platform.Platform != setupwire.PlatformNitro {
 		return "", fmt.Errorf("setup is for %s, not nitro", s.Wire.Platform.Platform)
 	}
-	routes, err := NitroRoutes(&s.Wire.Platform)
-	if err != nil {
-		return "", err
-	}
+	routes := NitroRoutes(&s.Wire.Platform)
 	var b strings.Builder
 	for _, r := range routes {
 		fmt.Fprintf(&b, "%d %s %d\n", r.Port, r.Host, r.HostPort)

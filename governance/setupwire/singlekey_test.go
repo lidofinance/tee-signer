@@ -10,7 +10,7 @@ import (
 // signing_mode = single must say that it accepts a key held alone (an
 // import order with t = n = 1); Check and CheckThresholdOn refuse it
 // otherwise. It is a flag byte after
-// no_lock_accepted, before the peer hosts; setup_hash covers it. The human
+// no_lock_accepted, the last byte of the setup; setup_hash covers it. The human
 // form is checked in governance/setuptext.
 func TestUnsafeSingleKeyAccepted(t *testing.T) {
 	plain := samples(t)["setup-gcp"]
@@ -23,7 +23,7 @@ func TestUnsafeSingleKeyAccepted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	at := len(before) - 2 // the flag, then host_count 0
+	at := len(before) - 1 // the flag, the last byte
 	if len(b) != len(before) || before[at] != 0 || b[at] != 1 || !bytes.Equal(b[:at], before[:at]) || !bytes.Equal(b[at+1:], before[at+1:]) {
 		t.Fatalf("encoding: want the setup without it with the flag byte 1")
 	}

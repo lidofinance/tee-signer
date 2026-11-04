@@ -99,9 +99,8 @@ func statementNitroSetup(t testing.TB) *Setup {
 	s := statementSetup(t)
 	s.SignerName = "nitro-1"
 	s.Platform = PlatformConfig{Platform: PlatformNitro, AllowedClientCA: s.Platform.AllowedClientCA,
-		SlashingLogStore:     Store{Bucket: "lido-signer-marks-nitro-1", Region: "eu-central-1"},
-		SealingKeyRelease:    KeyRelease{Region: "eu-central-1", KMSKeyID: "arn:aws:kms:eu-central-1:111122223333:key/0b6f4c7e-58a1-4c39-9d2e-5f0a8e3b7c41"},
-		PeerAttestationHosts: []string{"signer-2.example.internal:9443"}}
+		SlashingLogStore:  Store{Bucket: "lido-signer-marks-nitro-1", Region: "eu-central-1"},
+		SealingKeyRelease: KeyRelease{Region: "eu-central-1", KMSKeyID: "arn:aws:kms:eu-central-1:111122223333:key/0b6f4c7e-58a1-4c39-9d2e-5f0a8e3b7c41"}}
 	s.PlatformSalt = vsum("platform_salt nitro-1")
 	if _, err := s.Encode(); err != nil {
 		t.Fatal(err)
@@ -350,7 +349,7 @@ func buildVectors(t *testing.T) []byte {
 	s := statementSetup(t)
 	human := humanForms(t)
 	var v vectors
-	v.Description = "Golden vectors of the attestation statement, setup format 2 (docs/attestation-statement.md). " +
+	v.Description = fmt.Sprintf("Golden vectors of the attestation statement, setup format %d (docs/attestation-statement.md). ", FormatVersion) +
 		"Hex is 0x-prefixed; every hash is SHA-256. Made by backend/setupwire TestStatementVectors -update; the test recomputes them."
 	v.Contexts = map[string]string{}
 	for _, c := range []struct {

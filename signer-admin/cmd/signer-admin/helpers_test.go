@@ -173,7 +173,7 @@ func setupText(dir string, ca []byte, genesis int64, locked string, names ...str
 		mode = "single"
 	}
 	fmt.Fprintf(&b, `# a test cluster
-setup_format_version = 3
+setup_format_version = 4
 signing_mode = %s
 handover_generation = 1
 genesis_validators_root = 0x4b36000000000000000000000000000000000000000000000000000000000000

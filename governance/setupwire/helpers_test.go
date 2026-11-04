@@ -205,14 +205,8 @@ func samples(t testing.TB) map[string]*Setup {
 		d.SigningMode = mode
 		return d
 	}
-	// nitro-peers: the Nitro signer of a cluster with an Azure peer
-	// (sharedneu) and a GCP peer.
-	nitroPeers := base("signer-1", 1, 1024, 3650, nitro.Platform)
-	nitroPeers.Locked.ChangeDelaySeconds = nil
-	nitroPeers.Platform.PeerAttestationHosts = []string{"confidentialcomputing.googleapis.com:443", "sharedneu.neu.attest.azure.net:443",
-		"www.googleapis.com:443"}
 	return map[string]*Setup{"setup-nitro": nitro, "setup-azure": azure, "setup-gcp": gcp, "setup-gcp-single": gcpSingle,
-		"setup-dev-single": devOf(SigningModeSingle), "setup-dev-threshold": devOf(SigningModeThreshold), "setup-nitro-peers": nitroPeers}
+		"setup-dev-single": devOf(SigningModeSingle), "setup-dev-threshold": devOf(SigningModeThreshold)}
 }
 
 // rawSetup encodes s without the checks, to feed the decoder values the

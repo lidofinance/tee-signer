@@ -116,19 +116,6 @@ its 2-minute time lock and comes into force 7 minutes after it is sent.
 Deploying non-prod images follows the steps below, with `CHAIN` set and
 `allow_chain_build` in every connection.
 
-### Nitro peer endpoints
-
-A Nitro enclave reaches only the routes of its setup. A Nitro signer's
-setup may list hosts in `peer_attestation_hosts`. The parent starts a
-vsock-proxy for each on ports 8010 to 8025 (at most 16), in the setup's
-order, and the enclave maps those names to them; nothing else gets a
-route. No runner checks another runner's attestation, so no runner code
-needs these hosts, and the sample setup below lists none. `setup-tool check` prints the list
-(`peer_attestation_hosts none` for a Nitro setup without one);
-`hostagent -proxy-routes` prints the routes, 8010 and up last. The
-parent's security group allows TCP 443 out (`main.tf`), so a listed host
-on another port needs a rule.
-
 ## Rules for this test
 
 1. Never two live signer sets for one validator. If the test reuses the
@@ -179,9 +166,9 @@ Set these once per shell, from the deploy settings of each cloud.
    (`allowed_fee_recipients`, the builder gas limits,
    `builder_registration_max_future_seconds`,
    `allow_unverified_nonslashable_signing`) and the `open` `fork_schedule`.
-5. The cluster file `setup.conf` (setup format 3).
+5. The cluster file `setup.conf` (setup format 4).
    Before the first section, the lines all signers share:
-   `setup_format_version = 3`, `signing_mode = threshold` (three signers
+   `setup_format_version = 4`, `signing_mode = threshold` (three signers
    hold shares; a one-signer file says `single`), `handover_generation = 1`, the chain lines
    (set `allow_unverified_nonslashable_signing` as the test's signing paths need),
    `allowed_client_ca` (the client CA, base64 DER), `max_keys`,
@@ -249,8 +236,7 @@ Set these once per shell, from the deploy settings of each cloud.
    `platform-gcp/deploy/deploy.sh plan`, and
    `build/x86_64/bin/hostagent -setup setups/signer-2.setup -proxy-routes`,
    which prints the parent's routes as `parent-run.sh` will start them:
-   8000 to 8008, and nothing from 8010 up, as the setup lists no peer
-   host.
+   8000 to 8008.
 8. Negative setups for the lock check (C3): the same file with
    `slashing_log_min_lock_days = 2` and the names `lockneg-N`, written to
    `setups-neg/`.

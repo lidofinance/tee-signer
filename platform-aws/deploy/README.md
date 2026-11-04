@@ -161,9 +161,7 @@ SETUP=signer-2.bin platform-aws/deploy/parent-run.sh               # on the pare
   mutable.
 - The routes follow from the setup over a fixed port map: KMS and STS of
   the key release region on vsock 8000 and 8001, `www.cloudflare.com` on
-  8002, the mark bucket on 8004, NTS-KE on 8005 to 8008, and the setup's
-  `peer_attestation_hosts` on 8010 to 8025 (at most 16)
-  (`governance/docs/setup-phase-cloud-test.md`, "Nitro peer endpoints").
+  8002, the mark bucket on 8004 and NTS-KE on 8005 to 8008.
   `hostagent -setup FILE -proxy-routes` prints them; `parent-run.sh` starts
   one vsock-proxy per line and writes the allowlist. The coarse-time URLs
   name `{region}`; the runner fills in the setup's region.

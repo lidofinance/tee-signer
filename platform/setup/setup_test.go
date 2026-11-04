@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -167,11 +166,7 @@ func TestNitroOptionsAndRoutes(t *testing.T) {
 	}
 	// Every port of the map is distinct, and none is the agent's or the relay's.
 	seen := map[uint32]bool{7101: true, 7102: true}
-	routes, err := NitroRoutes(&n.Wire.Platform)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, r := range routes {
+	for _, r := range NitroRoutes(&n.Wire.Platform) {
 		if seen[r.Port] {
 			t.Fatalf("port %d twice", r.Port)
 		}
@@ -258,95 +253,5 @@ func TestParseSource(t *testing.T) {
 		if _, err := ParseSource(bad); err == nil {
 			t.Fatalf("%q accepted", bad)
 		}
-	}
-}
-
-// withPeers is the sample setup name with the peer endpoints e, encoded
-// again.
-func withPeers(t *testing.T, name string, e ...string) []byte {
-	t.Helper()
-	s, err := setupwire.DecodeSetup(sample(t, name))
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.Platform.PeerAttestationHosts = e
-	b, err := s.Encode()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return b
-}
-
-// Nitro with peer_attestation_hosts: each endpoint gets a port of the peer block,
-// in the setup's order, in the runner's proxy option and in the parent's
-// route lines alike. Nothing else gets a route.
-func TestNitroPeerRoutes(t *testing.T) {
-	n, err := Load(sample(t, "nitro-peers"), "nitro")
-	if err != nil {
-		t.Fatal(err)
-	}
-	peers := ",confidentialcomputing.googleapis.com:443=vsock:3:8010,sharedneu.neu.attest.azure.net:443=vsock:3:8011," +
-		"www.googleapis.com:443=vsock:3:8012"
-	plain := load(t, "nitro").Options()["proxy"]
-	if got := n.Options()["proxy"]; got != plain+peers {
-		t.Fatalf("proxy\n%s\nwant\n%s", got, plain+peers)
-	}
-	lines, err := NitroProxyLines(n)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasSuffix(lines, "8008 ntppool1.time.nl 4460\n8010 confidentialcomputing.googleapis.com 443\n"+
-		"8011 sharedneu.neu.attest.azure.net 443\n8012 www.googleapis.com 443\n") || strings.Count(lines, "\n") != 11 {
-		t.Fatalf("proxy lines:\n%s", lines)
-	}
-
-	// The full block: 16 endpoints on 8010 to 8025, apart from every
-	// fixed port.
-	var e []string
-	for i := range NitroPeerPorts {
-		e = append(e, fmt.Sprintf("h%02d.example:443", i))
-	}
-	full, err := Load(withPeers(t, "nitro", e...), "nitro")
-	if err != nil {
-		t.Fatal(err)
-	}
-	routes, _ := NitroRoutes(&full.Wire.Platform)
-	seen := map[uint32]bool{7101: true, 7102: true}
-	for _, r := range routes {
-		if seen[r.Port] {
-			t.Fatalf("port %d twice", r.Port)
-		}
-		seen[r.Port] = true
-	}
-	if last := routes[len(routes)-1]; last.Port != 8025 || last.Host != "h15.example" {
-		t.Fatalf("last route %+v", last)
-	}
-	// More endpoints than the block holds: the host agent and the runner
-	// refuse the setup (the codec's cap is the same 16, so only a setup
-	// made past the codec gets here).
-	p := full.Wire.Platform
-	p.PeerAttestationHosts = append(slices.Clone(e), "h16.example:443")
-	if _, err := NitroRoutes(&p); err == nil || !strings.Contains(err.Error(), "17 peer_attestation_hosts, but the nitro port map has 16 ports for them (8010 to 8025)") {
-		t.Fatalf("17 endpoints: %v", err)
-	}
-	// An endpoint that a fixed route serves is refused, not routed twice.
-	if _, err := Load(withPeers(t, "nitro", "www.cloudflare.com:443"), "nitro"); err == nil ||
-		!strings.Contains(err.Error(), "www.cloudflare.com:443 is the fixed route of port 8002") {
-		t.Fatalf("fixed route as a peer endpoint: %v", err)
-	}
-}
-
-// dev: a setup with peer_attestation_hosts limits the runner's HTTP client to them
-// (option egress); without them it is not limited.
-func TestDevAttestationEgress(t *testing.T) {
-	d, err := Load(withPeers(t, "dev-single", "127.0.0.1:8443", "maa.test:443"), "dev")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if o := d.Options(); len(o) != 1 || o["egress"] != "127.0.0.1:8443,maa.test:443" {
-		t.Fatalf("dev options %v", o)
-	}
-	if o := load(t, "dev-single").Options(); len(o) != 0 {
-		t.Fatalf("dev options without peers %v", o)
 	}
 }

@@ -156,7 +156,9 @@ func TestPolicySplit(t *testing.T) {
 	}
 	// Two signers of a cluster: the same public part and salts, another
 	// private part. They share policy_root.
-	a, b := samples(t)["setup-nitro"], samples(t)["setup-nitro-peers"]
+	a, b := samples(t)["setup-nitro"], samples(t)["setup-nitro"]
+	b.SignerName = "signer-4"
+	b.Platform.SlashingLogStore.Bucket = "signer-4-marks"
 	pa, _ := a.PolicyRoot()
 	pb, _ := b.PolicyRoot()
 	ca, _ := a.PlatformCommitment()
