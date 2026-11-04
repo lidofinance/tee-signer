@@ -683,9 +683,16 @@ forwarder -listen tcp:0.0.0.0:7100 -to vsock:16:7100
 `scripts/build-runner.sh` builds it as `build/<arch>/bin/forwarder`, and
 `parent-run.sh` starts it. It accepts TCP connections, dials the enclave's
 vsock port for each one and copies bytes both ways. A half-close passes
-through. It allows 256 connections at once (`-max-conns`) and gives the
-dial 5 seconds. It has no certificate, key or CA, reads no request and
-answers none. Tests (`platform-aws/forward`): mutual TLS 1.3 with the
+through. It allows 256 connections at once (`-max-conns`) and, from one
+source IP address, 16 in their first 15 seconds (`-max-conns-per-source`:
+the runner's handshake deadline of 10 seconds plus the 5 seconds it gives
+the dial; the forwarder sees no handshake, only its deadline). A connection
+past that window counts against the 256 only, so clients behind one address
+keep their pools. The cap per source is the only one per peer on Nitro: the
+enclave sees every connection come from the parent's vsock address, so
+without it one outside peer that connects and says nothing could hold every
+handshake slot of the runner. It has no
+certificate, key or CA, reads no request and answers none. Tests (`platform-aws/forward`): mutual TLS 1.3 with the
 runner's real TLS configuration runs through it, the client sees the
 target's key, and the bytes it copies do not contain the payload.
 

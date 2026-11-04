@@ -35,10 +35,16 @@ body  = version:u8  type:u8  id:u32  payload
   it like any type it does not serve (`UNSUPPORTED`).
 - Connection limits (ATTEST-BUDGET-01, `tee-signer/server/limits.go`, each a
   runner flag). At most 256 connections are open at once (`-max-conns`),
-  TLS handshakes included; more are closed at once. At most 32 TLS
-  handshakes run at once (`-max-handshakes`), at most 16 of them from one
-  IP address. A peer has 3 seconds to send its first byte and 10 seconds
-  for the whole handshake. A frame must arrive within 30 seconds of its first byte. Each
+  TLS handshakes included; more are closed at once. The TLS handshake
+  budget (`-max-handshakes`) defaults to the connection cap, and at most
+  16 handshakes run at once from one IP address. On vsock (Nitro) the
+  runner sees no client address; there the forwarder on the parent caps,
+  per source address, the connections in their first 15 seconds instead
+  (16, `-max-conns-per-source`): it sees no handshake, only that the
+  handshake deadline below plus its dial have passed, and a connection
+  past that window counts against the 256 only.
+  A peer has 3 seconds to send its first byte and 10 seconds for the whole
+  handshake. A frame must arrive within 30 seconds of its first byte. Each
   frame may hold its first 64 KiB freely; the bytes past that count
   against 64 MiB for all frames together (`-max-inflight-mib`), and a
   frame that would go over closes its connection. So SIGN, HEALTH,
@@ -1050,12 +1056,16 @@ image constants, in any minute:
 - an attest-only certificate: 4 (`backend.AttestOnlyPerMinute`), ATTEST and IDENTITY
   together. The connection's own IDENTITY counts too (the dashboard's
   proof check makes two a minute);
-- a signing certificate: 32 IDENTITY (`server.SigningIdentityPerMinute`,
-  twice the signing client's pool of 16 connections, each of which asks for
-  IDENTITY when it is made);
-- all non-admin certificates together: 128
-  (`server.NonAdminFreshPerMinute`), so many signing certificates cannot
-  add up to an attestation flood.
+- a signing certificate: 64 IDENTITY (`server.SigningIdentityPerMinute`,
+  four times the signing client's pool of 16 connections, each of which
+  asks for IDENTITY with a new nonce when it is made: a start, a runner
+  restart and two rounds of failed dials fit in one minute);
+- all attest-only certificates together: 128
+  (`server.AttestOnlyFreshPerMinute`); all signing certificates together:
+  768 (`server.SigningFreshPerMinute`, a dozen clients at their own
+  limit). The totals are per role, so many certificates of one role cannot
+  add up to an attestation flood, and an attest-only flood cannot use up
+  what the signing clients need to reconnect.
 
 More get `RATE_LIMITED`, with the seconds until the next one. Admin and
 local clients have no limit.

@@ -7,6 +7,13 @@
 // certificate, no key and no CA, reads no request and answers none. It can
 // drop or delay traffic, as any network part can. Replacing it with socat
 // or a load balancer in TCP mode changes nothing about what is trusted.
+//
+// It bounds the connections open at once, and those from one source IP
+// address that are still in their handshake window: the enclave sees every
+// connection come from the parent, so this is where one outside peer is
+// told from another. A hostile parent can skip the bound, but it can drop
+// the traffic anyway; the bound protects an honest parent's enclave from
+// outside peers.
 package forward
 
 import (
@@ -27,10 +34,46 @@ type Forwarder struct {
 	// MaxConns bounds the connections open at once. Zero means 256. A
 	// connection over the bound is closed at once.
 	MaxConns int
+	// MaxConnsPerSource bounds the connections from one source IP address
+	// that are within their handshake window (HandshakeWindow after the
+	// accept). Zero means 16, the most one signing client pool dials at
+	// once and the runner's own cap on handshakes in progress per address
+	// on a TCP listener; negative means no bound. The enclave sees every
+	// connection come from the parent's vsock address, so it cannot tell
+	// one outside peer from another: without this bound one peer that
+	// connects and says nothing could hold every handshake slot of the
+	// enclave. A connection over the bound is closed at once. Past its
+	// window a connection counts against MaxConns only, so a client that
+	// handshaked keeps its connections whatever its address opens later.
+	// A peer without an IP address (a unix socket) is not counted.
+	MaxConnsPerSource int
+	// HandshakeWindow is how long a connection counts against its source
+	// address. Zero means the runner's handshake deadline (10 s from the
+	// enclave's accept) plus DialTimeout.
+	//
+	// The forwarder sees TLS records and cannot tell from them that the
+	// handshake is done: a count of flights in each direction is matched
+	// by a peer that stalls after its ClientHello, or after the second one
+	// a HelloRetryRequest asks for. The runner's deadline is sound: a
+	// connection still open past it has handshaked, or the runner is
+	// closing it this moment. The cost is a cap on dials, not handshakes:
+	// one pool of 16 fits; a second pool from the same address within one
+	// window of the first has its later dials closed at accept.
+	HandshakeWindow time.Duration
 	// DialTimeout bounds Dial. Zero means 5 s.
 	DialTimeout time.Duration
 	Log         *slog.Logger
+
+	// perSource counts the connections within their handshake window of
+	// each source IP address.
+	mu        sync.Mutex
+	perSource map[string]int
 }
+
+// runnerHandshakeTimeout is server.handshakeTimeout of tee-signer: the
+// runner closes a connection whose TLS handshake is not done this long
+// after it accepted the connection.
+const runnerHandshakeTimeout = 10 * time.Second
 
 func (f *Forwarder) maxConns() int {
 	if f.MaxConns > 0 {
@@ -39,11 +82,64 @@ func (f *Forwarder) maxConns() int {
 	return 256
 }
 
+func (f *Forwarder) maxConnsPerSource() int {
+	if f.MaxConnsPerSource != 0 {
+		return f.MaxConnsPerSource
+	}
+	return 16
+}
+
+// sourceOf is the IP address of a TCP peer, "" for any other peer.
+func sourceOf(c net.Conn) string {
+	if a, ok := c.RemoteAddr().(*net.TCPAddr); ok {
+		return a.IP.String()
+	}
+	return ""
+}
+
+// takeSource counts one more connection from src if that stays within
+// the bound per source, and reports whether it did.
+func (f *Forwarder) takeSource(src string) bool {
+	limit := f.maxConnsPerSource()
+	if src == "" || limit < 0 {
+		return true
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.perSource[src] >= limit {
+		return false
+	}
+	if f.perSource == nil {
+		f.perSource = map[string]int{}
+	}
+	f.perSource[src]++
+	return true
+}
+
+// giveSource gives back what takeSource counted.
+func (f *Forwarder) giveSource(src string) {
+	if src == "" || f.maxConnsPerSource() < 0 {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.perSource[src]--; f.perSource[src] <= 0 {
+		delete(f.perSource, src)
+	}
+}
+
 func (f *Forwarder) dialTimeout() time.Duration {
 	if f.DialTimeout > 0 {
 		return f.DialTimeout
 	}
 	return 5 * time.Second
+}
+
+func (f *Forwarder) handshakeWindow() time.Duration {
+	if f.HandshakeWindow > 0 {
+		return f.HandshakeWindow
+	}
+	return runnerHandshakeTimeout + f.dialTimeout()
 }
 
 // Serve accepts connections on l until ctx ends or l fails. On ctx it
@@ -67,10 +163,17 @@ func (f *Forwarder) Serve(ctx context.Context, l net.Listener) error {
 			}
 			return err
 		}
+		src := sourceOf(c)
+		if !f.takeSource(src) {
+			f.Log.Warn("too many connections in their handshake window from one address, closing", "remote", c.RemoteAddr().String(), "max_per_source", f.maxConnsPerSource(), "window", f.handshakeWindow().String())
+			c.Close()
+			continue
+		}
 		select {
 		case slots <- struct{}{}:
 		default:
 			f.Log.Warn("too many connections, closing", "remote", c.RemoteAddr().String(), "max", f.maxConns())
+			f.giveSource(src)
 			c.Close()
 			continue
 		}
@@ -78,6 +181,15 @@ func (f *Forwarder) Serve(ctx context.Context, l net.Listener) error {
 		go func() {
 			defer wg.Done()
 			defer func() { <-slots }()
+			// The count per source ends with the handshake window or with
+			// the connection, whichever comes first; exactly one of the
+			// two gives it back.
+			window := time.AfterFunc(f.handshakeWindow(), func() { f.giveSource(src) })
+			defer func() {
+				if window.Stop() {
+					f.giveSource(src)
+				}
+			}()
 			f.handle(ctx, c)
 		}()
 	}

@@ -24,24 +24,40 @@ import (
 // Per certificate in any minute: backend.AttestOnlyPerMinute for an
 // attest-only certificate (ATTEST and IDENTITY together),
 // SigningIdentityPerMinute for a signing certificate (IDENTITY only, it
-// may not send ATTEST). Over every non-admin certificate together:
-// NonAdminFreshPerMinute, so many signing certificates cannot add up to an
-// attestation flood. Admin clients have no limit.
+// may not send ATTEST). Over all certificates of one role together:
+// AttestOnlyFreshPerMinute and SigningFreshPerMinute, so many certificates
+// of a role cannot add up to an attestation flood. The two roles have
+// separate totals: an attest-only flood (the attest CA can mint any number
+// of certificates) must not use up what the signing clients need to
+// reconnect, since a signing client whose IDENTITY is refused cannot dial
+// at all. Admin clients have no limit.
 
 const (
 	attestWindow = time.Minute
-	// SigningIdentityPerMinute is 2 x the signing client's pool of 16
-	// connections per runner, each of which asks for IDENTITY when it is
-	// made: enough for a full pool to redial twice in a minute.
-	SigningIdentityPerMinute = 32
-	// NonAdminFreshPerMinute bounds the fresh attestations of all limited
-	// certificates together in any minute, and so the answers the limit
-	// keeps.
-	NonAdminFreshPerMinute = 128
+	// SigningIdentityPerMinute is 4 x the signing client's pool of 16
+	// connections per runner. Each connection asks for IDENTITY with a new
+	// nonce when it is made, so a repeat never helps a signing client: the
+	// whole pool dials at the client's start and again after every runner
+	// restart or network cut, and a dial that fails and is tried again
+	// costs one more. Four full pool dials in one minute cover a start, a
+	// runner restart and two rounds of failed dials together; 2 x the pool
+	// did not, and a pool refused here cannot reconnect until the minute
+	// ends.
+	SigningIdentityPerMinute = 64
+	// AttestOnlyFreshPerMinute bounds the fresh attestations of all
+	// attest-only certificates together in any minute (32 certificates at
+	// their own limit), and so the answers the limit keeps for them.
+	AttestOnlyFreshPerMinute = 128
+	// SigningFreshPerMinute bounds the fresh IDENTITY answers of all signing
+	// certificates together: a dozen signing clients (limits.go plans for
+	// that many) each at SigningIdentityPerMinute. It bounds the answers
+	// the limit keeps when the signing CA issues many certificates; the
+	// clients planned for never reach it before their own limit.
+	SigningFreshPerMinute = 12 * SigningIdentityPerMinute
 )
 
-// attestLimit holds the fresh attestations of each limited certificate in
-// the last attestWindow. The zero value is ready.
+// attestLimit holds the fresh attestations of each limited certificate of
+// one role in the last attestWindow. The zero value is ready.
 type attestLimit struct {
 	mu    sync.Mutex
 	certs map[[32]byte][]*freshAttest // oldest first
@@ -76,9 +92,9 @@ func (l *attestLimit) pruneLocked(now time.Time) {
 
 // begin returns the answer the certificate already had for this request,
 // or takes one of its fresh attestations (e, to finish), or refuses with
-// RATE_LIMITED. perCert is the certificate's limit, role names it in the
-// refusal.
-func (l *attestLimit) begin(cert [32]byte, role string, perCert int, t wire.MsgType, nonce, userData []byte, now time.Time) (body []byte, e *freshAttest, err error) {
+// RATE_LIMITED. perCert is the certificate's limit, total the limit over
+// every certificate of the role, and role names it in the refusal.
+func (l *attestLimit) begin(cert [32]byte, role string, perCert, total int, t wire.MsgType, nonce, userData []byte, now time.Time) (body []byte, e *freshAttest, err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.certs == nil {
@@ -97,9 +113,9 @@ func (l *attestLimit) begin(cert [32]byte, role string, perCert int, t wire.MsgT
 			"%v: this %s client certificate had %d fresh attestations in the last minute, the limit; the next one is possible in %d s (the same nonce again gets the answer it had)",
 			t, role, len(list), int(math.Ceil(wait.Seconds())))
 	}
-	if l.total >= NonAdminFreshPerMinute {
+	if l.total >= total {
 		return nil, nil, backend.Refused(backend.StatusRateLimited,
-			"%v: the client certificates without the admin role had %d fresh attestations in the last minute, the limit over all of them; try again later", t, l.total)
+			"%v: the %s client certificates had %d fresh attestations in the last minute, the limit over all of them; try again later", t, role, l.total)
 	}
 	e = &freshAttest{at: now, typ: t, nonce: bytes.Clone(nonce), userData: bytes.Clone(userData)}
 	l.certs[cert] = append(list, e)
@@ -155,7 +171,7 @@ func (s *Server) attestationFor(t wire.MsgType, nonce []byte) attestation {
 }
 
 // limitedAttestation serves ATTEST or IDENTITY to an attest-only or a
-// signing client, under its certificate's limit.
+// signing client, under its certificate's limit and its role's total.
 func (s *Server) limitedAttestation(ctx context.Context, f wire.Frame, cl *client) ([]byte, error) {
 	nonce, err := decodeNonce(f.Payload)
 	if err != nil {
@@ -166,11 +182,11 @@ func (s *Server) limitedAttestation(ctx context.Context, f wire.Frame, cl *clien
 	if s.limitNow != nil {
 		now = s.limitNow
 	}
-	perCert := backend.AttestOnlyPerMinute
+	limit, perCert, total := &s.attestOnlyLimit, backend.AttestOnlyPerMinute, AttestOnlyFreshPerMinute
 	if cl.role == attls.RoleSigning {
-		perCert = SigningIdentityPerMinute
+		limit, perCert, total = &s.signingLimit, SigningIdentityPerMinute, SigningFreshPerMinute
 	}
-	body, e, err := s.attestLimit.begin(cl.cert, cl.role.String(), perCert, f.Type, nonce, a.userData, now())
+	body, e, err := limit.begin(cl.cert, cl.role.String(), perCert, total, f.Type, nonce, a.userData, now())
 	if err != nil {
 		s.Log.Warn("refused: attestation limit", "type", f.Type.String(), "role", cl.role.String(), "err", err)
 		return nil, err
@@ -182,6 +198,6 @@ func (s *Server) limitedAttestation(ctx context.Context, f wire.Frame, cl *clien
 	if err != nil {
 		return nil, err
 	}
-	s.attestLimit.finish(e, body)
+	limit.finish(e, body)
 	return body, nil
 }

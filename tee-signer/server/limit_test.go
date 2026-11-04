@@ -124,31 +124,65 @@ func TestAttestOnlyLimitCountsFailures(t *testing.T) {
 	}
 }
 
-// NonAdminFreshPerMinute bounds the fresh attestations of every limited
-// certificate together: the next one, from any certificate of either role,
-// waits until entries age out. Admin clients are not counted.
-func TestAttestLimitOverAllCertificates(t *testing.T) {
+// AttestOnlyFreshPerMinute bounds the fresh attestations of every
+// attest-only certificate together: the next attest-only certificate waits
+// until entries age out. The total is the role's own: a signing
+// certificate's IDENTITY still passes while attest-only certificates hold
+// their whole total, so an attest-only flood (32 certificates, or the
+// attest CA minting more) cannot lock the signing clients out. Admin
+// clients are not counted.
+func TestAttestOnlyFloodLeavesSigningAlone(t *testing.T) {
 	s, _, now := limitServer(t)
 	ctx := context.Background()
-	for i := 0; i < NonAdminFreshPerMinute; i++ {
-		cl := &client{role: attls.RoleAttestOnly, cert: [32]byte{0x80, byte(i)}}
-		if i%2 == 1 {
-			cl.role = attls.RoleSigning
-		}
-		if _, err := s.dispatchFor(ctx, attestFrame(wire.TypeIdentity, 1), cl); err != nil {
-			t.Fatalf("certificate %d: %v", i, err)
+	for i := 0; i < AttestOnlyFreshPerMinute; i++ {
+		cl := &client{role: attls.RoleAttestOnly, cert: [32]byte{0x80, byte(i / backend.AttestOnlyPerMinute)}}
+		if _, err := s.dispatchFor(ctx, attestFrame(wire.TypeIdentity, byte(1+i%backend.AttestOnlyPerMinute)), cl); err != nil {
+			t.Fatalf("attest-only attestation %d: %v", i+1, err)
 		}
 	}
-	for _, extra := range []*client{{role: attls.RoleSigning, cert: [32]byte{0x81}}, {role: attls.RoleAttestOnly, cert: [32]byte{0x82}}} {
-		if _, err := s.dispatchFor(ctx, attestFrame(wire.TypeIdentity, 1), extra); refusedWith(err) != backend.StatusRateLimited {
-			t.Fatalf("%v certificate, attestation %d: %v", extra.role, NonAdminFreshPerMinute+1, err)
+	extra := &client{role: attls.RoleAttestOnly, cert: [32]byte{0x82}}
+	_, err := s.dispatchFor(ctx, attestFrame(wire.TypeIdentity, 1), extra)
+	if refusedWith(err) != backend.StatusRateLimited || !strings.Contains(err.Error(), "attest-only client certificates had 128") {
+		t.Fatalf("attest-only certificate %d: %v", AttestOnlyFreshPerMinute/backend.AttestOnlyPerMinute+1, err)
+	}
+	signing := &client{role: attls.RoleSigning, cert: [32]byte{0x81}}
+	for n := 1; n <= 16; n++ {
+		if _, err := s.dispatchFor(ctx, attestFrame(wire.TypeIdentity, byte(n)), signing); err != nil {
+			t.Fatalf("signing IDENTITY %d while the attest-only total is full: %v", n, err)
 		}
 	}
 	if _, err := s.dispatchFor(ctx, attestFrame(wire.TypeIdentity, 2), localAdmin); err != nil {
 		t.Fatalf("admin over the limit: %v", err)
 	}
 	*now = now.Add(attestWindow)
-	if _, err := s.dispatchFor(ctx, attestFrame(wire.TypeIdentity, 1), &client{role: attls.RoleSigning, cert: [32]byte{0x81}}); err != nil {
+	if _, err := s.dispatchFor(ctx, attestFrame(wire.TypeIdentity, 1), extra); err != nil {
+		t.Fatalf("after a minute: %v", err)
+	}
+}
+
+// SigningFreshPerMinute bounds the fresh IDENTITY answers of every signing
+// certificate together: a dozen at their own limit fill it, the next
+// signing certificate waits, and an attest-only certificate still has its
+// own total.
+func TestSigningLimitOverAllCertificates(t *testing.T) {
+	s, _, now := limitServer(t)
+	ctx := context.Background()
+	for i := 0; i < SigningFreshPerMinute; i++ {
+		cl := &client{role: attls.RoleSigning, cert: [32]byte{0x90, byte(i / SigningIdentityPerMinute)}}
+		if _, err := s.dispatchFor(ctx, attestFrame(wire.TypeIdentity, byte(1+i%SigningIdentityPerMinute)), cl); err != nil {
+			t.Fatalf("signing IDENTITY %d: %v", i+1, err)
+		}
+	}
+	extra := &client{role: attls.RoleSigning, cert: [32]byte{0x91}}
+	_, err := s.dispatchFor(ctx, attestFrame(wire.TypeIdentity, 1), extra)
+	if refusedWith(err) != backend.StatusRateLimited || !strings.Contains(err.Error(), "signing client certificates had 768") {
+		t.Fatalf("signing certificate %d: %v", SigningFreshPerMinute/SigningIdentityPerMinute+1, err)
+	}
+	if _, err := s.dispatchFor(ctx, attestFrame(wire.TypeAttest, 1), &client{role: attls.RoleAttestOnly, cert: [32]byte{0x92}}); err != nil {
+		t.Fatalf("attest-only while the signing total is full: %v", err)
+	}
+	*now = now.Add(attestWindow)
+	if _, err := s.dispatchFor(ctx, attestFrame(wire.TypeIdentity, 1), extra); err != nil {
 		t.Fatalf("after a minute: %v", err)
 	}
 }
@@ -179,7 +213,7 @@ func TestSigningIdentityLimit(t *testing.T) {
 	if _, err := s.dispatchFor(ctx, attestFrame(wire.TypeAttest, 1), fork); refusedWith(err) != backend.StatusForbidden {
 		t.Fatalf("signing ATTEST: %v, want FORBIDDEN", err)
 	}
-	for n := 0; n < 2*NonAdminFreshPerMinute; n++ {
+	for n := 0; n < 2*AttestOnlyFreshPerMinute; n++ {
 		if _, err := s.dispatchFor(ctx, attestFrame(wire.TypeIdentity, byte(n)), localAdmin); err != nil {
 			t.Fatalf("admin IDENTITY %d: %v", n, err)
 		}

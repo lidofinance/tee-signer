@@ -42,6 +42,7 @@ func run() error {
 		listen   = flag.String("listen", "tcp:0.0.0.0:7100", "address the signing client connects to (tcp:HOST:PORT)")
 		to       = flag.String("to", "", "the enclave's address (vsock:CID:PORT, the runner's -listen port), required")
 		maxConns = flag.Int("max-conns", 256, "connections open at once; more are closed")
+		perSrc   = flag.Int("max-conns-per-source", 16, "connections from one source IP address within their first 15 s, the TLS handshake window (the enclave cannot tell outside peers apart); more are closed; a connection past the window counts against -max-conns only; -1 = no bound")
 	)
 	flag.Parse()
 	if *to == "" {
@@ -70,12 +71,13 @@ func run() error {
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	f := &forward.Forwarder{
-		Dial:     func(ctx context.Context) (net.Conn, error) { return transport.Dial(ctx, target) },
-		MaxConns: *maxConns,
-		Log:      log,
+		Dial:              func(ctx context.Context) (net.Conn, error) { return transport.Dial(ctx, target) },
+		MaxConns:          *maxConns,
+		MaxConnsPerSource: *perSrc,
+		Log:               log,
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	log.Info("forwarding bytes, no TLS here", "listen", from.String(), "to", target.String(), "max_conns", *maxConns)
+	log.Info("forwarding bytes, no TLS here", "listen", from.String(), "to", target.String(), "max_conns", *maxConns, "max_conns_per_source", *perSrc)
 	return f.Serve(ctx, l)
 }

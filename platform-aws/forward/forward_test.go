@@ -377,6 +377,82 @@ func TestMaxConns(t *testing.T) {
 	}
 }
 
+// One source IP address holds at most MaxConnsPerSource connections
+// within their handshake window (the default window here, 15 s, outlasts
+// the test): its next one is closed at once, a connection from another
+// address still gets a slot, and the count gives back when a connection
+// closes. The enclave sees every connection come from the parent's vsock
+// address, so this is the only cap per peer on Nitro.
+func TestMaxConnsPerSource(t *testing.T) {
+	l := listen(t)
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() { defer c.Close(); io.Copy(io.Discard, c) }()
+		}
+	}()
+	addr := startForwarder(t, l.Addr().String(), func(f *Forwarder) { f.MaxConnsPerSource = 2 }, nil)
+	// held reports whether a connection got a slot: a read runs into its
+	// deadline instead of the close.
+	held := func(c net.Conn) bool {
+		_ = c.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+		_, err := c.Read(make([]byte, 1))
+		ne, ok := err.(net.Error)
+		return ok && ne.Timeout()
+	}
+	var first []net.Conn
+	for i := range 2 {
+		c, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		io.WriteString(c, "x")
+		if !held(c) {
+			t.Fatalf("connection %d from one address within the cap of 2 was closed", i+1)
+		}
+		first = append(first, c)
+	}
+	third, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer third.Close()
+	if held(third) {
+		t.Fatal("connection 3 from one address stays open over the cap of 2")
+	}
+	d := net.Dialer{LocalAddr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 2)}}
+	other, err := d.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	io.WriteString(other, "x")
+	if !held(other) {
+		t.Fatal("a connection from another address was closed")
+	}
+	first[0].Close()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		c, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ok := held(c)
+		c.Close()
+		if ok {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the count per source did not give back after a connection closed")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 func TestServeClosesConnectionsWhenTheContextEnds(t *testing.T) {
 	l := listen(t)
 	go func() {
@@ -415,5 +491,114 @@ func TestServeClosesConnectionsWhenTheContextEnds(t *testing.T) {
 	_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if _, err := c.Read(make([]byte, 1)); err == nil {
 		t.Fatal("the connection stayed open")
+	}
+}
+
+// A signing client pool of 16 from one address that handshaked and
+// works, then more connections from the same address: a second pool
+// behind the same NAT, a tool on the same host, a rolling restart. The cap
+// per source counts a connection only through its handshake window, as
+// the runner's cap per address counts handshakes in progress, so the pool
+// stays open and the later connections are served too.
+func TestEstablishedConnectionsLeaveTheCapPerSource(t *testing.T) {
+	l := listen(t)
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() { defer c.Close(); io.Copy(c, c) }() // echo
+		}
+	}()
+	// Defaults, 16 per source, with a short window: the runner's deadline
+	// does not apply to the echo target.
+	const window = 200 * time.Millisecond
+	addr := startForwarder(t, l.Addr().String(), func(f *Forwarder) { f.HandshakeWindow = window }, nil)
+	// exchange sends a byte and waits for its echo: the connection got a
+	// slot and the target answers on it.
+	exchange := func(c net.Conn) error {
+		if _, err := io.WriteString(c, "x"); err != nil {
+			return err
+		}
+		_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+		b := make([]byte, 1)
+		if _, err := io.ReadFull(c, b); err != nil {
+			return err
+		}
+		if b[0] != 'x' {
+			return errors.New("echoed " + string(b))
+		}
+		return nil
+	}
+	var pool []net.Conn
+	for i := range 16 {
+		c, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		if err := exchange(c); err != nil {
+			t.Fatalf("pool connection %d: %v", i+1, err)
+		}
+		pool = append(pool, c)
+	}
+	time.Sleep(2 * window) // the handshake window of every pool connection has passed
+	for i := range 4 {
+		c, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		if err := exchange(c); err != nil {
+			t.Fatalf("connection %d from one address, after 16 established ones: %v", 16+i+1, err)
+		}
+	}
+	for i, c := range pool {
+		if err := exchange(c); err != nil {
+			t.Fatalf("pool connection %d after the later ones: %v", i+1, err)
+		}
+	}
+}
+
+// Peers from one address that connect and send nothing still hold at most
+// MaxConnsPerSource slots: the next one from that address is closed at
+// once. This is what the cap is for: on vsock the enclave cannot tell
+// outside peers apart.
+func TestSilentPeersStayCappedPerSource(t *testing.T) {
+	l := listen(t)
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() { defer c.Close(); io.Copy(io.Discard, c) }()
+		}
+	}()
+	addr := startForwarder(t, l.Addr().String(), nil, nil) // defaults: 16 per source
+	held := func(c net.Conn) bool {
+		_ = c.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+		_, err := c.Read(make([]byte, 1))
+		ne, ok := err.(net.Error)
+		return ok && ne.Timeout()
+	}
+	for i := range 16 {
+		c, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		if !held(c) {
+			t.Fatalf("silent connection %d from one address within the cap of 16 was closed", i+1)
+		}
+	}
+	extra, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer extra.Close()
+	if held(extra) {
+		t.Fatal("silent connection 17 from one address stays open over the cap of 16")
 	}
 }

@@ -140,10 +140,11 @@ type Server struct {
 	// cut is a batch import that did not complete and whose records may
 	// be stored (importbatch.go); nil if none. shareSetMu guards it.
 	cut *batchCut
-	// attestLimit counts the fresh attestations of attest-only clients
-	// (limit.go); limitNow, if set, is its clock (tests).
-	attestLimit attestLimit
-	limitNow    func() time.Time
+	// attestOnlyLimit and signingLimit count the fresh attestations of
+	// attest-only and of signing clients, each role on its own (limit.go);
+	// limitNow, if set, is their clock (tests).
+	attestOnlyLimit, signingLimit attestLimit
+	limitNow                      func() time.Time
 
 	// Limits bounds connections, handshakes and large frame bytes
 	// (limits.go); the zero value has the defaults.
@@ -632,7 +633,7 @@ func (s *Server) handleConn(ctx context.Context, c net.Conn) {
 	cl := localAdmin
 	if tc, ok := c.(*tls.Conn); ok {
 		// The handshake budget: a peer that has not shown a client
-		// certificate yet holds one of a few slots (ATTEST-BUDGET-01).
+		// certificate yet holds one of its slots (ATTEST-BUDGET-01).
 		// One IP address holds at most a part of them.
 		addr, perAddr := addrOf(c), s.Limits.maxHandshakesPerAddr()
 		if !s.addrHandshakes.take(addr, perAddr) {
