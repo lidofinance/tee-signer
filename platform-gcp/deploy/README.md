@@ -82,9 +82,10 @@ CHAIN=<chain> CHAIN_JSON=chain.json SETUP_FILE=signer-3.bin CONFIRM=yes platform
   grants it to itself, a binding inherited from the project or the
   organization) can still plant one, and the runner cannot see such
   bindings. GCP is outside the admin-proof goal.
-- `build-image.sh` refuses `CHAIN`, `CHAIN_JSON` and `CLIENT_CA`, and
-  `render_dockerfile` refuses `STATE_STORE` and `MARK_SIGNER`: those are
-  setup fields.
+- `CHAIN` picks the runner build of `build-image.sh` (the mainnet runner
+  when unset); the chain config is checked, not put into the image. The
+  script refuses `CLIENT_CA`, and `render_dockerfile` refuses `STATE_STORE`
+  and `MARK_SIGNER`: those are setup fields.
 
 ## Hardware: default and production
 
@@ -176,7 +177,8 @@ copy (`slashing-log/docs/durable-state.md`) are the setup's
 platform-gcp/deploy/build-image.sh
 ```
 
-The build takes no chain and no CA. `build-image.sh` builds twice per run and
+No chain config and no CA go into the image; `CHAIN` picks the runner build,
+the mainnet runner when unset. `build-image.sh` builds twice per run and
 compares the digests. The context file gets an explicit mode (`install -m`,
 `COPY --chmod`), as in `platform-azure/deploy`, so the digest does not depend
 on the builder's umask. A change to the runner or the flags changes the
@@ -457,7 +459,7 @@ keeps the durable state copy under `state/` with the same client and roles
 
 ## Verifier settings
 
-For the signing client, `cloud-import` and `share-import`
+For the signing client, `signer-admin import` and `share-import`
 (`attestation-verify/runnerclient`, verifier `gcp-cs`). `deploy.sh
 verifier-config` writes them to `$GCP_TEST_DIR/gcp-signer.json` (directory
 700, file 600, no secrets; some chains add a suffix to the file name). With `HARDWARE=amd-sev` it writes a `NOTE.txt` next to it
@@ -565,8 +567,8 @@ assumes the launcher's log is named `confidential-space-launcher`).
 
 - `attest.VerifyConfidentialSpace` checks Confidential Space tokens
   (Google key set, claims, nonce). `attestation-verify/runnerclient` has
-  it as the verifier `gcp-cs`, so the dealer tool `share-import`, the signing
-  client's `cloud-import` and its adapter can select it. Its settings are
+  it as the verifier `gcp-cs`, so the dealer tool `share-import`,
+  `signer-admin import` and the signing client can select it. Its settings are
   `gcp_image_digest`, `gcp_audience` and `gcp_hwmodels`, and optionally
   `gcp_issuer`, `gcp_jwks_file` and `gcp_service_account` (see
   `attestation-verify/README.md`).

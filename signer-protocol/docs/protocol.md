@@ -614,7 +614,7 @@ the document (platform signature and measurements) binds it.
 `remote.DevVerifier` does the last step for the dev platform's unsigned
 document only. `attestation-verify/identity` (`Config.Verify`, same signature as
 `remote.VerifyFunc`) does it for Nitro, Confidential Space and MAA
-documents. The signing client, its `cloud-import` tool and
+documents. The signing client, `signer-admin import` and
 `share-import` do not call either directly. They build their client with
 `attestation-verify/runnerclient`, which offers four verifiers by name: `dev`
 (`remote.DevVerifier`), `azure-maa` (`attest.VerifyMAA` through
@@ -677,8 +677,8 @@ with `SC_ERR_BAD_KEY`. `-sealed-import=false` turns the message off.
 `signer-admin/cmd/share-import` is the dealer tool; it reads the share from a
 file or stdin and takes the verifier settings of `attestation-verify/runnerclient`
 (`-verifier dev|azure-maa|aws-nitro|gcp-cs`, and the settings of the
-verifier, see `attest/README.md`). The signing client's `cloud-import` does the
-same with the same settings.
+verifier, see `attest/README.md`). `signer-admin import` does the same with
+the settings of each signer's connection file (`cloud.json`).
 
 ### Voluntary exits
 

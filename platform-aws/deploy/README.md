@@ -169,9 +169,10 @@ SETUP=signer-2.bin platform-aws/deploy/parent-run.sh               # on the pare
   writer credentials stay at `record/writer-credentials.kms` on the parent.
 - `-mark-create`, `-state-create` and the flags the setup
   replaces are refused with `-setup`, and the runner hands over to no one.
-- `scripts/nitro-eif.sh` refuses `CHAIN`, `CHAIN_JSON`, `CLIENT_CA`,
-  `REGION`, `KMS_KEY_ARN` and `MARK_BUCKET`, and checks that the image holds
-  no `/etc/signer`.
+- `CHAIN` picks the runner build of `scripts/nitro-eif.sh` (the mainnet
+  runner when unset); the chain config is checked, not put into the image.
+  The script refuses `CLIENT_CA`, `REGION`, `KMS_KEY_ARN`, `MARK_BUCKET`
+  and `MARK_SIGNER`, and checks that the image holds no `/etc/signer`.
 
 With `mark_bucket` set, `main.tf` writes the bucket policy: the writer may
 create and read objects under `marks/` and `config/`, set each new object's
@@ -208,8 +209,8 @@ The signing client connects to the forwarder over TCP and never sees vsock (see
   COSE_Sign1, ES384 ([AWS: verify root](https://docs.aws.amazon.com/enclaves/latest/user/verify-root.html)).
   Verifiers check it against the AWS Nitro root and compare PCR0/1/2.
   `attest.VerifyNitro` does that. `attestation-verify/runnerclient` has it as
-  the verifier `aws-nitro`, so the dealer tool `share-import`, the signing
-  client's `cloud-import` and its adapter can select it. Its settings are
+  the verifier `aws-nitro`, so the dealer tool `share-import`,
+  `signer-admin import` and the signing client can select it. Its settings are
   `nitro_pcrs` (PCR0, PCR1 and PCR2 of the image; `scripts/nitro-eif.sh`
   prints them), and optionally more PCRs and `nitro_root_sha256` (see
   `attestation-verify/README.md`). The NSM writes the payload's top-level map
@@ -389,8 +390,9 @@ ARCH=aarch64 scripts/nitro-eif.sh
 make eif EIF_ARCH=aarch64                  # the same
 ```
 
-The image is generic: no chain, client CA or region goes in ("Setup"). The
-chain is checked when the setup is made (`setup-tool check -chain`).
+The image is generic: no chain config, client CA or region goes in
+("Setup"). `CHAIN` picks the runner build, the mainnet runner when unset.
+The chain is checked when the setup is made (`setup-tool check -chain`).
 
 The script writes `runner-aarch64.eif`, `build-enclave-aarch64.json`,
 `describe-eif-aarch64.json`, `kms-key-policy-aarch64.json` and
