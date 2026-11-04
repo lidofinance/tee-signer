@@ -183,13 +183,22 @@ func run(cfgPath string, log *slog.Logger) error {
 // plain HTTP for local and unsafe_plain_http. Failed handshakes (a client
 // without an accepted certificate) go to the log as warnings.
 func httpServer(access string, st *servertls.Server, h http.Handler, log *slog.Logger) *http.Server {
-	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second, ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
+	// IdleTimeout closes an idle keep-alive connection, so one opened
+	// before a client CA reload does not stay open for good.
+	srv := &http.Server{Handler: h, ReadHeaderTimeout: readHeaderTimeout, IdleTimeout: idleTimeout,
+		ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
 	if config.UsesTLS(access) {
 		srv.TLSConfig = st.Config(access == config.AccessMTLS)
 	}
 
 	return srv
 }
+
+// The timeouts of both listeners.
+const (
+	readHeaderTimeout = 10 * time.Second
+	idleTimeout       = 120 * time.Second
+)
 
 // serve serves srv on ln, over TLS when srv has a TLS config.
 func serve(srv *http.Server, ln net.Listener) error {

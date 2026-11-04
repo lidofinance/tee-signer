@@ -2,6 +2,7 @@ package servertls
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -486,5 +487,107 @@ func TestExpiryWarning(t *testing.T) {
 	}
 	if !strings.Contains(p.logBuf.String(), "days_left=8") {
 		t.Fatalf("no days_left=8 in\n%s", p.logBuf)
+	}
+}
+
+// getResumable is get with a client session cache, so a later call can
+// resume the session. It reports whether the connection resumed one.
+func (p *pki) getResumable(t *testing.T, addr string, version uint16, cache tls.ClientSessionCache, client *issued) (bool, error) {
+	t.Helper()
+	cfg := &tls.Config{RootCAs: p.serverRoots, MinVersion: version, MaxVersion: version, ClientSessionCache: cache}
+	if client != nil {
+		cfg.Certificates = []tls.Certificate{{Certificate: [][]byte{client.cert.Raw}, PrivateKey: client.key}}
+	}
+	cl := &http.Client{Transport: &http.Transport{TLSClientConfig: cfg, DisableKeepAlives: true}, Timeout: 5 * time.Second}
+	defer cl.CloseIdleConnections()
+	resp, err := cl.Get("https://" + addr + "/upcheck")
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || string(b) != "OK" {
+		return false, errors.New(resp.Status)
+	}
+
+	return resp.TLS.DidResume, nil
+}
+
+// A resumed session passes the client check in force at the resumption,
+// not the one of its first handshake: after the client CA is replaced, a
+// client of the old CA cannot resume its session, with or without a
+// certificate of its own, on TLS 1.2 and 1.3.
+func TestResumedSessionCheckedAfterReload(t *testing.T) {
+	for _, version := range []uint16{tls.VersionTLS12, tls.VersionTLS13} {
+		t.Run(tls.VersionName(version), func(t *testing.T) {
+			p := newPKI(t)
+			s := p.settings()
+			s.MinVersion = tls.VersionTLS12
+			srv, err := New(s, p.log)
+			if err != nil {
+				t.Fatal(err)
+			}
+			addr := serve(t, srv)
+			withCert, noCert := tls.NewLRUClientSessionCache(8), tls.NewLRUClientSessionCache(8)
+			for _, cache := range []tls.ClientSessionCache{withCert, noCert} {
+				if _, err := p.getResumable(t, addr, version, cache, p.client); err != nil {
+					t.Fatalf("first connection: %v", err)
+				}
+			}
+			// The session resumes while the CA is in force: the test below
+			// does test resumption.
+			if resumed, err := p.getResumable(t, addr, version, withCert, p.client); err != nil || !resumed {
+				t.Fatalf("second connection before the reload: resumed %v, %v", resumed, err)
+			}
+
+			caB := newCA(t, "client CA B")
+			write(t, p.clientCAFile, certPEM(caB))
+			if !srv.Poll() {
+				t.Fatalf("new client CA not reloaded:\n%s", p.logBuf)
+			}
+			if resumed, err := p.getResumable(t, addr, version, withCert, p.client); err == nil {
+				t.Errorf("client of the removed CA with its session: served (resumed %v)", resumed)
+			}
+			if resumed, err := p.getResumable(t, addr, version, noCert, nil); err == nil {
+				t.Errorf("session of the removed CA's client, no certificate: served (resumed %v)", resumed)
+			}
+			if _, err := p.getResumable(t, addr, version, tls.NewLRUClientSessionCache(8), clientCert(t, caB, time.Time{}, time.Time{})); err != nil {
+				t.Errorf("client of the new CA: %v", err)
+			}
+		})
+	}
+}
+
+// Run polls the files: a renewed server certificate is served without a
+// call to Poll.
+func TestRunReloads(t *testing.T) {
+	p := newPKI(t)
+	srv, err := New(p.settings(), p.log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := serve(t, srv)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go srv.Run(ctx, 20*time.Millisecond)
+	renewed := serverCert(t, p.serverCA, time.Time{}, time.Time{})
+	write(t, p.certFile, certPEM(renewed, p.serverCA))
+	write(t, p.keyFile, keyPEM(t, renewed))
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		cfg := &tls.Config{RootCAs: p.serverRoots, Certificates: []tls.Certificate{{Certificate: [][]byte{p.client.cert.Raw}, PrivateKey: p.client.key}}}
+		c, err := tls.Dial("tcp", addr, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		serial := c.ConnectionState().PeerCertificates[0].SerialNumber
+		c.Close()
+		if serial.Cmp(renewed.cert.SerialNumber) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("still serving serial %v, want %v", serial, renewed.cert.SerialNumber)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

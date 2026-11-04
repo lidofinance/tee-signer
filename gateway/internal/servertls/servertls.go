@@ -282,10 +282,18 @@ func (srv *Server) Config(verifyClients bool) *tls.Config {
 	}
 	if verifyClients {
 		// VerifyClient does the whole check, so a listed fingerprint can
-		// accept a certificate that no CA of the bundle issued.
+		// accept a certificate that no CA of the bundle issued. It runs in
+		// VerifyConnection, which Go calls on every handshake, a resumed
+		// one too (VerifyPeerCertificate is skipped on resumption), so a
+		// session from before a reload passes the clients in force now.
 		c.ClientAuth = tls.RequireAnyClientCert
-		c.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-			return srv.VerifyClient(rawCerts)
+		c.VerifyConnection = func(cs tls.ConnectionState) error {
+			raw := make([][]byte, 0, len(cs.PeerCertificates))
+			for _, pc := range cs.PeerCertificates {
+				raw = append(raw, pc.Raw)
+			}
+
+			return srv.VerifyClient(raw)
 		}
 	}
 

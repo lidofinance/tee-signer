@@ -108,6 +108,9 @@ func TestListenerAccess(t *testing.T) {
 			t.Fatal(err)
 		}
 		srv := httpServer(tc.access, st, mux, log)
+		if srv.ReadHeaderTimeout != 10*time.Second || srv.IdleTimeout != 120*time.Second {
+			t.Errorf("%s: timeouts %v, %v", tc.access, srv.ReadHeaderTimeout, srv.IdleTimeout)
+		}
 		go func() { _ = serve(srv, ln) }()
 		addr := ln.Addr().String()
 		for name, got := range map[string][2]bool{
