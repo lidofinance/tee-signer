@@ -13,7 +13,7 @@ import (
 
 // The setup pins. Every verifier this package builds runs them after the platform
 // check, on the setup state of the verified identity. The signing
-// client, cloud-import (again on the identity it seals each
+// client, signer-admin import (again on the identity it seals each
 // share to), proof-check and share-import build their verifier here, so
 // all of them refuse the same runners:
 //
@@ -156,10 +156,10 @@ func EffectiveVersion(g backend.ConfigGroup, now time.Time) uint64 {
 }
 
 // CheckPending refuses a state in which a locked update waits for its
-// effective activation time, or an order is pending. cloud-import runs it
-// on the identity of each share unless the operator passes -allow-pending: a share sent now stays under the
-// approvers or allowed images that the update brings in. Only an image
-// with a handover sets an order.
+// effective activation time, or an order is pending. An import tool can
+// run it on the identity of each share: a share sent now stays under the
+// approvers or allowed images that the update brings in. No tool of this
+// repo calls it yet. Only an image with a handover sets an order.
 func CheckPending(s *backend.SetupState, now time.Time) error {
 	if p := s.Locked.Pending; Waiting(s.Locked, now) {
 		return fmt.Errorf("a locked config update is pending: version %d (sha256 %s), effective at %s",
