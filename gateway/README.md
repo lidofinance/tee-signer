@@ -212,6 +212,8 @@ Errors use Web3Signer's JSON shape, `{"code":<status>,"message":"..."}`:
 | 412 | Gateway policy refused, or signers refused (slashing protection, their policy, another domain) and the threshold was out of reach |
 | 500 | Too few signers answered with a partial signature that verifies, before `signers.timeout` |
 
+A 412 means the signers refused the request, for example because another client already signed that duty. Lighthouse logs it as `CRIT Failed to sign ...`. It is not a gateway error.
+
 The `identifier` may come with or without `0x`, in any case.
 
 ## Request types and signer messages
