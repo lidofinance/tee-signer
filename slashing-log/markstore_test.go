@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -297,11 +298,14 @@ func TestMarkLogOnFiles(t *testing.T) {
 	if err := m.SetState(ctx, st); err != nil {
 		t.Fatal(err)
 	}
-	// Kind 2, the key generation order of earlier builds, is not a kind.
-	kind2 := st.Clone()
-	kind2.Order = &Order{Kind: 2, Hash: [32]byte{8}, ActAt: 1_800_000_100}
-	if err := m.SetState(ctx, kind2); err == nil {
-		t.Fatal("SetState took an order of kind 2")
+	// This image writes no order: kind 2, the key generation order of
+	// earlier builds, and the handover order are both refused.
+	for _, kind := range []OrderKind{2, OrderHandover} {
+		withOrder := st.Clone()
+		withOrder.Order = &Order{Kind: kind, Hash: [32]byte{8}, ActAt: 1_800_000_100}
+		if err := m.SetState(ctx, withOrder); err == nil {
+			t.Fatalf("SetState took an order of kind %d", kind)
+		}
 	}
 	m2, _ := New(l, "signer-1", testKey(1), opt)
 	got, found, err := m2.Claim(ctx, true)
@@ -421,6 +425,30 @@ func TestSquattedNamesSkipped(t *testing.T) {
 	}
 }
 
+// AllowCreate over more old names than maxSkips, none a record this key
+// opens, starts above the highest of them. A name at the last version
+// leaves no room and stops the claim.
+func TestCreateAboveOldNames(t *testing.T) {
+	ctx := context.Background()
+	name := func(v uint64) string { return Name([32]byte{}, "s", v) }
+	l := &memLog{objs: map[string][][]byte{}}
+	for v := uint64(1); v <= maxSkips+4; v++ {
+		l.objs[name(v)] = [][]byte{[]byte("old")}
+	}
+	m, _ := New(l, "s", testKey(1), Options{Log: quiet, AllowCreate: true})
+	if _, _, err := m.Claim(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, v := m.Mark(); v != maxSkips+5 {
+		t.Fatalf("claimed at version %d, want %d", v, maxSkips+5)
+	}
+	l = &memLog{objs: map[string][][]byte{name(math.MaxUint64): {[]byte("planted")}}}
+	m, _ = New(l, "s", testKey(1), Options{Log: quiet, AllowCreate: true})
+	if _, _, err := m.Claim(ctx, true); err == nil {
+		t.Fatal("claimed over a name at the last version")
+	}
+}
+
 // A body the newest record names but no copy of which reads back does not
 // stop the claim; Body reports it, and the same update sent again restores
 // it as a new copy.
@@ -464,6 +492,36 @@ func TestMissingBodyRestored(t *testing.T) {
 	// Another update under a version the state names is refused.
 	if _, _, _, err := m2.PutBody(ctx, openUpdate(t, 2, 6)); err == nil {
 		t.Fatal("a second update under an active version")
+	}
+}
+
+// Refresh copies a body before half the retention, by a margin of more
+// than one refresh interval: a restart half the retention after the last
+// record still finds the copy that record names.
+func TestBodyCopiedBeforeHalfRetention(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_800_000_000, 0)
+	s := testSetup("s")
+	l := &memLog{objs: map[string][][]byte{}}
+	m, _ := New(l, "s", testKey(1), Options{Setup: s, Clock: clockAt(&now), Log: quiet})
+	if _, _, err := m.Claim(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	_, _, h, err := m.PutBody(ctx, openUpdate(t, 2, 5))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := m.State()
+	st.Open = GroupState{Version: 2, Hash: h}
+	if err := m.SetState(ctx, st); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(s.Retention()/2 - time.Hour)
+	if err := m.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := l.objs[BodyName(s.Hash, setupwire.GroupOpen, 2, 2)]; !ok {
+		t.Fatal("no new copy an hour before half the retention")
 	}
 }
 

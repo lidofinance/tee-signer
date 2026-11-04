@@ -237,6 +237,33 @@ func TestCloneLoses(t *testing.T) {
 	}
 }
 
+// hiddenLog creates commits and then answers ErrHidden, as a store does
+// when a delete marker or another version hides an object of the name.
+type hiddenLog struct{ markstore.Log }
+
+func (h hiddenLog) Create(ctx context.Context, name string, data []byte) error {
+	if err := h.Log.Create(ctx, name, data); err != nil || strings.Contains(name, "/c/") {
+		return err
+	}
+	return markstore.ErrHidden
+}
+
+// A create that lands but comes back ErrHidden is not this process's own
+// write: the store stops changing, as after a lost race.
+func TestHiddenCommitLoses(t *testing.T) {
+	l, _ := markstore.NewFileLog(t.TempDir())
+	s, err := open(t, newLocal(t), hiddenLog{l}, keysOf("image-a"), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Put("shares/aa", []byte("x")); !errors.Is(err, ErrLost) {
+		t.Fatalf("hidden commit: %v", err)
+	}
+	if err := s.Put("shares/bb", []byte("y")); !errors.Is(err, ErrLost) {
+		t.Fatalf("after a hidden commit: %v", err)
+	}
+}
+
 // The key release down at start is an error, not "nothing to restore".
 type downKeys struct{ platform.Keys }
 
@@ -279,6 +306,34 @@ func TestRefresh(t *testing.T) {
 	now = now.Add(2 * time.Hour)
 	if err := s.Refresh(context.Background(), time.Hour); err != nil || !strings.Contains(s.Status(), "version=2") {
 		t.Fatalf("refresh: %v %s", err, s.Status())
+	}
+}
+
+// With a trusted clock, a commit and a refresh fail while it errors, and a
+// commit stamped ahead of it (a clock that ran ahead) is written again.
+func TestRefreshOnTrustedClock(t *testing.T) {
+	l, _ := markstore.NewFileLog(t.TempDir())
+	now := time.Unix(1_800_000_000, 0)
+	var clockErr error
+	clk := func() (time.Time, error) { return now, clockErr }
+	s, _ := open(t, newLocal(t), l, keysOf("image-a"), Options{Clock: clk})
+	if err := s.Put("shares/aa", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	clockErr = errors.New("no reading")
+	if err := s.Put("shares/bb", []byte("y")); err == nil {
+		t.Fatal("commit without a clock reading")
+	}
+	if err := s.Refresh(context.Background(), time.Hour); err == nil {
+		t.Fatal("refresh without a clock reading")
+	}
+	clockErr = nil
+	now = now.Add(-365 * 24 * time.Hour)
+	if err := s.Refresh(context.Background(), time.Hour); err != nil || !strings.Contains(s.Status(), "version=2") {
+		t.Fatalf("refresh after a future stamp: %v %s", err, s.Status())
+	}
+	if err := s.Refresh(context.Background(), time.Hour); err != nil || !strings.Contains(s.Status(), "version=2") {
+		t.Fatalf("second refresh: %v %s", err, s.Status())
 	}
 }
 

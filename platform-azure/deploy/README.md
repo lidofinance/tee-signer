@@ -521,6 +521,11 @@ outside the group.
 
 ## Mark log (immutable Blob Storage)
 
+The storage account must be locally or zone redundant (`Standard_LRS` or
+`Standard_ZRS`). The runner refuses a geo-redundant account (GRS, RA-GRS,
+GZRS, RA-GZRS): an unplanned failover to the second region drops the
+newest writes and rolls the log back.
+
 `-mark-store azblob:account=A,container=C` keeps the runner's mark in a
 Blob Storage container with a locked time-based retention policy
 (`slashing-log/docs/marklog.md`). Use container-level immutability: do not

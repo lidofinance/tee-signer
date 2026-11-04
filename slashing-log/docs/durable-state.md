@@ -181,10 +181,14 @@ back.
   later): its local state becomes the first commit.
 - Refresh. The runner writes the whole state as segment 0 when the oldest
   object the newest commit needs is half of the setup's
-  `slashing_log_min_lock_days` old, so on a locked bucket no object the
-  state needs comes out of retention. It checks at least every hour.
+  `slashing_log_min_lock_days` less two hours old, so on a locked bucket no
+  object the state needs comes out of retention, even on a restart half the
+  retention after the stop. It checks at least every hour.
   `-state-refresh` (default 24 hours) can make that age shorter, never
-  longer. Without a setup, `-state-refresh` alone sets it.
+  longer. Without a setup, `-state-refresh` alone sets it. With a setup,
+  commit times and the age come from the trusted clock the mark log uses.
+  A commit or refresh fails while that clock has no reading, and an object
+  stamped after now is written again.
 
 ### Where to keep it
 
@@ -296,7 +300,7 @@ parent, which is untrusted, so its state gives no way into the enclave.
 | --- | --- |
 | `-state-store` | the copy, same syntax as `-mark-store` (`file:`, `s3:`, `gcs:`, `azblob:`) |
 | `-state-create` | start over when no commit opens under this key release with every object it needs |
-| `-state-refresh` | write the whole state again when the oldest object the newest commit needs is this old (default 24h); with a setup at most half of `slashing_log_min_lock_days`; 0 off without a setup |
+| `-state-refresh` | write the whole state again when the oldest object the newest commit needs is this old (default 24h); with a setup at most half of `slashing_log_min_lock_days` less two hours; 0 off without a setup |
 
 Images: `platform-gcp/deploy` `STATE_STORE`; `platform-azure/deploy` `STATE_STORE_N`. Both
 are off unless set. Setting one changes the command line, and with it the

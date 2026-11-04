@@ -210,6 +210,9 @@ type MarkLog struct {
 	uncheckedAt time.Time
 	skipped     int
 	writes      uint64
+	// above: the first record goes above this version (AllowCreate over
+	// names that hold no valid record).
+	above uint64
 }
 
 // New returns the log of signer, with the platform's key release keys.
@@ -529,6 +532,20 @@ func (m *MarkLog) Claim(ctx context.Context, expect bool) (backend.Watermark, bo
 	case r != nil && hasHint && hv == r.Version && hh != h:
 		return backend.Watermark{}, false, fmt.Errorf("mark log %s: record %d is not the one this runner wrote (refusing)", m.log, hv)
 	}
+	if r == nil && present > 0 && m.opt.AllowCreate {
+		// Starting over: go above every name taken, as old records of a
+		// key release that no longer opens them may be more than maxSkips.
+		vs, _, err := m.listVersions(ctx)
+		if err != nil {
+			return backend.Watermark{}, false, fmt.Errorf("mark log %s: %w", m.log, err)
+		}
+		if len(vs) > 0 && vs[0].v == math.MaxUint64 {
+			return backend.Watermark{}, false, fmt.Errorf("mark log %s: an object holds the last record name (refusing)", m.log)
+		}
+		if len(vs) > 0 {
+			m.above = vs[0].v
+		}
+	}
 	if r != nil && m.opt.Setup != nil {
 		now, err := m.now()
 		if err != nil {
@@ -763,9 +780,9 @@ func (m *MarkLog) appendLocked(ctx context.Context, wm backend.Watermark) error 
 	if prevV == 0 {
 		logID = [32]byte{} // the first record: its own hash is the log_id
 	}
-	for v, skips := prevV+1, 0; ; v, skips = v+1, skips+1 {
+	for v, skips := max(prevV, m.above)+1, 0; ; v, skips = v+1, skips+1 {
 		if skips > maxSkips {
-			return fmt.Errorf("markstore: %d names after version %d are taken by objects that are not records", maxSkips, prevV)
+			return fmt.Errorf("markstore: %d names after version %d are taken by objects that are not records", maxSkips, max(prevV, m.above))
 		}
 		rec := Record{Setup: m.setup, Signer: m.signer, Version: v, PrevVersion: prevV, PrevHash: prevH, LogID: logID,
 			Owner: m.owner, KeyBlob: m.blob, Mark: wm, Time: uint64(now.Unix()), State: m.state.Clone(),
@@ -1055,6 +1072,12 @@ func (m *MarkLog) writeCopyLocked(ctx context.Context, k bodyKey, raw []byte, fr
 			}
 			err = nil // our own write; its reply was lost
 		}
+		if errors.Is(err, ErrHidden) {
+			// Another object hides under the name: a copy needs a name
+			// that holds this body only.
+			m.opt.Log.Warn("mark log: body name holds a hidden object; skipping it", "name", name, "err", err)
+			continue
+		}
 		if err != nil {
 			return BodyCopy{}, fmt.Errorf("markstore: write body copy %s: %w", name, err)
 		}
@@ -1093,8 +1116,9 @@ func (m *MarkLog) SetState(ctx context.Context, st ConfigState) error {
 			return fmt.Errorf("markstore: %s pending version %d is not above the active %d", g, ns.Pending.Version, ns.Version)
 		}
 	}
-	if o := st.Order; o != nil && o.Kind != OrderHandover {
-		return fmt.Errorf("markstore: order kind %d", o.Kind)
+	if o := st.Order; o != nil {
+		// No handover writes an order in this image.
+		return fmt.Errorf("markstore: order kind %d: this image writes no order", o.Kind)
 	}
 	for _, ref := range refsOf(&st) {
 		if e := m.bodies[ref.key]; e == nil || e.hash != ref.hash {
@@ -1134,8 +1158,14 @@ func (m *MarkLog) pruneBodiesLocked() {
 // that long.
 func keepAlive(retention time.Duration) time.Duration { return min(retention/8, 24*time.Hour) }
 
+// bodyMargin: Refresh copies a body this much before half the retention.
+// A restart may come half the retention after the newest record, and that
+// record may name a copy up to one refresh interval (an hour) past the
+// refresh age, so the copy must be new again before then.
+const bodyMargin = 2 * time.Hour
+
 // Refresh keeps the log readable for a restart (section 5): a body copy
-// older than half the retention gets a new copy, and the log gets a new
+// older than half the retention less bodyMargin gets a new copy, and the log gets a new
 // record (same mark and state, the new copies) when a copy was written or
 // the newest record is older than keepAlive. With Options.LockDays it
 // checks the store's lock first (checkLockLocked). Without a setup it
@@ -1162,7 +1192,7 @@ func (m *MarkLog) Refresh(ctx context.Context) error {
 	wrote := false
 	for _, ref := range refsOf(&m.state) {
 		e := m.bodies[ref.key]
-		if e == nil || now.Sub(time.Unix(int64(e.copy.At), 0)) < ret/2 {
+		if e == nil || now.Sub(time.Unix(int64(e.copy.At), 0)) < ret/2-bodyMargin {
 			continue
 		}
 		if e.raw == nil {

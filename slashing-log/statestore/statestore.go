@@ -142,8 +142,11 @@ type Options struct {
 	// gives a state (another key release, objects that are not commits,
 	// chunks gone).
 	AllowCreate bool
-	Now         func() time.Time
-	Log         *slog.Logger
+	// Clock is the trusted clock. Commit times and the refresh age read
+	// it, and a commit or a refresh fails when it errors. nil: Now.
+	Clock func() (time.Time, error)
+	Now   func() time.Time
+	Log   *slog.Logger
 }
 
 // Store is a platform.Store whose durable keys are copied to the object
@@ -160,6 +163,7 @@ type Store struct {
 	mu      sync.Mutex
 	version uint64    // highest version read or written
 	written time.Time // time of the newest commit
+	stamp   time.Time // time of the commit being written
 	key     []byte    // this process's object key, made at the first write
 	blob    []byte    // the key, wrapped by the key release
 	opened  map[string][]byte
@@ -504,10 +508,31 @@ func (s *Store) undelete(keys []string) {
 func (s *Store) Refresh(ctx context.Context, maxAge time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.head == 0 || s.opt.Now().Sub(s.oldest()) < maxAge {
+	if s.head == 0 {
+		return nil
+	}
+	now, err := s.now()
+	if err != nil {
+		return err
+	}
+	// A time after now comes from a clock that ran ahead: the objects may
+	// be older than they say, so write them again.
+	if age := now.Sub(s.oldest()); age >= 0 && age < maxAge {
 		return nil
 	}
 	return s.commitLocked(ctx, nil, true)
+}
+
+// now is the time commits carry: Clock if set, else Now.
+func (s *Store) now() (time.Time, error) {
+	if s.opt.Clock == nil {
+		return s.opt.Now(), nil
+	}
+	t, err := s.opt.Clock()
+	if err != nil {
+		return time.Time{}, fmt.Errorf("statestore: trusted clock: %w", err)
+	}
+	return t, nil
 }
 
 // oldest is the time of the oldest object the newest commit needs.

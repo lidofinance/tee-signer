@@ -125,7 +125,7 @@ The runner writes copy 1. If that name holds another object, it skips to
 the next copy number, up to 16 in a row. A copy counts only by its
 content: the reader decodes it and compares its hash with the hash the
 record names. The record keeps the newest copy number and its time. When
-that copy is older than half the retention, the runner writes copy n+1
+that copy is two hours short of half the retention, the runner writes copy n+1
 and then a record that names it, so a body never expires while the
 runner runs.
 
@@ -243,14 +243,15 @@ roll the mark back.
   start; the runner refuses to sign once its config in force needs that
   body. Sending the same update again writes a new copy and restores it.
 - Keep alive. While the runner runs, `Refresh` writes a new copy of every
-  body older than half the retention, and a record when it wrote a copy or
+  body older than half the retention less two hours, and a record when it wrote a copy or
   when the newest record is older than the retention / 8 (at most a day).
   A runner with a setup calls it every hour (`RefreshLoop`).
 - Nothing valid. A log with objects under record names but no valid record
   stops the start, with or without shares: those may be records whose keys
   this key release cannot open, and starting over would drop their mark.
   An empty log stops the start of a node that holds shares. `-mark-create`
-  overrides both on the flag path; setup images have no override.
+  overrides both on the flag path, and the new log starts above the
+  highest name taken; setup images have no override.
 - Restart with lost state. The state directory held the sealed shares, the
   sealing key's wrapped blob and the hint. With the state copy
   (`-state-store`, `slashing-log/docs/durable-state.md`) the platform restores the
@@ -297,7 +298,14 @@ roll the mark back.
   chain justifies the floor epoch, with the log as without it.
 - Objects that are not records under future names (anyone with write
   access can create new names) cost the writer a skip each, up to 16 in a
-  row; readers ignore them. A copy of an old record under a new name does
+  row; readers ignore them. More than 16 in a row stop every write and every
+  start for the retention period, and one such object on a new log stops
+  its first claim. Many names above the newest record can also push the
+  claim past its timeout. The state copy has the same rule. Whoever can
+  create objects in the bucket can stop the signer this way, as they can
+  by taking the runner's access away. The design trusts the storage
+  admin for liveness, not for safety: nothing they write makes the runner
+  sign below its mark. A copy of an old record under a new name does
   not verify there (the version inside differs from the name).
 
 ## Shares

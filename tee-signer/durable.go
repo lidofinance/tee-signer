@@ -64,7 +64,13 @@ func (d *durableCopy) open(ctx context.Context, p *platform.Platform) (platform.
 	if err := d.checkStore(ctx, l, true); err != nil {
 		return nil, err
 	}
-	s, err := statestore.Open(ctx, p.Store, l, d.signer, p.Keys, statestore.Options{SetupHash: d.setupHash, AllowCreate: d.create, Log: d.log})
+	opt := statestore.Options{SetupHash: d.setupHash, AllowCreate: d.create, Log: d.log}
+	if d.setupHash != ([32]byte{}) {
+		// The copy ages on the clock the mark log ages on. The NTS clock
+		// replaces p.Clock after open returns, so read it at each call.
+		opt.Clock = func() (time.Time, error) { return p.Clock.Now() }
+	}
+	s, err := statestore.Open(ctx, p.Store, l, d.signer, p.Keys, opt)
 	if err != nil {
 		return nil, err
 	}
@@ -109,14 +115,16 @@ func (d *durableCopy) checkStore(ctx context.Context, l markstore.Log, warn bool
 
 // refreshAge is how old the oldest object the newest commit needs may get
 // before the whole state is written again. With a setup it is at most half
-// of slashing_log_min_lock_days, so the newest copy never outlives the
-// store's retention; flagAge (-state-refresh) can only make it shorter.
-// Without a setup (lockDays 0) it is flagAge, and 0 means never.
+// of slashing_log_min_lock_days less two refresh ticks: a restart may come
+// half the retention after the last mark record, so the copy at the stop
+// must be younger than the other half. flagAge (-state-refresh) can only
+// make it shorter. Without a setup (lockDays 0) it is flagAge, and 0 means
+// never.
 func refreshAge(flagAge time.Duration, lockDays uint32) time.Duration {
 	if lockDays == 0 {
 		return flagAge
 	}
-	half := time.Duration(lockDays) * 24 * time.Hour / 2
+	half := time.Duration(lockDays)*24*time.Hour/2 - 2*time.Hour
 	if flagAge > 0 && flagAge < half {
 		return flagAge
 	}

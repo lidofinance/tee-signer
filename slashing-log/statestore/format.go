@@ -342,7 +342,7 @@ func (s *Store) ensureKey(ctx context.Context) error {
 func (s *Store) seal(magic string, version uint64, plain []byte) ([]byte, error) {
 	header := []byte(magic)
 	header = binary.BigEndian.AppendUint64(header, version)
-	header = binary.BigEndian.AppendUint64(header, uint64(s.opt.Now().Unix()))
+	header = binary.BigEndian.AppendUint64(header, uint64(s.stamp.Unix()))
 	header = binary.BigEndian.AppendUint16(header, uint16(len(s.blob)))
 	header = append(header, s.blob...)
 	g, err := gcm(s.key)
