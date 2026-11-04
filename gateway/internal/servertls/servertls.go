@@ -71,6 +71,8 @@ type files struct {
 	cert   *tls.Certificate
 	pool   *x509.CertPool
 	digest [32]byte
+	// caDigest is the sha256 of the client CA bundle.
+	caDigest [32]byte
 }
 
 // Server holds the files in force.
@@ -84,6 +86,18 @@ type Server struct {
 	refused [32]byte
 	// expiryLogged is when the expiry of cur was last logged.
 	expiryLogged time.Time
+	subs         []chan struct{}
+}
+
+// ClientsChanged returns a channel that receives after each reload that
+// changed the client CA bundle. It holds one notice.
+func (srv *Server) ClientsChanged() <-chan struct{} {
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	ch := make(chan struct{}, 1)
+	srv.subs = append(srv.subs, ch)
+
+	return ch
 }
 
 // New reads the files. It fails if they do not pass the checks of a
@@ -164,7 +178,7 @@ func (srv *Server) check(raw [3][]byte, now time.Time) (*files, error) {
 		return nil, fmt.Errorf("tls.cert %s: valid from %s to %s, not now", srv.s.CertFile,
 			leaf.NotBefore.UTC().Format(time.RFC3339), leaf.NotAfter.UTC().Format(time.RFC3339))
 	}
-	f := &files{cert: &cert, digest: digest(raw)}
+	f := &files{cert: &cert, digest: digest(raw), caDigest: sha256.Sum256(raw[2])}
 	if srv.s.ClientCAFile != "" {
 		if f.pool, err = parseBundle(raw[2]); err != nil {
 			return nil, fmt.Errorf("tls.client_ca %s: %w", srv.s.ClientCAFile, err)
@@ -240,6 +254,14 @@ func (srv *Server) Poll() bool {
 			srv.log.Error(msgRefused, "err", err.Error())
 		}
 		return false
+	}
+	if f.caDigest != srv.cur.caDigest {
+		for _, ch := range srv.subs {
+			select {
+			case ch <- struct{}{}:
+			default:
+			}
+		}
 	}
 	srv.cur, srv.refused, srv.expiryLogged = f, [32]byte{}, time.Time{}
 	srv.log.Info(msgReloaded, "cert", srv.s.CertFile, "serial", f.cert.Leaf.SerialNumber.String(),

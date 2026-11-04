@@ -131,7 +131,7 @@ func run(cfgPath string, log *slog.Logger) error {
 		}
 		mux := http.NewServeMux()
 		mux.Handle("GET /metrics", m.Registry)
-		msrv := httpServer(cfg.MetricsAccess, serverTLS, mux, log)
+		msrv := httpServer(ctx, cfg.MetricsAccess, serverTLS, mux, log)
 		go func() { errCh <- fmt.Errorf("metrics: %w", serve(msrv, ln)) }()
 		defer msrv.Close()
 		log.Info("metrics", "addr", cfg.Metrics, "path", "/metrics", "access", cfg.MetricsAccess)
@@ -156,7 +156,7 @@ func run(cfgPath string, log *slog.Logger) error {
 	}
 	log.Info("coalesce", "enabled", *cfg.Coalesce.Enabled, "cache_slots", *cfg.Coalesce.CacheSlots,
 		"seconds_per_slot", cfg.Chain.SecondsPerSlot)
-	srv := httpServer(cfg.Access, serverTLS, handler.Handler(), log)
+	srv := httpServer(ctx, cfg.Access, serverTLS, handler.Handler(), log)
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return err
@@ -181,23 +181,52 @@ func run(cfgPath string, log *slog.Logger) error {
 // httpServer is the HTTP server of one listener: TLS from st for access
 // mtls and unsafe_open_tls, with the client check for mtls only, and
 // plain HTTP for local and unsafe_plain_http. Failed handshakes (a client
-// without an accepted certificate) go to the log as warnings.
-func httpServer(access string, st *servertls.Server, h http.Handler, log *slog.Logger) *http.Server {
-	// IdleTimeout closes an idle keep-alive connection, so one opened
-	// before a client CA reload does not stay open for good.
+// without an accepted certificate) go to the log as warnings. An mtls
+// listener retires its connections when the client CA changes, until ctx
+// ends.
+func httpServer(ctx context.Context, access string, st *servertls.Server, h http.Handler, log *slog.Logger) *http.Server {
 	srv := &http.Server{Handler: h, ReadHeaderTimeout: readHeaderTimeout, IdleTimeout: idleTimeout,
 		ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
 	if config.UsesTLS(access) {
 		srv.TLSConfig = st.Config(access == config.AccessMTLS)
 	}
+	if access == config.AccessMTLS {
+		go func(changed <-chan struct{}) {
+			var t *time.Timer
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-changed:
+					if t != nil {
+						t.Stop()
+					}
+					t = retire(srv, retireWindow)
+					log.Info("client CA changed: open connections close after their current request")
+				}
+			}
+		}(st.ClientsChanged())
+	}
 
 	return srv
 }
 
-// The timeouts of both listeners.
+// retire turns keep-alives off for window: idle connections close, and
+// each active one closes after its current response (Connection: close).
+// New connections are served throughout, with the client check in force.
+// The window outlasts a sign request (signers.timeout).
+func retire(srv *http.Server, window time.Duration) *time.Timer {
+	srv.SetKeepAlivesEnabled(false)
+
+	return time.AfterFunc(window, func() { srv.SetKeepAlivesEnabled(true) })
+}
+
+// The timeouts of both listeners, and how long keep-alives stay off after
+// a client CA change.
 const (
 	readHeaderTimeout = 10 * time.Second
 	idleTimeout       = 120 * time.Second
+	retireWindow      = 30 * time.Second
 )
 
 // serve serves srv on ln, over TLS when srv has a TLS config.

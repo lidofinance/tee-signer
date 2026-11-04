@@ -591,3 +591,32 @@ func TestRunReloads(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// ClientsChanged fires on a reload that changes the client CA bundle,
+// not on one that renews the server certificate only.
+func TestClientsChanged(t *testing.T) {
+	p := newPKI(t)
+	srv, err := New(p.settings(), p.log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch := srv.ClientsChanged()
+	fired := func() bool {
+		select {
+		case <-ch:
+			return true
+		default:
+			return false
+		}
+	}
+	renewed := serverCert(t, p.serverCA, time.Time{}, time.Time{})
+	write(t, p.certFile, certPEM(renewed, p.serverCA))
+	write(t, p.keyFile, keyPEM(t, renewed))
+	if !srv.Poll() || fired() {
+		t.Fatal("a server certificate renewal counted as a client change")
+	}
+	write(t, p.clientCAFile, certPEM(newCA(t, "client CA 2")))
+	if !srv.Poll() || !fired() {
+		t.Fatal("a new client CA did not count as a client change")
+	}
+}
