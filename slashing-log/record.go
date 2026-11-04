@@ -71,9 +71,9 @@ type Pending struct {
 }
 
 // OrderKind is the kind of a pending order (section 10, phase 2). The
-// handover order is the only kind: Parse and SetState refuse every other,
-// so a record of an earlier build with a key generation order (kind 2)
-// does not read.
+// handover order is the only kind: Parse refuses every other, so a record
+// of an earlier build with a key generation order (kind 2) does not read.
+// SetState refuses every order, as no handover writes one.
 type OrderKind uint8
 
 const OrderHandover OrderKind = 1

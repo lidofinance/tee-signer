@@ -77,3 +77,28 @@ func TestRBRLOG01DroppedReplyOverDeleteMarker(t *testing.T) {
 		t.Errorf("A's retry at version %d: err %v, Lost %v; want ErrLost", v+1, err, a.Lost())
 	}
 }
+
+// A delete marker on a name nothing was written under hides nothing: a
+// create over it lands as a plain create, and its retry after a lost reply
+// finds the one version (ErrExists), not a hidden object.
+func TestDeleteMarkerOnFreeName(t *testing.T) {
+	ctx := context.Background()
+	srv := wormfake.New(wormfake.S3, "signer-marks")
+	defer srv.Close()
+	creds := platform.Credentials{AccessKeyID: "AKIDENCLAVE", SecretAccessKey: "enclave"}
+	l, err := Open("bucket="+srv.Bucket+",region=eu-central-1,endpoint="+srv.URL, markstore.Env{
+		HTTP: srv.Client(), AWSCreds: func(context.Context) (platform.Credentials, error) { return creds, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const name = "marks/signer-1/00000000000000000001"
+	if !srv.AdminDeleteMarker(name) {
+		t.Fatal("delete marker refused by the fake")
+	}
+	if err := l.Create(ctx, name, []byte("a")); err != nil {
+		t.Fatalf("create over a marker on a free name: %v", err)
+	}
+	if err := l.Create(ctx, name, []byte("a")); !errors.Is(err, markstore.ErrExists) {
+		t.Fatalf("retry: %v, want ErrExists", err)
+	}
+}

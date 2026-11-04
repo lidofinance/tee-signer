@@ -127,7 +127,11 @@ func TestAzureLockContainerRead(t *testing.T) {
 		{"unlocked policy", 0, "", 200, `{"properties":{"immutableStorageWithVersioning":{"enabled":false},"immutabilityPolicy":{"properties":{"immutabilityPeriodSinceCreationInDays":30,"state":"Unlocked"}}}}`, false, true, true, `mode "Unlocked"`},
 		{"no container", 0, "", 404, `{"error":{"code":"ContainerNotFound"}}`, false, false, true, "no container at http"},
 		{"no account", 404, `{"error":{"code":"ResourceNotFound"}}`, 200, `{"properties":{` + pol + `}}`, false, false, true, "no storage account at http"},
-		{"account version-level", 0, `{"properties":{"immutableStorageWithVersioning":{"enabled":true}}}`, 200, `{"properties":{` + pol + `}}`, false, false, true, "storage account acct has version-level"},
+		{"account version-level", 0, `{"sku":{"name":"Standard_LRS"},"properties":{"immutableStorageWithVersioning":{"enabled":true}}}`, 200, `{"properties":{` + pol + `}}`, false, false, true, "storage account acct has version-level"},
+		{"account geo-redundant", 0, `{"sku":{"name":"Standard_RAGRS"},"properties":{}}`, 200, `{"properties":{` + pol + `}}`, false, false, true, "Standard_RAGRS"},
+		{"account geo-zone-redundant", 0, `{"sku":{"name":"Standard_GZRS"},"properties":{}}`, 200, `{"properties":{` + pol + `}}`, false, false, true, "Standard_GZRS"},
+		{"account without sku", 0, `{"properties":{}}`, 200, `{"properties":{` + pol + `}}`, false, false, true, "LRS or ZRS"},
+		{"account zone-redundant", 0, `{"sku":{"name":"Standard_ZRS"},"properties":{}}`, 200, `{"properties":{` + pol + `}}`, true, true, false, ""},
 		{"no account read access", 403, `{"error":{"code":"AuthorizationFailed"}}`, 200, `{"properties":{` + pol + `}}`, false, false, false, "403"},
 		{"no container read access", 0, "", 403, `{"error":{"code":"AuthorizationFailed"}}`, false, false, false, "403"},
 		{"not JSON", 0, "", 200, `<html>`, false, false, false, "container"},
@@ -145,7 +149,7 @@ func TestAzureLockContainerRead(t *testing.T) {
 						w.WriteHeader(c.acctStatus)
 					}
 					if c.acct == "" {
-						w.Write([]byte(`{"properties":{}}`))
+						w.Write([]byte(`{"sku":{"name":"Standard_LRS"},"properties":{}}`))
 						return
 					}
 					w.Write([]byte(c.acct))

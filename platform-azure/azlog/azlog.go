@@ -155,6 +155,9 @@ func (l *Log) container(ctx context.Context) (*armContainer, error) {
 			markstore.ErrNoLock, what, u)
 	}
 	var a struct {
+		SKU struct {
+			Name string `json:"name"`
+		} `json:"sku"`
 		Properties struct {
 			VersionLevel *struct {
 				Enabled bool `json:"enabled"`
@@ -172,6 +175,12 @@ func (l *Log) container(ctx context.Context) (*armContainer, error) {
 	if v := a.Properties.VersionLevel; v != nil && v.Enabled {
 		return nil, fmt.Errorf("%w: azlog: storage account %s has version-level immutability; the client reads current blob versions only and needs an account without it",
 			markstore.ErrNoLock, l.Account)
+	}
+	// A geo-redundant account copies to a second region with a delay. An
+	// unplanned failover drops the newest writes and rolls the log back.
+	if s := strings.ToUpper(a.SKU.Name); s == "" || strings.Contains(s, "GRS") || strings.Contains(s, "GZRS") {
+		return nil, fmt.Errorf("%w: azlog: storage account %s has sku %q; the mark log needs a locally or zone redundant account (LRS or ZRS), because a geo failover can lose the newest records",
+			markstore.ErrNoLock, l.Account, a.SKU.Name)
 	}
 	if a.Properties.HNS {
 		return nil, fmt.Errorf("%w: azlog: storage account %s has a hierarchical namespace (isHnsEnabled); a rename there could move records out of the names the client reads, and the client needs an account without it",

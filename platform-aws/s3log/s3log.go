@@ -301,24 +301,36 @@ func (l *Log) retainUntil() (time.Time, bool) {
 }
 
 // checkMarker runs after a create that S3 refused (412): a delete marker on
-// the name means the name looked free to some create, so another object may
-// sit under it next to the current one (a lost reply to this runner's own
-// create over a marker on a clone's record, RBRLOG-01). That is
-// markstore.ErrHidden; a name without a marker is markstore.ErrExists.
+// a name with more than one version means the name looked free to some
+// create, so another object sits under it next to the current one (a lost
+// reply to this runner's own create over a marker on a clone's record,
+// RBRLOG-01). That is markstore.ErrHidden. A marker next to one version
+// hides nothing: markstore.ErrExists, as for a name without a marker.
 func (l *Log) checkMarker(ctx context.Context, name string) error {
-	_, markers, err := l.listVersions(ctx, name)
+	versions, markers, err := l.listVersions(ctx, name)
 	if err != nil {
 		return fmt.Errorf("s3log: %s exists, but its versions cannot be listed: %w", name, err)
 	}
+	n, d := 0, 0
+	for _, v := range versions {
+		if v.Name == name {
+			n++
+		}
+	}
 	for _, v := range markers {
 		if v.Name == name {
-			return fmt.Errorf("%w: %s exists and has a delete marker", markstore.ErrHidden, name)
+			d++
 		}
+	}
+	if n > 1 && d > 0 {
+		return fmt.Errorf("%w: %s exists with %d versions and %d delete markers", markstore.ErrHidden, name, n, d)
 	}
 	return markstore.ErrExists
 }
 
 // checkHidden lists the versions and delete markers of name after a create.
+// Another version besides the new one is ErrHidden. A delete marker alone
+// hides nothing: one put on a free name leaves it free for this create.
 func (l *Log) checkHidden(ctx context.Context, name string) error {
 	versions, markers, err := l.listVersions(ctx, name)
 	if err != nil {
@@ -335,7 +347,7 @@ func (l *Log) checkHidden(ctx context.Context, name string) error {
 			d++
 		}
 	}
-	if n != 1 || d != 0 {
+	if n != 1 {
 		return fmt.Errorf("%w: %s has %d versions and %d delete markers after the create", markstore.ErrHidden, name, n, d)
 	}
 	return nil

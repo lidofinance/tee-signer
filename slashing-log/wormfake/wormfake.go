@@ -87,6 +87,8 @@ type Lock struct {
 	// immutability (immutableStorageWithVersioning enabled). Only the
 	// account read reports it.
 	AccountVersionLevel bool
+	// SKU is the account's sku.name; empty serves Standard_LRS.
+	SKU string
 	// HNS: the Azure storage account has a hierarchical namespace
 	// (isHnsEnabled). Only the account read reports it.
 	HNS bool
@@ -712,7 +714,12 @@ func (s *Server) serveARM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) == 9 && r.URL.Path == armAccountPath(parts[2], parts[4], parts[8]) {
+		sku := s.lock.SKU
+		if sku == "" {
+			sku = "Standard_LRS"
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"name": parts[8], "type": "Microsoft.Storage/storageAccounts",
+			"sku": map[string]any{"name": sku},
 			"properties": map[string]any{"immutableStorageWithVersioning": map[string]any{"enabled": s.lock.AccountVersionLevel},
 				"isHnsEnabled": s.lock.HNS}})
 		return

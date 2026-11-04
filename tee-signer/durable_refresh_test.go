@@ -14,9 +14,9 @@ func TestStateRefreshFollowsLockDays(t *testing.T) {
 		lockDays uint32
 		want     time.Duration
 	}{
-		{24 * time.Hour, 1, 12 * time.Hour}, // the default flag with a 1-day lock
-		{0, 1, 12 * time.Hour},
-		{48 * time.Hour, 1, 12 * time.Hour},
+		{24 * time.Hour, 1, 10 * time.Hour}, // the default flag with a 1-day lock
+		{0, 1, 10 * time.Hour},
+		{48 * time.Hour, 1, 10 * time.Hour},
 		{6 * time.Hour, 1, 6 * time.Hour}, // the flag can only make it shorter
 		{24 * time.Hour, 365, 24 * time.Hour},
 		{24 * time.Hour, 0, 24 * time.Hour}, // no setup: the flag
@@ -27,9 +27,10 @@ func TestStateRefreshFollowsLockDays(t *testing.T) {
 			t.Errorf("refreshAge(%v, %d) = %v, want %v", c.flag, c.lockDays, got, c.want)
 		}
 		// The oldest object is at most age plus one tick old when refresh
-		// replaces it; that must stay inside the retention.
-		if c.lockDays > 0 && got+refreshTick(got) >= time.Duration(c.lockDays)*day {
-			t.Errorf("lock %d days: refresh at %v plus tick %v reaches the retention", c.lockDays, got, refreshTick(got))
+		// replaces it, and a restart may come half the retention after the
+		// stop; that must stay inside the retention.
+		if ret := time.Duration(c.lockDays) * day; c.lockDays > 0 && got+refreshTick(got)+ret/2 >= ret {
+			t.Errorf("lock %d days: refresh at %v plus tick %v plus half the retention reaches the retention", c.lockDays, got, refreshTick(got))
 		}
 	}
 }

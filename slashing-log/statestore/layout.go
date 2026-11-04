@@ -146,7 +146,7 @@ func (s *Store) chunkLimit() int {
 // chunkLimit bytes and creates them.
 func (s *Store) writeSegment(ctx context.Context, ops map[string]op, sg *segment) (objects int, n int64, err error) {
 	es := s.entries(ops, sg)
-	sg.created = s.opt.Now().Unix()
+	sg.created = s.stamp.Unix()
 	limit := s.chunkLimit()
 	for len(es) > 0 {
 		size, i := 4, 0
@@ -200,6 +200,11 @@ func (s *Store) commitLocked(ctx context.Context, ops map[string]op, full bool) 
 	if s.broken != nil {
 		return s.broken
 	}
+	now, err := s.now()
+	if err != nil {
+		return err
+	}
+	s.stamp = now
 	if err := s.ensureKey(ctx); err != nil {
 		return err
 	}
@@ -244,7 +249,7 @@ func (s *Store) commitLocked(ctx context.Context, ops map[string]op, full bool) 
 			s.tailBytes += o.size(k)
 		}
 		if s.chain == 0 {
-			s.chainSince = s.opt.Now()
+			s.chainSince = s.stamp
 		}
 		s.chain++
 	} else {
@@ -254,7 +259,7 @@ func (s *Store) commitLocked(ctx context.Context, ops map[string]op, full bool) 
 		s.segs, s.tail, s.tailBytes, s.chain = p.segs, map[string]op{}, 0, 0
 	}
 	s.head, s.headSum = v, sha256.Sum256(obj)
-	s.version, s.written = v, s.opt.Now()
+	s.version, s.written = v, s.stamp
 	s.writes++
 	s.objects += uint64(objects)
 	s.bytesOut += uint64(nbytes)
@@ -307,6 +312,15 @@ func (s *Store) createCommit(ctx context.Context, plain []byte) (uint64, []byte,
 				s.opt.Log.Error("state copy: another instance wrote this signer's copy; refusing further changes", "version", v)
 				return 0, nil, s.lost
 			}
+		}
+		if errors.Is(err, markstore.ErrHidden) {
+			// Another object of this name is hidden: a clone may have
+			// written it, so this write is not known to be the one a
+			// restart reads.
+			s.lost = ErrLost
+			s.opt.Log.Error("state copy: a delete marker or another version hides an object at the version this runner wrote; refusing further changes",
+				"version", v, "err", err)
+			return 0, nil, fmt.Errorf("%w: %v", ErrLost, err)
 		}
 		if err != nil && s.landed(ctx, name, obj) {
 			err = nil // the store took it and the reply was lost
