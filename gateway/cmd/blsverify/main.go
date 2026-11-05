@@ -1,7 +1,8 @@
 // Command blsverify checks a gateway signature on a Web3Signer request without
 // reusing any gateway or signer code: the signing root comes from SSZ hashing
-// written out by hand on crypto/sha256, and the BLS check uses blst (the
-// gateway combines with herumi).
+// written out by hand on crypto/sha256, and the BLS check calls blst's Go
+// bindings directly, not the signer core's check that the gateway uses. Both
+// build from the same blst sources (signer-core/third_party/blst).
 //
 // Supported request types: ATTESTATION, BLOCK_V2 (block_header versions),
 // RANDAO_REVEAL, AGGREGATION_SLOT, SYNC_COMMITTEE_MESSAGE, VALIDATOR_REGISTRATION.

@@ -4,14 +4,14 @@ go 1.26.0
 
 require (
 	github.com/attestantio/go-eth2-client v0.30.3
-	github.com/herumi/bls-eth-go-binary v1.36.1
-	github.com/supranational/blst v0.3.17
+	github.com/supranational/blst v0.3.16
 	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
 	github.com/lidofinance/tee-signer/attestation-verify v0.0.0
 	github.com/lidofinance/tee-signer/governance v0.0.0
+	github.com/lidofinance/tee-signer/signer-core v0.0.0
 	github.com/lidofinance/tee-signer/signer-protocol v0.0.0
 	github.com/lidofinance/tee-signer/web3signer-api v0.0.0
 )
@@ -53,4 +53,7 @@ replace (
 	github.com/lidofinance/tee-signer/tee-signer => ../tee-signer
 	github.com/lidofinance/tee-signer/trusted-time => ../trusted-time
 	github.com/lidofinance/tee-signer/web3signer-api => ../web3signer-api
+	// blsverify and the tests use blst's Go bindings from the copy the
+	// signer core builds (signer-core/third_party/blst, v0.3.16).
+	github.com/supranational/blst => ../signer-core/third_party/blst
 )

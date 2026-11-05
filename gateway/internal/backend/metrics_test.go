@@ -9,8 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/herumi/bls-eth-go-binary/bls"
-
 	"github.com/lidofinance/tee-signer/gateway/internal/certreload"
 	"github.com/lidofinance/tee-signer/gateway/internal/metrics"
 	proto "github.com/lidofinance/tee-signer/signer-protocol"
@@ -187,8 +185,7 @@ func TestMetricsSigning(t *testing.T) {
 	}
 
 	// One signer sends a partial under another key: bad_partial.
-	var other bls.SecretKey
-	other.SetByCSPRNG()
+	other := randKey(t)
 	fakes[0].set(func(f *fakeRunner) { f.signer = &other })
 	if _, err := signWith(t, s, k.pk); err != nil {
 		t.Fatal(err)

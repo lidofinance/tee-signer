@@ -28,7 +28,7 @@ import (
 	"time"
 
 	"github.com/attestantio/go-eth2-client/spec/phase0"
-	"github.com/herumi/bls-eth-go-binary/bls"
+	blst "github.com/supranational/blst/bindings/go"
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
 	proto "github.com/lidofinance/tee-signer/signer-protocol"
@@ -98,7 +98,7 @@ type tlsRunner struct {
 	ln    net.Listener
 	spki  []byte
 	key   proto.ValidatorKey
-	share *bls.SecretKey
+	share *blst.SecretKey
 	root  phase0.Root
 	// badDoc makes its attestation document carry another nonce.
 	badDoc bool
