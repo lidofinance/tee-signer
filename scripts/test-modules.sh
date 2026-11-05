@@ -14,7 +14,7 @@
 # with the tags of each non-prod chain and with the tags of a release runner.
 # The signer-admin tests start a dev runner: SIGNER_ADMIN_RUNNER, else one
 # built here (dev_runner).
-# Logs: logs/test-<module>.log.
+# Logs: logs/test-<module>.log (tooling/<name>: logs/test-tooling-<name>.log).
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 mkdir -p "$LOGS"
@@ -129,11 +129,13 @@ if [ ${#mods[@]} -eq 0 ]; then
 fi
 for m in "${mods[@]}"; do
   start=$SECONDS
-  if (checks "$m") >"$LOGS/test-$m.log" 2>&1; then
-    log "$m: vet and tests passed ($((SECONDS - start)) s, $(grep -c '^ok ' "$LOGS/test-$m.log") package runs)"
+  # tooling/<name> logs to test-tooling-<name>.log.
+  lf="test-${m//\//-}.log"
+  if (checks "$m") >"$LOGS/$lf" 2>&1; then
+    log "$m: vet and tests passed ($((SECONDS - start)) s, $(grep -c '^ok ' "$LOGS/$lf") package runs)"
   else
-    tail -40 "$LOGS/test-$m.log"
-    echo "test-modules: $m failed (log: logs/test-$m.log)" >&2
+    tail -40 "$LOGS/$lf"
+    echo "test-modules: $m failed (log: logs/$lf)" >&2
     exit 1
   fi
 done

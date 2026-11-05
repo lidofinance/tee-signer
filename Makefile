@@ -36,7 +36,7 @@ check: ## guards: module boundaries, secret scan, release gate, eif-check and af
 	bash $(ROOT)/scripts/eif-check-test.sh
 	python3 -B $(ROOT)/scripts/bundle-licenses-test.py
 	python3 -B $(ROOT)/scripts/check-modes.py
-	@for m in */go.mod; do d=$${m%/go.mod}; out=$$(cd $$d && gofmt -l . | grep -v '^third_party/' || true); \
+	@for m in */go.mod tooling/*/go.mod; do [ -f "$$m" ] || continue; d=$${m%/go.mod}; out=$$(cd $$d && gofmt -l . | grep -v '^third_party/' || true); \
 		[ -z "$$out" ] || { echo "gofmt: $$d: $$out"; exit 1; }; done; echo "gofmt: clean"
 
 core: ## the C signer core and the vendored blst, static libraries for cgo (build/<arch>/lib)

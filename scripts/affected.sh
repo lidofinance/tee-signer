@@ -51,6 +51,11 @@ while IFS= read -r f; do
     *.c | *.h | *.S | *.rs | Cargo.* | */Cargo.*) all "$f is C or Rust code" ;;
   esac
   mod="${f%%/*}"
+  # A tool under tooling/ is a module of its own: tooling/<name>.
+  if [ "$mod" = tooling ]; then
+    rest="${f#tooling/}"
+    mod="tooling/${rest%%/*}"
+  fi
   if [ "$mod" = "$f" ] || ! is_module "$mod" || [ ! -f "$ROOT/$mod/go.mod" ]; then
     all "$f is in no Go module"
   fi

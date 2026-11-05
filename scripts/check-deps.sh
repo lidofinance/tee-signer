@@ -76,7 +76,7 @@ package_cloud() {
   case "$1" in
     github.com/lidofinance/tee-signer/platform/dev) echo dev ;;
     # Operator tools, adapters and development helpers are never runner dependencies.
-    github.com/lidofinance/tee-signer/devkit|github.com/lidofinance/tee-signer/devkit/*|github.com/lidofinance/tee-signer/tests|github.com/lidofinance/tee-signer/tests/*|github.com/lidofinance/tee-signer/signer-admin|github.com/lidofinance/tee-signer/signer-admin/*|github.com/lidofinance/tee-signer/web3signer-api|github.com/lidofinance/tee-signer/web3signer-api/*|github.com/lidofinance/tee-signer/signer-core/software|github.com/lidofinance/tee-signer/signer-core/software/*) echo none ;;
+    github.com/lidofinance/tee-signer/devkit|github.com/lidofinance/tee-signer/devkit/*|github.com/lidofinance/tee-signer/tests|github.com/lidofinance/tee-signer/tests/*|github.com/lidofinance/tee-signer/signer-admin|github.com/lidofinance/tee-signer/signer-admin/*|github.com/lidofinance/tee-signer/web3signer-api|github.com/lidofinance/tee-signer/web3signer-api/*|github.com/lidofinance/tee-signer/tooling/*|github.com/lidofinance/tee-signer/signer-core/software|github.com/lidofinance/tee-signer/signer-core/software/*) echo none ;;
     # The host agent runs on the parent instance. The enclave links its
     # client and its messages; every other package below hostagent, the
     # agent itself included, is in no runner.
