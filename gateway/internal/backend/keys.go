@@ -36,7 +36,8 @@ type group struct {
 // signatures of any t of them combine with those indices into pk's
 // signature. A key that fits no t and no indices is refused: its
 // signatures would never combine. t = 1 means every share is pk itself.
-// A group is also refused unless 2t > k (checkOverlap).
+// A group with pk next to other shares is refused, and so is one unless
+// 2t > k (checkOverlap).
 //
 // The search tries the indices in increasing order, so signers listed in
 // the order of their indices match at the first try.
@@ -49,9 +50,16 @@ func deriveGroup(pk phase0.BLSPubKey, shares []share, maxIndex int) (group, erro
 		return group{}, fmt.Errorf("%d shares, but share indices go to %d only", k, maxIndex)
 	}
 	out := append([]share(nil), shares...)
-	whole := true
+	whole, some := true, false
 	for _, s := range shares {
 		whole = whole && s.pub == pk
+		some = some || s.pub == pk
+	}
+	// A signer with the whole key signs alone, so it and the signers of
+	// the other shares can sign without each other. The search below could
+	// still find indices for such a group when max_share_index is high.
+	if some && !whole {
+		return group{}, errors.New("the whole key is on a signer next to other shares of it")
 	}
 	if whole {
 		for i := range out {

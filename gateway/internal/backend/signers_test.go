@@ -421,6 +421,26 @@ func TestShareIndicesWithAGap(t *testing.T) {
 	}
 }
 
+// A whole key on one signer next to a real split of the same key on
+// others is refused, whatever max_share_index: the whole-key signer signs
+// alone, so it and the split signers form disjoint signing sets.
+func TestWholeKeyNextToSharesRefused(t *testing.T) {
+	for _, c := range []struct{ t, n int }{{2, 2}, {2, 3}} {
+		k := splitKey(t, c.t, c.n)
+		var sh []share
+		for i := range k.shares {
+			sh = append(sh, share{node: i, pub: pubOf(&k.shares[i])})
+		}
+		sh = append(sh, share{node: len(sh), pub: k.pk})
+		g, err := deriveGroup(k.pk, sh, maxShareIndex)
+		if err == nil {
+			t.Errorf("%d of %d plus the whole key: served with threshold %d", c.t, c.n, g.threshold)
+		} else if !strings.Contains(err.Error(), "whole key") {
+			t.Errorf("%d of %d plus the whole key: %v", c.t, c.n, err)
+		}
+	}
+}
+
 // A signer that is down at a key load keeps its last answer, so its
 // share stays in the group.
 func TestKeyListKeepsAnswersOfASignerThatIsDown(t *testing.T) {
