@@ -173,7 +173,9 @@ Set these once per shell, from the deploy settings of each cloud.
    (set `allow_unverified_nonslashable_signing` as the test's signing paths need),
    `allowed_client_ca` (the client CA, base64 DER), `max_keys`,
    `slashing_log_min_lock_days = 1`, and the rest of `locked`: approvers 1
-   to 3, `approvals_needed = 2`, `change_delay_seconds = 0`, the
+   to 3, `approvals_needed = 2`, `change_delay_seconds = 0` (a non-prod
+   chain only: a prod chain needs at least the default time lock,
+   `governance/setupwire/timelock.go`), the
    balance values and `withdrawal_credentials`
    (`governance/setuptext/testdata/setup-gcp.conf` lists them, without its
    `salt.*` and `platform_salt` lines: `signer-admin setup` draws the

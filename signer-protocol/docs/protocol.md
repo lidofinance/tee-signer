@@ -31,8 +31,9 @@ body  = version:u8  type:u8  id:u32  payload
   and it sends nothing but answers.
 - A frame over 1 MiB, a short frame, a wrong version or any read error
   closes the connection without an answer.
-- The runner does not refuse a request type with bit 0x80 set: it answers
-  it like any type it does not serve (`UNSUPPORTED`).
+- The runner does not refuse a request type with bit 0x80 set as such: it
+  answers it like any type the role table lacks (`FORBIDDEN`, "Client
+  roles").
 - Connection limits (ATTEST-BUDGET-01, `tee-signer/server/limits.go`, each a
   runner flag). At most 256 connections are open at once (`-max-conns`),
   TLS handshakes included; more are closed at once. The TLS handshake
@@ -319,7 +320,7 @@ key_origin: reserved[4] imported_keys:u32 reserved[32]
 ```
 
 - `setup_hash`: SHA-256 over the context `signer-setup-v1`, `policy_root`
-  and `platform_commitment` (setup format 2, `attestation-verify/docs/attestation-statement.md`).
+  and `platform_commitment` (setup format 4, `attestation-verify/docs/attestation-statement.md`).
   A runner without a setup (the flag path of tests and local runners) puts the SHA-256 of its `-config` file here and zeros in the
   rest.
 - Per group, the state in force: the active version and the hash of the
@@ -799,12 +800,13 @@ per signature in the same `position:u8 signature[64]` slot:
 The direct message starts with its context, and the hashed one is SHA-256
 over an input that starts with its hash context, so a signature of one
 form or kind passes for another only through a SHA-256 collision. The
-`-hash-v1` contexts of the first build signed the hash context and the
-32 bytes without the outer SHA-256, 58 to 65 bytes, which gpg's scdaemon
-does not pass to a card; `-hash-v2` replaces them, and a runner takes no
-v1 signature. `signer-admin sign
--hashed` makes the hashed form; `show` prints both messages so an
-approver can compare them over a second channel.
+hashed form exists for OpenPGP cards: gpg's scdaemon passes a card a
+message of 20, 28, 32, 48 or 64 bytes only, so under a `-hash-v1` context
+the approver signs the 32 bytes `SHA-256(hash context || SHA-256(direct
+message))` (`governance/setupwire/contexts.go`, `ApprovalMessage`). The
+verifiers take either form per signature (`VerifyApproval`).
+`signer-admin sign -hashed` makes the hashed form; `show` prints both
+messages so an approver can compare them over a second channel.
 
 ### Hardware approver keys
 
@@ -991,7 +993,7 @@ signers may have rotated away since.
 
 Every connection has a client role, and the role table below is the only
 grant: a message type a role may not send gets `FORBIDDEN` before the
-runner reads its payload, and a refused
+runner parses its payload, and a refused
 IMPORT_SHARE, IMPORT_SHARE_SEALED or IMPORT_SHARES_SEALED payload is wiped. A type missing from
 the table (an unknown one, or a new message nobody added) is `FORBIDDEN`
 for every role.
@@ -1126,7 +1128,8 @@ setup.
 `scripts/make-test-ca.sh` issues a test PKI with one chain per role:
 `client.pem` (signing), `attest-client.pem`, `admin-client.pem` under
 `admin-ca.pem`, and `root-admin-client.pem`, an admin-marked leaf straight
-under the root that the runner treats as signing.
+under the root: a non-prod build gives it the admin-root-direct role (rule
+3 above), a mainnet build gives it no role (rule 4).
 `signer-admin issue-client-cert` issues certificates of a role from an
 existing CA key.
 
@@ -1236,7 +1239,8 @@ document describes the code as it is.
    frame: `WriteFrame` fails, the runner logs it and closes the connection
    without an answer.
 4. `detail` (1024 bytes) is cut at a byte count, which can split a UTF-8 sequence.
-5. A request type with bit 0x80 set is not refused as such.
+5. A request type with bit 0x80 set is not refused as such; it gets
+   `FORBIDDEN` as a type no role may send.
 6. IMPORT_SHARE and IMPORT_SHARE_SEALED take flags 0 with maxima that are
    not zero and drop the maxima. Only all-zero maxima should pass with
    flags 0.

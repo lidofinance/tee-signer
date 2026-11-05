@@ -158,7 +158,7 @@ setup = 'S' public_values public_salts locked_values locked_salts open_values op
         platform_salt[32] private
 ```
 
-`X_values` is the concatenation of the leaf values of group X in leaf order (section 1), and `X_salts` the concatenation of its salts in the same order (17, 19 and 2 salts). `public_values` is 147 bytes and starts with the format byte 4, so the setup's first two bytes are `0x53 0x04`. The decoder refuses trailing bytes, counts above a cap, presence bytes other than 0 or 1, unknown enum values, unsorted lists, any value the rules refuse, a zero salt, and any input that does not encode back to the same bytes. A setup larger than 64 KiB is refused, and so is one whose private part is above 2560 bytes (section 2).
+`X_values` is the concatenation of the leaf values of group X in leaf order (section 1), and `X_salts` the concatenation of its salts in the same order (17, 16 and 2 salts). `public_values` is 147 bytes and starts with the format byte 4, so the setup's first two bytes are `0x53 0x04`. The decoder refuses trailing bytes, counts above a cap, presence bytes other than 0 or 1, unknown enum values, unsorted lists, any value the rules refuse, a zero salt, and any input that does not encode back to the same bytes. A setup larger than 64 KiB is refused, and so is one whose private part is above 2560 bytes (section 2).
 
 
 ## 4. Config updates
@@ -174,7 +174,7 @@ update = 'U' 1:u8 body_len:u32 body sig_count:u8 {position:u8 signature[64]}
          new_count:u8 {position:u8 signature[64]}
 ```
 
-- `group` is 1 locked or 2 open. `group_values` are the group's leaf values as in a setup, `group_salts` one salt per leaf of that group (20 or 2), in leaf order. `group_root` is MerkleRoot over the leaves of `group_values` with `group_salts`.
+- `group` is 1 locked or 2 open. `group_values` are the group's leaf values as in a setup, `group_salts` one salt per leaf of that group (16 or 2), in leaf order. `group_root` is MerkleRoot over the leaves of `group_values` with `group_salts`.
 - `chain_hash = H(CTX_CHAIN, genesis_validators_root || genesis_fork_version || genesis_time:u64 || seconds_per_slot:u64 || slots_per_epoch:u64 || preset:u8 || voluntary_exit_fork_version)`, the chain fields of the public group in order (61 bytes).
 - The header is 145 bytes. Each signature is Ed25519 over `len(CTX_UPDATE):u16 || CTX_UPDATE || header`.
 - `update_hash = H(CTX_UPDATE, header)`. The next update of the group names it as `prev_hash`, and the setup state carries it as the group's hash once the update is active or pending.

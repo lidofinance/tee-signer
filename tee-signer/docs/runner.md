@@ -342,8 +342,10 @@ directly.
 RANDAO_REVEAL, AGGREGATION_SLOT, AGGREGATE_AND_PROOF, SYNC_COMMITTEE_*
 types as object root and domain). For root messages the runner recomputes
 the domain from its own chain config and refuses a mismatch, and the C
-core accepts only the six non-slashable domain types, so this path cannot
-sign a block, vote, exit or registration. Every other message comes with
+core accepts only the nine non-slashable domain types (six always, and the
+three Gloas ones from the Gloas fork epoch on; `signer-core/README.md`,
+`sc_sign_root`), so this path cannot sign a block, vote, exit or
+registration. Every other message comes with
 `SignRequest.Domain`, the domain the caller computed; the runner refuses it
 with `DOMAIN_MISMATCH` when its chain config and fork schedule give the
 message another one (`signer-protocol/docs/protocol.md`, "SIGN kinds").
