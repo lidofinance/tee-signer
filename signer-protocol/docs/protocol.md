@@ -1150,9 +1150,12 @@ holds the setup's genesis fork version and genesis validators root as an
 OCTET STRING of 36 bytes. `attestation-verify/runnerclient` refuses, in
 the handshake, a runner whose values make a prod chain
 (`setupwire.ProdChain`) unless its attestation settings say `mainnet`,
-and a runner of another chain if they do. Older runners wrote the fork
-version alone (4 bytes); a client treats such a mark like no mark,
-since it cannot show the root (those runners were test network builds).
+and a runner of another chain if they do. Older runners, mainnet ones
+included, wrote the fork version alone (4 bytes), which cannot show the
+root. A client takes such a mark as prod unless a non-prod row of the
+chain table has the fork version (`setupwire.ProdForkVersion`); with
+such a row's fork version, the setting alone decides. The `dev` verifier
+refuses every such mark.
 The settings decide the client's mainnet rules
 (`key_release_sha256` for `azure-maa` and `aws-nitro`), and IDENTITY
 does not name the chain, so without the mark a setting left out would fail

@@ -348,7 +348,7 @@ func run() (err error) {
 	}
 	var tlsCfg *tls.Config
 	if caPEM != nil {
-		if tlsCfg, srv.TLSKeyHash, err = attls.ServerConfig(caPEM, plat.Clock.Now, attls.WithChain(cfg.GenesisForkVersion, cfg.GenesisValidatorsRoot)); err != nil {
+		if tlsCfg, srv.TLSKeyHash, err = attls.ServerConfig(caPEM, plat.Clock.Now, chainMark(cfg)); err != nil {
 			return err
 		}
 		srv.ClientCAs = tlsCfg.ClientCAs
@@ -608,4 +608,10 @@ func raiseMarks(ctx context.Context, s *core.Signer, clk platform.Clock, raiseSl
 		}
 		raised = epoch + 1
 	}
+}
+
+// chainMark names the runner's chain in its TLS certificate by both
+// genesis values (attls.WithChain).
+func chainMark(cfg core.Config) attls.Option {
+	return attls.WithChain(cfg.GenesisForkVersion, cfg.GenesisValidatorsRoot)
 }

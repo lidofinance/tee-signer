@@ -253,10 +253,13 @@ var AdminClientOID = asn1.ObjectIdentifier{1, 2, 840, 113556, 1, 8000, 2554,
 // certificate's key is the one the attested identity names, so the value
 // comes from the runner's code. Clients refuse a runner whose values make
 // a prod chain unless their settings say mainnet, and the reverse
-// (attestation-verify/runnerclient). Older runners wrote the fork version
-// alone (4 bytes); clients treat such a mark like no mark, since it
-// cannot show the root (those runners were test network builds). A
-// certificate without it leaves the decision to the client's setting.
+// (attestation-verify/runnerclient). Older runners, mainnet ones
+// included, wrote the fork version alone (4 bytes). Such a mark cannot
+// show the root: a client takes it as prod unless a non-prod row of the
+// chain table has the fork version (setupwire.ProdForkVersion), and then
+// leaves the decision to its setting. The dev verifier refuses every
+// such mark. A certificate without it leaves the decision to the
+// client's setting.
 // Same GUID arc as AttestOnlyClientOID, last arc 3.
 var RunnerChainOID = asn1.ObjectIdentifier{1, 2, 840, 113556, 1, 8000, 2554,
 	49247, 57036, 45844, 17649, 38356, 1811430, 10320378, 3}

@@ -120,5 +120,16 @@ func ProdChain(genesisForkVersion backend.Version, genesisValidatorsRoot backend
 	return !ok || r.Prod
 }
 
+// ProdForkVersion: a chain with this genesis fork version is prod
+// whatever its root, since no non-prod row has the fork version.
+func ProdForkVersion(genesisForkVersion backend.Version) bool {
+	for _, r := range chainTable {
+		if !r.Prod && r.ForkVersion == genesisForkVersion {
+			return false
+		}
+	}
+	return true
+}
+
 // Prod is ProdChain for the setup's chain.
 func (c *Chain) Prod() bool { return ProdChain(c.GenesisForkVersion, c.GenesisValidatorsRoot) }

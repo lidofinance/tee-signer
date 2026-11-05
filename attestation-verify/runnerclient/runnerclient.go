@@ -327,11 +327,13 @@ func (c *Connection) tlsConfig(cert tls.Certificate) *tls.Config {
 // decides.
 //
 // The chain is prod by both genesis values, as on the runner. A mark of
-// the fork version alone, from a runner built before the root was in the
-// mark, cannot show the root; it counts as no mark, so the setting alone
-// decides. The dev verifier refuses such a mark: it cannot tell a prod
-// chain, and runners built from this code carry the root. Such runners
-// were built for test networks only.
+// the fork version alone comes from a runner built before the root was in
+// the mark, mainnet runners included. A fork version no non-prod row has
+// is prod whatever the root (setupwire.ProdForkVersion), so such a mark
+// gets the prod checks. A non-prod row's fork version cannot show the
+// root, so the setting alone decides. The dev verifier refuses every mark
+// of the fork version alone: it cannot tell a prod chain, and runners
+// built from this code carry the root.
 func checkChain(cs tls.ConnectionState, mainnet, dev bool) error {
 	if len(cs.PeerCertificates) == 0 {
 		return nil // the dial refuses a runner without a certificate
@@ -348,9 +350,11 @@ func checkChain(cs tls.ConnectionState, mainnet, dev bool) error {
 			return fmt.Errorf("the runner's chain mark holds no genesis validators root (%s in its certificate), so it may sign for a prod chain, and the dev verifier proves nothing about it; "+
 				"use the verifier of its platform (azure-maa, aws-nitro or gcp-cs)", m)
 		}
-		return nil
+		if !setupwire.ProdForkVersion(m.gfv) {
+			return nil
+		}
 	}
-	prod := setupwire.ProdChain(m.gfv, m.gvr)
+	prod := !m.hasRoot || setupwire.ProdChain(m.gfv, m.gvr)
 	switch {
 	case prod && dev:
 		return fmt.Errorf("the runner signs for a prod chain (%s in its certificate), and the dev verifier proves nothing about it; "+

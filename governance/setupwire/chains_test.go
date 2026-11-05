@@ -101,6 +101,9 @@ func TestPartialMatchIsProd(t *testing.T) {
 			}
 			s := samples(t)["setup-gcp"]
 			s.Chain.GenesisForkVersion, s.Chain.GenesisValidatorsRoot = r.ForkVersion, root
+			if err := CheckThresholdOn(s, 2, 3); err == nil {
+				t.Errorf("%s fork version with public root %x: 2 of 3 passes the threshold rule of the setup", r.Name, root[:4])
+			}
 			k := &s.Platform.SealingKeyRelease
 			k.UnsafeSingleKeyAccepted, k.NoLockAccepted = true, false
 			if CheckSingleKeyProd(&s.Platform, &s.Chain) == nil || !s.Chain.Prod() {
@@ -110,6 +113,21 @@ func TestPartialMatchIsProd(t *testing.T) {
 	}
 	if !ProdChain(hoodiFork, devnetRoot) {
 		t.Error("hoodi fork version with a devnet's root: not prod")
+	}
+}
+
+// A fork version no non-prod row has is prod whatever the root; a
+// non-prod row's fork version needs the root to tell.
+func TestProdForkVersion(t *testing.T) {
+	for _, v := range []backend.Version{MainnetForkVersion, {0x90, 0, 0, 0x69}, {0xde, 0xad, 0xbe, 0xef}} {
+		if !ProdForkVersion(v) {
+			t.Errorf("fork version %x: not prod", v)
+		}
+	}
+	for _, r := range ChainRows() {
+		if ProdForkVersion(r.ForkVersion) != r.Prod {
+			t.Errorf("%s fork version %x: prod %v", r.Name, r.ForkVersion, !r.Prod)
+		}
 	}
 }
 

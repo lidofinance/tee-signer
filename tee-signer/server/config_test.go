@@ -1158,6 +1158,22 @@ func TestConfigUpdateProdChainFloor(t *testing.T) {
 	}
 }
 
+// A non-prod row's fork version with mainnet's root signs mainnet
+// messages: the floor applies there too.
+func TestConfigUpdatePartialMatchFloor(t *testing.T) {
+	e := newEnvWith(t, nil, func(s *setupwire.Setup) {
+		_, s.Chain.GenesisValidatorsRoot, _ = setupwire.PublicNetworkValues("mainnet")
+	})
+	if !e.setup.Chain.Prod() {
+		t.Fatal("the setup's chain is not prod")
+	}
+	zero := e.body(locked, 1, e.groupHash(locked), e.now())
+	zero.Locked.AllowedFeeRecipients = append(zero.Locked.AllowedFeeRecipients, x)
+	zero.Locked.ChangeDelaySeconds = u64(0)
+	_, _, err := e.send(signed(t, zero, first2, nil))
+	wantCode(t, err, backend.StatusBadRequest, "change_delay_seconds 0 on a prod chain")
+}
+
 // A locked update with change_delay_seconds = 0 that an image before the
 // floor put in force on a prod chain (its body and record written straight
 // to the log here, as that image did) stays in force on this image, the

@@ -27,6 +27,7 @@ var (
 	mainnetFork = backend.Version{0, 0, 0, 0}
 	hoodiFork   = backend.Version{0x10, 0, 0x09, 0x10}
 	devnetFork  = backend.Version{0x10, 0, 0, 0x38}
+	ciTestFork  = backend.Version{0, 0, 0, 1}
 	unknownFork = backend.Version{0xde, 0xad, 0xbe, 0xef}
 	hoodiRoot   = mustRoot("212f13fc4df078b6cb7db228f1c8307566dcecf900867401a92023d7ba99cb5f")
 	mainnetRoot = mustRoot("4b363db94e286120d76eb905340fdd4e54bfe9f06bf33ff6cf5ad27f511bfe95")
@@ -124,12 +125,32 @@ func TestMainnetRunnerNeedsMainnetSetting(t *testing.T) {
 		}
 	}
 
-	// A runner without a mark, or with the fork version alone (built before
-	// the root was in the mark): the setting alone decides.
+	// A mark of the fork version alone, from a runner built before the root
+	// was in the mark, mainnet runners included: a fork version no non-prod
+	// row has is prod, as before the root.
+	for name, ext := range map[string][]pkix.Extension{
+		"mainnet fork, no root": chainExt(t, mainnetFork),
+		"unknown fork, no root": chainExt(t, unknownFork),
+	} {
+		r := maaRunner(t, ca, env, ext)
+		c := mainnetConn(t, ca, r, env)
+		c.Attestation.Mainnet = false
+		if err := health(t, c, opts...); err == nil || !strings.Contains(err.Error(), "set mainnet") {
+			t.Errorf("%s, client without mainnet: %v, want refused", name, err)
+		}
+		if err := health(t, mainnetConn(t, ca, r, env), opts...); err != nil {
+			t.Errorf("%s, client set to mainnet: %v", name, err)
+		}
+	}
+
+	// A runner without a mark, or with the fork version alone of a non-prod
+	// row, which cannot show whether the root is the row's: the setting
+	// alone decides.
 	for name, ext := range map[string][]pkix.Extension{
 		"no chain mark":         nil,
 		"hoodi fork, no root":   chainExt(t, hoodiFork),
-		"mainnet fork, no root": chainExt(t, mainnetFork),
+		"devnet fork, no root":  chainExt(t, devnetFork),
+		"ci-test fork, no root": chainExt(t, ciTestFork),
 	} {
 		r := maaRunner(t, ca, env, ext)
 		for _, m := range []bool{false, true} {
@@ -148,8 +169,8 @@ func TestMainnetRunnerNeedsMainnetSetting(t *testing.T) {
 // whose certificate names a prod chain when the verifier is dev, whatever
 // mainnet says. So one wrong flag cannot seal a share to a fake runner
 // that claims the mainnet chain. A non-prod chain mark, or none, stays
-// open to the dev verifier, and so does a mark of the fork version alone,
-// which counts as none.
+// open to the dev verifier. A mark of the fork version alone does not: it
+// cannot show the root, so it may be a prod chain's.
 func TestDevVerifierNeverReachesMainnet(t *testing.T) {
 	ca := newTestCA(t)
 	const want = "the dev verifier proves nothing"
