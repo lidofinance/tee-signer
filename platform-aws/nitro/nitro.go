@@ -307,16 +307,18 @@ func (k Keys) KeyRule(ctx context.Context) (platform.KeyRule, string, error) {
 	if r.Lock != backend.KeyLockLocked {
 		return r, arn, nil
 	}
-	// The images the locked policy releases the key to, for the runner's
-	// compare with allowed_image_measurements in force.
-	r.Images = policyImages(*p.Policy)
 	grants, err := listGrants(ctx, k.Client, arn)
 	if err != nil {
 		// The hash leaves the grants out, so it must not stand for a rule
 		// whose grants are unknown.
 		return platform.KeyRule{Lock: backend.KeyLockUnread, Why: fmt.Sprintf("nitro: ListGrants: %v", err)}, arn, nil
 	}
-	r.Lock, r.Why = grantLock(grants)
+	if r.Lock, r.Why = grantLock(grants); r.Lock == backend.KeyLockLocked {
+		// The images the locked policy releases the key to, for the
+		// runner's compare with allowed_image_measurements in force. A
+		// rule that is not locked reports no image set (platform.KeyRule).
+		r.Images = policyImages(*p.Policy)
+	}
 	return r, arn, nil
 }
 

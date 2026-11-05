@@ -137,6 +137,14 @@ func TestKeyRuleLock(t *testing.T) {
 	if len(r.Images) != 1 || string(r.Images[0]) != strings.Repeat("\xaa", 48) {
 		t.Fatalf("locked policy images: %x", r.Images)
 	}
+	// A grant opens the rule, and a rule that is not locked carries no
+	// image list, whatever the policy names.
+	f.grants = []map[string]any{{"GrantId": "g-admin", "GranteePrincipal": "arn:aws:iam::111122223333:role/admin",
+		"Operations": []string{"Decrypt"}}}
+	if r, _, err = keys.KeyRule(context.Background()); err != nil || r.Lock != backend.KeyLockNotLocked || r.Images != nil {
+		t.Fatalf("locked policy with a grant: %+v %v", r, err)
+	}
+	f.grants = nil
 	f.policy = strings.Replace(lockedPolicy, `"kms:CancelKeyDeletion"`, `"kms:CancelKeyDeletion", "kms:PutKeyPolicy"`, 1)
 	if r, _, err = keys.KeyRule(context.Background()); err != nil || r.Lock != backend.KeyLockNotLocked || !strings.Contains(r.Why, "AdminReads allows kms:PutKeyPolicy") || r.Images != nil {
 		t.Fatalf("policy with PutKeyPolicy: %+v %v", r, err)
