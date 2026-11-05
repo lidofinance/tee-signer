@@ -82,8 +82,9 @@ func cmdSplit(args []string, out io.Writer) error {
 	if len(names) != *n {
 		return fmt.Errorf("-signers has %d names, -n is %d", len(names), *n)
 	}
-	if *n > 16 {
-		return fmt.Errorf("-n %d: at most 16 shares", *n)
+	// The gateway serves at most 8 signers and share indices up to 8.
+	if *n > 8 {
+		return fmt.Errorf("-n %d: at most 8 shares", *n)
 	}
 	idx := map[string]uint8{}
 	for i, name := range names {
