@@ -65,7 +65,7 @@ day of the mainnet build:
 
 | Image constant | Mainnet build | Non-prod build |
 | --- | --- | --- |
-| Default time lock (the setup names none) | 48 hours | 2 minutes |
+| Default time lock (the setup names none), and the floor of `change_delay_seconds` on a prod chain | 48 hours | 2 minutes |
 | Time lock cap (`change_delay_seconds` at most) | 30 days | 30 minutes |
 | Activation horizon, past the required wait | 30 days | 30 minutes |
 | Images minimum: allowed-images updates | 7 days | 7 minutes |

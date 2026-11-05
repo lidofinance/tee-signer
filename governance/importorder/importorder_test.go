@@ -138,3 +138,39 @@ func TestHashedSignature(t *testing.T) {
 		t.Fatal("a signature under the handover order's hashed context verified")
 	}
 }
+
+// Matches takes an order until not_after, and not_after is at most
+// MaxValidity past now: a far not_after would be a standing permission to
+// import until the approvers rotate.
+func TestMatchesValidity(t *testing.T) {
+	o, _ := sample(t)
+	s := &setupwire.Setup{ClusterID: o.Body.ClusterID}
+	s.Chain.GenesisForkVersion = setupwire.MainnetForkVersion
+	b := o.Body
+	b.ChainHash = s.Chain.Hash()
+	pk := b.Validators[0].Pubkey
+	const now = uint64(1_790_000_000)
+	for _, c := range []struct {
+		name     string
+		notAfter uint64
+		want     string // "" for an accepted order
+	}{
+		{"an hour", now + 3600, ""},
+		{"at the cap", now + MaxValidity, ""},
+		{"past the cap", now + MaxValidity + 1, "more than"},
+		{"the largest value", 1<<64 - 1, "more than"},
+		{"expired", now, "expired"},
+	} {
+		b.NotAfter = c.notAfter
+		e, err := b.Matches(s, b.Target, now, pk)
+		if c.want == "" {
+			if err != nil || e == nil || e.Pubkey != pk {
+				t.Errorf("%s: %v, want the validator's entry", c.name, err)
+			}
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want a refusal with %q", c.name, err, c.want)
+		}
+	}
+}

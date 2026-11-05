@@ -184,3 +184,112 @@ func TestForgedHeaderSkipped(t *testing.T) {
 		}
 	}
 }
+
+// The fail-closed reader rule on the write path and in the chain walk
+// (review M1). Two instances run under one key release and one signer, the
+// image-swap window where both measurements are admitted. The newer image
+// writes a record this one cannot parse (a higher magic digit, signed under
+// a key this key release opens). Skipping it as junk would let this
+// instance write past it and keep signing next to the other: it must latch
+// ErrLost and write nothing, and a start over the forked state must
+// refuse. Objects that are no record of this signer under this key release
+// still take the skip path, and a readable record of another owner still
+// gives ErrLost.
+func TestUnreadableRecordOnWriteLatchesLost(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_800_000_000, 0)
+	opt := Options{Setup: testSetup("signer-1"), Clock: clockAt(&now), Log: quiet}
+	setup := opt.Setup.Hash
+
+	// written is a live instance with records 1 to 4 and the encoding of
+	// record 4.
+	written := func() (*memLog, *MarkLog, []byte) {
+		l := &memLog{objs: map[string][][]byte{}}
+		m, _ := New(l, "signer-1", testKey(1), opt)
+		if _, _, err := m.Claim(ctx, false); err != nil {
+			t.Fatal(err)
+		}
+		for e := uint64(5); e < 8; e++ {
+			if err := m.Append(ctx, mark(e)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return l, m, l.objs[Name(setup, "signer-1", 4)][0]
+	}
+	// other is a second instance under the same key release, with a log of
+	// its own so its claim writes nothing here.
+	other, _ := New(&memLog{objs: map[string][][]byte{}}, "signer-1", testKey(1), opt)
+	if _, _, err := other.Claim(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	// recordBy is version v as the instance w writes it on top of prev
+	// (record 4), with mark 20; magic sets the format digit.
+	recordBy := func(w *MarkLog, prev []byte, v uint64, magic byte) []byte {
+		r, err := Parse(prev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Version, r.PrevVersion, r.PrevHash, r.Mark = v, 4, Hash(prev), mark(20)
+		r.Owner, r.KeyBlob = w.owner, w.blob
+		enc := r.Sign(w.key)
+		if magic == enc[5] {
+			return enc
+		}
+		body := bytes.Clone(enc[:len(enc)-64])
+		body[5] = magic
+		return append(body, ed25519.Sign(w.key, signedMessage(body))...)
+	}
+
+	// (a) The newer image's record at version 5: this instance's next
+	// write must latch ErrLost and write nothing.
+	l, a, prev := written()
+	newer := recordBy(other, prev, 5, '3')
+	if _, err := Parse(newer); err == nil {
+		t.Fatal("this reader parses the newer record")
+	}
+	if h, ok := RecordHeader(newer); !ok || h.Version != 5 || !h.Verify(other.key.Public().(ed25519.PublicKey)) {
+		t.Fatalf("header %+v %v", h, ok)
+	}
+	l.objs[Name(setup, "signer-1", 5)] = [][]byte{newer}
+	err := a.Append(ctx, mark(9))
+	if !errors.Is(err, ErrLost) || !errors.Is(a.Lost(), ErrLost) {
+		t.Errorf("append over a newer image's record at version 5: err %v, Lost %v; want ErrLost", err, a.Lost())
+	}
+	if n := len(l.objs[Name(setup, "signer-1", 6)]); n != 0 {
+		t.Errorf("append over a newer image's record wrote version 6 (%d objects): this instance signs on next to the other", n)
+	}
+
+	// (b) The forked state (a) leaves behind on the old code: this
+	// instance's readable record 6 above the newer image's record 5. A
+	// start must refuse with ErrUnreadable, not take record 6.
+	l, a, prev = written()
+	l.objs[Name(setup, "signer-1", 5)] = [][]byte{recordBy(other, prev, 5, '3')}
+	l.objs[Name(setup, "signer-1", 6)] = [][]byte{recordBy(a, prev, 6, '2')}
+	m2, _ := New(l, "signer-1", testKey(1), opt)
+	if _, _, err := m2.Claim(ctx, true); !errors.Is(err, ErrUnreadable) || !strings.Contains(err.Error(), "version 5") {
+		t.Errorf("claim over a newer image's record below the newest: %v, want ErrUnreadable at version 5", err)
+	}
+
+	// (c) Control: junk and a copied key blob without a signature under it
+	// still cost a skip, nothing more.
+	l, a, prev = written()
+	r, _ := Parse(prev)
+	r.Version = 5
+	blobOnly := r.encodeBody()
+	blobOnly = append(blobOnly[:bytes.Index(blobOnly, r.KeyBlob)+len(r.KeyBlob)], bytes.Repeat([]byte{0xee}, 100)...)
+	l.objs[Name(setup, "signer-1", 5)] = [][]byte{[]byte("junk"), blobOnly}
+	if err := a.Append(ctx, mark(9)); err != nil {
+		t.Fatalf("append past objects that are not records: %v", err)
+	}
+	if _, v := a.Mark(); v != 6 || len(l.objs[Name(setup, "signer-1", 6)]) != 1 {
+		t.Fatalf("append past junk at 5: version %d", v)
+	}
+
+	// (d) Control: a readable record of another owner at version 5 gives
+	// ErrLost, as before.
+	l, a, prev = written()
+	l.objs[Name(setup, "signer-1", 5)] = [][]byte{recordBy(other, prev, 5, '2')}
+	if err := a.Append(ctx, mark(9)); !errors.Is(err, ErrLost) {
+		t.Fatalf("append over another owner's readable record: %v, want ErrLost", err)
+	}
+}

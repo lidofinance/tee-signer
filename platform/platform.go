@@ -182,6 +182,16 @@ type KeyRule struct {
 	// NoService: the platform has no key release service at all (dev), so
 	// there is no rule to lock or to accept.
 	NoService bool
+	// Images, if set, are the images a locked rule releases the key to, as
+	// the rule names them: on Nitro the PCR0 values of the key policy's
+	// enclave conditions, 48 bytes each (RuleImageID gives the same bytes
+	// of an allowed_image_measurements entry). On a prod chain, when one of
+	// them is not on the allowed list in force, the runner leaves the
+	// shares sealed and stays up (tee-signer keyruleimages.go,
+	// ImageGate.WithholdKeyRule): such an image gets the sealing key
+	// without passing the image check. nil: the platform reports no image
+	// set (Azure, GCP, a rule that is not locked), and no check runs.
+	Images [][]byte
 }
 
 // KeyRuleTimeout bounds the read of the key rule at start.

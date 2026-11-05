@@ -307,6 +307,9 @@ func (k Keys) KeyRule(ctx context.Context) (platform.KeyRule, string, error) {
 	if r.Lock != backend.KeyLockLocked {
 		return r, arn, nil
 	}
+	// The images the locked policy releases the key to, for the runner's
+	// compare with allowed_image_measurements in force.
+	r.Images = policyImages(*p.Policy)
 	grants, err := listGrants(ctx, k.Client, arn)
 	if err != nil {
 		// The hash leaves the grants out, so it must not stand for a rule

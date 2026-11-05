@@ -35,10 +35,16 @@ body  = version:u8  type:u8  id:u32  payload
   it like any type it does not serve (`UNSUPPORTED`).
 - Connection limits (ATTEST-BUDGET-01, `tee-signer/server/limits.go`, each a
   runner flag). At most 256 connections are open at once (`-max-conns`),
-  TLS handshakes included; more are closed at once. At most 32 TLS
-  handshakes run at once (`-max-handshakes`), at most 16 of them from one
-  IP address. A peer has 3 seconds to send its first byte and 10 seconds
-  for the whole handshake. A frame must arrive within 30 seconds of its first byte. Each
+  TLS handshakes included; more are closed at once. The TLS handshake
+  budget (`-max-handshakes`) defaults to the connection cap, and at most
+  16 handshakes run at once from one IP address. On vsock (Nitro) the
+  runner sees no client address; there the forwarder on the parent caps,
+  per source address, the connections in their first 15 seconds instead
+  (16, `-max-conns-per-source`): it sees no handshake, only that the
+  handshake deadline below plus its dial have passed, and a connection
+  past that window counts against the 256 only.
+  A peer has 3 seconds to send its first byte and 10 seconds for the whole
+  handshake. A frame must arrive within 30 seconds of its first byte. Each
   frame may hold its first 64 KiB freely; the bytes past that count
   against 64 MiB for all frames together (`-max-inflight-mib`), and a
   frame that would go over closes its connection. So SIGN, HEALTH,
@@ -56,13 +62,27 @@ body  = version:u8  type:u8  id:u32  payload
   has no log_id yet, the restart floor is unreadable, or the log record
   of a share set reset fails), or because the stored share records are
   not the set the mark log vouches for, keeps serving. HEALTH then
-  reports `ready` false and `load_failed` with the error until a restart.
-  For a share set that does not match, the error names the stored records:
-  remove the ones that should not be there, or every share and import
-  again (`slashing-log/docs/marklog.md`, "Share set"). A store with no
-  readable record under a vouched set that is not empty reports the same
-  until an import records a new set. A single record that does not load
-  leaves `ready` as it is.
+  reports `ready` false and `load_failed` with the error until a restart,
+  and the runner refuses IMPORT_SHARE_SEALED and IMPORT_SHARES_SEALED
+  with `NOT_READY` and that error: an import then would have the log
+  vouch for a set without the stored records, for good. For a share set
+  that does not match, the error names the stored records: remove the
+  ones that should not be there, or put back the ones that are missing
+  (`slashing-log/docs/marklog.md`, "Share set"). One import is taken: an
+  IMPORT_SHARES_SEALED batch that holds every share name the start
+  listed. It replaces the stored records, so none is left out of the new
+  set; the keys load without history, and `ready` is true after it. A
+  batch that leaves a listed name out is refused. A store that lists
+  share records but gives none the runner can read, under a vouched set
+  that is not empty or under a log with no share set yet, reports the
+  same and refuses imports the same way, but that batch: put the records
+  back and restart, import every listed share in one batch, or remove
+  every share record and restart, then import. A
+  store that lists no share record under a vouched set that is not empty
+  (the state is lost, or every share was removed) reports `ready` false
+  and `load_failed` too, but takes imports: the first import records a
+  new set, and `ready` is true after it. What counts is the listing the
+  start saw. A single record that does not load leaves `ready` as it is.
 - A state copy refresh that fails makes HEALTH report `ready` false and
   `state_copy_failed` with the error. The next refresh that succeeds
   clears both.
@@ -340,7 +360,7 @@ the rule:
 | Platform | Locked when |
 |---|---|
 | Azure | `release_policy.immutable` is true, and the policy (`release_policy.data`) has the shape of `platform-azure/deploy/skr-policy.json.tmpl`: version `1.0.0`, one `anyOf` entry whose `authority` is `https://` + the setup's `maa_endpoint` (any case, no trailing slash, path or port), and an `allOf` of `equals` tests with string values on `x-ms-compliance-status` (`azure-compliant-uvm`), `x-ms-sevsnpvm-hostdata` (64 hex digits, not all zero), `x-ms-sevsnpvm-is-debuggable` (`"false"` or JSON `false`) and `x-ms-sevsnpvm-vmpl` (`0`); a second authority, another claim or operator, a nested `anyOf` or a JSON member given twice is not locked; and `attributes.recoveryLevel` says the vault has purge protection (`Recoverable`, `CustomizedRecoverable`, or either with `+ProtectedSubscription`), so nobody can purge the key while it is deleted. The lock does not show whether the vault made the key or it was imported, or whether it was released before the policy became immutable; the deploy rule covers that (`platform-azure/deploy/README.md`). The lock trusts the MAA provider that `maa_endpoint` names, whose owner can change its attestation policy, so a prod setup names a Microsoft shared provider |
-| AWS | origin `AWS_KMS`, not multi-Region, no Allow statement of the key policy grants `kms:PutKeyPolicy`, `kms:CreateGrant`, `kms:ImportKeyMaterial`, `kms:ReplicateKey`, `kms:CreateAlias`, `kms:UpdateAlias`, `kms:DeleteAlias`, `kms:ScheduleKeyDeletion` or `kms:DisableKey` to any principal, by name, wildcard (`kms:*`, `*`, `kms:Put*`) or `NotAction` (conditions do not count), every Allow of `kms:Decrypt`, `kms:GenerateDataKey`, `kms:GenerateDataKeyPair`, `kms:ReEncryptFrom` or `kms:ReEncryptTo` has `StringEquals` or `StringEqualsIgnoreCase` tests of `kms:RecipientAttestation:PCR0`, `PCR1` and `PCR2`, so it names one image (PCR3 or PCR8 alone does not); every `kms:RecipientAttestation:*` condition of an Allow, under any operator, has a key `PCR0` to `PCR31` or `ImageSha384` and only literal values of 96 hex digits (a policy variable such as `${aws:PrincipalTag/x}` fails), and no all-zero `PCR0`, `PCR1`, `PCR2` or `ImageSha384`, the values of a debug-mode enclave; any other Allow of `kms:Encrypt` has `StringEquals` on `kms:EncryptionContext:purpose` with the one value `record-creds`, so nobody outside the enclave plants a sealing or mark log key; and `ListGrants` (every page) lists no grant: a grant is outside the key policy, stays in force after the lock, and cannot require the enclave as recipient. Grants that AWS services make count too, so the key serves no other service. KMS grants are eventually consistent, so a grant made shortly before the read may not be listed yet, and the runner cannot tell it from none; a mainnet key is therefore created with its final, locked policy, so no grant can ever exist (platform-aws/deploy/README.md). A policy that passes but whose grants the runner cannot read is `unread`, with a zero `key_release_hash`. `kms_key_id` is a key or alias ARN with the account (a bare alias or key ID resolves in the account of the parent's credentials), `DescribeKey` must answer a key in that account and region (that very key for a key ARN), and a `kms_key_id` that fails this stops the start on every chain. After `DescribeKey` the runner names the key by its key ARN in every call, so an alias ARN is resolved once per start |
+| AWS | origin `AWS_KMS`, not multi-Region, no Allow statement of the key policy grants `kms:PutKeyPolicy`, `kms:CreateGrant`, `kms:ImportKeyMaterial`, `kms:ReplicateKey`, `kms:CreateAlias`, `kms:UpdateAlias`, `kms:DeleteAlias`, `kms:ScheduleKeyDeletion` or `kms:DisableKey` to any principal, by name, wildcard (`kms:*`, `*`, `kms:Put*`) or `NotAction` (conditions do not count), every Allow of `kms:Decrypt`, `kms:GenerateDataKey`, `kms:GenerateDataKeyPair`, `kms:ReEncryptFrom` or `kms:ReEncryptTo` has `StringEquals` or `StringEqualsIgnoreCase` tests of `kms:RecipientAttestation:PCR0`, `PCR1` and `PCR2`, so it names one image or a fixed list of images (PCR3 or PCR8 alone does not; the image rule below holds each of them to `allowed_image_measurements`); every `kms:RecipientAttestation:*` condition of an Allow, under any operator, has a key `PCR0` to `PCR31` or `ImageSha384` and only literal values of 96 hex digits (a policy variable such as `${aws:PrincipalTag/x}` fails), and no all-zero `PCR0`, `PCR1`, `PCR2` or `ImageSha384`, the values of a debug-mode enclave; any other Allow of `kms:Encrypt` has `StringEquals` on `kms:EncryptionContext:purpose` with the one value `record-creds`, so nobody outside the enclave plants a sealing or mark log key; and `ListGrants` (every page) lists no grant: a grant is outside the key policy, stays in force after the lock, and cannot require the enclave as recipient. Grants that AWS services make count too, so the key serves no other service. KMS grants are eventually consistent, so a grant made shortly before the read may not be listed yet, and the runner cannot tell it from none; a mainnet key is therefore created with its final, locked policy, so no grant can ever exist (platform-aws/deploy/README.md). A policy that passes but whose grants the runner cannot read is `unread`, with a zero `key_release_hash`. `kms_key_id` is a key or alias ARN with the account (a bare alias or key ID resolves in the account of the parent's credentials), `DescribeKey` must answer a key in that account and region (that very key for a key ARN), and a `kms_key_id` that fails this stops the start on every chain. After `DescribeKey` the runner names the key by its key ARN in every call, so an alias ARN is resolved once per start |
 | GCP, dev | no lock exists |
 
 On Azure the runner releases exactly the key version whose release
@@ -370,6 +390,34 @@ platform has no real attestation`, and on other chains HEALTH's
 chains the runner starts; a failed read, or a rule that is not locked,
 leaves `key_release_hash` zero and logs a warning, so no
 `key_release_sha256` pin matches the runner.
+
+Image rule (AWS): a locked policy may release the key to more than one
+image, by a list of PCR0 values (a rollback image, `prev_pcrs` in
+`platform-aws/deploy/main.tf`) or by two enclave statements. The lock
+only asks that each release is bound to some image. So the platform
+collects every PCR0 (and `ImageSha384`, which equals PCR0) that a bound
+Allow of a key action or of `kms:Encrypt` names, under `StringEquals` or
+`StringEqualsIgnoreCase`, as `platform.KeyRule.Images`, and the runner
+compares them with `allowed_image_measurements` in force (the image
+check's list, "Image check") once at start, after the config updates
+and before any share is unsealed (`tee-signer/keyruleimages.go`). An
+image the list does not name would get the sealing key and open every
+sealed share without the image check, which only the listed runner runs
+on itself. On a prod chain the runner then stays up and withholds the
+shares, as the image check does when it refuses: no share is unsealed,
+SIGN and the imports get `NOT_READY`, and HEALTH reports `image.state`
+`key_rule_unlisted` with the PCR0 values the list lacks in `why`.
+HEALTH, PUBLIC_KEYS, ATTEST, IDENTITY and CONFIG_UPDATE are served, so
+the locked update that lists the image can reach this runner. Once that
+update is in force HEALTH says `restart_needed`, and a restart loads the
+shares. An exit would close that path, since a locked update reaches the
+log only through a serving runner. The same holds when the runner cannot
+read the list in force, for example when the body of the locked update
+in force is missing from the store (state `unknown`; sending the update
+again restores it). On other chains the runner logs a warning. A locked
+update that later drops an image the policy names does not stop a
+running signer; the next start on a prod chain withholds the shares.
+Azure and GCP report no image set, so no check runs there.
 
 A signer holds keys alone (single-node, 1 of 1) only when its setup says
 so: `signing_mode`, a leaf of the public part of the setup (setup format
@@ -533,7 +581,8 @@ What "allowed" means on each path:
   nothing a setup sealed.
 
 HEALTH reports `image`: `state` (`allowed`, `not_allowed`,
-`restart_needed`, `unknown`, `override`, `not_applicable`), the runner's
+`restart_needed`, `key_rule_unlisted`, `unknown`, `override`,
+`not_applicable`), the runner's
 `kind` and `measurement` (hex), the `locked_version` whose list it read,
 and `why`. `ready` is false while the check refuses. The start log line
 `runner started` carries `image_check`, and every change of the state is
@@ -621,7 +670,13 @@ documents. The signing client, `signer-admin import` and
 (`remote.DevVerifier`), `azure-maa` (`attest.VerifyMAA` through
 `attestation-verify/azureid`), `aws-nitro` (`attest.VerifyNitro` through
 `attestation-verify/identity`) and `gcp-cs` (`attest.VerifyConfidentialSpace` through
-`attestation-verify/identity`). No setting turns the check off.
+`attestation-verify/identity`). No setting turns the check off. The `dev`
+verifier takes an unsigned document from whoever answers, so it is refused
+for any address but this machine's (tcp to 127.0.0.0/8, `::1` or
+`localhost`; for `share-import` without TLS also a `unix:` socket or vsock
+CID 1), with `mainnet` set, and for a runner whose certificate names a
+prod chain; `signer-admin` refuses it for a member whose setup names a
+cloud platform.
 
 ### IMPORT_SHARE_SEALED
 
@@ -639,7 +694,9 @@ the trusted clock has not reached, the split (`t`, `n`, this signer's share
 index) and, for each validator, the hash of its public commitments
 (`signer-import-commitments-v1`). An order can be used again until
 `not_after`, so keep it short: `signer-admin import-draft` refuses a
-`not_after` more than 7 days from now. Without an order, or with one that does
+`not_after` more than 7 days from now, and the runner refuses an order
+whose `not_after` is more than 30 days past the trusted time
+(`importorder.MaxValidity`). Without an order, or with one that does
 not verify or does not name the validator, the answer is `FORBIDDEN`. A
 runner without a setup (the flag path) has no approvers and takes the share
 without an order. With the order the request carries the split: `t`,
@@ -863,36 +920,46 @@ order (the status of each refusal in brackets):
    pending update is in force already.
 4. The core exists (`NOT_READY` otherwise). The group's pending or active update sent again skips to
    its signatures (pending) or straight to the body write (active), and
-   answers `outcome` 2.
-5. `version` is above the group's active and pending versions, at most
+   answers `outcome` 2. This comes before the floor of step 5, so an
+   update from before the floor that is in force or pending can be sent
+   again to restore a lost body.
+5. On a prod chain (mainnet, or a chain without a row in the chain
+   table) a new `locked` update's time lock is at least the image default
+   of 48 hours. A non-prod chain takes 0. The tools hold a new setup of a
+   prod chain to the same floor (`setup-tool encode`, `signer-admin
+   setup`); the runner does not refuse a pinned setup or a stored update
+   with a lower value, it raises their wait to the floor (step 9).
+   (`BAD_REQUEST`)
+6. `version` is above the group's active and pending versions, at most
    2^32 above the higher one. `prev_hash` is the hash of the group's
    active update (version 0: the setup's group hash). (`BAD_REQUEST`)
-6. The runner knows the approver set in force and, for an `open` update,
+7. The runner knows the approver set in force and, for an `open` update,
    the open values in force: their update bodies are readable
    (`SC_ERR_STORAGE` otherwise, until that body is sent again).
-7. At least k distinct approvers of the set in force signed, every
+8. At least k distinct approvers of the set in force signed, every
    signature verifies, and for a rotation every key of the new set signed.
    A pending rotation's new set counts for nothing. (`BAD_REQUEST`)
-8. The wait W: for `locked` the time lock in force (the image default of
-   48 hours when the group names none), at least the image's minimum of 7
-   days when the allowed-images list gains an entry; for `open` 0.
+9. The wait W: for `locked` the time lock in force (the image default of
+   48 hours when the group names none; on a prod chain never less than
+   that, whatever the group in force names), at least the image's minimum
+   of 7 days when the allowed-images list gains an entry; for `open` 0.
    `activate_at` is at most now + W + 30 days. Sums saturate.
    (`BAD_REQUEST`)
-9. The core takes the values, and its status goes out as it is: the
-   signing policy and the slot time rule for `locked` (`SC_ERR_ARG`,
-   `SC_ERR_SCHEDULE`), the fork rule for `open` (`SC_ERR_SCHEDULE`; an
-   `open` update while an earlier one is stuck in the core gets
-   `SC_ERR_STORAGE`): every epoch whose fork version or Gloas state
-   changes must lie above epoch(effective time) +
-   `max_sign_epochs_ahead_of_clock` + 1, the epoch the largest under the
-   slot times in force and those of a pending `locked` update. A `locked`
-   update with new slot times is refused when a pending `open` update would
-   not keep clear under them.
-10. The runner writes the body to the mark log, then a record with the
+10. The core takes the values, and its status goes out as it is: the
+    signing policy and the slot time rule for `locked` (`SC_ERR_ARG`,
+    `SC_ERR_SCHEDULE`), the fork rule for `open` (`SC_ERR_SCHEDULE`; an
+    `open` update while an earlier one is stuck in the core gets
+    `SC_ERR_STORAGE`): every epoch whose fork version or Gloas state
+    changes must lie above epoch(effective time) +
+    `max_sign_epochs_ahead_of_clock` + 1, the epoch the largest under the
+    slot times in force and those of a pending `locked` update. A `locked`
+    update with new slot times is refused when a pending `open` update would
+    not keep clear under them.
+11. The runner writes the body to the mark log, then a record with the
     update pending, then answers. A failed write is `SC_ERR_STORAGE` and
     leaves nothing pending.
 
-Steps 1 and 2 refuse with `BAD_REQUEST`, step 3 with `SC_ERR_CLOCK`. The
+Steps 1, 2 and 5 refuse with `BAD_REQUEST`, step 3 with `SC_ERR_CLOCK`. The
 reason is in `detail`. A client tells a malformed update from a
 well-formed one the runner refuses only by that text.
 
@@ -1032,12 +1099,16 @@ image constants, in any minute:
 - an attest-only certificate: 4 (`backend.AttestOnlyPerMinute`), ATTEST and IDENTITY
   together. The connection's own IDENTITY counts too (the dashboard's
   proof check makes two a minute);
-- a signing certificate: 32 IDENTITY (`server.SigningIdentityPerMinute`,
-  twice the signing client's pool of 16 connections, each of which asks for
-  IDENTITY when it is made);
-- all non-admin certificates together: 128
-  (`server.NonAdminFreshPerMinute`), so many signing certificates cannot
-  add up to an attestation flood.
+- a signing certificate: 64 IDENTITY (`server.SigningIdentityPerMinute`,
+  four times the signing client's pool of 16 connections, each of which
+  asks for IDENTITY with a new nonce when it is made: a start, a runner
+  restart and two rounds of failed dials fit in one minute);
+- all attest-only certificates together: 128
+  (`server.AttestOnlyFreshPerMinute`); all signing certificates together:
+  768 (`server.SigningFreshPerMinute`, a dozen clients at their own
+  limit). The totals are per role, so many certificates of one role cannot
+  add up to an attestation flood, and an attest-only flood cannot use up
+  what the signing clients need to reconnect.
 
 More get `RATE_LIMITED`, with the seconds until the next one. Admin and
 local clients have no limit.

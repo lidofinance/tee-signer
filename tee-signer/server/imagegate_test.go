@@ -3,12 +3,14 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/lidofinance/tee-signer/governance/setupwire"
+	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/buildchain"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
@@ -261,5 +263,64 @@ func TestImageCheckDefaultBuildHasNoOverride(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "only a non-prod build") {
 		t.Fatalf("unclear refusal: %v", err)
+	}
+}
+
+// The image rule of the key rule lock (tee-signer/keyruleimages.go): a
+// start on a prod chain whose key rule releases the sealing key to an
+// image the list in force does not name withholds the shares
+// (WithholdKeyRule) instead of exiting. The runner then serves as an image
+// the list does not name does: HEALTH says key_rule_unlisted with the PCR0
+// values, SIGN and the imports get NOT_READY, CONFIG_UPDATE gets through.
+// Once a locked update that lists the image is in force HEALTH says
+// restart_needed, as after a withheld image check.
+func TestKeyRuleImagesWithheldServesStatusAndConfig(t *testing.T) {
+	mine, rollback := testImage(setupwire.ImageNitro, 0xa1), testImage(setupwire.ImageNitro, 0xb2)
+	e := gatedEnv(t, u64(0), "nitro", mine, mine)
+	ids := [][]byte{platform.RuleImageID(mine), platform.RuleImageID(rollback)}
+	if unlisted, _, err := e.upd.UnlistedKeyRuleImages(ids); err != nil || len(unlisted) != 1 {
+		t.Fatalf("unlisted %x, %v", unlisted, err)
+	}
+	if err := e.signWire(); err != nil {
+		t.Fatalf("before the start withholds: %v", err)
+	}
+	e.srv.Image.WithholdKeyRule(ids)
+	wantCode(t, e.signWire(), backend.StatusNotReady, "releases the sealing key to 1 image(s)")
+	c, ready := e.imageState()
+	if ready || c.State != backend.ImageKeyRuleUnlisted || c.LockedVersion != 0 || !strings.Contains(c.Why, hex.EncodeToString(ids[1])) || strings.Contains(c.Why, hex.EncodeToString(ids[0])) {
+		t.Fatalf("HEALTH image %+v, ready %v", c, ready)
+	}
+	for _, typ := range []wire.MsgType{wire.TypeHealth, wire.TypePublicKeys} {
+		if _, err := e.srv.dispatch(ctx, wire.Frame{Type: typ}); err != nil {
+			t.Fatalf("%v: %v", typ, err)
+		}
+	}
+	for _, typ := range []wire.MsgType{wire.TypeSign, wireadmin.TypeImportSealed, 0x09, 0x30, 0x31, 0x32, 0x33, 0x27, 0x28} {
+		_, err := e.srv.dispatch(ctx, wire.Frame{Type: typ, Payload: []byte{1, 2, 3}})
+		wantCode(t, err, backend.StatusNotReady, "image check:")
+	}
+
+	// CONFIG_UPDATE gets through: version 1 changes a fee recipient and is
+	// in force at once (change delay 0). The rollback image stays unlisted.
+	t0 := e.now()
+	b1 := e.body(locked, 1, e.groupHash(locked), t0)
+	b1.Locked.AllowedFeeRecipients = append(b1.Locked.AllowedFeeRecipients, x)
+	e.mustSend(signed(t, b1, first2, nil), wireadmin.ConfigAccepted)
+	wantCode(t, e.signWire(), backend.StatusNotReady, "locked version 1")
+	wantImageState(t, e, backend.ImageKeyRuleUnlisted, false)
+
+	// Version 2 lists the rollback image: pending for the images minimum,
+	// then the list covers the rule and the shares want a fresh start.
+	b2 := e.body(locked, 2, hashOf(t, b1), e.now())
+	b2.Locked.AllowedImageMeasurements = imageList(mine, rollback)
+	e.mustSend(signed(t, b2, first2, nil), wireadmin.ConfigAccepted)
+	wait := uint64(setupwire.ImagesMinTimeLock)
+	e.clock.add(wait - 1)
+	wantImageState(t, e, backend.ImageKeyRuleUnlisted, false)
+	e.clock.add(1)
+	wantCode(t, e.signWire(), backend.StatusNotReady, "restart the runner")
+	wantImageState(t, e, backend.ImageRestartNeeded, false)
+	if c, _ := e.imageState(); c.LockedVersion != 2 {
+		t.Fatalf("after the effective time: %+v", c)
 	}
 }

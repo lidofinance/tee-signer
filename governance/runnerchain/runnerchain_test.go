@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/lidofinance/tee-signer/governance/setupwire"
+	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
 // The times of each build: one minute in a non-prod build for each day
@@ -77,23 +78,50 @@ func TestSameRulesAsSetupwire(t *testing.T) {
 		{Group: setupwire.GroupLocked, Locked: lockedWith(nil, img(1))},
 		{Group: setupwire.GroupLocked, Locked: lockedWith(nil, img(1), img(2))},
 	}
-	for i, a := range actives {
-		if got, want := l.TimeLock(a), a.ChangeDelay(); got != want {
-			t.Errorf("active %d: TimeLock %d, setupwire %d", i, got, want)
+	// Mainnet, a prod chain with the floor, and the ci-test row's chain.
+	chains := []backend.Version{setupwire.MainnetForkVersion, {0, 0, 0, 1}}
+	for _, gfv := range chains {
+		if got, want := l.MinTimeLock(gfv), setupwire.MinChangeDelay(gfv); got != want {
+			t.Errorf("chain %x: MinTimeLock %d, setupwire %d", gfv, got, want)
 		}
-		if got, want := l.CheckTimeLock(a) == nil, a.ChangeDelaySeconds == nil || *a.ChangeDelaySeconds <= setupwire.MaxTimeLock; got != want {
-			t.Errorf("active %d: CheckTimeLock ok %v, want %v", i, got, want)
-		}
-		for j, u := range updates {
-			w := l.Wait(a, u)
-			if want := setupwire.Wait(a, u); w != want {
-				t.Errorf("active %d update %d: Wait %d, setupwire %d", i, j, w, want)
+		for i, a := range actives {
+			if got, want := l.TimeLock(gfv, a), a.ChangeDelayOn(gfv); got != want {
+				t.Errorf("chain %x active %d: TimeLock %d, setupwire %d", gfv, i, got, want)
 			}
-			for _, at := range []uint64{0, 1000 + w + l.ActivationHorizon, 1001 + w + l.ActivationHorizon} {
-				if got, want := l.CheckActivateAt(at, 1000, w) == nil, setupwire.CheckActivateAt(at, 1000, w) == nil; got != want {
-					t.Errorf("active %d update %d activate_at %d: ok %v, setupwire %v", i, j, at, got, want)
+			underCap := a.ChangeDelaySeconds == nil || *a.ChangeDelaySeconds <= setupwire.MaxTimeLock
+			if got, want := l.CheckTimeLock(gfv, a) == nil, underCap && a.CheckChangeDelay(gfv) == nil; got != want {
+				t.Errorf("chain %x active %d: CheckTimeLock ok %v, want %v", gfv, i, got, want)
+			}
+			for j, u := range updates {
+				w := l.Wait(gfv, a, u)
+				if want := setupwire.Wait(gfv, a, u); w != want {
+					t.Errorf("chain %x active %d update %d: Wait %d, setupwire %d", gfv, i, j, w, want)
+				}
+				for _, at := range []uint64{0, 1000 + w + l.ActivationHorizon, 1001 + w + l.ActivationHorizon} {
+					if got, want := l.CheckActivateAt(at, 1000, w) == nil, setupwire.CheckActivateAt(at, 1000, w) == nil; got != want {
+						t.Errorf("chain %x active %d update %d activate_at %d: ok %v, setupwire %v", gfv, i, j, at, got, want)
+					}
 				}
 			}
+		}
+	}
+	// The floor on a prod chain, in the build's seconds: 0 and one below
+	// the default are refused, the default and an absent value pass; a
+	// non-prod chain takes 0.
+	one := l.DefaultTimeLock - 1
+	for _, c := range []struct {
+		gfv backend.Version
+		tl  *uint64
+		ok  bool
+	}{
+		{setupwire.MainnetForkVersion, new(uint64), false},
+		{setupwire.MainnetForkVersion, &one, false},
+		{setupwire.MainnetForkVersion, &l.DefaultTimeLock, true},
+		{setupwire.MainnetForkVersion, nil, true},
+		{backend.Version{0, 0, 0, 1}, new(uint64), true},
+	} {
+		if err := l.CheckTimeLock(c.gfv, lockedWith(c.tl)); (err == nil) != c.ok {
+			t.Errorf("chain %x time lock %v: %v, want ok %v", c.gfv, c.tl, err, c.ok)
 		}
 	}
 }

@@ -19,7 +19,9 @@ type orderActive struct {
 }
 
 // maxOrderLife caps an import order's not_after: the order can be used
-// again until then.
+// again until then. It is under the runner's own cap
+// (importorder.MaxValidity, 30 days past the trusted time), so an order
+// this tool drafts is never refused for its life.
 const maxOrderLife = 7 * 24 * time.Hour
 
 // parseNotAfter reads -not-after: an RFC 3339 time, or a duration from now

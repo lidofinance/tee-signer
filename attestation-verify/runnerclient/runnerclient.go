@@ -37,6 +37,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,7 +76,8 @@ type Connection struct {
 	// plain forwarder on the parent instance in front of it. The forwarder
 	// is not trusted: it copies bytes, and the check of the runner's
 	// identity (the TLS key hash against the attested identity) is what
-	// ties the connection to the enclave.
+	// ties the connection to the enclave. With the dev verifier the host
+	// must be this machine: 127.0.0.0/8, ::1 or localhost (DevLocalOnly).
 	Address string `json:"address"`
 	// ClientCert and ClientKey are the PEM files of the client certificate
 	// the runner's -tls-client-ca accepts. Both required.
@@ -180,6 +182,9 @@ func (c *Connection) prepare(o *optset.Options) (*prepared, error) {
 	if addr.Network != "tcp" {
 		return nil, fmt.Errorf("address: %q is not a tcp: address; connect to the runner's TCP port (on AWS, the forwarder in front of the enclave)", c.Address)
 	}
+	if err := devLocal(&c.Attestation, addr); err != nil {
+		return nil, err
+	}
 	if c.AllowChainBuild != "" {
 		if ch, err := runnerchain.Parse(c.AllowChainBuild); err != nil || ch.Prod() {
 			return nil, fmt.Errorf("allow_chain_build: %q is not a chain of a non-prod build (hoodi, devnet or ci-test)", c.AllowChainBuild)
@@ -198,6 +203,52 @@ func (c *Connection) prepare(o *optset.Options) (*prepared, error) {
 		return nil, err
 	}
 	return p, nil
+}
+
+// DevLocalOnly refuses the dev verifier for an address that is not this
+// machine. The dev verifier takes an unsigned document from whoever
+// answers, so a fake on the network path with an import key of its own
+// would be sealed the share; a runner that protects anything has a
+// verifier of its platform. Local is tcp to a loopback address
+// (127.0.0.0/8, ::1) or the name localhost, a unix: socket, and vsock CID
+// 1, the loopback CID the e2e tests run a dev runner on. The check reads
+// the address and resolves nothing: another name that resolves to
+// loopback is refused. Connection.New runs it (on its tcp addresses);
+// share-import runs it on its plain transport, which builds no
+// Connection. Any other verifier passes.
+func DevLocalOnly(a *Attestation, address string) error {
+	addr, err := transport.Parse(address)
+	if err != nil {
+		return fmt.Errorf("address: %w", err)
+	}
+	return devLocal(a, addr)
+}
+
+func devLocal(a *Attestation, addr transport.Addr) error {
+	if a.Verifier != VerifierDev || localAddr(addr) {
+		return nil
+	}
+	return fmt.Errorf("address: %q is not local, and the dev verifier proves nothing about the runner that answers, so it reaches a runner on this machine only "+
+		"(tcp to 127.0.0.0/8, ::1 or localhost; unix:PATH; vsock CID 1); use the verifier of the runner's platform (azure-maa, aws-nitro or gcp-cs)", addr)
+}
+
+// localAddr reports whether addr names this machine (DevLocalOnly).
+func localAddr(addr transport.Addr) bool {
+	switch addr.Network {
+	case "unix":
+		return true
+	case "vsock":
+		return addr.CID == 1 // VMADDR_CID_LOCAL
+	}
+	host, _, err := net.SplitHostPort(addr.Address)
+	if err != nil {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // loadPair reads the client certificate and key. Both must exist, be
@@ -250,6 +301,7 @@ func loadPair(certPath, keyPath string) (tls.Certificate, error) {
 // TLS 1.3, and the build check.
 func (c *Connection) tlsConfig(cert tls.Certificate) *tls.Config {
 	allow, mainnet := runnerchain.Chain(c.AllowChainBuild), c.Attestation.Mainnet
+	dev := c.Attestation.Verifier == VerifierDev
 	return &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		MinVersion:   tls.VersionTLS13,
@@ -257,21 +309,23 @@ func (c *Connection) tlsConfig(cert tls.Certificate) *tls.Config {
 			if err := checkBuild(cs, allow); err != nil {
 				return err
 			}
-			return checkChain(cs, mainnet)
+			return checkChain(cs, mainnet, dev)
 		},
 	}
 }
 
 // checkChain refuses a runner whose certificate names a prod chain
-// (setupwire.ProdChain) when the settings do not say mainnet, and the
-// reverse. The setting
-// decides the mainnet rules of the client (key_release_sha256 for
+// (setupwire.ProdChain) when the verifier is dev, whatever the mainnet
+// setting says: the dev verifier proves nothing, so it never reaches a
+// runner that signs for real funds. With another verifier it refuses a
+// prod chain when the settings do not say mainnet, and the reverse. The
+// setting decides the mainnet rules of the client (key_release_sha256 for
 // azure-maa and aws-nitro), and the identity names no chain, so without
 // this a setting left out failed open. The certificate's key is the one
 // the attested identity names (checked after the handshake), so the mark
 // comes from the runner's code. Without a mark the setting alone
 // decides.
-func checkChain(cs tls.ConnectionState, mainnet bool) error {
+func checkChain(cs tls.ConnectionState, mainnet, dev bool) error {
 	if len(cs.PeerCertificates) == 0 {
 		return nil // the dial refuses a runner without a certificate
 	}
@@ -281,6 +335,9 @@ func checkChain(cs tls.ConnectionState, mainnet bool) error {
 		return err
 	case !ok:
 		return nil
+	case setupwire.ProdChain(gfv) && dev:
+		return fmt.Errorf("the runner signs for a prod chain (genesis fork version %#x in its certificate), and the dev verifier proves nothing about it; "+
+			"use the verifier of its platform (azure-maa, aws-nitro or gcp-cs)", gfv[:])
 	case setupwire.ProdChain(gfv) && !mainnet:
 		return fmt.Errorf("the runner signs for a prod chain: mainnet or a chain without a row in the chain table (genesis fork version %#x in its certificate); "+
 			"set mainnet in its attestation settings, which makes key_release_sha256 mandatory for azure-maa and aws-nitro", gfv[:])

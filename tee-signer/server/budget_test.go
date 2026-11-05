@@ -104,17 +104,22 @@ func TestConnectionCap(t *testing.T) {
 	}
 }
 
-// ATTEST-BUDGET-01: at most 32 TLS handshakes run at once (the default
-// handshake budget). Peers that connect and say nothing hold them; the
-// next peer is closed at once instead of holding a goroutine for the
-// handshake timeout too.
+// ATTEST-BUDGET-01: at most -max-handshakes TLS handshakes run at once,
+// here 32. Peers that connect and say nothing hold them; the next peer is
+// closed at once instead of holding a goroutine for the handshake timeout
+// too. The default budget is the connection cap: on vsock no cap per
+// address applies, and a smaller budget let 32 silent peers hold every
+// slot while the other 224 connections stayed free.
 func TestHandshakeBudget(t *testing.T) {
+	if DefaultMaxHandshakes != DefaultMaxConns || (Limits{}).maxHandshakes() != (Limits{}).maxConns() {
+		t.Fatalf("default handshake budget %d, want the connection cap %d", DefaultMaxHandshakes, DefaultMaxConns)
+	}
 	cfg, _, err := attls.ServerConfig(selfSignedCA(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// All peers here come from 127.0.0.1: no cap per address.
-	s := &Server{Log: quiet, Limits: Limits{MaxHandshakesPerAddr: -1}}
+	s := &Server{Log: quiet, Limits: Limits{MaxHandshakes: 32, MaxHandshakesPerAddr: -1}}
 	addr := serveOn(t, s, func(l net.Listener) net.Listener { return tls.NewListener(l, cfg) })
 	silent := dialN(t, addr, 32)
 	// Wait until the server has taken all 32 into their handshakes.

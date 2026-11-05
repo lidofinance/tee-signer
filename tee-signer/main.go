@@ -152,7 +152,7 @@ func run() (err error) {
 		stateRefresh  = flag.Duration("state-refresh", 24*time.Hour, "write the whole state into the state copy again when the oldest object its newest commit needs is this old, so a locked store's retention never ends on one; with a setup, at most half of slashing_log_min_lock_days less two hours; 0 = never without a setup")
 		logJSON       = flag.Bool("log-json", false, "JSON logs")
 		maxConns      = flag.Int("max-conns", server.DefaultMaxConns, "connections open at once over every listener, TLS handshakes included; more are closed at once")
-		maxHandshakes = flag.Int("max-handshakes", server.DefaultMaxHandshakes, "TLS handshakes at once; more are closed at once")
+		maxHandshakes = flag.Int("max-handshakes", 0, "TLS handshakes at once; more are closed at once; 0 = the -max-conns value")
 		maxInflight   = flag.Int("max-inflight-mib", server.DefaultMaxInflight>>20, "MiB that frames may hold together past their first 64 KiB each; a frame that would go over closes its connection")
 		idleTimeout   = flag.Duration("idle-timeout", server.DefaultIdleTimeout, "close a connection that sends no frame for this long after its last answer; 0 = never (clients that do not redial a closed connection fail a request on it)")
 	)
@@ -222,6 +222,9 @@ func run() (err error) {
 		}
 	}
 
+	if *maxHandshakes == 0 {
+		*maxHandshakes = *maxConns // the budget follows the cap the operator set, not the constant
+	}
 	if *maxConns <= 0 || *maxHandshakes <= 0 || *maxInflight <= 0 || *idleTimeout < 0 {
 		return errors.New("-max-conns, -max-handshakes and -max-inflight-mib must be positive, -idle-timeout zero or positive")
 	}
@@ -356,9 +359,11 @@ func run() (err error) {
 	var n int
 	imageState := "not_applicable"
 	if boot.setup != nil {
-		// The image check, before any share is unsealed (imagecheck.go).
+		// The image check and the image rule of the key rule lock, before
+		// any share is unsealed (imagecheck.go, keyruleimages.go). Either
+		// leaves the shares sealed on refusal; the runner stays up.
 		var load bool
-		if srv.Image, load, err = startImageCheck(ctx, plat, updates, log); err != nil {
+		if srv.Image, load, err = startImageCheck(ctx, plat, boot.prod, rule, updates, log); err != nil {
 			return err
 		}
 		h, _ := srv.Image.Status(updates)

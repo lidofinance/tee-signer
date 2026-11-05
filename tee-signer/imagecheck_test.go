@@ -52,7 +52,7 @@ func TestStartImageCheckWithholdsShares(t *testing.T) {
 		}}, true, backend.ImageNotApplicable},
 		{"dev", &platform.Platform{Name: "dev"}, true, backend.ImageNotApplicable},
 	} {
-		g, load, err := startImageCheck(ctx, c.plat, nil, quietLog)
+		g, load, err := startImageCheck(ctx, c.plat, false, platform.KeyRule{}, nil, quietLog)
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}

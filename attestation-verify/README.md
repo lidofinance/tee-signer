@@ -96,7 +96,7 @@ cl, err := c.New() // refuses a bad or incomplete configuration
   |---|---|---|
   | `setup_sha256` | `-setup-sha256` | The runner's `setup_hash` must equal it. Required for a runner that reports a setup: without it such a runner is refused. A runner on the flag path (no setup; `setup_hash` is the SHA-256 of its `-config` file, every other field zero) is accepted without it by the `dev` verifier only. Every other verifier needs the pin for it too: such a runner has no approvers and a client CA its host chose. |
   | `min_locked_version`, `min_open_version` | `-min-locked-version`, `-min-open-version` | Optional, need `setup_sha256`. The group's effective version must be at least this. A pending update counts once its effective activation time has passed on the client's clock. |
-  | `mainnet` | `-mainnet` | The runner signs for Ethereum mainnet. An `azure-maa` or `aws-nitro` setting then needs `key_release_sha256`; a `gcp-cs` setting needs `gcp_project_id` and `gcp_service_account`, since GCP has no key rule hash to pin. |
+  | `mainnet` | `-mainnet` | The runner signs for Ethereum mainnet. An `azure-maa` or `aws-nitro` setting then needs `key_release_sha256`; a `gcp-cs` setting needs `gcp_project_id` and `gcp_service_account`, since GCP has no key rule hash to pin. Refused with the `dev` verifier, which proves nothing about the runner. |
   | `allow_unpinned_setup` | `-allow-unpinned-setup` | Tests only: accepts a runner with a setup and no `setup_sha256`. Refused with any verifier but `dev`, and together with `setup_sha256`. |
 
   The signing client, `signer-admin import` (again on the identity it
@@ -108,7 +108,17 @@ cl, err := c.New() // refuses a bad or incomplete configuration
   mismatched client certificate and key, a non-tcp address, an unknown or
   missing verifier, a missing or malformed expected value, and the settings
   of one verifier on another. There is no setting that skips the
-  verification. There is no setting for debug mode (Nitro: PCR0 to PCR2 all
+  verification. The `dev` verifier takes an unsigned document from
+  whoever answers, so it reaches a runner on this machine only: an
+  `address` of `tcp` to 127.0.0.0/8, `::1` or `localhost`; any other host
+  is refused before the dial, whatever the other settings say
+  (`DevLocalOnly`; `share-import` without TLS also takes a `unix:` socket
+  and vsock CID 1). It is refused with `mainnet`, and in the handshake for
+  a runner whose certificate names a prod chain. A runner on this machine
+  whose certificate names a non-prod chain, or none, stays open to it.
+  `signer-admin` refuses it for a member whose setup names a cloud
+  platform, whatever the address. There is
+  no setting for debug mode (Nitro: PCR0 to PCR2 all
   zero, GCP: `dbgstat` other than `disabled-since-boot`) or VMPL (Azure:
   must be 0), for accepting other PCRs or another root (Nitro), or for the
   checks of `swname`, `secboot` and STABLE support (GCP).

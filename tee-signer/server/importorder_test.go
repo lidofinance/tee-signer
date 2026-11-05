@@ -63,8 +63,12 @@ func TestImportOrderRequired(t *testing.T) {
 		"unknown approver":  {e.importOrder([]byte{1, 4}, other, nil), "the set in force has"},
 		"another validator": {e.importOrder([]byte{1, 2}, other, nil), "does not name"},
 		"expired":           {e.importOrder([]byte{1, 2}, other, func(b *importorder.Body) { b.NotAfter = e.now() }), "expired"},
-		"another target":    {e.importOrder([]byte{1, 2}, other, func(b *importorder.Body) { b.Target[0] ^= 1 }), "its target"},
-		"another cluster":   {e.importOrder([]byte{1, 2}, other, func(b *importorder.Body) { b.ClusterID[0] ^= 1 }), "cluster_id"},
+		"past the validity cap": {e.importOrder([]byte{1, 2}, other, func(b *importorder.Body) {
+			b.NotAfter = e.now() + importorder.MaxValidity + 1
+		}), "more than"},
+		"never expires":   {e.importOrder([]byte{1, 2}, other, func(b *importorder.Body) { b.NotAfter = 1<<64 - 1 }), "more than"},
+		"another target":  {e.importOrder([]byte{1, 2}, other, func(b *importorder.Body) { b.Target[0] ^= 1 }), "its target"},
+		"another cluster": {e.importOrder([]byte{1, 2}, other, func(b *importorder.Body) { b.ClusterID[0] ^= 1 }), "cluster_id"},
 	} {
 		err := send(c.order)
 		var r *backend.RefusedError

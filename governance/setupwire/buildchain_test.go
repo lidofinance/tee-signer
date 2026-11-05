@@ -41,8 +41,13 @@ func TestBuildChainConstants(t *testing.T) {
 		t.Errorf("TimeLock %d, want %d", l.ChangeDelay(), want.timeLock)
 	}
 	gain := &UpdateBody{Group: GroupLocked, Locked: &Locked{AllowedImageMeasurements: []Image{{Kind: ImageGCP, Measurement: make([]byte, 32)}}}}
-	if w := Wait(&Locked{ChangeDelaySeconds: new(uint64)}, gain); w != want.imagesMin {
+	if w := Wait(sampleChain().GenesisForkVersion, &Locked{ChangeDelaySeconds: new(uint64)}, gain); w != want.imagesMin {
 		t.Errorf("Wait with time lock 0 and a new image %d, want %d", w, want.imagesMin)
+	}
+	// On a prod chain the floor is the default time lock, in this build's
+	// seconds.
+	if w := Wait(MainnetForkVersion, &Locked{ChangeDelaySeconds: new(uint64)}, &UpdateBody{Group: GroupLocked, Locked: &Locked{}}); w != want.timeLock {
+		t.Errorf("Wait on a prod chain with time lock 0 %d, want the floor %d", w, want.timeLock)
 	}
 	if err := CheckActivateAt(1000+want.imagesMin+want.horizon, 1000, want.imagesMin); err != nil {
 		t.Error(err)

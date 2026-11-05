@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -64,11 +65,11 @@ func TestKeyRuleAtStart(t *testing.T) {
 			}
 			continue
 		}
-		if err != nil || got != c.want {
+		if err != nil || !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: %+v %v, want %+v", c.name, got, err, c.want)
 		}
 	}
-	if got, err := keyRule(false, true, false, &platform.Platform{KeyRule: open}, quietLog); err != nil || got != (platform.KeyRule{}) {
+	if got, err := keyRule(false, true, false, &platform.Platform{KeyRule: open}, quietLog); err != nil || !reflect.DeepEqual(got, platform.KeyRule{}) {
 		t.Fatalf("flag path: %+v %v", got, err)
 	}
 }
@@ -98,12 +99,18 @@ func TestStartMainnetKeyRule(t *testing.T) {
 	}
 	testnet := write(st)
 	st.Chain.GenesisForkVersion = setupwire.MainnetForkVersion
+	st.Locked.ChangeDelaySeconds = nil
 	mainnet := write(st)
+	// A prod-chain setup with change_delay_seconds = 0, as a tool before the
+	// floor wrote it: a runner pinned to it still starts (the wait is raised
+	// to the floor at run time, setupwire.Locked.ChangeDelayOn).
+	st.Locked.ChangeDelaySeconds = new(uint64)
+	mainnetZero := write(st)
 
 	for _, c := range []struct {
 		path string
 		want bool
-	}{{testnet, false}, {mainnet, true}} {
+	}{{testnet, false}, {mainnet, true}, {mainnetZero, true}} {
 		var events []string
 		var opts platform.Options
 		s, _, _, err := startPlatform(context.Background(), &startArgs{platformName: "dev", setupSrc: "file:" + c.path},

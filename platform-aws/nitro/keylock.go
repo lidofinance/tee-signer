@@ -2,6 +2,7 @@ package nitro
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"path"
@@ -60,22 +61,9 @@ func policyLock(policy, origin string, multiRegion bool) (backend.KeyLock, strin
 	case multiRegion:
 		return backend.KeyLockNotLocked, "the key is a multi-Region key: replicas in other regions have their own policies"
 	}
-	if err := checkPolicyMembers([]byte(policy)); err != nil {
-		return backend.KeyLockNotLocked, fmt.Sprintf("the key policy does not parse: %v", err)
-	}
-	var doc struct {
-		Statement json.RawMessage
-	}
-	if err := json.Unmarshal([]byte(policy), &doc); err != nil {
-		return backend.KeyLockNotLocked, fmt.Sprintf("the key policy does not parse: %v", err)
-	}
-	var stmts []keyPolicyStatement
-	if err := json.Unmarshal(doc.Statement, &stmts); err != nil {
-		var one keyPolicyStatement
-		if err := json.Unmarshal(doc.Statement, &one); err != nil {
-			return backend.KeyLockNotLocked, fmt.Sprintf("the key policy's Statement does not parse: %v", err)
-		}
-		stmts = []keyPolicyStatement{one}
+	stmts, err := parseStatements(policy)
+	if err != nil {
+		return backend.KeyLockNotLocked, err.Error()
 	}
 	for i, s := range stmts {
 		if !strings.EqualFold(s.Effect, "Allow") {
@@ -109,6 +97,93 @@ func policyLock(policy, origin string, multiRegion bool) (backend.KeyLock, strin
 		}
 	}
 	return backend.KeyLockLocked, ""
+}
+
+// parseStatements reads the Statement list of a key policy (one statement
+// not in a list counts too), after checkPolicyMembers.
+func parseStatements(policy string) ([]keyPolicyStatement, error) {
+	if err := checkPolicyMembers([]byte(policy)); err != nil {
+		return nil, fmt.Errorf("the key policy does not parse: %v", err)
+	}
+	var doc struct {
+		Statement json.RawMessage
+	}
+	if err := json.Unmarshal([]byte(policy), &doc); err != nil {
+		return nil, fmt.Errorf("the key policy does not parse: %v", err)
+	}
+	var stmts []keyPolicyStatement
+	if err := json.Unmarshal(doc.Statement, &stmts); err != nil {
+		var one keyPolicyStatement
+		if err := json.Unmarshal(doc.Statement, &one); err != nil {
+			return nil, fmt.Errorf("the key policy's Statement does not parse: %v", err)
+		}
+		stmts = []keyPolicyStatement{one}
+	}
+	return stmts, nil
+}
+
+// policyImages is the set of images a locked key policy releases the key
+// to: the PCR0 values (48 bytes each, sorted, no repeats) that every
+// enclave-bound Allow of one of keyActions or of Encrypt names under
+// StringEquals or StringEqualsIgnoreCase, by kms:RecipientAttestation:PCR0
+// or ImageSha384, which AWS documents as equal to PCR0. PCR0 is the hash
+// of the whole image file, so it names the image; PCR1 and PCR2 of
+// different images do not combine into a real one. The runner compares
+// the set with allowed_image_measurements in force (tee-signer
+// keyruleimages.go): a locked policy may name an image the approvers
+// never listed, such as a second image in a two-value PCR0 list
+// (prev_pcrs in platform-aws/deploy/main.tf), and that image would open
+// every sealed share. Only call it on a policy policyLock found locked:
+// every statement with a key action is then bound, and every value is 96
+// hex digits.
+func policyImages(policy string) [][]byte {
+	stmts, err := parseStatements(policy)
+	if err != nil {
+		return nil
+	}
+	var ids [][]byte
+	for _, s := range stmts {
+		if !strings.EqualFold(s.Effect, "Allow") {
+			continue
+		}
+		if bound, _ := s.enclaveBinding(); !bound {
+			continue
+		}
+		if !s.grants(encryptAction) && !slices.ContainsFunc(keyActions, s.grants) {
+			continue
+		}
+		ids = append(ids, s.imageIDs()...)
+	}
+	slices.SortFunc(ids, bytes.Compare)
+	return slices.CompactFunc(ids, bytes.Equal)
+}
+
+// imageIDs are the PCR0 and ImageSha384 values the statement's
+// StringEquals and StringEqualsIgnoreCase conditions name, decoded from
+// hex in any case. A value that is not 48 bytes of hex is skipped.
+func (s keyPolicyStatement) imageIDs() [][]byte {
+	var ids [][]byte
+	for op, keys := range s.Condition {
+		if !strings.EqualFold(op, "StringEquals") && !strings.EqualFold(op, "StringEqualsIgnoreCase") {
+			continue
+		}
+		for k, raw := range keys {
+			name, ok := strings.CutPrefix(strings.ToLower(k), recipientPrefix)
+			if !ok || (name != "pcr0" && name != "imagesha384") {
+				continue
+			}
+			var vals stringOrList
+			if json.Unmarshal(raw, &vals) != nil {
+				continue
+			}
+			for _, v := range vals {
+				if b, err := hex.DecodeString(v); err == nil && len(b) == 48 {
+					ids = append(ids, b)
+				}
+			}
+		}
+	}
+	return ids
 }
 
 // policyNames are the policy element names policyLock reads or skips.

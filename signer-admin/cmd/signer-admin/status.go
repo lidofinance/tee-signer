@@ -49,7 +49,7 @@ func cmdPin(args []string, out io.Writer) error {
 }
 
 func pinOne(m *member, timeout time.Duration) (string, error) {
-	conn, err := loadConn(m.cloudPath)
+	conn, err := memberConn(m)
 	if err != nil {
 		return "", err
 	}

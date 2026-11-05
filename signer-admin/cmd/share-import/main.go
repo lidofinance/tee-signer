@@ -8,7 +8,11 @@
 // The identity is checked with the verifier of package runnerclient, the
 // one the signing client uses:
 //
-//	-verifier dev        the dev platform's unsigned document (local runners)
+//	-verifier dev        the dev platform's unsigned document, for a runner
+//	                     on this machine only: -addr tcp to 127.0.0.0/8, ::1
+//	                     or localhost, unix:, or vsock CID 1. Refused for
+//	                     any other address, with -mainnet, and for a runner
+//	                     whose certificate names a prod chain
 //	-verifier azure-maa  an Azure MAA token: -maa-host, -cce-policy-sha256
 //	                     and, if not the ACI default, -compliance-status
 //	-verifier aws-nitro  an AWS Nitro NSM document: -nitro-pcr INDEX=HEX,
@@ -166,6 +170,11 @@ func run() error {
 		}
 		if *chainBuild != "" {
 			return errors.New("-allow-chain-build needs -tls-cert and -tls-key")
+		}
+		// No Connection on this path, so its address rule runs here: the
+		// dev verifier reaches a runner on this machine only.
+		if err := runnerclient.DevLocalOnly(att, *addr); err != nil {
+			return err
 		}
 		if c, err = remote.New(*addr); err != nil {
 			return err

@@ -660,14 +660,16 @@ func refusedAs(err error, what string) error {
 // Accept takes a signed CONFIG_UPDATE (section 6). The checks, in order:
 // the strict decoder with the value rules (counts within caps, approver
 // keys, approvals_needed > n/2, change delay cap, withdrawal credentials,
-// gas limits, slot time changes); the cluster and the chain; the trusted clock; version and prev_hash against
+// gas limits, slot time changes); the cluster and the chain; the trusted clock; the again paths below;
+// for a new locked update the change delay floor of the chain; version and prev_hash against
 // the group's state in force; k signatures of the approvers in force, and
 // for a rotation every key of the new set; activate_at within the wait plus
 // the activation horizon; the core's checks of the values, for an open
 // update the fork rule, for a locked one the slot time rule. Then it writes the body, then a record with the
 // update pending, and answers with the effective state. The wait is the
-// active time lock for locked (at least the images minimum when the allowed
-// list gains an entry), 0 for open; the update is in force at the later of
+// active time lock for locked (never below the chain's floor on a prod
+// chain, at least the images minimum when the allowed list gains an
+// entry), 0 for open; the update is in force at the later of
 // activate_at and its arrival plus the wait. A higher version replaces the
 // group's pending update with a wait of its own. The same update again
 // writes its body again if no readable copy is left and answers
@@ -721,6 +723,14 @@ func (u *Updates) Accept(ctx context.Context, raw []byte) (uint8, backend.SetupS
 		// after every check, so its hash is enough.
 		return u.again(ctx, raw, upd, ref, now)
 	}
+	// A new locked update takes no change delay below the chain's floor.
+	// After the again paths: an update from before the floor that is in
+	// force or pending must be taken again, to restore a lost body.
+	if b.Group == setupwire.GroupLocked && b.Locked != nil {
+		if err := b.Locked.CheckChangeDelay(u.opt.Setup.Chain.GenesisForkVersion); err != nil {
+			return 0, none, backend.Refused(backend.StatusBadRequest, "config update: %v", err)
+		}
+	}
 	if err := setupwire.CheckVersion(b.Version, gs.Version, pendingVersion(*gs)); err != nil {
 		return 0, none, backend.Refused(backend.StatusBadRequest, "config update: %s %v", b.Group, err)
 	}
@@ -737,7 +747,7 @@ func (u *Updates) Accept(ctx context.Context, raw []byte) (uint8, backend.SetupS
 	if err := upd.Verify(&v.locked.Approvers); err != nil {
 		return 0, none, backend.Refused(backend.StatusBadRequest, "config update: %v", err)
 	}
-	wait := setupwire.Wait(v.locked, b)
+	wait := setupwire.Wait(u.opt.Setup.Chain.GenesisForkVersion, v.locked, b)
 	if err := setupwire.CheckActivateAt(b.ActivateAt, now, wait); err != nil {
 		return 0, none, backend.Refused(backend.StatusBadRequest, "config update: %v", err)
 	}

@@ -37,7 +37,7 @@ import (
 // pin, so probe and import work before pin and still check that the
 // signer runs that setup.
 func connectAdmin(m *member, timeout time.Duration) (*runnerclient.Client, error) {
-	conn, err := loadConn(m.cloudPath)
+	conn, err := memberConn(m)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +155,7 @@ func (s *splitFile) commitmentsOf(pk cloud.Pubkey) ([]cloud.Pubkey, bool) {
 // lockedInForce reads the attested state of m and its locked group in
 // force: the body from the archive of push, or the setup's version 0.
 func lockedInForce(c *cluster, m *member, timeout time.Duration) (*setupwire.Locked, []byte, ref, error) {
-	conn, err := loadConn(m.cloudPath)
+	conn, err := memberConn(m)
 	if err != nil {
 		return nil, nil, ref{}, err
 	}
@@ -472,26 +472,26 @@ func readShares(path string) ([]share, error) {
 }
 
 // chainOf reads a runner's setup file, or the -config file of a runner
-// without a setup, and returns its genesis_validators_root and the
-// setup_hash such a runner reports: the setup's hash, or the SHA-256 of the
-// -config file.
-func chainOf(path string) (cloud.Root, [32]byte, error) {
+// without a setup, and returns its genesis_validators_root, the
+// setup_hash such a runner reports (the setup's hash, or the SHA-256 of the
+// -config file) and the setup, nil for a -config file.
+func chainOf(path string) (cloud.Root, [32]byte, *setupwire.Setup, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return cloud.Root{}, [32]byte{}, err
+		return cloud.Root{}, [32]byte{}, nil, err
 	}
 	if s, err := setupwire.DecodeSetup(raw); err == nil {
 		h, err := setupwire.SetupHash(raw)
 		if err != nil {
-			return cloud.Root{}, [32]byte{}, fmt.Errorf("%s: %w", path, err)
+			return cloud.Root{}, [32]byte{}, nil, fmt.Errorf("%s: %w", path, err)
 		}
-		return cloud.Root(s.Chain.GenesisValidatorsRoot), h, nil
+		return cloud.Root(s.Chain.GenesisValidatorsRoot), h, s, nil
 	}
 	cfg, _, err := core.LoadConfig(path)
 	if err != nil {
-		return cloud.Root{}, [32]byte{}, fmt.Errorf("%s: neither a setup file nor a signer config: %w", path, err)
+		return cloud.Root{}, [32]byte{}, nil, fmt.Errorf("%s: neither a setup file nor a signer config: %w", path, err)
 	}
-	return cfg.GenesisValidatorsRoot, sha256.Sum256(raw), nil
+	return cfg.GenesisValidatorsRoot, sha256.Sum256(raw), nil, nil
 }
 
 func cmdImport(args []string, out io.Writer) error {
@@ -545,8 +545,16 @@ func cmdImport(args []string, out io.Writer) error {
 			if *chainPath == "" {
 				return errors.New("-conn with -interchange needs -setup: the runner's setup file, or its -config file if it runs without a setup")
 			}
-			if gvr, gvrOfHash, err = chainOf(*chainPath); err != nil {
+			var s *setupwire.Setup
+			if gvr, gvrOfHash, s, err = chainOf(*chainPath); err != nil {
 				return err
+			}
+			// -setup names the runner's platform, so the dev verifier is
+			// held to a dev platform setup as it is for a member.
+			if s != nil {
+				if err := devPlatformOnly(conn, s); err != nil {
+					return fmt.Errorf("%s: %w", *connPath, err)
+				}
 			}
 		}
 		dial = func() (*runnerclient.Client, error) { return conn.New(runnerclient.WithTimeout(*cf.timeout)) }

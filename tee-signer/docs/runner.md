@@ -71,8 +71,12 @@ chain, `prod`, from the chain table in `governance/setupwire/chains.go`:
 
 The table fails closed: a genesis fork version without a row is prod, so
 a setup of an unknown chain gets the strict checks (the threshold rule's
-2t - n >= 2, the key rule lock, the GCP single-key rule), and clients
-treat its runner as a mainnet one. The devnet row names the fork version
+2t - n >= 2, the change delay floor: `change_delay_seconds` at least the
+default time lock in a new setup the tools make and in every new `locked`
+update the runner takes, while a pinned setup or a stored update with a
+lower value is not refused, its wait is raised to the floor, the key rule
+lock, the GCP single-key rule), and clients treat its runner as a mainnet
+one. The devnet row names the fork version
 of ethereum-package devnets, `0x10000038`, the one
 `governance/chains/chain.sh identify` takes as a devnet; a devnet with a
 fork version of its own counts as prod.
@@ -238,6 +242,24 @@ with; and a binary built with no platform tag.
 
 A release build also refuses to start on `nitro`, `azure` or `gcp` without
 `-setup` (dev and debug builds keep the flag path).
+
+On a prod chain the runner also refuses, after the platform starts, a key
+rule that is not locked or not readable, before any share is unsealed
+(`signer-protocol/docs/protocol.md`, "Key rule lock").
+
+Two checks keep the runner up but withhold the shares, as an exit would
+close the recovery (a locked update reaches the log only through a
+serving runner) and would loop through key releases and mark log claim
+records: the image check, when `allowed_image_measurements` in force
+does not name this image (`imagecheck.go`), and on a prod chain the
+image rule of the key rule lock, when a locked Nitro key policy releases
+the key to an image the list does not name, or when the list cannot be
+read (`keyruleimages.go`; off prod a warning). The runner then loads no
+share, answers SIGN and the imports with `NOT_READY`, serves HEALTH
+(`image.state` `not_allowed`, `key_rule_unlisted` or `unknown`, and
+`why`), PUBLIC_KEYS, ATTEST, IDENTITY and CONFIG_UPDATE, and says
+`restart_needed` once a locked update in force names every image. A
+restart then loads the shares.
 
 Every cloud image bakes its flags into the measured image. On Azure the
 flags are the container's `command`, which the CCE policy measures. The host

@@ -250,7 +250,9 @@ func UpdateHash(body []byte) ([32]byte, error) {
 }
 
 // Matches is step 2 of section 6: the update is for this cluster and
-// chain, and its slot time changes fit the chain.
+// chain, and its slot time changes fit the chain. The change delay floor
+// is not here: Matches runs on a stored update too, and one in force from
+// before the floor must be taken again (Locked.CheckChangeDelay).
 func (u *UpdateBody) Matches(s *Setup) error {
 	if u.ClusterID != s.ClusterID {
 		return errors.New("update: for another cluster_id")

@@ -35,6 +35,10 @@ import (
 //   - With mainnet set, a gcp-cs client needs gcp_project_id and
 //     gcp_service_account. GCP has no key rule hash, so these tie the
 //     runner to the operator's project.
+//   - With mainnet set, the dev verifier is refused. It accepts an unsigned
+//     document, so it proves nothing about the runner that holds the
+//     share. Package runnerclient also refuses a runner whose certificate
+//     names a prod chain when the verifier is dev, whatever mainnet says.
 
 // setupPins are the setup settings, checked.
 type setupPins struct {
@@ -67,6 +71,12 @@ func (a *Attestation) setupPins() (*setupPins, error) {
 			return nil, errors.New("attestation.key_release_sha256: needs setup_sha256, since the key rule is read per setup")
 		}
 		p.keyRelease = backend.Root(b)
+	}
+	// The dev verifier accepts an unsigned document from anyone, so it
+	// never reaches a mainnet runner: one wrong flag would seal a share to
+	// a fake.
+	if a.Mainnet && a.Verifier == VerifierDev {
+		return nil, errors.New("attestation: mainnet: the dev verifier proves nothing about the runner; a mainnet runner needs azure-maa, aws-nitro or gcp-cs")
 	}
 	// On mainnet the key rule of an Azure or Nitro runner must be the one
 	// the operator reviewed. GCP has no

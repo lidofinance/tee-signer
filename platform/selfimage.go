@@ -60,6 +60,17 @@ func (s *ImageSeen) Get(context.Context) (setupwire.Image, error) {
 	return setupwire.Image{Kind: s.im.Kind, Measurement: bytes.Clone(s.im.Measurement)}, nil
 }
 
+// RuleImageID is the part of an allowed_image_measurements entry that a
+// key rule names (KeyRule.Images): for a Nitro entry PCR0, its first 48
+// bytes, the hash of the whole image file; for every other kind the whole
+// measurement.
+func RuleImageID(im setupwire.Image) []byte {
+	if im.Kind == setupwire.ImageNitro && len(im.Measurement) >= 48 {
+		return im.Measurement[:48]
+	}
+	return im.Measurement
+}
+
 // NitroImage is the allowed_image_measurements entry of a Nitro enclave:
 // PCR0, PCR1 and PCR2 of its attestation document, 48 bytes each, in that
 // order (setupwire.ImageNitro).
