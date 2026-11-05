@@ -93,6 +93,28 @@ func PublicNetwork(forkVersion backend.Version, root backend.Root) (name string,
 	return "", false
 }
 
+// PublicNetworkOfForkVersion names the public network with this genesis
+// fork version, or "".
+func PublicNetworkOfForkVersion(forkVersion backend.Version) string {
+	for _, n := range networks {
+		if f, _ := n.values(); f == forkVersion {
+			return n.name
+		}
+	}
+	return ""
+}
+
+// PublicNetworkOfRoot names the public network with this genesis
+// validators root, or "".
+func PublicNetworkOfRoot(root backend.Root) string {
+	for _, n := range networks {
+		if _, r := n.values(); r == root {
+			return n.name
+		}
+	}
+	return ""
+}
+
 // PublicNetworkValues gives the genesis values of the public network
 // called name.
 func PublicNetworkValues(name string) (forkVersion backend.Version, root backend.Root, ok bool) {

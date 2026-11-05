@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -236,6 +237,67 @@ func TestNonProdRefusesProdChains(t *testing.T) {
 	}
 	if prod == 0 {
 		t.Fatal("no prod row")
+	}
+}
+
+// The tools' check: a build takes the chains its runners start on. The
+// mainnet build takes mainnet and, on the dev platform, any non-prod
+// chain; a non-prod build takes its own chain; no build takes a prod chain
+// other than mainnet, a public network's fork version with another root
+// (or its root with another fork version), or mainnet's values with other
+// times. CheckAnyBuild passes exactly the chains some build takes.
+func TestCheckSetupChain(t *testing.T) {
+	mf, mr := fork(t, public["mainnet"][0]), root(t, public["mainnet"][1])
+	mainnet := on(mf, mr)
+	hoodi := on(fork(t, public["hoodi"][0]), root(t, public["hoodi"][1]))
+	ci := on(ciTestFork, ciTestRootBytes)
+	devnet := on(otherFork, otherRoot)
+	// The ci-test fork version with a root of its own: the ci-test row, no
+	// build's own chain, which the mainnet build takes on the dev platform.
+	other := on(ciTestFork, otherRoot)
+	all := []*setupwire.Chain{mainnet, hoodi, ci, devnet, other}
+	takes := map[Chain][]*setupwire.Chain{Mainnet: all, Hoodi: {hoodi}, CITest: {ci}, Devnet: {devnet}}
+	for c, oks := range takes {
+		for i, ch := range all {
+			err := c.CheckSetupChain(ch)
+			if want := slices.Contains(oks, ch); (err == nil) != want {
+				t.Errorf("%s build, chain %d (%x/%x): %v, want taken %v", c, i, ch.GenesisForkVersion, ch.GenesisValidatorsRoot[:4], err, want)
+			}
+		}
+	}
+	for i, ch := range all {
+		if err := CheckAnyBuild(ch); err != nil {
+			t.Errorf("CheckAnyBuild, chain %d: %v", i, err)
+		}
+	}
+	late := on(mf, mr)
+	late.GenesisTime++
+	for what, c := range map[string]struct {
+		ch    *setupwire.Chain
+		want  string
+		mixed bool // values of two chains: every build says so
+	}{
+		"mainnet fork version, other root":  {on(mf, otherRoot), "the fork version is mainnet's, the root no public network's", true},
+		"hoodi fork version, mainnet root":  {on(fork(t, public["hoodi"][0]), mr), "the fork version is hoodi's, the root mainnet's", true},
+		"gnosis root, other fork version":   {on(otherFork, root(t, public["gnosis"][1])), "the fork version is no public network's, the root gnosis's", true},
+		"unknown chain":                     {on([4]byte{0xde, 0xad, 0xbe, 0xef}, otherRoot), "a mainnet build runs on mainnet with its exact values only", false},
+		"mainnet with another genesis time": {late, "genesis_time 1606824024", false},
+	} {
+		for _, b := range Chains {
+			if err := b.CheckSetupChain(c.ch); err == nil {
+				t.Errorf("%s build took %s", b, what)
+			} else if c.mixed && (!strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), "belong to different chains")) {
+				t.Errorf("%s build, %s: %v, want %q", b, what, err, c.want)
+			}
+		}
+		if err := CheckAnyBuild(c.ch); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("CheckAnyBuild, %s: %v, want %q", what, err, c.want)
+		}
+	}
+	// A non-prod build names the partial match's values.
+	err := Hoodi.CheckChain(on(otherFork, root(t, public["gnosis"][1])))
+	if err == nil || !strings.Contains(err.Error(), "gnosis has fork version 0x00000064 and root 0xf5dcb556") {
+		t.Errorf("hoodi build on gnosis's root: %v", err)
 	}
 }
 
