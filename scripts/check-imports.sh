@@ -32,12 +32,12 @@ host_only() {
     attestation-verify/runnerclient/verify|attestation-verify/runnerclient/internal/optset) echo "attestation-verify/ signer-admin/ gateway/ tests/" ;;
     platform-aws/hostagent|platform-aws/hostagent/*) echo "platform-aws/cmd/" ;;
     platform-aws/udprelay|platform-aws/udprelay/*) echo "platform-aws/cmd/" ;;
-    attestation-verify/runnerclient|attestation-verify/runnerclient/*) echo "signer-admin/ gateway/ tests/" ;;
+    attestation-verify/runnerclient|attestation-verify/runnerclient/*) echo "signer-admin/ gateway/ tooling/ tests/" ;;
   esac
 }
 
 mods=()
-for m in */go.mod; do mods+=("${m%/go.mod}"); done
+for m in */go.mod tooling/*/go.mod; do [ -f "$m" ] && mods+=("${m%/go.mod}"); done
 
 for m in "${mods[@]}"; do
   # Go files of this module, without nested modules and vendored code.
@@ -57,6 +57,11 @@ for m in "${mods[@]}"; do
     esac
     rest="${imp#"$P"/}"
     other="${rest%%/*}"
+    # A tool under tooling/ is a module of its own: tooling/<name>.
+    if [ "$other" = tooling ]; then
+      other="${rest#tooling/}"
+      other="tooling/${other%%/*}"
+    fi
     allow="$(host_only "$rest")"
     case "$f" in
       *_test.go) allow="" ;;
@@ -86,8 +91,14 @@ for m in "${mods[@]}"; do
     esac
     grep -qE "^(require)?[[:space:]]*$P/$other[[:space:]]+v" "$m/go.mod" ||
       bad "$m/go.mod does not require $P/$other ($f imports it)"
-    grep -qE "^(replace)?[[:space:]]*$P/$other[[:space:]]+=>[[:space:]]+\.\./$other$" "$m/go.mod" ||
-      bad "$m/go.mod has no replace of $P/$other by ../$other"
+    # The path to the repo root: ../ for a module at the root, ../../ for
+    # tooling/<name>; upre is the same as a regexp.
+    case "$m" in
+      */*) up=../../ upre='\.\./\.\./' ;;
+      *) up=../ upre='\.\./' ;;
+    esac
+    grep -qE "^(replace)?[[:space:]]*$P/$other[[:space:]]+=>[[:space:]]+$upre$other$" "$m/go.mod" ||
+      bad "$m/go.mod has no replace of $P/$other by $up$other"
   done <<<"$imports"
 done
 

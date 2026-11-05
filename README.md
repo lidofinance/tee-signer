@@ -46,6 +46,7 @@ every module builds and tests on its own.
 | [signer-admin](signer-admin) | Operator tools: setup updates and orders, share import |
 | [web3signer-api](web3signer-api) | Parsing and checks of Web3Signer signing requests |
 | [gateway](gateway) | The Web3Signer gateway: sends each request to the TEE signers over mutual TLS and combines their partial signatures |
+| [tooling/health-exporter](tooling/health-exporter) | A Prometheus exporter for runner HEALTH, over attested mutual TLS |
 | [devkit](devkit) | Test helpers: fuzz oracles and driver, goroutine leak and lock order checks |
 | [tests](tests) | End-to-end tests across modules, against the built runners |
 
