@@ -246,6 +246,16 @@ func TestBackendErrors(t *testing.T) {
 	}
 }
 
+// A body over maxBodyBytes gets 413, not a parse of its first
+// maxBodyBytes.
+func TestBodyTooLarge(t *testing.T) {
+	srv, _ := newTestServer(t)
+	body := attestationBody(411400) + strings.Repeat(" ", maxBodyBytes)
+	if code, _, got := post(t, srv, pubHex, "", body); code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("got %d %s, want 413", code, got)
+	}
+}
+
 // The identifier may come without 0x and in upper case (Web3Signer normalises it).
 func TestIdentifierNormalisation(t *testing.T) {
 	srv, _ := newTestServer(t)

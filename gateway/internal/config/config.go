@@ -395,6 +395,9 @@ func (c *Config) loadSigners(base string) error {
 	if s.DialTimeout == 0 {
 		s.DialTimeout = 30 * time.Second
 	}
+	if s.Timeout < 0 || s.DialTimeout < 0 {
+		return errors.New("signers.timeout and signers.dial_timeout must be positive")
+	}
 	if s.Connections == 0 {
 		s.Connections = 2
 	}

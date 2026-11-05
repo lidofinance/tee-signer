@@ -130,9 +130,13 @@ func (s *Server) sign(w http.ResponseWriter, r *http.Request) {
 	identifier := r.PathValue("identifier")
 	log := s.log.With("identifier", identifier)
 
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "Bad Request")
+		if errors.As(err, new(*http.MaxBytesError)) {
+			writeError(w, http.StatusRequestEntityTooLarge, "Request Entity Too Large")
+		} else {
+			writeError(w, http.StatusBadRequest, "Bad Request")
+		}
 		return
 	}
 

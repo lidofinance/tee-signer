@@ -110,9 +110,13 @@ func TestListenerAccess(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		srv := httpServer(context.Background(), tc.access, st, mux, log)
+		srv := httpServer(context.Background(), tc.access, st, mux, 5*time.Second, log)
 		if srv.ReadHeaderTimeout != 10*time.Second || srv.IdleTimeout != 120*time.Second {
 			t.Errorf("%s: timeouts %v, %v", tc.access, srv.ReadHeaderTimeout, srv.IdleTimeout)
+		}
+		if srv.ReadTimeout != 30*time.Second || srv.WriteTimeout != 40*time.Second || srv.MaxHeaderBytes != 64<<10 {
+			t.Errorf("%s: read timeout %v, write timeout %v, max header bytes %d", tc.access, srv.ReadTimeout,
+				srv.WriteTimeout, srv.MaxHeaderBytes)
 		}
 		go func() { _ = serve(srv, ln) }()
 		addr := ln.Addr().String()
@@ -196,7 +200,7 @@ func TestRetireOnClientCAChange(t *testing.T) {
 			})
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			srv := httpServer(ctx, config.AccessMTLS, st, mux, log)
+			srv := httpServer(ctx, config.AccessMTLS, st, mux, 5*time.Second, log)
 			ln, err := net.Listen("tcp", "127.0.0.1:0")
 			if err != nil {
 				t.Fatal(err)
