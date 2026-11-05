@@ -76,8 +76,9 @@ type Health struct {
 	// without a setup and runners before it leave it out.
 	KeyLock string `json:"key_lock,omitempty"`
 	// KeyLockWhy says what the key lock rests on: what keeps the rule
-	// open, why it was not read, or, for a platform without a lock, that
-	// the setup accepts that.
+	// open, why it was not read, for a locked rule what the lock cannot
+	// show (Azure: the key's history before the lock), or, for a platform
+	// without a lock, that the setup accepts that.
 	KeyLockWhy string `json:"key_lock_why,omitempty"`
 	// SingleKey says whether this signer holds a key alone (a 1 of 1
 	// import order) on a platform where that is unsafe: on GCP "accepted"

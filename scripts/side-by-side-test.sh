@@ -11,8 +11,9 @@
 #          running signer's
 #   Azure  GROUP_NAME_N, KEY_NAME_N, IDENTITY_NAME_N: the plan takes the new
 #          key name, key-create refuses a key name that exists (a new
-#          version would take the running group's key) and one whose
-#          existence it cannot read. The render goes to the group's own
+#          version would take the running group's key), one whose
+#          existence it cannot read and a mutable key on mainnet, and makes
+#          the key immutable unless KEY_IMMUTABLE=false. The render goes to the group's own
 #          folder with the running group's identity, and group-deploy
 #          takes the new key name and refuses the running group's
 #
@@ -187,11 +188,50 @@ key_create
 [ "$rc" != 0 ] && grep -q 'cannot tell whether key signer-1b-kek exists' <<<"$out" && [ "$(wc -l <"$work/az.log")" = 1 ] &&
   ok "azure key-create refuses when it cannot read whether the key exists" || bad "azure key-create, denied: rc $rc $out"
 fake_az notfound
+run_rc env PATH="$work/bin:$PATH" CONFIRM=yes KEY_IMMUTABLE=false IMAGE_TAG=no-such-local-image "${A1[@]}" "${az_env[@]}" bash "$work/platform-azure/deploy/deploy.sh" key-create 1
+[ "$rc" != 0 ] && grep -q 'KEY_IMMUTABLE=false on prod chain mainnet' <<<"$out" && [ ! -s "$work/az.log" ] &&
+  ok "azure key-create refuses a mutable key on mainnet" || bad "azure key-create, mutable on mainnet: rc $rc $out"
 key_create
 grep -q 'exists in' <<<"$out" && bad "azure key-create, not found: $out"
 grep -q 'unexpected az call' <<<"$out" && bad "azure key-create went on to another az call before the policy step: $out"
 [ "$rc" != 0 ] && ! grep -q 'cannot tell' <<<"$out" && ok "azure key-create goes past the check for a new name (stops later, at the local image)" ||
   bad "azure key-create, not found: rc $rc $out"
+
+# key-create to the end: a fake docker has every image and a fake az
+# writes a policy, so the create call runs and its arguments are logged.
+mkdir -p "$work/bin-img"
+printf '#!/usr/bin/env bash
+case "$1 $2" in "image inspect" | tag*) exit 0 ;; esac
+exit 99
+' >"$work/bin-img/docker"
+chmod +x "$work/bin-img/docker"
+ln -s azure "$work/build/azure-hoodi"
+fake_az_create() {
+  cat >"$work/bin/az" <<EOF
+#!/usr/bin/env bash
+echo "az \$*" >>"$work/az.log"
+case "\$1 \$2 \$3" in
+  "keyvault key show") echo "ERROR: (KeyNotFound) not found" >&2; exit 3 ;;
+  "keyvault key create") exit 0 ;;
+  "confcom acipolicygen -a")
+    jq --arg p "\$(printf policy | base64 -w0)" '.resources[0].properties.confidentialComputeProperties.ccePolicy = \$p' "\$4" >"\$4.new" && mv "\$4.new" "\$4"
+    printf policy | sha256sum | cut -d' ' -f1; exit 0 ;;
+esac
+echo "unexpected az call" >&2
+exit 99
+EOF
+  chmod +x "$work/bin/az"
+  : >"$work/az.log"
+}
+key_create_all() { run_rc env PATH="$work/bin-img:$work/bin:$PATH" CONFIRM=yes "${A1[@]}" "${az_env[@]}" "$@" bash "$work/platform-azure/deploy/deploy.sh" key-create 1; }
+fake_az_create
+key_create_all CHAIN=ci-test
+[ "$rc" = 0 ] && grep -q '^az keyvault key create .* --immutable true' "$work/az.log" &&
+  ok "azure key-create makes the key immutable by default" || bad "azure key-create, default: rc $rc $out $(cat "$work/az.log")"
+fake_az_create
+key_create_all CHAIN=hoodi KEY_IMMUTABLE=false
+[ "$rc" = 0 ] && grep -q '^az keyvault key create ' "$work/az.log" && ! grep -q -- '--immutable' "$work/az.log" &&
+  ok "azure key-create makes a mutable key on hoodi with KEY_IMMUTABLE=false" || bad "azure key-create, mutable on hoodi: rc $rc $out $(cat "$work/az.log")"
 
 [ "$fail" = 0 ] || exit 1
 echo "side-by-side-test: all cases as expected"

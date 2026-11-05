@@ -140,16 +140,20 @@ CHAINS="mainnet hoodi devnet ci-test"
 PROD_CHAINS="mainnet"
 CHAIN_TOOL="$ROOT/governance/chains/chain.sh"
 
-# check_chain_name NAME: one of $CHAINS.
+# check_chain_name NAME: exactly one of $CHAINS.
 check_chain_name() {
-  case " $CHAINS " in
-    *" ${1:-} "*) ;;
-    *) echo "CHAIN must be one of: $CHAINS (got '${1:-}')" >&2; return 1 ;;
-  esac
+  local c
+  for c in $CHAINS; do [ "${1:-}" = "$c" ] && return 0; done
+  echo "CHAIN must be one of: $CHAINS (got '${1:-}')" >&2
+  return 1
 }
 
-# chain_is_prod NAME: NAME is a prod chain (PROD_CHAINS).
-chain_is_prod() { case " $PROD_CHAINS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+# chain_is_prod NAME: NAME is exactly one of $PROD_CHAINS.
+chain_is_prod() {
+  local c
+  for c in $PROD_CHAINS; do [ "${1:-}" = "$c" ] && return 0; done
+  return 1
+}
 
 # chain_tags NAME: the Go build tags of the chain's build: none for a prod
 # chain, nonprod and chain_<name> ("-" as "_") otherwise.

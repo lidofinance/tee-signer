@@ -295,7 +295,7 @@ Azure (`platform-azure/deploy/deploy.sh`, settings above):
 2. `policy`: one hash for the three signers, written to
    `build/azure/policy.sha256`. It must equal the build record.
 3. `key-create 1`: key `signer-gkek-1` with the release policy for that
-   hash. `KEY_IMMUTABLE` stays false for the test.
+   hash. Set `KEY_IMMUTABLE=false` for the test.
 4. `key-role 1`, then `store-role 1` with `SETUP_FILE_1=setups/signer-1.setup`:
    the data role on the container and Reader on its storage account.
    Reader lets the lock check read the account and the container. Wait a
