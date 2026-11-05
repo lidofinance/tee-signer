@@ -166,6 +166,10 @@ chain_tags() {
 CHAIN="${CHAIN:-mainnet}"
 check_chain_name "$CHAIN" || exit 1
 export CHAIN
+# CHAIN_PROD: 1 when CHAIN is a prod chain, else 0. Computed here once, from
+# this file's chain_is_prod, before the build overlay's hooks.sh (below)
+# runs any code: the refusal of the overlay on a prod chain reads it.
+if chain_is_prod "$CHAIN"; then CHAIN_PROD=1; else CHAIN_PROD=0; fi
 
 if ! chain_is_prod "$CHAIN"; then
   RUNNER_RELEASE_BINS=(runner-azure-"$CHAIN" runner-aws-"$CHAIN" runner-gcp-"$CHAIN")
@@ -323,10 +327,16 @@ has_nts() { case ",$(runner_tags "$1")," in *,nts,*) return 0 ;; *) return 1 ;; 
 # The build overlay. SIGNER_BUILD_OVERLAY_DIR names a folder outside this
 # repo whose hooks.sh adds parts to a build: runner files (go build
 # -overlay), its own programs, image and deploy parts. Non-prod builds only:
-# build-runner.sh and the release gate (release-gate.sh) refuse a mainnet
-# build while it is set. Unset, this tree builds nothing of it.
+# on a prod chain the overlay is refused here, before hooks.sh is sourced,
+# so its code never runs in a mainnet build (it could redefine
+# chain_is_prod), and the release gate (release-gate.sh) refuses it again on
+# every mainnet binary. Unset, this tree builds nothing of it.
 OVERLAY_DIR="${SIGNER_BUILD_OVERLAY_DIR:-}"
 if [ -n "$OVERLAY_DIR" ]; then
+  if [ "$CHAIN_PROD" = 1 ]; then
+    echo "SIGNER_BUILD_OVERLAY_DIR is set: the build overlay goes into non-prod builds only (CHAIN=hoodi, devnet or ci-test), unset it for CHAIN=$CHAIN" >&2
+    exit 1
+  fi
   [ -r "$OVERLAY_DIR/hooks.sh" ] || { echo "SIGNER_BUILD_OVERLAY_DIR=$OVERLAY_DIR has no hooks.sh" >&2; exit 1; }
   # shellcheck source=/dev/null
   . "$OVERLAY_DIR/hooks.sh"

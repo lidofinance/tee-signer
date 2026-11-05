@@ -84,11 +84,9 @@ has_string() {
   fi
 }
 
-# The build overlay is for non-prod builds only (release gate).
-if [ -n "$OVERLAY_DIR" ] && chain_is_prod "$CHAIN"; then
-  echo "SIGNER_BUILD_OVERLAY_DIR is set: the build overlay goes into non-prod builds only (CHAIN=hoodi, devnet or ci-test), unset it for CHAIN=$CHAIN" >&2
-  exit 1
-fi
+# The build overlay is for non-prod builds only: common.sh refused it on a
+# prod chain before it sourced the overlay's hooks.sh, and the release gate
+# refuses it again on every mainnet binary.
 chain_select
 log "chain $CHAIN, chain config $CHAIN_JSON$(chain_is_prod "$CHAIN" || echo ", non-prod build (-tags $(chain_tags "$CHAIN"))")"
 mapfile -t OVERLAY_FLAGS < <(go_overlay_flags)

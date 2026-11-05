@@ -237,6 +237,16 @@ for c in hoodi devnet ci-test; do
 done
 expect_fail "build: SIGNER_BUILD_OVERLAY_DIR with a mainnet build" env -u CHAIN SIGNER_BUILD_OVERLAY_DIR="$T" bash -c 'printf "true\n" >"$2/hooks.sh"; bash "$1/scripts/build-runner.sh" x86_64' _ "$ROOT" "$T"
 grep -q "build overlay goes into non-prod builds only" "$T/out" && ok "the refusal names the non-prod builds" || bad "overlay refusal: $(cat "$T/out")"
+# The overlay's hooks.sh is shell code from outside the tree: on a prod
+# chain common.sh refuses the overlay before it sources the file, so a
+# hooks.sh that redefines chain_is_prod gets no say.
+mkdir -p "$T/evil"
+printf 'touch "%s/evil/ran"\nchain_is_prod() { return 1; }\n' "$T" >"$T/evil/hooks.sh"
+expect_fail "overlay: common.sh refuses SIGNER_BUILD_OVERLAY_DIR on a mainnet build" env -u CHAIN SIGNER_BUILD_OVERLAY_DIR="$T/evil" bash -c '. "$1/scripts/common.sh"' _ "$ROOT"
+grep -q "build overlay goes into non-prod builds only" "$T/out" && ok "overlay: the refusal names the non-prod builds" || bad "overlay refusal from common.sh: $(cat "$T/out")"
+[ ! -e "$T/evil/ran" ] && ok "overlay: hooks.sh did not run on a mainnet build" || bad "overlay: hooks.sh ran before the refusal"
+expect_fail "overlay: CHAIN=mainnet refuses it too" env CHAIN=mainnet SIGNER_BUILD_OVERLAY_DIR="$T/evil" bash -c '. "$1/scripts/common.sh"' _ "$ROOT"
+expect_ok "overlay: CHAIN=hoodi sources hooks.sh" env CHAIN=hoodi SIGNER_BUILD_OVERLAY_DIR="$T/evil" bash -c '. "$1/scripts/common.sh" && [ -e "$2/evil/ran" ]' _ "$ROOT" "$T"
 
 echo "chain-test: $pass passed, $fail failed"
 [ "$fail" = 0 ]
