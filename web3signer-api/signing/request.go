@@ -121,32 +121,56 @@ func (p *Pin) versionAt(epoch phase0.Epoch) phase0.Version {
 	return v
 }
 
-// knows reports whether fork is one a beacon state of this chain can carry:
-// a schedule entry with the entry before it as previous_version (the genesis
-// entry is its own previous version), or the genesis state's fork. A chain
-// that starts at a later fork (a devnet with several forks at epoch 0) has
-// that fork as previous and current version at epoch 0.
+// knows reports whether fork is one a validator client can send for this
+// chain. Three forms pass:
 //
-// The fork's epoch may be any epoch in the entry's period, not only its first:
-// Lodestar v1.49.0 sends the current epoch there on a devnet whose forks all
-// start at epoch 0. The domain does not use the epoch, and domain() below
-// still checks the version against the pinned schedule.
+//   - a fork of the schedule: current_version is a fork version of the
+//     schedule and previous_version the version before it (the genesis
+//     entry is its own previous version);
+//   - a blob-parameter-only (BPO) fork: previous_version and current_version
+//     are both a fork version of the schedule. A BPO fork changes the blob
+//     limits, not the fork version, and needs no schedule entry. Some
+//     clients (Prysm) send the latest BPO fork in fork_info;
+//   - the genesis state's fork of a chain that starts at a later fork (a
+//     devnet with several forks at epoch 0): previous and current version
+//     both the version at epoch 0, epoch 0. This is the BPO form at epoch 0.
+//
+// In each form the fork's epoch must fall in the period of current_version:
+// at or after the epoch the schedule activates it, before the next version.
+// It may be any epoch there, not only the first: Lodestar v1.49.0 sends the
+// current epoch on a devnet whose forks all start at epoch 0, and a BPO fork
+// has an epoch of its own. Schedule entries that repeat the version before
+// them (BPO forks listed in the config) start no new period. The domain does
+// not use the epoch, and domain() below still checks the version against the
+// pinned schedule.
 func (p *Pin) knows(fork *phase0.Fork) bool {
-	if fork.Epoch == 0 && fork.PreviousVersion == fork.CurrentVersion && fork.CurrentVersion == p.versionAt(0) {
-		return true
-	}
-	for i, f := range p.Forks {
+	periods := p.periods()
+	for i, f := range periods {
 		prev := f.Version
 		if i > 0 {
-			prev = p.Forks[i-1].Version
+			prev = periods[i-1].Version
 		}
-		inPeriod := fork.Epoch >= f.Epoch && (i+1 == len(p.Forks) || fork.Epoch < p.Forks[i+1].Epoch)
-		if inPeriod && fork.CurrentVersion == f.Version && fork.PreviousVersion == prev {
+		inPeriod := fork.Epoch >= f.Epoch && (i+1 == len(periods) || fork.Epoch < periods[i+1].Epoch)
+		bpo := fork.PreviousVersion == fork.CurrentVersion
+		if inPeriod && fork.CurrentVersion == f.Version && (fork.PreviousVersion == prev || bpo) {
 			return true
 		}
 	}
 
 	return false
+}
+
+// periods is the schedule without the entries that repeat the version
+// before them: each entry starts the period of a new fork version.
+func (p *Pin) periods() []ForkEpoch {
+	out := p.Forks[:1:1]
+	for _, f := range p.Forks[1:] {
+		if f.Version != out[len(out)-1].Version {
+			out = append(out, f)
+		}
+	}
+
+	return out
 }
 
 // domain checks fork_info against the pin and returns the domain the pinned

@@ -37,6 +37,8 @@
 # runs. CI_MODULES picks the modules, CI_E2E=0 skips the runner builds and
 # everything that needs them or checks them (release gate, EIF check,
 # chains, e2e, PCR3, deploy names, GCP deploy, Azure template), CI_CORE=0 skips the signer-core suites.
+# With CI_E2E=0, CI_E2E_GATEWAY=1 still runs the gateway e2e test
+# (TestE2EGateway*) on a dev runner the test builds.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 mkdir -p "$LOGS"
@@ -44,6 +46,7 @@ RACE="${RACE--race}"
 export RACE
 e2e="${CI_E2E:-1}"
 core="${CI_CORE:-1}"
+gateway_e2e="${CI_E2E_GATEWAY:-1}"
 
 log "guards: module boundaries, forbidden names and markers"
 bash "$ROOT/scripts/check-imports.sh"
@@ -113,6 +116,12 @@ if [ "$e2e" = 1 ]; then
       >"$LOGS/e2e-aarch64-qemu.log" 2>&1 || { tail -80 "$LOGS/e2e-aarch64-qemu.log"; exit 1; }
     summary "$LOGS/e2e-aarch64-qemu.log" | grep -E '^(ok|FAIL)'
   fi
+elif [ "$gateway_e2e" = 1 ]; then
+  log "e2e: the gateway only (CI_E2E_GATEWAY=1): signer core for cgo, then TestE2EGateway on a dev runner it builds"
+  bash "$ROOT/scripts/build-core.sh" "$HOST_ARCH"
+  (cd "$ROOT/tests" && go test $RACE -count=1 -v -timeout 20m -tags platform_aws -run 'TestE2EGateway' ./e2e/) \
+    >"$LOGS/e2e-gateway-$HOST_ARCH.log" 2>&1 || { tail -80 "$LOGS/e2e-gateway-$HOST_ARCH.log"; exit 1; }
+  summary "$LOGS/e2e-gateway-$HOST_ARCH.log" | grep -E '^(ok|FAIL)'
 fi
 
 if fuzz_everything; then

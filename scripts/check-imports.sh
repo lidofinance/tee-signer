@@ -27,12 +27,12 @@ host_only() {
   case "$1" in
     # The enclave's side of the host agent and of the UDP relay.
     platform-aws/hostagent/agentclient|platform-aws/hostagent/agentwire|platform-aws/udprelay/relayclient) ;;
-    # The attestation verifiers: the tools and the tests check runners, no
-    # runner checks another one.
-    attestation-verify/runnerclient/verify|attestation-verify/runnerclient/internal/optset) echo "attestation-verify/ signer-admin/ tests/" ;;
+    # The attestation verifiers: the tools, the gateway and the tests check
+    # runners, no runner checks another one.
+    attestation-verify/runnerclient/verify|attestation-verify/runnerclient/internal/optset) echo "attestation-verify/ signer-admin/ gateway/ tests/" ;;
     platform-aws/hostagent|platform-aws/hostagent/*) echo "platform-aws/cmd/" ;;
     platform-aws/udprelay|platform-aws/udprelay/*) echo "platform-aws/cmd/" ;;
-    attestation-verify/runnerclient|attestation-verify/runnerclient/*) echo "signer-admin/ tests/" ;;
+    attestation-verify/runnerclient|attestation-verify/runnerclient/*) echo "signer-admin/ gateway/ tests/" ;;
   esac
 }
 
