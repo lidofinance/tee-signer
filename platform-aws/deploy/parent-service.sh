@@ -32,6 +32,8 @@
 #   BACKOFF_MAX     the longest wait before a start, default 300
 #   BACKOFF_RESET   an enclave that ran this many seconds before it ended
 #                   counts as a first failure again, default 600
+#   START_WAIT      whole seconds to wait for each parent tool after
+#                   parent-run.sh returns, default 10
 # The failure count is in RUNTIME_DIRECTORY (systemd keeps it across
 # restarts, not across a stop or a reboot).
 set -euo pipefail
@@ -41,6 +43,7 @@ WATCH_INTERVAL="${WATCH_INTERVAL:-10}"
 BACKOFF_BASE="${BACKOFF_BASE:-10}"
 BACKOFF_MAX="${BACKOFF_MAX:-300}"
 BACKOFF_RESET="${BACKOFF_RESET:-600}"
+START_WAIT="${START_WAIT:-10}"
 RUN_DIR="${RUNTIME_DIRECTORY:-/run/signer-runner}"
 TOOLS=(hostagent forwarder udprelay vsock-proxy)
 export STATE_DIR
@@ -103,6 +106,20 @@ collect_pids() {
   done
 }
 
+# parent-run.sh starts the tools in the background, so one may not run yet
+# when it returns. Waits up to START_WAIT seconds for each, checking every
+# 0.2 s; collect_pids then reports one that is still missing.
+wait_tools() {
+  local t n
+  for t in "${TOOLS[@]}"; do
+    for ((n = START_WAIT * 5; n > 0; n--)); do
+      ! pgrep -x -u "$(id -u)" "$t" >/dev/null || break
+      [ "$stopping" = 0 ] || stop_now
+      sleep 0.2
+    done
+  done
+}
+
 failed() {
   local reason="$1" now n=0
   [ "$stopping" = 0 ] || stop_now
@@ -159,6 +176,7 @@ cmd_run() {
   }
   PR=""
   [ "$stopping" = 0 ] || stop_now
+  wait_tools
   collect_pids || failed "a parent tool did not start"
   say "running: ${PIDS[*]}"
 

@@ -10,12 +10,15 @@
 #             failure with no start limit, no restart on exit 3, SIGTERM to
 #             the main process alone, the settings from an EnvironmentFile
 #   start     a start with nothing running starts parent-run.sh once: one
-#             enclave and one set of parent tools (the boot path)
+#             enclave and one set of parent tools (the boot path); hostagent
+#             starts 1 s after parent-run.sh returns, and run waits for it
 #   crash     the enclave ends with a line in last-exit.txt: run exits 1
 #             with that line, the tools are stopped, the failure count is 1;
 #             the next run waits BACKOFF_BASE, a later one twice that, up to
 #             BACKOFF_MAX
 #   tool      a parent tool ends: run exits 1 and terminates the enclave
+#   missing   a parent tool that never starts: run exits 1 after START_WAIT
+#             and terminates the enclave
 #   stop      SIGTERM (systemctl stop): run exits 0, the enclave is
 #             terminated, the tools are stopped
 #   refused   an enclave or a parent tool already running: run exits 3 and
@@ -94,6 +97,14 @@ X
 chmod +x "$work/bin/nitro-cli"
 # The parent tools: copies of sleep under their names, so pgrep -x finds them.
 for t in hostagent forwarder udprelay vsock-proxy; do cp "$(command -v sleep)" "$work/tools/$t"; done
+# hostagent starts late, as on a slow machine: pgrep -x finds it only after
+# the exec, 1 s after parent-run.sh has returned.
+cat >"$work/tools/late-start" <<'X'
+#!/usr/bin/env bash
+sleep 1
+exec "$(dirname "$0")/hostagent" "$@"
+X
+chmod +x "$work/tools/late-start"
 cat >"$work/opt/parent-run.sh" <<'X'
 #!/usr/bin/env bash
 # As parent-run.sh: the tools in the background with nohup, the enclave.
@@ -101,7 +112,7 @@ set -euo pipefail
 T="$(dirname "$FAKE")/tools"
 for p in 8000 8001; do nohup "$T/vsock-proxy" 1000 >/dev/null 2>&1 & done
 nohup "$T/udprelay" 1000 >/dev/null 2>&1 &
-nohup "$T/hostagent" 1000 >/dev/null 2>&1 &
+[ -n "${NO_HOSTAGENT:-}" ] || nohup "$T/late-start" 1000 >/dev/null 2>&1 &
 nitro-cli run-enclave --eif-path x.eif --cpu-count 1 --memory 512 --enclave-cid 16
 nohup "$T/forwarder" 1000 >/dev/null 2>&1 &
 X
@@ -115,6 +126,7 @@ tools_up() { local n=0 t; for t in hostagent forwarder udprelay vsock-proxy; do 
 # wait_for COND: up to 5 s.
 wait_for() { local n; for ((n = 0; n < 50; n++)); do eval "$1" && return 0; sleep 0.1; done; return 1; }
 reset() {
+  pkill -f "$work/tools/late-start" 2>/dev/null || true
   for t in hostagent forwarder udprelay vsock-proxy; do pkill -x -u "$(id -u)" "$t" 2>/dev/null || true; done
   rm -rf "$work/fake" "$work/run" "$work/state"
   mkdir -p "$work/fake" "$work/run" "$work/state"
@@ -148,7 +160,7 @@ fi
 svc cleanup >/dev/null
 # The restart after it: waits BACKOFF_BASE, starts again.
 svc_bg "$work/run2.log"
-if wait_for '[ -f "$work/fake/enclave" ] && [ "$(tools_up)" = 4 ]' && has "start after failure 1: waiting 1s" "$(cat "$work/run2.log")"; then
+if wait_for 'has "parent-service: running:" "$(cat "$work/run2.log" 2>/dev/null)"' && has "start after failure 1: waiting 1s" "$(cat "$work/run2.log")"; then
   ok "restart: waits 1s, starts again"
 else
   bad "restart: $(cat "$work/run2.log")"
@@ -171,7 +183,7 @@ svc_bg "$work/run3.log"
 wait_for 'has "start after failure 5: waiting 2s" "$(cat "$work/run3.log")"' && ok "backoff: capped at BACKOFF_MAX" || bad "backoff: $(cat "$work/run3.log")"
 
 # ---- stop ---------------------------------------------------------------------
-wait_for '[ -f "$work/fake/enclave" ] && [ "$(tools_up)" = 4 ]' || bad "stop: never started: $(cat "$work/run3.log")"
+wait_for 'has "parent-service: running:" "$(cat "$work/run3.log" 2>/dev/null)"' || bad "stop: never started: $(cat "$work/run3.log")"
 sleep 0.5
 kill -TERM "$pid"
 rc=0
@@ -220,11 +232,27 @@ kill "$other" 2>/dev/null || true
 # ---- cleanup after SIGKILL ----------------------------------------------------
 reset
 svc_bg "$work/run7.log"
-wait_for '[ -f "$work/fake/enclave" ] && [ "$(tools_up)" = 4 ]' || bad "cleanup: never started: $(cat "$work/run7.log")"
+wait_for 'has "parent-service: running:" "$(cat "$work/run7.log" 2>/dev/null)"' || bad "cleanup: never started: $(cat "$work/run7.log")"
 kill -9 "$pid"
 wait "$pid" 2>/dev/null || true
 svc cleanup >/dev/null
 [ ! -f "$work/fake/enclave" ] && [ ! -f "$work/run/owned" ] && ok "cleanup: terminates the enclave of a killed run" || bad "cleanup: enclave left"
+reset
+
+# ---- missing tool --------------------------------------------------------------
+rc=0
+t0="$(date +%s%N)"
+env "${envs[@]}" START_WAIT=1 NO_HOSTAGENT=1 bash "$SVC" run >"$work/run8.log" 2>&1 || rc=$?
+ms=$((($(date +%s%N) - t0) / 1000000))
+svc cleanup >/dev/null
+log8="$(cat "$work/run8.log")"
+if [ "$rc" = 1 ] && [ "$ms" -ge 1000 ] && has "hostagent is not running after parent-run.sh" "$log8" &&
+  has "a parent tool did not start (failure 1)" "$log8" && [ ! -f "$work/fake/enclave" ]; then
+  ok "missing: a tool that never starts, exit 1 after START_WAIT, enclave terminated"
+else
+  bad "missing: rc $rc after ${ms} ms, enclave $(cat "$work/fake/enclave" 2>/dev/null): $log8"
+fi
+
 reset
 
 [ "$fail" = 0 ] || exit 1

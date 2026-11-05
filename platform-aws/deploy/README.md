@@ -838,10 +838,11 @@ OnFailure does on Azure and `tee-restart-policy=OnFailure` on GCP.
 `nitro-cli run-enclave` returns once the enclave runs, so
 `parent-service.sh`, the unit's main process, checks the enclave
 (`nitro-cli describe-enclaves`) and the parent tools that `parent-run.sh`
-started every 10 seconds (`WATCH_INTERVAL`). When the enclave or any of
-the tools has ended, it logs the reason with the line of `last-exit.txt`,
-terminates the enclave, stops the tools and exits 1. systemd starts the
-whole set again.
+started every 10 seconds (`WATCH_INTERVAL`). After `parent-run.sh`
+returns, it waits up to 10 seconds (`START_WAIT`) for each tool to
+start. When the enclave or any of the tools has ended, it logs the
+reason with the line of `last-exit.txt`, terminates the enclave, stops
+the tools and exits 1. systemd starts the whole set again.
 
 - A crash and an exit on purpose are the same here. The runner ends only on
   an error: a refused setup, an image that the setup does not list, no NTS
