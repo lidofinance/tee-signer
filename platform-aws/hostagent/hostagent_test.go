@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/platform-aws/hostagent/agentclient"
@@ -29,8 +30,9 @@ func TestAgentStoreOverUnixSocket(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	expiry := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
 	srv := &Server{Store: st, Creds: func(context.Context) (agentwire.Credentials, error) {
-		return agentwire.Credentials{AccessKeyID: "AKIDEXAMPLE", SecretAccessKey: "x", SessionToken: "y"}, nil
+		return agentwire.Credentials{AccessKeyID: "AKIDEXAMPLE", SecretAccessKey: "x", SessionToken: "y", Expiration: expiry}, nil
 	}}
 	go srv.Serve(ctx, l)
 
@@ -61,6 +63,14 @@ func TestAgentStoreOverUnixSocket(t *testing.T) {
 	}
 	if err := c.Put("../escape", []byte{1}); err == nil {
 		t.Fatal("path escape accepted")
+	}
+	got := srv.Stats()
+	want := map[[2]string]uint64{
+		{"get", "refused"}: 1, {"get", "ok"}: 1, {"put", "ok"}: 2, {"put", "error"}: 1,
+		{"list", "ok"}: 1, {"creds", "ok"}: 1,
+	}
+	if !reflect.DeepEqual(got.Requests, want) || got.Connections == 0 || !got.CredsExpiry.Equal(expiry) {
+		t.Fatalf("stats %+v, want requests %v", got, want)
 	}
 }
 

@@ -313,7 +313,8 @@ func TestDialFailureClosesTheClient(t *testing.T) {
 	}
 	dead := l.Addr().String()
 	l.Close() // nothing listens there any more
-	addr := startForwarder(t, dead, nil, nil)
+	var f *Forwarder
+	addr := startForwarder(t, dead, func(x *Forwarder) { f = x }, nil)
 	for i := 0; i < 3; i++ {
 		c, err := net.Dial("tcp", addr)
 		if err != nil {
@@ -324,6 +325,9 @@ func TestDialFailureClosesTheClient(t *testing.T) {
 			t.Fatalf("attempt %d: the client was not closed: %v", i, err)
 		}
 		c.Close()
+	}
+	if s := f.Stats(); s.Accepted != 3 || s.DialFailures != 3 || s.RefusedMaxConns != 0 || s.RefusedPerSource != 0 {
+		t.Fatalf("stats %+v, want 3 accepted, 3 dial failures", s)
 	}
 }
 
@@ -338,7 +342,8 @@ func TestMaxConns(t *testing.T) {
 			go func() { defer c.Close(); io.Copy(io.Discard, c) }()
 		}
 	}()
-	addr := startForwarder(t, l.Addr().String(), func(f *Forwarder) { f.MaxConns = 1 }, nil)
+	var f *Forwarder
+	addr := startForwarder(t, l.Addr().String(), func(x *Forwarder) { x.MaxConns = 1; f = x }, nil)
 	first, err := net.Dial("tcp", addr)
 	if err != nil {
 		t.Fatal(err)
@@ -356,6 +361,9 @@ func TestMaxConns(t *testing.T) {
 	_ = second.SetReadDeadline(time.Now().Add(5 * time.Second))
 	if _, err := second.Read(make([]byte, 1)); err == nil || errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("the second connection was not closed: %v", err)
+	}
+	if s := f.Stats(); s.Accepted != 2 || s.Open != 1 || s.RefusedMaxConns != 1 || s.DialFailures != 0 {
+		t.Fatalf("stats %+v, want 2 accepted, 1 open, 1 refused", s)
 	}
 	// The first one still works, and a slot frees when it closes.
 	first.Close()
@@ -394,7 +402,8 @@ func TestMaxConnsPerSource(t *testing.T) {
 			go func() { defer c.Close(); io.Copy(io.Discard, c) }()
 		}
 	}()
-	addr := startForwarder(t, l.Addr().String(), func(f *Forwarder) { f.MaxConnsPerSource = 2 }, nil)
+	var f *Forwarder
+	addr := startForwarder(t, l.Addr().String(), func(x *Forwarder) { x.MaxConnsPerSource = 2; f = x }, nil)
 	// held reports whether a connection got a slot: a read runs into its
 	// deadline instead of the close.
 	held := func(c net.Conn) bool {
@@ -423,6 +432,9 @@ func TestMaxConnsPerSource(t *testing.T) {
 	defer third.Close()
 	if held(third) {
 		t.Fatal("connection 3 from one address stays open over the cap of 2")
+	}
+	if s := f.Stats(); s.RefusedPerSource != 1 || s.RefusedMaxConns != 0 || s.Open != 2 {
+		t.Fatalf("stats %+v, want 1 refused per source, 2 open", s)
 	}
 	d := net.Dialer{LocalAddr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 2)}}
 	other, err := d.Dial("tcp", addr)
