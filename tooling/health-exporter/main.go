@@ -110,10 +110,17 @@ func (r *runner) poll(timeout time.Duration) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	r.mu.Lock()
-	v0 := r.verified
+	v0, open := r.verified, r.h != nil
 	r.mu.Unlock()
 	t0 := time.Now()
 	h, err := r.cl.Health(ctx)
+	if err != nil && open {
+		// The last poll left a connection open and this call failed on it,
+		// as when the runner closes idle connections. Retry once on a new
+		// connection. A call that dialed itself is not retried.
+		log.Printf("%s: health on the open connection: %v; dialing again", r.name, err)
+		h, err = r.cl.Health(ctx)
+	}
 	t1 := time.Now()
 	r.mu.Lock()
 	dialed := r.verified != v0
@@ -181,7 +188,7 @@ func render(w io.Writer, rs []*runner) {
 		one := "{" + l + "}"
 		with := func(k, v string) string { return fmt.Sprintf(`{%s,%s="%s"}`, l, k, q(v)) }
 		gauge("tee_signer_up", "1 if the last HEALTH call passed the attestation check and answered.", one, b2f(h != nil))
-		counter("tee_signer_health_errors_total", "HEALTH calls that failed (connection, attestation or timeout).", one, float64(errs))
+		counter("tee_signer_health_errors_total", "Polls whose HEALTH call failed (connection, attestation or timeout).", one, float64(errs))
 		counter("tee_signer_attestations_verified_total", "Runner identities this exporter verified, one per new connection.", one, float64(verified))
 		if h == nil {
 			continue

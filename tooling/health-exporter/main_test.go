@@ -256,13 +256,16 @@ func TestPollRTTSkipsNewConnection(t *testing.T) {
 // proxy forwards to addr. Each chunk from the runner waits delay first.
 // kill closes every open connection. With idle set, a connection that
 // carries nothing for idle is closed, as a runner -idle-timeout or a NAT
-// would.
+// would. While down is set, it closes each new connection at once.
+// accepts counts the connections it took.
 type proxy struct {
-	addr  string
-	delay atomic.Int64
-	idle  time.Duration
-	mu    sync.Mutex
-	conns []net.Conn
+	addr    string
+	delay   atomic.Int64
+	down    atomic.Bool
+	accepts atomic.Int64
+	idle    time.Duration
+	mu      sync.Mutex
+	conns   []net.Conn
 }
 
 func startProxy(t *testing.T, addr string, idle time.Duration) *proxy {
@@ -278,6 +281,11 @@ func startProxy(t *testing.T, addr string, idle time.Duration) *proxy {
 			c, err := ln.Accept()
 			if err != nil {
 				return
+			}
+			p.accepts.Add(1)
+			if p.down.Load() {
+				c.Close()
+				continue
 			}
 			up, err := net.Dial("tcp", strings.TrimPrefix(addr, "tcp:"))
 			if err != nil {
@@ -356,11 +364,14 @@ func TestPollRTTFreshAfterOutage(t *testing.T) {
 	if rtt := rttOf(t, rendered(r)); rtt < slow.Seconds() {
 		t.Fatalf("rtt through the slow proxy %v, want at least %v", rtt, slow.Seconds())
 	}
+	p.down.Store(true)
 	p.kill()
 	p.delay.Store(0)
-	r.poll(20 * time.Second) // on the killed connection: fails
+	r.poll(20 * time.Second) // the killed connection and the redial fail
 	out := rendered(r)
+	wantLine(t, out, `tee_signer_up{runner="s1"} 0`)
 	wantLine(t, out, `tee_signer_health_errors_total{runner="s1"} 1`)
+	p.down.Store(false)
 	r.poll(20 * time.Second)
 	out = rendered(r)
 	wantLine(t, out, `tee_signer_up{runner="s1"} 1`)
@@ -370,8 +381,9 @@ func TestPollRTTFreshAfterOutage(t *testing.T) {
 }
 
 // A runner that closes idle connections before the next poll makes every
-// answering poll dial. rtt is still exported. The fake runner reports no
-// clock in ms, so skew stays absent.
+// poll find a dead connection. The poll dials again at once, so every poll
+// answers with an rtt. The fake runner reports no clock in ms, so skew
+// stays absent.
 func TestPollRTTWithIdleClose(t *testing.T) {
 	fr := fakerunner.Start(t, backend.SetupState{})
 	const idle = 1 * time.Second
@@ -381,7 +393,6 @@ func TestPollRTTWithIdleClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.cl.Close()
-	answered := 0
 	for i := 0; i < 3; i++ {
 		if i > 0 {
 			time.Sleep(idle + idle/2)
@@ -389,9 +400,9 @@ func TestPollRTTWithIdleClose(t *testing.T) {
 		r.poll(10 * time.Second)
 		out := rendered(r)
 		if !strings.Contains(out, `tee_signer_up{runner="s1"} 1`) {
+			t.Errorf("poll %d: down:\n%s", i, out)
 			continue
 		}
-		answered++
 		if rttOf(t, out) < 0 {
 			t.Errorf("poll %d: no rtt:\n%s", i, out)
 		}
@@ -399,8 +410,38 @@ func TestPollRTTWithIdleClose(t *testing.T) {
 			t.Errorf("poll %d: skew without a clock in ms:\n%s", i, out)
 		}
 	}
-	if answered == 0 {
-		t.Fatal("no poll answered")
+	wantLine(t, rendered(r), `tee_signer_health_errors_total{runner="s1"} 0`)
+}
+
+// A poll whose own dial fails, or whose attestation check fails, is not
+// retried: one connection per poll.
+func TestPollNoRetryAfterDial(t *testing.T) {
+	fr := fakerunner.Start(t, backend.SetupState{})
+	for _, tc := range []struct {
+		name string
+		down bool
+		pin  string
+	}{
+		{"refused", true, ""},
+		{"wrong pin", false, strings.Repeat("ab", 32)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := startProxy(t, fr.Addr(), 0)
+			p.down.Store(tc.down)
+			r, err := newRunner("s1", writeConn(t, p.addr, fr, tc.pin), 5*time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.cl.Close()
+			r.poll(5 * time.Second)
+			r.poll(5 * time.Second)
+			out := rendered(r)
+			wantLine(t, out, `tee_signer_up{runner="s1"} 0`)
+			wantLine(t, out, `tee_signer_health_errors_total{runner="s1"} 2`)
+			if n := p.accepts.Load(); n != 2 {
+				t.Errorf("%d connections for 2 polls, want 2", n)
+			}
+		})
 	}
 }
 

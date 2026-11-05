@@ -102,7 +102,7 @@ Every metric has the label `runner`, the name given on the command line.
 | Metric | Type | Meaning |
 |---|---|---|
 | `tee_signer_up` | gauge | The last HEALTH call passed the attestation check and answered |
-| `tee_signer_health_errors_total` | counter | HEALTH calls that failed |
+| `tee_signer_health_errors_total` | counter | Polls that failed. A call that fails on a connection the last poll left open, as when the runner closes idle connections, is retried once on a new connection and counts only if the retry fails too |
 | `tee_signer_attestations_verified_total` | counter | Runner identities verified, one per new connection |
 | `tee_signer_info` | gauge | Always 1; labels `platform`, `version`, `signing_mode`, `single_key`, `clock_source`, `key_lock`, `restart_mode` |
 | `tee_signer_ready` | gauge | The runner reports it can sign |
