@@ -94,8 +94,9 @@
 //	        http://BEACON:5052/eth/v1/beacon/pool/voluntary_exits
 //	signer-admin split -keystores DIR -password-file FILE -t T -n N -signers NAME,... [-chain mainnet|hoodi|devnet|ci-test] [-expect FILE] -out DIR
 //	    Offline, as a trusted dealer: decrypt EIP-2335 keystores, split
-//	    each key t of n with Feldman commitments, check that every t-subset
-//	    recovers the key and write OUT/split.json for import-draft,
+//	    each key t of n with Feldman commitments, check each share against
+//	    the commitments and that t shares recover the key, and write
+//	    OUT/split.json for import-draft,
 //	    OUT/shares/NAME/shares.txt (mode 0600) for import -shares and
 //	    OUT/manifest.json (split.go). OUT must be a new folder on tmpfs.
 //	signer-admin issue-client-cert -ca-cert FILE -ca-key FILE -role admin|attest|signing -name CN -out DIR
