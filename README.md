@@ -69,6 +69,8 @@ default Docker builder with `exporter option "rewrite-timestamp" conflicts
 with "unpack"`. A docker-container builder works:
 `docker buildx create --use --driver docker-container`.
 
+To move a running cluster to a new image, see [docs/upgrade.md](docs/upgrade.md).
+
 ## Test
 
 ```sh

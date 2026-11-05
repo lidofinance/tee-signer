@@ -5,6 +5,8 @@ runner and its fixed flags, and the WIF provider pins the image's digest, so
 only that image gets the signer's Cloud KMS key. `deploy.sh` creates the
 project resources one step at a time.
 
+To move a running signer to a new image, see [docs/upgrade.md](../../docs/upgrade.md).
+
 ## Setup
 
 The image is the same for every signer of every operator and every project:

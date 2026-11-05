@@ -7,6 +7,8 @@ file (EIF) serves every signer of every operator. It holds the runner and the
 flags that are the same for everyone, and the signer's values come in its
 setup ("Setup").
 
+To move a running signer to a new image, see [docs/upgrade.md](../../docs/upgrade.md).
+
 ## Files
 
 | File | What |
