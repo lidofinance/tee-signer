@@ -13,7 +13,8 @@ import (
 	"github.com/lidofinance/tee-signer/platform/setup"
 )
 
-// nitroSetupOn is the Nitro sample setup with these genesis values.
+// nitroSetupOn is the Nitro sample setup with these genesis values and
+// mainnet's slot times.
 func nitroSetupOn(t *testing.T, fork, root string) []byte {
 	t.Helper()
 	s, err := setupwire.DecodeSetup(sampleSetup(t, "nitro"))
@@ -26,6 +27,8 @@ func nitroSetupOn(t *testing.T, fork, root string) []byte {
 	if _, err := hex.Decode(s.Chain.GenesisValidatorsRoot[:], []byte(root)); err != nil {
 		t.Fatal(err)
 	}
+	s.Chain.GenesisTime, s.Chain.SecondsPerSlot, s.Chain.SlotsPerEpoch = setupwire.MainnetGenesisTime, setupwire.MainnetSecondsPerSlot, setupwire.MainnetSlotsPerEpoch
+	s.Chain.Preset = setupwire.PresetMainnet
 	out, err := s.Encode()
 	if err != nil {
 		t.Fatal(err)

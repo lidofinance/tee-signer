@@ -47,6 +47,17 @@ var networks = []network{
 	{"chiado", "0000006f", "9d642dac73058fbf39c0ae41ab1e34e4d889043cb199851ded7095bc99eb4c1e"},
 }
 
+// Mainnet's genesis time and slot times, which never change: genesis time
+// [geth] (GenesisTime), seconds per slot [teku] mainnet.yaml
+// (SLOT_DURATION_MS 12000), slots per epoch [geth] (EpochLength) and
+// [teku] presets/mainnet/phase0.yaml; all three also [cloud]. The mainnet
+// build refuses a setup with other values (governance/runnerchain).
+const (
+	MainnetGenesisTime    = 1606824023
+	MainnetSecondsPerSlot = 12
+	MainnetSlotsPerEpoch  = 32
+)
+
 // network is a chain by its genesis values, in hex. Strings keep the table
 // static data, with nothing to run at package init.
 type network struct {

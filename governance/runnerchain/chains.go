@@ -13,7 +13,12 @@ import (
 // (tee-signer/runnerchain.go). The mainnet build runs on mainnet only, by
 // its exact genesis fork version and genesis validators root
 // (tee-signer/prodchain.go): a setup with another chain's fork version
-// would start it without the prod rules while it signs for mainnet.
+// would start it without the prod rules while it signs for mainnet. It
+// also takes mainnet's genesis time, seconds per slot, slots per epoch
+// and preset only: the runner counts slots with the times, and the preset
+// sets the SSZ sizes of what it signs. The fork schedule changes with
+// each fork, so it stays the operator's check (setup-tool check -chain
+// governance/chains/mainnet.json).
 //
 //   - hoodi: Hoodi, by its exact genesis fork version and genesis
 //     validators root.
@@ -50,21 +55,37 @@ func PublicNetwork(forkVersion [4]byte, root [32]byte) (name string, exact bool)
 
 // CheckChain refuses a chain the build of c must not run on. nil: the
 // chain is c's own. The mainnet build runs on mainnet with its exact
-// values only, and refuses every other chain. A non-prod build refuses
-// every prod chain (a prod row, or genesis values no row matches), and
-// then every chain but its own. A build the table does not have runs on
-// none.
-func (c Chain) CheckChain(forkVersion [4]byte, root [32]byte) error {
+// genesis values and slot times only, and refuses every other chain. A
+// non-prod build refuses every prod chain (a prod row, or genesis values
+// no row matches), and then every chain but its own. A build the table
+// does not have runs on none.
+func (c Chain) CheckChain(ch *setupwire.Chain) error {
+	forkVersion, root := [4]byte(ch.GenesisForkVersion), [32]byte(ch.GenesisValidatorsRoot)
 	if _, known := setupwire.ChainRowByName(string(c)); !known {
 		return fmt.Errorf("chain %s: no build of this name", c)
 	}
 	name, exact := PublicNetwork(forkVersion, root)
 	values := fmt.Sprintf("genesis fork version 0x%x and genesis validators root 0x%x", forkVersion, root)
 	if c.Prod() {
-		if c == Mainnet && name == "mainnet" && exact {
-			return nil
+		if c != Mainnet || name != "mainnet" || !exact {
+			return fmt.Errorf("chain with %s: a %s build runs on mainnet with its exact values only", values, c)
 		}
-		return fmt.Errorf("chain with %s: a %s build runs on mainnet with its exact values only", values, c)
+		for _, v := range []struct {
+			field     string
+			got, want uint64
+		}{
+			{"genesis_time", ch.GenesisTime, setupwire.MainnetGenesisTime},
+			{"seconds_per_slot", ch.SecondsPerSlot, setupwire.MainnetSecondsPerSlot},
+			{"slots_per_epoch", ch.SlotsPerEpoch, setupwire.MainnetSlotsPerEpoch},
+		} {
+			if v.got != v.want {
+				return fmt.Errorf("chain with %s %d: mainnet's is %d, and a %s build runs on mainnet with its exact values only", v.field, v.got, v.want, c)
+			}
+		}
+		if ch.Preset != setupwire.PresetMainnet {
+			return fmt.Errorf("chain with preset %s: mainnet's is %s, and a %s build runs on mainnet with its exact values only", ch.Preset, setupwire.PresetMainnet, c)
+		}
+		return nil
 	}
 	own, ok := map[Chain]string{Hoodi: "hoodi with its exact values", CITest: "the ci-test chain (governance/chains/chain.ci-test.json)",
 		Devnet: "devnets, whose genesis values are their own"}[c]

@@ -7,8 +7,9 @@ package main
 // start it without the prod rules while it signs for mainnet, so on a
 // cloud platform it checks the chain of the setup as the setup channel
 // reads it, before any key release and any store. It refuses every chain
-// but mainnet with mainnet's exact genesis fork version and genesis
-// validators root.
+// but mainnet with mainnet's exact genesis fork version, genesis
+// validators root, genesis time, seconds per slot, slots per epoch and
+// preset.
 //
 // A cloud platform reads its setup from its own channel only (-setup file:
 // is for dev), so wrapping those channels covers every setup it takes. The
@@ -43,8 +44,7 @@ func checkMainnetSetup(raw []byte) error {
 	if err != nil {
 		return nil
 	}
-	ch := &s.Chain
-	if err := runnerchain.Build.CheckChain([4]byte(ch.GenesisForkVersion), [32]byte(ch.GenesisValidatorsRoot)); err != nil {
+	if err := runnerchain.Build.CheckChain(&s.Chain); err != nil {
 		return fmt.Errorf("setup refused by this %s build: %w", runnerchain.Build, err)
 	}
 	return nil
