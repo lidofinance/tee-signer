@@ -630,7 +630,14 @@ approves an update that allows the image.
   measurement is not on the signer's `allowed_image_measurements` in force.
   Before a new image runs on a signer, that list must name it: a locked
   update, or a new setup that lists it and takes the shares by sealed
-  import.
+  import. To move a signer to a new image: list the new image, wait for
+  the update to take effect, switch the host, then drop the old image in
+  a later update. `signer-admin draft` and `push` refuse a locked update
+  whose list drops the image a signer reports it runs (HEALTH `image`),
+  or lists no image of a signer's platform; `-drop-running-image NAME`
+  says the drop is that last step. `sign` and `assemble` check the list
+  for the signer of the active file. The runner itself accepts such an
+  update and stops signing at its effective time.
 - A cloud start needs a mark log: the setup's, or on the flag path
   `-mark-store` (`none` must be explicit). The images take the setup's.
 - Release images have no plaintext import: shares go in sealed.

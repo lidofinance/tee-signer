@@ -370,17 +370,90 @@ func checkOwnImages(members []*member, l *setupwire.Locked) error {
 	return nil
 }
 
+// runningImage is the image a member's runner reports it runs: HEALTH's
+// image field, read over the attested connection, when the list in force
+// names that image (allowed, or restart_needed: listed, a restart loads
+// the shares). ok is false when the runner reports no image, or one the
+// tool cannot read; the rule by kind (checkOwnImages) covers that signer.
+func runningImage(st *signerState) (im setupwire.Image, ok bool) {
+	if st == nil || st.health == nil || st.health.Image == nil {
+		return setupwire.Image{}, false
+	}
+	ic := st.health.Image
+	if ic.State != cloud.ImageAllowed && ic.State != cloud.ImageRestartNeeded {
+		return setupwire.Image{}, false
+	}
+	k := slices.Index(setupwire.ImageKindNames(), ic.Kind)
+	if ic.Kind == "" || k < 0 {
+		return setupwire.Image{}, false
+	}
+	im.Kind = setupwire.ImageKind(k)
+	m, err := hex.DecodeString(ic.Measurement)
+	if err != nil || len(m) != im.Kind.Size() {
+		return setupwire.Image{}, false
+	}
+	im.Measurement = m
+	return im, true
+}
+
+// checkRunningImages refuses locked values whose allowed_image_measurements
+// does not name the image a member's runner reports it runs, by kind and
+// measurement. A list that keeps the kind but drops the running measurement
+// passes the rule by kind, and from the effective time that runner signs
+// nothing until its host runs a listed image; a list that names the old
+// image again waits the images minimum. The rollout order is: list the new
+// image, wait, switch the host, then drop the old one. drop names the
+// signers whose running image this update drops on purpose, that last step;
+// a name whose running image the list keeps, or that the tool cannot check,
+// is refused. states are the members' states in order (readAll).
+func checkRunningImages(members []*member, states []*signerState, l *setupwire.Locked, drop []string) error {
+	dropped := map[string]bool{}
+	for _, n := range drop {
+		dropped[n] = false
+	}
+	for i, m := range members {
+		im, ok := runningImage(states[i])
+		if !ok || im.Listed(l.AllowedImageMeasurements) {
+			continue
+		}
+		if _, ok := dropped[m.name]; ok {
+			dropped[m.name] = true
+			continue
+		}
+		return fmt.Errorf("signer %s runs the %s image 0x%x (HEALTH), and the new allowed_image_measurements does not list it: from the effective time its runner signs nothing until its host runs a listed image; keep that line, or pass -drop-running-image %s when this update retires the image after the host switched",
+			m.name, im.Kind, im.Measurement, m.name)
+	}
+	for _, n := range drop {
+		if !dropped[n] {
+			return fmt.Errorf("-drop-running-image %s: the list keeps the image that signer runs, or the signer is not among these signers or reports no image", n)
+		}
+	}
+	return nil
+}
+
+// splitNames reads a comma-separated list of signer names; "" is none.
+func splitNames(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, ",")
+}
+
 func cmdDraft(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("draft", flag.ContinueOnError)
 	cf := addClusterFlags(fs)
 	group := fs.String("group", "", "the group the file holds: locked or open")
 	margin := fs.Duration("margin", 10*time.Minute, "time for signing and push, added to the wait: activate_at = now + wait + margin")
 	outPath := fs.String("out", "update.bin", "the body to sign; the active values go to the same name with .active")
+	drop := fs.String("drop-running-image", "", "signer names, comma-separated: the locked update drops the image these signers run on purpose, after their hosts switched to a listed image")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("usage: signer-admin draft -cluster cluster.json -group locked|open [-margin 10m] [-out update.bin] FILE")
+		return errors.New("usage: signer-admin draft -cluster cluster.json -group locked|open [-margin 10m] [-drop-running-image NAME,...] [-out update.bin] FILE")
+	}
+	if *drop != "" && *group != "locked" {
+		return errors.New("-drop-running-image: an open update changes no image")
 	}
 	if *margin < 0 || *margin > setupwire.ActivationHorizon*time.Second {
 		return fmt.Errorf("-margin %v: want 0 to %v", *margin, time.Duration(setupwire.ActivationHorizon)*time.Second)
@@ -420,14 +493,14 @@ func cmdDraft(args []string, out io.Writer) error {
 		}
 		return errors.New("draft needs the state of every signer it drafts for (-signers names a part of the cluster)")
 	}
-	return writeDraft(c, states, body, *margin, *outPath, out)
+	return writeDraft(c, states, body, *margin, *outPath, splitNames(*drop), out)
 }
 
 // writeDraft checks body against the signers' states read by draft, fills
 // in its version, prev_hash, activate_at and salts, prints a summary and
 // the diff against the active values, and writes the body and its active
-// file to outPath and outPath.active.
-func writeDraft(c *cluster, states []*signerState, body *setupwire.UpdateBody, margin time.Duration, outPath string, out io.Writer) error {
+// file to outPath and outPath.active. drop is -drop-running-image.
+func writeDraft(c *cluster, states []*signerState, body *setupwire.UpdateBody, margin time.Duration, outPath string, drop []string, out io.Writer) error {
 	// The waits are the signers' image constants: a non-prod build's run in
 	// minutes.
 	fl, lim, err := clusterLimits(c, states)
@@ -442,6 +515,9 @@ func writeDraft(c *cluster, states []*signerState, body *setupwire.UpdateBody, m
 			return err
 		}
 		if err := checkOwnImages(c.members, body.Locked); err != nil {
+			return err
+		}
+		if err := checkRunningImages(c.members, states, body.Locked, drop); err != nil {
 			return err
 		}
 	}
@@ -560,6 +636,9 @@ func writeDraft(c *cluster, states []*signerState, body *setupwire.UpdateBody, m
 	}
 	if body.IsRotation(&a.locked.Approvers) {
 		fprintf(out, "  rotation: approvals_needed of the active approvers sign, and every one of the %d new keys signs too\n", len(body.Locked.Approvers.Keys))
+	}
+	for _, n := range drop {
+		fprintf(out, "  drops the image %s runs (-drop-running-image): from the effective time its runner signs nothing until its host runs a listed image\n", n)
 	}
 	fprintf(out, "  wait %v (%s build), activate_at %s (now + wait + margin %v)\n", time.Duration(min(wait, math.MaxInt64/uint64(time.Second)))*time.Second, fl, when(body.ActivateAt), margin)
 	if err := diffAgainst(out, a, body); err != nil {

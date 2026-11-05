@@ -36,10 +36,12 @@
 //	    One line per signer: setup, version and hash per group, pending
 //	    update with its effective time, approver set, clock. Marks signers
 //	    that differ from the rest.
-//	signer-admin draft -cluster cluster.json -group locked|open [-margin 10m] [-out update.bin] FILE
+//	signer-admin draft -cluster cluster.json -group locked|open [-margin 10m] [-drop-running-image NAME,...] [-out update.bin] FILE
 //	    Read the new values of one group, check that every signer is at the
 //	    same version, print the diff and write the body to sign (update.bin)
-//	    and the values it replaces (update.bin.active).
+//	    and the values it replaces (update.bin.active). A locked update must
+//	    list the image each signer runs, unless -drop-running-image names
+//	    the signer: the update retires that image on purpose.
 //	signer-admin show [-active FILE] FILE
 //	    Decode a body or a signed update offline and print its values, the
 //	    diff against the active values and the body hash.
@@ -56,8 +58,10 @@
 //	signer-admin assemble [-active FILE] [-out update.signed] update.bin SIG...
 //	    Check the signatures against the active approvers (and, for a
 //	    rotation, every new key) and write the signed update.
-//	signer-admin push -cluster cluster.json [-raise-min] update.signed
+//	signer-admin push -cluster cluster.json [-raise-min] [-drop-running-image NAME,...] update.signed
 //	    Send the signed update to every signer and print what each one says.
+//	    A locked update is checked first against the image each signer runs,
+//	    as draft checks it.
 //	signer-admin probe -cluster cluster.json [-signers NAME,...]
 //	    Tell, per signer, whether admin messages from its connection file's
 //	    certificate pass the runner's role check (adminops.go): a message
@@ -172,12 +176,12 @@ const usage = `usage:
   signer-admin setup [-build mainnet|hoodi|devnet|ci-test] [-allow-gcp-unsafe-single-key] -out DIR FILE
   signer-admin pin -cluster cluster.json [-signers NAME,...]
   signer-admin status -cluster cluster.json [-signers NAME,...]
-  signer-admin draft -cluster cluster.json -group locked|open [-margin 10m] [-out update.bin] FILE
+  signer-admin draft -cluster cluster.json -group locked|open [-margin 10m] [-drop-running-image NAME,...] [-out update.bin] FILE
   signer-admin show [-active FILE] FILE
   signer-admin sign -key FILE|openpgp:KEYGRIP [-hashed] -expect-sha256 HEX [-out FILE] update.bin|import.bin
   signer-admin approver-key -key FILE|openpgp:KEYGRIP | -openpgp FILE [-fingerprint HEX]
   signer-admin assemble [-active FILE] [-out update.signed] update.bin SIG...
-  signer-admin push -cluster cluster.json [-raise-min] [-signers NAME,...] update.signed
+  signer-admin push -cluster cluster.json [-raise-min] [-signers NAME,...] [-drop-running-image NAME,...] update.signed
   signer-admin probe -cluster cluster.json [-signers NAME,...]
   signer-admin import-draft -cluster cluster.json -signer NAME -split FILE [-not-after 12h] [-allow-gcp-unsafe-single-key] [-out import.bin]
   signer-admin import -cluster cluster.json -signer NAME -order import.signed -shares FILE -commitments FILE

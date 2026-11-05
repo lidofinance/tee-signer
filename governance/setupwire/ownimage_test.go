@@ -60,3 +60,21 @@ func TestCheckOwnImageListed(t *testing.T) {
 		}
 	})
 }
+
+// Image.Listed matches an entry by kind and measurement: another
+// measurement of the same kind does not count, while Platform.ImageListed
+// takes any entry of the kind.
+func TestImageListed(t *testing.T) {
+	im := Image{Kind: ImageNitro, Measurement: bytes.Repeat([]byte{0x11}, ImageNitro.Size())}
+	other := Image{Kind: ImageNitro, Measurement: bytes.Repeat([]byte{0x22}, ImageNitro.Size())}
+	azure := Image{Kind: ImageAzure, Measurement: bytes.Repeat([]byte{0xaa}, ImageAzure.Size())}
+	if im.Listed(nil) || im.Listed([]Image{azure, other}) {
+		t.Fatal("listed without an entry of its kind and measurement")
+	}
+	if !im.Listed([]Image{azure, other, im}) {
+		t.Fatal("not listed with its entry")
+	}
+	if !PlatformNitro.ImageListed([]Image{other}) {
+		t.Fatal("the rule by kind refused another nitro measurement")
+	}
+}

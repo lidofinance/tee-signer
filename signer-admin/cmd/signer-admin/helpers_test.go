@@ -269,6 +269,8 @@ type craftSpec struct {
 	prev [32]byte
 	// open is the open group of an open update; nil: the setup's.
 	open *setupwire.Open
+	// locked is the locked group of a locked update; nil: the setup's.
+	locked *setupwire.Locked
 	// set is the active approver set in order; signers are the positions
 	// in it that sign.
 	set     []approver
@@ -289,6 +291,9 @@ func craft(t *testing.T, spec craftSpec) string {
 	}
 	if spec.group == setupwire.GroupLocked {
 		b.Locked = &s.Locked
+		if spec.locked != nil {
+			b.Locked = spec.locked
+		}
 	} else {
 		b.Open = &s.Open
 		if spec.open != nil {
