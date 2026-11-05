@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
+	"math"
 	"math/big"
 	"time"
 
@@ -238,6 +239,10 @@ func decodeNitroPayload(b []byte) (*nitroPayload, error) {
 		return nil, formatErr("no module_id")
 	case p.Timestamp == 0:
 		return nil, formatErr("no timestamp")
+	case p.Timestamp > math.MaxInt64:
+		// time.UnixMilli takes an int64: a larger value would wrap to a
+		// time far in the past and pass the not-in-the-future check.
+		return nil, formatErr("timestamp %d is above the int64 range", p.Timestamp)
 	case p.Digest != "SHA384":
 		return nil, formatErr("digest %q, want SHA384", p.Digest)
 	case len(p.PCRs) == 0:
