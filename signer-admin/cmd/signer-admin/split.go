@@ -103,8 +103,16 @@ func cmdSplit(args []string, out io.Writer) error {
 	if !ok {
 		return fmt.Errorf("-chain %s: no row in the chain table", c)
 	}
+	// The chain's genesis validators root; zero for a row without one
+	// (devnet, ci-test), which such a row takes.
+	var root cloud.Root
+	if row.Root != "" {
+		if _, err := hex.Decode(root[:], []byte(row.Root)); err != nil {
+			return fmt.Errorf("-chain %s: root: %w", c, err)
+		}
+	}
 	// The rules import-draft applies to the split file.
-	if err := setupwire.CheckThreshold(row.ForkVersion, *t, *n); err != nil {
+	if err := setupwire.CheckThreshold(row.ForkVersion, root, *t, *n); err != nil {
 		return err
 	}
 	if err := setupwire.CheckShareIndices(*n, idx); err != nil {
