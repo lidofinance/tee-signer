@@ -189,7 +189,7 @@ A connection that fails a check takes no request. The gateway keeps `signers.con
 
 ## Keys, shares and the threshold
 
-The gateway asks each signer for `PUBLIC_KEYS`: the validator keys it holds a share of, and the share's public key. It groups the answers by validator key. The share index of each share and the threshold come from the public keys alone: the gateway looks for the smallest threshold t, and distinct indices from 1 to `signers.max_share_index` (default: the number of signers), for which every t of the share keys interpolate to the validator key. With those indices any t partial signatures combine into the validator's signature, so the signers can be listed in any order. A key whose shares fit no threshold and no indices is not served, and the gateway logs `key refused` once. It also refuses a key unless twice the threshold exceeds the number of shares, and a key held whole by one signer while others hold shares of it, so any two sets of signers that can sign share one signer: a whole key is served only from one signer with no other shares.
+The gateway asks each signer for `PUBLIC_KEYS`: the validator keys it holds a share of, and the share's public key. It groups the answers by validator key. The share index of each share and the threshold come from the public keys alone: the gateway looks for the smallest threshold t, and distinct indices from 1 to `signers.max_share_index` (default: the number of signers), for which every t of the share keys interpolate to the validator key. With those indices any t partial signatures combine into the validator's signature, so the signers can be listed in any order. The gateway takes at most 8 signers and indices up to 8, because this search grows fast with both. A key whose shares fit no threshold and no indices is not served, and the gateway logs `key refused` once. It also refuses a key unless twice the threshold exceeds the number of shares, and a key held whole by one signer while others hold shares of it, so any two sets of signers that can sign share one signer: a whole key is served only from one signer with no other shares.
 
 A signer that lists a wrong share key for a validator, after a bad import say, makes that key fit no threshold, so the gateway refuses the whole key and logs `key refused`. It does not skip the signer and serve the rest: two separate splits of one key, on different signers, would then each pass, and each could sign alone. Fix or remove that signer's share. If every key is refused, the load fails and the last list stays in force: a key served before keeps its old shares, and the wrong share's partials fail their check. A signer that is down is different: see the next paragraph.
 
@@ -294,7 +294,8 @@ Both are refused with 412 and a message naming the rule, before any signer is co
 | `signers.timeout` | `5s` | one sign request, from the HTTP request to the combined signature, and each key list call |
 | `signers.dial_timeout` | `30s` | each new connection: TCP, TLS, `IDENTITY` and the attestation check |
 | `signers.connections` | 2 | connections to each signer, 1 to 16 |
-| `signers.max_share_index` | number of signers | highest share index tried when the gateway matches shares to keys |
+| `signers.max_share_index` | number of signers | highest share index tried when the gateway matches shares to keys, up to 8 |
+| `signers.nodes` | required | the signers, at most 8 |
 | `signers.nodes[].name` | `signer-N` | the signer's name in the log and the metrics |
 | `signers.nodes[].address` | required | `tcp:HOST:PORT` of the signer's mutual TLS listener; for AWS Nitro, the forwarder on the parent instance (the TLS ends inside the enclave) |
 | `signers.nodes[].attestation` | required | what the signer's attestation must show, below |
@@ -316,7 +317,7 @@ The `attestation` block takes the fields of `runnerclient.Attestation` under the
 
 Settings of one verifier are refused with another, and a required one that is missing stops the start.
 
-The gateway refuses to start without `chain.genesis_validators_root`, with fork epochs out of order, without signers or a client certificate, with an `allow_chain_build` that is not a non-prod chain, and with an `access` or `metrics_access` that does not fit the rest of the config (see [Access](#access)). A new fork needs a config line before its epoch, as it does in the beacon node and in the signers. A blob-parameter-only fork (`BLOB_SCHEDULE`) keeps the fork version and needs no line.
+The gateway refuses to start without `chain.genesis_validators_root`, with fork epochs out of order, without signers or with more than 8, without a client certificate, with an `allow_chain_build` that is not a non-prod chain, and with an `access` or `metrics_access` that does not fit the rest of the config (see [Access](#access)). A new fork needs a config line before its epoch, as it does in the beacon node and in the signers. A blob-parameter-only fork (`BLOB_SCHEDULE`) keeps the fork version and needs no line.
 
 A configuration for three Hoodi signers:
 

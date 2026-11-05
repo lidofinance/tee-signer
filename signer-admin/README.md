@@ -30,7 +30,7 @@ signer-admin split -keystores DIR -password-file FILE -t T -n N -signers NAME,..
 ```
 
 - `-keystores` is a folder of `keystore-*.json` with the kdf `scrypt` (n*r*p at most 2^24) or `pbkdf2` (c at most 2^24). All keystores share the one password in `-password-file`, which must be printable ASCII, in a file of mode 0600.
-- `-signers` lists the signer names of `cluster.json` in share index order, 1 to n. n is at most 16.
+- `-signers` lists the signer names of `cluster.json` in share index order, 1 to n. n is at most 8, the most the gateway serves.
 - t and n must pass the threshold rule of `-chain` (default mainnet), as `import-draft` checks it.
 - For a single-node signer, `-t 1 -n 1 -signers NAME` writes each whole key as the share of index 1. The signer's setup must say `signing_mode = single`; on GCP it must also accept the risk (`sealing_key_release.unsafe_single_key_accepted`), and `import-draft` needs `-allow-gcp-unsafe-single-key`.
 - With `-expect`, a file of one `0x` pubkey per line, split takes exactly these keys in that order and refuses any other. Without it, split takes every keystore in the folder and prints the list.

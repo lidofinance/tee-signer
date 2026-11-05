@@ -443,14 +443,14 @@ func TestSplitKDFBounds(t *testing.T) {
 	}
 }
 
-// split takes at most 16 shares.
+// split takes at most 8 shares, the most the gateway serves.
 func TestSplitShareCap(t *testing.T) {
 	e := newSplitEnv(t, "scrypt")
 	var names []string
-	for i := 1; i <= 17; i++ {
+	for i := 1; i <= 9; i++ {
 		names = append(names, fmt.Sprintf("s%d", i))
 	}
-	wantIn(t, failTool(t, e.args("-chain", "devnet", "-t", "17", "-n", "17", "-signers", strings.Join(names, ","))...), "-n 17: at most 16 shares")
+	wantIn(t, failTool(t, e.args("-chain", "devnet", "-t", "9", "-n", "9", "-signers", strings.Join(names, ","))...), "-n 9: at most 8 shares")
 	if _, err := os.Lstat(e.out); err == nil {
 		t.Fatalf("%s was written", e.out)
 	}

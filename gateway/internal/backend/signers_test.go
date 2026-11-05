@@ -491,3 +491,10 @@ func TestKeyListReloadsWhenStaleOnAHit(t *testing.T) {
 	}
 	t.Fatal("the signer that was down did not join")
 }
+
+// The gateway tries share indices up to 8 at most, whatever it is given.
+func TestMaxShareIndexCapped(t *testing.T) {
+	if s := newSigners(nil, nil, 64, time.Second, slog.New(slog.NewTextHandler(io.Discard, nil))); s.maxIndex != 8 {
+		t.Fatalf("max index %d, want 8", s.maxIndex)
+	}
+}
