@@ -51,6 +51,13 @@ makes or opens the sealing key, `platform-aws/nitro` reads the key policy,
 and the runner does not start unless the policy is locked
 (`platform.CheckKeyRule`). That check is in scope (rows 6 and 12).
 
+The lock binds the account's own admins, not AWS. AWS documents that the
+owner of a key no principal can manage must contact AWS Support to regain
+access. So the lock holds against the account root user only as far as AWS
+Support refuses such a request. The runner sees a changed policy only at
+its next start. `platform-aws/deploy/README.md` lists the account controls
+that cover this.
+
 ## Kept in the project, not audited
 
 [platform-azure](platform-azure) and [platform-gcp](platform-gcp) stay in

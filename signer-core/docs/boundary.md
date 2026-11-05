@@ -27,7 +27,7 @@ as the assumptions under "Remaining trust" hold. File names are under
 | Config updates | Nothing. | `sc_signer_set_policy` changes the policy fields only. `sc_signer_set_schedule` and `sc_signer_set_slot_times` refuse a change at any epoch up to epoch(T) + `max_epochs_ahead` + 1. | `signer.c` `sc_signer_set_policy`, `schedule_rule`, `slot_time_rule` |
 | Secret (`sc_signer_add_validator`) | It is the share of the named validator. A wrong key gives signatures that do not verify, nothing slashable. | Nonzero and below the group order. A share already loaded under another pubkey is refused (`SC_ERR_DUPLICATE`), so one share has one set of marks. | `bls.c` `sc_bls_load_secret`; `signer.c` `sc_signer_add_validator` |
 | Typed request values (`sc_sign_block`, `sc_sign_attestation`, the Gloas and aggregate calls) | Nothing. | The core computes the signing root from the same values it checks, so a signature covers exactly what the slashing check saw. Slot rule, clock horizon, source not above target, target the epoch of the slot, fork gate, bound index, fee recipient and gas limit lists, selection proofs. | `signer.c` `sc_sign_*`; `slashing.c` `sc_slashing_check_*`; `policy.c` |
-| Bare roots (`sc_sign_root`) | The host computed the root of a type that is not slashable. | Only the listed domain types sign: never a block, attestation, exit, registration or deposit. The RANDAO root must be the root of the epoch. Clock horizon and fork gate. | `signer.c` `sc_sign_root` |
+| Bare roots (`sc_sign_root`) | The host computed the root of a type that is not slashable. | Only the listed domain types sign: never a block, attestation, exit, registration or deposit. The RANDAO root must be the root of the epoch. Clock horizon and fork gate. The three Gloas types (PTC vote, envelope, proposer preferences) sign as bare roots too, without the rules of their typed calls: no one-per-slot rule, no restored Gloas slot bound, no envelope checks. None of them is slashable. | `signer.c` `sc_sign_root` |
 | SSZ bytes (`sc_ssz_decode_*`, aggregates, contributions) | Nothing. | Exact lengths, offsets and bit lists. A preset with no sync committee subnets has no contribution size. | `ssz.c`, `typed.c` |
 | Import (`sc_signer_import`) | The maxima are those of history the validator signed elsewhere. | `genesis_validators_root` equals the config's; unknown flag bits refused; the marks only rise (maximum per field); the repeat roots are dropped. The core stores every import that raises the stored mark, also one at or below the restart floor. | `signer.c` `sc_signer_import`; `slashing.c` `sc_slashing_import` |
 | `sc_signer_cover_epoch` | Nothing. | Raises the device mark's target and block bounds only. | `slashing.c` `sc_slashing_cover_device` |
@@ -74,8 +74,11 @@ import, and a repeat is the same signature.
   slot time changes, or a smaller `max_epochs_ahead` after a restart can
   map the clock to a lower floor than the signatures of the run before
   need.
-- Storage, for liveness. A lost, old or garbled mark costs the epochs up
-  to the floor, not safety. The one exception: imported maxima above the
+- Storage, for liveness. A lost or old mark costs the epochs up to the
+  floor, not safety. A garbled mark can cost more: the floor only raises a
+  stored value, so a mark with high values refuses every vote or block up
+  to those values. A device mark near `UINT64_MAX` refuses every vote and
+  block after it. The one exception for safety: imported maxima above the
   floor of a later load (above the clock horizon at that load) survive a
   restart only through storage. After a failed import store they hold in
   RAM only, until the next load.
