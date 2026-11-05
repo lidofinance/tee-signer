@@ -613,17 +613,21 @@ mark log, and the shares imported again with their interchange maxima
   `key_lock: not_locked`, and a mainnet setup does not start on it. Edit
   the template only together with `checkReleasePolicy` in
   `platform-azure/azure/releasepolicy.go`.
-- `KEY_IMMUTABLE` defaults to `false`. An immutable release policy cannot be
-  corrected, and every change of the image changes the hash. Set
-  `KEY_IMMUTABLE=true` for anything beyond tests. A runner whose setup is on
+- `KEY_IMMUTABLE` defaults to `true`. An immutable release policy cannot be
+  corrected, and every change of the image changes the hash. A test on a
+  non-prod `CHAIN` may set `KEY_IMMUTABLE=false`; `key-create` refuses that
+  on mainnet. A runner whose setup is on
   mainnet refuses to start with a key that is not immutable, or whose
   policy is not the template's shape
   (`signer-protocol/docs/protocol.md`, "Key rule lock"). Keys are RSA-HSM,
   2048 bit by default (`KEY_SIZE`), enough to wrap one data key in a test.
   Use 3072 in production.
 - Create the key in the vault, never import it, and make it immutable at
-  creation (`deploy.sh` does both with `KEY_IMMUTABLE=true`). The runner
-  cannot see how the key was made. Whoever holds a copy of an imported
+  creation (`deploy.sh` does both by default). The operator's admin who
+  creates the key is trusted at setup, as on AWS (on GCP, which has no
+  lock, the admin stays trusted after setup). The runner checks
+  the lock but cannot prove the key's history before it, and HEALTH's
+  `key_lock_why` says so. Whoever holds a copy of an imported
   key, or got the key released while its policy could still change, can
   derive the sealing key from it and the public `setup_hash`, and open
   every sealed share. Validator keys are imported as usual; this rule is

@@ -398,6 +398,9 @@ func TestKeyRuleOfFixtures(t *testing.T) {
 		if err != nil || r.Lock != c.want || r.Hash == ([32]byte{}) {
 			t.Errorf("%s: %+v %v, want %s", c.name, r, err, c.want)
 		}
+		if (c.want == backend.KeyLockLocked) != (r.Why == lockedWhy) {
+			t.Errorf("%s: why %q", c.name, r.Why)
+		}
 	}
 	if _, _, err := keyRuleOf(answer(`null`), "maa.example"); err == nil {
 		t.Error("an answer without a release policy gave a rule")

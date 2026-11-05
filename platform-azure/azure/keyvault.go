@@ -228,6 +228,10 @@ func checkedVersion(kid, answered string) (string, error) {
 var purgeProtected = map[string]bool{"Recoverable": true, "Recoverable+ProtectedSubscription": true,
 	"CustomizedRecoverable": true, "CustomizedRecoverable+ProtectedSubscription": true}
 
+// lockedWhy is the Why of a locked key: the lock is checked, the key's
+// history before it is not.
+const lockedWhy = "locked; the key's history before the lock (an import or an earlier release) is not provable"
+
 // keyRuleOf reads a Get Key answer. key_release_hash is over the key id
 // with version (key.kid), attributes.exportable, release_policy.immutable,
 // release_policy.contentType and the policy bytes (release_policy.data,
@@ -282,7 +286,7 @@ func keyRuleOf(resp []byte, maaHost string) (platform.KeyRule, CheckedKey, error
 		return []byte{0}
 	}
 	r := platform.KeyRule{Hash: backend.KeyReleaseHash(backend.KeyReleaseAzure, []byte(out.Key.Kid), flag(out.Attributes.Exportable),
-		flag(rp.Immutable), []byte(rp.ContentType), policy), Lock: backend.KeyLockLocked}
+		flag(rp.Immutable), []byte(rp.ContentType), policy), Lock: backend.KeyLockLocked, Why: lockedWhy}
 	hostData, perr := checkReleasePolicy(policy, maaHost)
 	var why []string
 	if !rp.Immutable {

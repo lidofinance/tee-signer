@@ -50,7 +50,8 @@
 # sends its logs there), NETWORK (optional, unset for the runner alone:
 # a network entry part of the build overlay SIGNER_BUILD_OVERLAY_DIR, with
 # its settings), STDIO=enable|disable (default enable),
-# KEY_IMMUTABLE=true|false (default false), KEY_SIZE (default 2048),
+# KEY_IMMUTABLE=true|false (default true; false only on a non-prod CHAIN),
+# KEY_SIZE (default 2048),
 # KEY_NAME_PREFIX (default signer-kek: the keys are signer-kek-N; the
 # generic image takes its own, for example signer-gkek, so a running
 # per-chain image keeps its key),
@@ -84,7 +85,7 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 STDIO="${STDIO:-enable}"
-KEY_IMMUTABLE="${KEY_IMMUTABLE:-false}"
+KEY_IMMUTABLE="${KEY_IMMUTABLE:-true}"
 KEY_SIZE="${KEY_SIZE:-2048}"
 ZERO_GUID="00000000-0000-0000-0000-000000000000"
 TMP_DIR=""
@@ -360,6 +361,12 @@ cmd_key_create() {
   local n="$1" dir hash
   check_signer "$n"
   need VAULT
+  case "$KEY_IMMUTABLE" in true | false) ;; *) die "KEY_IMMUTABLE must be true or false (got '$KEY_IMMUTABLE')" ;; esac
+  # A mutable release policy lets the key's owner release the key to any
+  # code, so a prod chain takes only an immutable key.
+  if [ "$KEY_IMMUTABLE" = false ] && chain_is_prod "$CHAIN"; then
+    die "KEY_IMMUTABLE=false on prod chain $CHAIN: key-create makes only immutable keys there"
+  fi
   gate "create HSM key $(key_name "$n") (RSA $KEY_SIZE, exportable, immutable=$KEY_IMMUTABLE) in $VAULT with a release policy for the CCE policy of signer $n"
   # key create on an existing name adds a version, and a runner releases the
   # newest version at its next start: that would take a running group's key.

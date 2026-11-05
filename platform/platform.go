@@ -177,7 +177,9 @@ type KeyRule struct {
 	// (tee-signer keyRule).
 	Hash [32]byte
 	Lock backend.KeyLock
-	// Why says what keeps the rule open, or why it was not read.
+	// Why says what keeps the rule open, why it was not read, or for a
+	// locked rule what the lock cannot show (Azure: the key's history
+	// before the lock).
 	Why string
 	// NoService: the platform has no key release service at all (dev), so
 	// there is no rule to lock or to accept.
