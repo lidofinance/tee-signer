@@ -85,6 +85,8 @@ code. The Azure platform is kept on purpose.
 - [signer-admin](signer-admin) and the other tools, except `share-import`
   (row 14) and `show` and `sign` with the setuptext printer (row 15), and
   [web3signer-api](web3signer-api).
+- [tooling](tooling): monitoring helpers that run outside the TEE, such as
+  the HEALTH exporter.
 - The deploy files (`platform-*/deploy`), except the enclave Dockerfile
   (row 10).
 - The build and release scripts (the release gate, `check-deps.sh`, the
