@@ -10,7 +10,8 @@
 // key and signing root always give the same signature: a repeat gets the
 // answer the signers already gave, and the gateway gains no signature it did
 // not already hold. Slashable types never come here: the signers must see
-// every one of them (DESIGN-INVARIANTS.md, rules 3 and 7).
+// every one of them, so that their slashing protection checks it (README,
+// Coalescing).
 package coalesce
 
 import (

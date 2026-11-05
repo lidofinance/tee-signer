@@ -131,7 +131,7 @@ func run(cfgPath string, log *slog.Logger) error {
 		}
 		mux := http.NewServeMux()
 		mux.Handle("GET /metrics", m.Registry)
-		msrv := httpServer(ctx, cfg.MetricsAccess, serverTLS, mux, log)
+		msrv := httpServer(ctx, cfg.MetricsAccess, serverTLS, mux, cfg.Signers.Timeout, log)
 		go func() { errCh <- fmt.Errorf("metrics: %w", serve(msrv, ln)) }()
 		defer msrv.Close()
 		log.Info("metrics", "addr", cfg.Metrics, "path", "/metrics", "access", cfg.MetricsAccess)
@@ -156,7 +156,7 @@ func run(cfgPath string, log *slog.Logger) error {
 	}
 	log.Info("coalesce", "enabled", *cfg.Coalesce.Enabled, "cache_slots", *cfg.Coalesce.CacheSlots,
 		"seconds_per_slot", cfg.Chain.SecondsPerSlot)
-	srv := httpServer(ctx, cfg.Access, serverTLS, handler.Handler(), log)
+	srv := httpServer(ctx, cfg.Access, serverTLS, handler.Handler(), cfg.Signers.Timeout, log)
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return err
@@ -184,8 +184,14 @@ func run(cfgPath string, log *slog.Logger) error {
 // without an accepted certificate) go to the log as warnings. An mtls
 // listener retires its connections when the client CA changes, until ctx
 // ends.
-func httpServer(ctx context.Context, access string, st *servertls.Server, h http.Handler, log *slog.Logger) *http.Server {
-	srv := &http.Server{Handler: h, ReadHeaderTimeout: readHeaderTimeout, IdleTimeout: idleTimeout,
+//
+// The write timeout covers the slowest request: its read, a key list load
+// for a key the list lacks, then the signing, each up to signTimeout
+// (signers.timeout).
+func httpServer(ctx context.Context, access string, st *servertls.Server, h http.Handler, signTimeout time.Duration,
+	log *slog.Logger) *http.Server {
+	srv := &http.Server{Handler: h, ReadHeaderTimeout: readHeaderTimeout, ReadTimeout: readTimeout,
+		WriteTimeout: readTimeout + 2*signTimeout, IdleTimeout: idleTimeout, MaxHeaderBytes: maxHeaderBytes,
 		ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
 	if config.UsesTLS(access) {
 		srv.TLSConfig = st.Config(access == config.AccessMTLS)
@@ -221,11 +227,15 @@ func retire(srv *http.Server, window time.Duration) *time.Timer {
 	return time.AfterFunc(window, func() { srv.SetKeepAlivesEnabled(true) })
 }
 
-// The timeouts of both listeners, and how long keep-alives stay off after
-// a client CA change.
+// The timeouts and header limit of both listeners, and how long keep-alives
+// stay off after a client CA change. A sign request is a few KiB of
+// headers and body, so 30 s to read it and 64 KiB of headers leave a wide
+// margin.
 const (
 	readHeaderTimeout = 10 * time.Second
+	readTimeout       = 30 * time.Second
 	idleTimeout       = 120 * time.Second
+	maxHeaderBytes    = 64 << 10
 	retireWindow      = 30 * time.Second
 )
 

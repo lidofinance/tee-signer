@@ -163,7 +163,9 @@ func everySubset(pk phase0.BLSPubKey, shares []share, idx []uint64, t int) bool 
 // keyList is the gateway's list of keys. A reader that finds it older
 // than maxAge loads it again first, so keys the signers get after the
 // gateway started show up without a restart. One load runs at a time;
-// readers that arrive during a load wait for it and use its result. A
+// readers that arrive during a load wait for it and use its result. A sign
+// request for a key the list has does not wait: it starts the load in the
+// background and signs with the list as it is. A
 // failed load keeps the old list, and the next try waits maxAge again, so
 // signers that are down, or unknown keys in sign requests, cause at most
 // one load per maxAge.
@@ -216,6 +218,28 @@ func (l *keyList) fresh(ctx context.Context) {
 	if _, err := l.loadLocked(context.WithoutCancel(ctx)); err != nil {
 		l.log.Warn("key refresh failed; keeping the current list", "keys", l.size(), "err", err.Error())
 	}
+}
+
+// freshInBackground starts a load when the list is older than maxAge and
+// no load runs, and returns without waiting for it.
+func (l *keyList) freshInBackground() {
+	if !l.stale() {
+		return
+	}
+	select {
+	case l.loading <- struct{}{}:
+	default:
+		return // a running load will make the list fresh
+	}
+	go func() {
+		defer func() { <-l.loading }()
+		if !l.stale() {
+			return
+		}
+		if _, err := l.loadLocked(context.Background()); err != nil {
+			l.log.Warn("key refresh failed; keeping the current list", "keys", l.size(), "err", err.Error())
+		}
+	}()
 }
 
 // loadLocked runs the load and logs the keys it adds or drops; the caller
@@ -287,9 +311,12 @@ func (l *keyList) list(ctx context.Context) []phase0.BLSPubKey {
 
 // get finds the group of pubkey. A key the list lacks may be one the
 // signers got since the last load: when the list is older than maxAge,
-// get loads it and looks again.
+// get loads it and looks again. A key the list has is served from it at
+// once, and a list older than maxAge loads again in the background.
 func (l *keyList) get(ctx context.Context, pubkey phase0.BLSPubKey) (group, bool) {
 	if g, ok := l.lookup(pubkey); ok {
+		l.freshInBackground()
+
 		return g, true
 	}
 	l.fresh(ctx)

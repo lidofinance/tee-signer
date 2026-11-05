@@ -21,7 +21,8 @@ import (
 
 // keysMaxAge is how old the key list may be when a request reads it: GET
 // publicKeys and a sign request for a key the list lacks load it from the
-// signers again first.
+// signers again first; a sign request for a key it has starts that load in
+// the background.
 const keysMaxAge = 30 * time.Second
 
 // SignerConfig is one TEE signer.

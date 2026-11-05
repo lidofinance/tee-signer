@@ -186,12 +186,14 @@ func TestSignersSettings(t *testing.T) {
 	}
 
 	for name, body := range map[string]string{
-		"no nodes":            pin + "signers:\n  client_cert: c\n  client_key: k\n",
-		"negative reload":     pin + "signers:\n  client_cert: c\n  client_key: k\n  cert_reload_interval: -1s\n  nodes: [{address: tcp:127.0.0.1:1, attestation: {verifier: dev}}]\n",
-		"no client cert":      pin + "signers:\n  nodes: [{address: \"tcp:1:1\", attestation: {verifier: dev}}]\n",
-		"no address":          pin + "signers:\n  client_cert: c\n  client_key: k\n  nodes: [{attestation: {verifier: dev}}]\n",
-		"no verifier":         pin + "signers:\n  client_cert: c\n  client_key: k\n  nodes: [{address: \"tcp:1:1\"}]\n",
-		"unknown attestation": pin + "signers:\n  client_cert: c\n  client_key: k\n  nodes: [{address: \"tcp:1:1\", attestation: {verifier: dev, pcr0: x}}]\n",
+		"no nodes":              pin + "signers:\n  client_cert: c\n  client_key: k\n",
+		"negative reload":       pin + "signers:\n  client_cert: c\n  client_key: k\n  cert_reload_interval: -1s\n  nodes: [{address: tcp:127.0.0.1:1, attestation: {verifier: dev}}]\n",
+		"negative timeout":      pin + "signers:\n  client_cert: c\n  client_key: k\n  timeout: -1s\n  nodes: [{address: tcp:127.0.0.1:1, attestation: {verifier: dev}}]\n",
+		"negative dial timeout": pin + "signers:\n  client_cert: c\n  client_key: k\n  dial_timeout: -1s\n  nodes: [{address: tcp:127.0.0.1:1, attestation: {verifier: dev}}]\n",
+		"no client cert":        pin + "signers:\n  nodes: [{address: \"tcp:1:1\", attestation: {verifier: dev}}]\n",
+		"no address":            pin + "signers:\n  client_cert: c\n  client_key: k\n  nodes: [{attestation: {verifier: dev}}]\n",
+		"no verifier":           pin + "signers:\n  client_cert: c\n  client_key: k\n  nodes: [{address: \"tcp:1:1\"}]\n",
+		"unknown attestation":   pin + "signers:\n  client_cert: c\n  client_key: k\n  nodes: [{address: \"tcp:1:1\", attestation: {verifier: dev, pcr0: x}}]\n",
 		"same name twice": pin + "signers:\n  client_cert: c\n  client_key: k\n  nodes: [{name: a, address: \"tcp:1:1\", attestation: {verifier: dev}}," +
 			" {name: a, address: \"tcp:1:2\", attestation: {verifier: dev}}]\n",
 		"share index below the signers": pin + "signers:\n  client_cert: c\n  client_key: k\n  max_share_index: 1\n" +
