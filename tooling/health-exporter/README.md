@@ -112,8 +112,8 @@ Every metric has the label `runner`, the name given on the command line.
 | `tee_signer_config_pending_effective_timestamp_seconds` | gauge | When the pending update of the group takes effect; 0 if none |
 | `tee_signer_validators` | gauge | Keys or shares loaded |
 | `tee_signer_started_timestamp_seconds` | gauge | Runner start time |
-| `tee_signer_health_rtt_seconds` | gauge | Duration of the last HEALTH call |
-| `tee_signer_clock_skew_seconds` | gauge | Runner clock minus this host's clock |
+| `tee_signer_health_rtt_seconds` | gauge | Duration of the last HEALTH call on an open connection |
+| `tee_signer_clock_skew_seconds` | gauge | Runner clock minus this host's clock, from the same call. A call that opens a new connection also times the dial and attestation check, so it leaves both values as they were; they are absent until the first call on an open connection |
 | `tee_signer_clock_trusted` | gauge | The runner's clock is a trusted source |
 | `tee_signer_allow_unverified_nonslashable` | gauge | The runner signs bare roots it cannot check |
 | `tee_signer_unverified_signatures_total` | counter | Such signatures since start |

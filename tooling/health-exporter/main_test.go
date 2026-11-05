@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -197,4 +198,57 @@ func TestPollWrongSetupPin(t *testing.T) {
 	wantLine(t, out, `tee_signer_up{runner="s1"} 0`)
 	wantLine(t, out, `tee_signer_health_errors_total{runner="s1"} 1`)
 	wantLine(t, out, `tee_signer_attestations_verified_total{runner="s1"} 0`)
+}
+
+// slowDial forwards to addr, but holds each new connection for d before it
+// forwards a byte, so the TLS handshake of every new connection is slow.
+func slowDial(t *testing.T, addr string, d time.Duration) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				time.Sleep(d)
+				up, err := net.Dial("tcp", strings.TrimPrefix(addr, "tcp:"))
+				if err != nil {
+					return
+				}
+				defer up.Close()
+				go io.Copy(up, c)
+				io.Copy(c, up)
+			}()
+		}
+	}()
+	return "tcp:" + ln.Addr().String()
+}
+
+// A poll that opens a new connection times the dial and the attestation
+// check too, so it must not set rtt or skew.
+func TestPollRTTSkipsNewConnection(t *testing.T) {
+	fr := fakerunner.Start(t, backend.SetupState{})
+	const dial = 500 * time.Millisecond
+	r, err := newRunner("s1", writeConn(t, slowDial(t, fr.Addr(), dial), fr, ""), 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.cl.Close()
+	r.poll(10 * time.Second)
+	out := rendered(r)
+	wantLine(t, out, `tee_signer_up{runner="s1"} 1`)
+	if strings.Contains(out, "tee_signer_health_rtt_seconds{") || strings.Contains(out, "tee_signer_clock_skew_seconds{") {
+		t.Errorf("rtt or skew from a poll that dialed:\n%s", out)
+	}
+	r.poll(10 * time.Second)
+	if r.rtt <= 0 || r.rtt >= dial/2 {
+		t.Errorf("rtt on an open connection %v, want above 0 and below %v", r.rtt, dial/2)
+	}
 }
