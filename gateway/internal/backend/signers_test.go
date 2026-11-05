@@ -2,10 +2,12 @@ package backend
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"math/big"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,7 +15,7 @@ import (
 	"time"
 
 	"github.com/attestantio/go-eth2-client/spec/phase0"
-	"github.com/herumi/bls-eth-go-binary/bls"
+	blst "github.com/supranational/blst/bindings/go"
 
 	proto "github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/web3signer-api/signing"
@@ -22,49 +24,57 @@ import (
 // testKey is a validator key split t of n: the secret, its public key, and
 // share i (index i+1) of each signer.
 type testKey struct {
-	sk     bls.SecretKey
+	sk     blst.SecretKey
 	pk     phase0.BLSPubKey
-	shares []bls.SecretKey
+	shares []blst.SecretKey
+}
+
+// randScalar is a random nonzero scalar mod r.
+func randScalar(t *testing.T) *big.Int {
+	t.Helper()
+	for {
+		k, err := rand.Int(rand.Reader, groupR)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if k.Sign() != 0 {
+			return k
+		}
+	}
+}
+
+// randKey is a random secret key.
+func randKey(t *testing.T) blst.SecretKey {
+	t.Helper()
+
+	return *blstKey(randScalar(t))
 }
 
 func splitKey(t *testing.T, threshold, n int) *testKey {
 	t.Helper()
-	if err := initBLS(); err != nil {
-		t.Fatal(err)
-	}
-	poly := make([]bls.SecretKey, threshold)
+	poly := make([]*big.Int, threshold)
 	for i := range poly {
-		poly[i].SetByCSPRNG()
+		poly[i] = randScalar(t)
 	}
-	k := &testKey{sk: poly[0]}
-	copy(k.pk[:], poly[0].GetPublicKey().Serialize())
-	for i := 1; i <= n; i++ {
-		id, err := shareID(uint64(i))
-		if err != nil {
-			t.Fatal(err)
+	k := &testKey{sk: *blstKey(poly[0])}
+	k.pk = pubOf(&k.sk)
+	for x := 1; x <= n; x++ {
+		y := new(big.Int)
+		for i := threshold - 1; i >= 0; i-- { // Horner
+			y.Mul(y, big.NewInt(int64(x))).Add(y, poly[i]).Mod(y, groupR)
 		}
-		var s bls.SecretKey
-		if err := s.Set(poly, &id); err != nil {
-			t.Fatal(err)
-		}
-		k.shares = append(k.shares, s)
+		k.shares = append(k.shares, *blstKey(y))
 	}
 
 	return k
 }
 
-func pubOf(s *bls.SecretKey) phase0.BLSPubKey {
-	var pk phase0.BLSPubKey
-	copy(pk[:], s.GetPublicKey().Serialize())
-
-	return pk
+func pubOf(s *blst.SecretKey) phase0.BLSPubKey {
+	return blstPub(s)
 }
 
-func signRoot(s *bls.SecretKey, root phase0.Root) proto.Signature {
-	var sig proto.Signature
-	copy(sig[:], s.SignByte(root[:]).Serialize())
-
-	return sig
+func signRoot(s *blst.SecretKey, root phase0.Root) proto.Signature {
+	return proto.Signature(blstSign(s, root, popDST))
 }
 
 // fakeRunner is a signer that holds shares and signs the root the test
@@ -72,11 +82,11 @@ func signRoot(s *bls.SecretKey, root phase0.Root) proto.Signature {
 type fakeRunner struct {
 	mu     sync.Mutex
 	keys   []proto.ValidatorKey
-	secret map[proto.Pubkey]*bls.SecretKey
+	secret map[proto.Pubkey]*blst.SecretKey
 	root   phase0.Root
-	err    error          // every call fails with it
-	signer *bls.SecretKey // signs with this key instead of the share (a bad partial)
-	hang   chan struct{}  // Sign waits until it closes or ctx ends
+	err    error           // every call fails with it
+	signer *blst.SecretKey // signs with this key instead of the share (a bad partial)
+	hang   chan struct{}   // Sign waits until it closes or ctx ends
 	signs  int
 }
 
@@ -127,7 +137,7 @@ func (f *fakeRunner) set(fn func(f *fakeRunner)) {
 func cluster(keys []*testKey, n int) []*fakeRunner {
 	fakes := make([]*fakeRunner, n)
 	for i := range fakes {
-		f := &fakeRunner{secret: map[proto.Pubkey]*bls.SecretKey{}}
+		f := &fakeRunner{secret: map[proto.Pubkey]*blst.SecretKey{}}
 		for _, k := range keys {
 			f.keys = append(f.keys, proto.ValidatorKey{Pubkey: proto.Pubkey(k.pk), SharePubkey: proto.Pubkey(pubOf(&k.shares[i])),
 				Index: proto.IndexUnknown})

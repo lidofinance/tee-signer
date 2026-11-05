@@ -7,8 +7,8 @@ import (
 	blst "github.com/supranational/blst/bindings/go"
 )
 
-// A signature made with blst, the library of the signers' core, verifies
-// here (herumi) under the same ciphersuite.
+// A signature made with the blst Go bindings verifies through the signer
+// core's check under the same ciphersuite.
 func TestVerifyBLS(t *testing.T) {
 	ikm := make([]byte, 32)
 	ikm[0] = 7

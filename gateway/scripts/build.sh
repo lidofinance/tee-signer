@@ -6,6 +6,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 command -v go >/dev/null || die "go not found (Go 1.26 or later)"
 mkdir -p "$GW_BIN"
+# The gateway links the signer core and blst (cgo, build/<arch>/lib).
+bash "$REPO_ROOT/scripts/build-core.sh" "$(uname -m)"
 cd "$GW_DIR"
 log "building gateway and blsverify ($(go env GOVERSION), $(go env GOARCH))"
 CGO_ENABLED=1 go build -trimpath -o "$GW_BIN/gateway" ./cmd/gateway

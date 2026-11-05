@@ -3,122 +3,70 @@ package backend
 import (
 	"errors"
 	"fmt"
-	"strconv"
-	"sync"
 
 	"github.com/attestantio/go-eth2-client/spec/phase0"
-	"github.com/herumi/bls-eth-go-binary/bls"
+
+	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/threshold"
+	proto "github.com/lidofinance/tee-signer/signer-protocol"
 )
 
-var (
-	blsOnce sync.Once
-	blsErr  error
-)
-
-// initBLS sets herumi BLS up for Ethereum: BLS12-381 with the hash to curve
-// and serialization of the consensus specs.
-func initBLS() error {
-	blsOnce.Do(func() {
-		if blsErr = bls.Init(bls.BLS12_381); blsErr == nil {
-			blsErr = bls.SetETHmode(bls.EthModeDraft07)
-		}
-	})
-
-	return blsErr
-}
-
-// VerifyBLS checks sig over root for pubkey.
+// VerifyBLS checks sig over root for pubkey with the signer core's blst
+// check (Ethereum proof-of-possession ciphersuite). It refuses a public
+// key at infinity and a key or signature outside its subgroup.
 func VerifyBLS(pubkey phase0.BLSPubKey, root phase0.Root, sig phase0.BLSSignature) error {
-	if err := initBLS(); err != nil {
-		return fmt.Errorf("init BLS: %w", err)
-	}
-	var pk bls.PublicKey
-	if err := pk.Deserialize(pubkey[:]); err != nil {
-		return fmt.Errorf("public key: %w", err)
-	}
-	var s bls.Sign
-	if err := s.Deserialize(sig[:]); err != nil {
-		return fmt.Errorf("signature: %w", err)
-	}
-	if !s.VerifyByte(&pk, root[:]) {
+	if !core.Verify(proto.Pubkey(pubkey), proto.Root(root), proto.Signature(sig)) {
 		return errors.New("signature does not verify")
 	}
 
 	return nil
 }
 
-// shareID is the x coordinate of share index i, the point at which the
-// split polynomial gives that share.
-func shareID(i uint64) (bls.ID, error) {
-	var id bls.ID
-	if i == 0 {
-		return id, errors.New("share index 0")
-	}
-
-	return id, id.SetDecString(strconv.FormatUint(i, 10))
-}
-
-func shareIDs(indices []uint64) ([]bls.ID, error) {
-	ids := make([]bls.ID, len(indices))
-	for i, x := range indices {
-		var err error
-		if ids[i], err = shareID(x); err != nil {
-			return nil, err
+// checkIndices refuses share index 0: share i is the split polynomial's
+// value at x = i, and the value at 0 is the secret itself.
+func checkIndices(indices []uint64) error {
+	for _, i := range indices {
+		if i == 0 {
+			return errors.New("share index 0")
 		}
 	}
 
-	return ids, nil
+	return nil
 }
 
 // combine interpolates partial signatures at zero (Lagrange): t partials
 // of a t-of-n split, with their share indices, give the validator
 // signature.
 func combine(indices []uint64, sigs []phase0.BLSSignature) (phase0.BLSSignature, error) {
-	var out phase0.BLSSignature
-	if err := initBLS(); err != nil {
-		return out, err
+	if err := checkIndices(indices); err != nil {
+		return phase0.BLSSignature{}, err
 	}
-	ids, err := shareIDs(indices)
-	if err != nil {
-		return out, err
-	}
-	parts := make([]bls.Sign, len(sigs))
+	parts := make([]proto.Signature, len(sigs))
 	for i := range sigs {
-		if err := parts[i].Deserialize(sigs[i][:]); err != nil {
-			return out, fmt.Errorf("partial signature %d: %w", i, err)
-		}
+		parts[i] = proto.Signature(sigs[i])
 	}
-	var s bls.Sign
-	if err := s.Recover(parts, ids); err != nil {
-		return out, err
+	s, err := threshold.RecoverSignature(indices, parts)
+	if err != nil {
+		return phase0.BLSSignature{}, fmt.Errorf("combine: %w", err)
 	}
-	copy(out[:], s.Serialize())
 
-	return out, nil
+	return phase0.BLSSignature(s), nil
 }
 
 // recoverPubkey is combine for public keys: t share keys with their
 // indices give the validator key.
 func recoverPubkey(indices []uint64, keys []phase0.BLSPubKey) (phase0.BLSPubKey, error) {
-	var out phase0.BLSPubKey
-	if err := initBLS(); err != nil {
-		return out, err
+	if err := checkIndices(indices); err != nil {
+		return phase0.BLSPubKey{}, err
 	}
-	ids, err := shareIDs(indices)
-	if err != nil {
-		return out, err
-	}
-	parts := make([]bls.PublicKey, len(keys))
+	parts := make([]proto.Pubkey, len(keys))
 	for i := range keys {
-		if err := parts[i].Deserialize(keys[i][:]); err != nil {
-			return out, fmt.Errorf("share key %d: %w", i, err)
-		}
+		parts[i] = proto.Pubkey(keys[i])
 	}
-	var pk bls.PublicKey
-	if err := pk.Recover(parts, ids); err != nil {
-		return out, err
+	pk, err := threshold.RecoverPubkey(indices, parts)
+	if err != nil {
+		return phase0.BLSPubKey{}, fmt.Errorf("recover public key: %w", err)
 	}
-	copy(out[:], pk.Serialize())
 
-	return out, nil
+	return phase0.BLSPubKey(pk), nil
 }

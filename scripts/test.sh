@@ -72,6 +72,11 @@ if [ "$e2e" = 1 ]; then
   tail -n 1 "$LOGS/test-chain.log"
 else
   log "CI_E2E=0: no runner code changed: skipped the runner builds, release gate, chains and e2e"
+  if [ "$gateway_e2e" = 1 ]; then
+    # The gateway's unit tests and its e2e test link the signer core (cgo).
+    log "signer core for cgo: the gateway links it"
+    bash "$ROOT/scripts/build-core.sh" "$HOST_ARCH"
+  fi
 fi
 
 summary() {
@@ -117,8 +122,7 @@ if [ "$e2e" = 1 ]; then
     summary "$LOGS/e2e-aarch64-qemu.log" | grep -E '^(ok|FAIL)'
   fi
 elif [ "$gateway_e2e" = 1 ]; then
-  log "e2e: the gateway only (CI_E2E_GATEWAY=1): signer core for cgo, then TestE2EGateway on a dev runner it builds"
-  bash "$ROOT/scripts/build-core.sh" "$HOST_ARCH"
+  log "e2e: the gateway only (CI_E2E_GATEWAY=1): TestE2EGateway on a dev runner it builds"
   (cd "$ROOT/tests" && go test $RACE -count=1 -v -timeout 20m -tags platform_aws -run 'TestE2EGateway' ./e2e/) \
     >"$LOGS/e2e-gateway-$HOST_ARCH.log" 2>&1 || { tail -80 "$LOGS/e2e-gateway-$HOST_ARCH.log"; exit 1; }
   summary "$LOGS/e2e-gateway-$HOST_ARCH.log" | grep -E '^(ok|FAIL)'
