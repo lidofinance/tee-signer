@@ -364,6 +364,25 @@ func TestNitroSynthetic(t *testing.T) {
 		_, err := VerifyNitro(doc, opts())
 		wantErr(t, err, ErrStale)
 	})
+	t.Run("timestamp above int64", func(t *testing.T) {
+		// 2^63 milliseconds read as an int64 is a time far in the past,
+		// which the not-in-the-future check lets through. With no MaxAge
+		// the nonce alone binds the document, so nothing else refuses it.
+		p, err := cbor.Marshal(map[string]any{
+			"module_id": "i-test-enc0000000000000000", "digest": "SHA384",
+			"timestamp": uint64(1) << 63, "pcrs": testgen.DefaultPCRs(),
+			"certificate": ca.Leaf.Raw, "cabundle": [][]byte{ca.Root.Raw, ca.Inter.Raw},
+			"public_key": nil, "user_data": ud, "nonce": nonce,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		doc := ca.NitroDoc(t, testgen.NitroSpec{TS: now, Payload: p})
+		o := opts()
+		o.MaxAge = 0
+		_, err = VerifyNitro(doc, o)
+		wantErr(t, err, ErrFormat)
+	})
 	t.Run("debug mode", func(t *testing.T) {
 		pcrs := defaultPCRs()
 		for i := range pcrs {

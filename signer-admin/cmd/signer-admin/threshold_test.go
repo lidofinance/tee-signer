@@ -390,16 +390,12 @@ func keyReleaseOf(t *testing.T, path string) setupwire.KeyRelease {
 	return s.Platform.SealingKeyRelease
 }
 
-// onMainnet moves a setup file in the human form to mainnet, with a
-// change_delay_seconds the prod chain's floor takes.
+// onMainnet moves a setup file in the human form to mainnet, with its
+// exact chain values and a change_delay_seconds the prod chain's floor
+// takes.
 func onMainnet(t *testing.T, text string) string {
 	t.Helper()
-	m := strings.Replace(text, "genesis_fork_version = 0x00000001\n", "genesis_fork_version = 0x00000000\n", 1)
-	out := strings.Replace(m, "change_delay_seconds = 0\n", fmt.Sprintf("change_delay_seconds = %d\n", setupwire.DefaultTimeLock), 1)
-	if m == text || out == m {
-		t.Fatal("the setup text changed its genesis_fork_version or change_delay_seconds line")
-	}
-	return out
+	return setLines(t, mainnetChain(t, text), map[string]string{"change_delay_seconds": fmt.Sprint(setupwire.DefaultTimeLock)})
 }
 
 // setup refuses a prod chain setup whose change_delay_seconds is below the
@@ -412,7 +408,7 @@ func TestSetupProdChainChangeDelayFloor(t *testing.T) {
 	file := func(name string, timeLock int, mainnet bool) string {
 		text := setupText(dir, ca, genesisTime(), lockedText(keys, 2, timeLock, fee1), "a", "b")
 		if mainnet {
-			text = strings.Replace(text, "genesis_fork_version = 0x00000001\n", "genesis_fork_version = 0x00000000\n", 1)
+			text = mainnetChain(t, text)
 		}
 		return writeFile(t, filepath.Join(t.TempDir(), name), text)
 	}

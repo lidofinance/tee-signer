@@ -104,9 +104,51 @@ func (c Chain) CheckChain(ch *setupwire.Chain) error {
 		return fmt.Errorf("chain %s (%s): a %s build runs on %s only", name, values, c, own)
 	case name != "":
 		f, r, _ := setupwire.PublicNetworkValues(name)
-		return fmt.Errorf("chain with %s: %s has fork version 0x%x and root 0x%x, and a partial match is a prod chain; a %s build runs on %s only", values, name, f, r, c, own)
+		return fmt.Errorf("chain with %s: %s has fork version 0x%x and root 0x%x, and a partial match is a prod chain; a %s build runs on %s only", values, name, [4]byte(f), [32]byte(r), c, own)
 	case !known:
 		return fmt.Errorf("chain with %s: no row in the chain table matches both values, so a prod chain, and a %s build runs on %s only", values, c, own)
 	}
 	return fmt.Errorf("chain with %s: a %s build runs on %s only", values, c, own)
+}
+
+// CheckSetupChain is the check of the tools that write setups: it refuses
+// a chain the runners of build c do not start on, so no setup is written
+// that no runner takes. A non-prod build starts on its own chain only
+// (CheckChain). The mainnet build starts on mainnet with its exact values
+// on its cloud platforms (tee-signer/prodchain.go) and, on the dev platform,
+// which protects nothing, on any non-prod chain, so for it a prod chain
+// must be mainnet exactly. A public network's fork version with another
+// root, or its root with another fork version, is refused for every build
+// with a message that names both chains: it is the mistake the check is
+// for.
+func (c Chain) CheckSetupChain(ch *setupwire.Chain) error {
+	forkVersion, root := [4]byte(ch.GenesisForkVersion), [32]byte(ch.GenesisValidatorsRoot)
+	fn, rn := setupwire.PublicNetworkOfForkVersion(ch.GenesisForkVersion), setupwire.PublicNetworkOfRoot(ch.GenesisValidatorsRoot)
+	if (fn != "" || rn != "") && fn != rn {
+		owner := func(n string) string {
+			if n == "" {
+				return "no public network's"
+			}
+			return n + "'s"
+		}
+		return fmt.Errorf("chain with genesis fork version 0x%x and genesis validators root 0x%x: the fork version is %s, the root %s, so the values belong to different chains, and no build runs on them",
+			forkVersion, root, owner(fn), owner(rn))
+	}
+	if c != Mainnet || ch.Prod() {
+		return c.CheckChain(ch)
+	}
+	return nil
+}
+
+// CheckAnyBuild refuses a chain no build starts on (CheckSetupChain of
+// every build): genesis values of two different networks, a prod chain
+// other than mainnet, or mainnet's values with other times. The error is
+// the mainnet build's, which names the values.
+func CheckAnyBuild(ch *setupwire.Chain) error {
+	for _, c := range Chains {
+		if c.CheckSetupChain(ch) == nil {
+			return nil
+		}
+	}
+	return Mainnet.CheckSetupChain(ch)
 }

@@ -102,6 +102,76 @@ func TestOwnImageListed(t *testing.T) {
 	}
 }
 
+// setLines replaces the value of each key in a human setup text, and fails
+// the test on a key the text does not have.
+func setLines(t *testing.T, text string, values map[string]string) string {
+	t.Helper()
+	seen := map[string]bool{}
+	lines := strings.Split(text, "\n")
+	for i, l := range lines {
+		k, _, ok := strings.Cut(l, "=")
+		k = strings.TrimSpace(k)
+		if v, found := values[k]; ok && found {
+			lines[i] = k + " = " + v
+			seen[k] = true
+		}
+	}
+	for k := range values {
+		if !seen[k] {
+			t.Fatalf("the setup text has no %s line", k)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// mainnetChain gives a human setup text mainnet's exact chain values, which
+// the mainnet build takes, and a change_delay_seconds at the prod floor.
+func mainnetChain(t *testing.T, text string) string {
+	t.Helper()
+	return setLines(t, text, map[string]string{
+		"genesis_fork_version": "0x00000000", "genesis_validators_root": "0x4b363db94e286120d76eb905340fdd4e54bfe9f06bf33ff6cf5ad27f511bfe95",
+		"genesis_time": fmt.Sprint(setupwire.MainnetGenesisTime), "seconds_per_slot": fmt.Sprint(setupwire.MainnetSecondsPerSlot),
+		"slots_per_epoch": fmt.Sprint(setupwire.MainnetSlotsPerEpoch), "preset": "mainnet",
+		"change_delay_seconds": fmt.Sprint(setupwire.DefaultTimeLock),
+	})
+}
+
+// encode refuses a setup whose genesis fork version and genesis validators
+// root belong to different chains, which every runner refuses at start,
+// and writes nothing; with mainnet's exact values it writes the setup.
+func TestEncodeRefusesMixedChain(t *testing.T) {
+	text, err := os.ReadFile(gcpSample)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A GCP runner checks itself against a gcp image (setupwire.CheckOwnImageListed).
+	mainnet := mainnetChain(t, string(text)) + gcpImage + "\n"
+	dir := t.TempDir()
+	write := func(name, text string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	for name, values := range map[string]map[string]string{
+		"mainnet fork version, the sample's root": {"genesis_validators_root": "0x4b36000000000000000000000000000000000000000000000000000000000000"},
+		"hoodi fork version, mainnet root":        {"genesis_fork_version": "0x10000910"},
+	} {
+		out := filepath.Join(dir, "mixed.setup")
+		err := encode(write("mixed.conf", setLines(t, mainnet, values)), out)
+		if err == nil || !strings.Contains(err.Error(), "different chains") || !strings.Contains(err.Error(), "no runner starts") {
+			t.Fatalf("%s: encode: %v, want the refusal naming the two chains", name, err)
+		}
+		if _, err := os.Stat(out); !os.IsNotExist(err) {
+			t.Fatalf("%s: encode wrote the refused setup (stat: %v)", name, err)
+		}
+	}
+	if err := encode(write("mainnet.conf", mainnet), filepath.Join(dir, "mainnet.setup")); err != nil {
+		t.Fatalf("encode with mainnet's exact values: %v", err)
+	}
+}
+
 // encode refuses a mainnet GCP setup that accepts a key held alone without
 // sealing_key_release.no_lock_accepted, as signer-admin setup does, and
 // writes nothing; with both acceptances it writes the setup.
@@ -110,16 +180,9 @@ func TestEncodeMainnetGCPSingleNeedsNoLockAccepted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mainnet := strings.Replace(string(text), "genesis_fork_version = 0x00000001\n", "genesis_fork_version = 0x00000000\n", 1)
-	if mainnet == string(text) {
-		t.Fatal("the sample changed its genesis_fork_version line")
-	}
-	// The sample's change_delay_seconds = 0 is below the prod chain's floor.
-	withDelay := strings.Replace(mainnet, "\nchange_delay_seconds = 0\n", fmt.Sprintf("\nchange_delay_seconds = %d\n", setupwire.DefaultTimeLock), 1)
-	if withDelay == mainnet {
-		t.Fatal("the sample changed its change_delay_seconds line")
-	}
-	mainnet = withDelay
+	// Mainnet's exact values, which the mainnet build takes, and a
+	// change_delay_seconds at the prod chain's floor.
+	mainnet := mainnetChain(t, string(text))
 	// A 1-of-1 GCP signer holds a whole key: signing_mode = single.
 	singleMode := strings.Replace(mainnet, "\nsigning_mode = threshold\n", "\nsigning_mode = single\n", 1)
 	if singleMode == mainnet {
@@ -173,11 +236,8 @@ func TestEncodeProdChainChangeDelayFloor(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A GCP runner checks itself against a gcp image (setupwire.CheckOwnImageListed).
-	zero := strings.Replace(string(text), "genesis_fork_version = 0x00000001\n", "genesis_fork_version = 0x00000000\n", 1) + gcpImage + "\n"
-	floor := strings.Replace(zero, "\nchange_delay_seconds = 0\n", fmt.Sprintf("\nchange_delay_seconds = %d\n", setupwire.DefaultTimeLock), 1)
-	if zero == string(text)+gcpImage+"\n" || floor == zero {
-		t.Fatal("the sample changed its genesis_fork_version or change_delay_seconds line")
-	}
+	floor := mainnetChain(t, string(text)) + gcpImage + "\n"
+	zero := setLines(t, floor, map[string]string{"change_delay_seconds": "0"})
 	dir := t.TempDir()
 	write := func(name, text string) string {
 		p := filepath.Join(dir, name)

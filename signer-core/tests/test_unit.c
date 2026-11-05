@@ -1352,6 +1352,49 @@ static void test_repeat_dropped_by_import(void)
 }
 
 /*
+ * A refused import (no mark, or unknown flag bits) changes nothing: the last
+ * vote and the last block still sign as exact repeats, with the same
+ * signature, under both mark scopes.
+ */
+static void test_repeat_kept_by_refused_import(void)
+{
+    for (uint32_t scope = SC_MARKS_PER_VALIDATOR; scope <= SC_MARKS_PER_DEVICE; scope++) {
+        host_t h = {0};
+        sc_config cfg;
+        sc_signer_stats st;
+        uint8_t sig[96], again[96];
+        uint64_t repeats;
+        make_config(&cfg);
+        cfg.mark_scope = scope;
+        set_epoch(&h, E + 1);
+        sc_signer *s = new_signer(&h, &cfg, 4, 4);
+        vkeys k = add_validator(s, 62, SC_INDEX_UNKNOWN);
+        sc_watermark bad = {0, E, E, SC_WM_HAS_ATTESTATION | 0x4};
+
+        sc_attestation_data a = att(E - 1, E, 1);
+        CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_OK);
+        sc_signer_get_stats(s, &st);
+        repeats = st.exact_repeats;
+        CHECK_RC(sc_signer_import(s, k.pk, cfg.genesis_validators_root, NULL), SC_ERR_ARG);
+        CHECK_RC(sc_signer_import(s, k.pk, cfg.genesis_validators_root, &bad), SC_ERR_ARG);
+        CHECK_RC(sc_sign_attestation(s, k.pk, &a, again), SC_OK);
+        CHECK(!memcmp(sig, again, 96));
+        sc_signer_get_stats(s, &st);
+        CHECK(st.exact_repeats == repeats + 1);
+
+        sc_beacon_block_header b = blk(E * 32 + 1, 1);
+        bad.flags = SC_WM_HAS_BLOCK | 0x8;
+        CHECK_RC(sc_sign_block(s, k.pk, &b, sig), SC_OK);
+        CHECK_RC(sc_signer_import(s, k.pk, cfg.genesis_validators_root, NULL), SC_ERR_ARG);
+        CHECK_RC(sc_signer_import(s, k.pk, cfg.genesis_validators_root, &bad), SC_ERR_ARG);
+        CHECK_RC(sc_sign_block(s, k.pk, &b, again), SC_OK);
+        CHECK(!memcmp(sig, again, 96));
+        sc_signer_get_stats(s, &st);
+        CHECK(st.exact_repeats == repeats + 2);
+    }
+}
+
+/*
  * Restart, for per-validator and per-device marks: the validator loads with
  * no repeat roots, so the repeat is refused after the restart (the marks),
  * as is another root at that target or slot.
@@ -3267,6 +3310,11 @@ static void test_slot_times(void)
     CHECK_RC(sc_slot_times_check(&cfg, &bad), SC_ERR_ARG); /* the start does not fit */
     bad = slot_times2(10, UINT64_MAX / 16, 0, 0);
     CHECK_RC(sc_slot_times_check(&cfg, &bad), SC_ERR_ARG); /* an epoch's length does not fit */
+    /* sc_slot_at takes unchecked times: a change with slot time 0 ends the
+     * walk, and the slots from its epoch on count at the slot time before it. */
+    bad = slot_times2(10, 0, 0, 0);
+    CHECK(sc_slot_at(&cfg, &bad, g + 12) == 1 && sc_slot_at(&cfg, &bad, s10 + 5) == 320 &&
+          sc_slot_at(&cfg, &bad, s10 + 12) == 321);
 
     /* A signer made with the changes: in epoch 30 under them its horizon is
      * epoch 32 and the slot rule counts 4-second slots; a signer without
@@ -3500,6 +3548,7 @@ static void test_builder_auth(void)
     r.data = big, r.data_len = sizeof big;
     CHECK_RC(sc_sign_builder_request_auth(s, k.pk, &r, sig), SC_ERR_DECODE);
     CHECK_RC(sc_htr_builder_auth_data(big, sizeof big, d), SC_ERR_ARG);
+    CHECK_RC(sc_htr_builder_request_auth(&r, obj), SC_ERR_ARG);
     CHECK(h.writes == writes); /* not slashable: no slashing state */
 
     /* Strict SSZ. */
@@ -3787,6 +3836,7 @@ int main(int argc, char **argv)
     test_fork_versions();
     test_repeats_in_run();
     test_repeat_dropped_by_import();
+    test_repeat_kept_by_refused_import();
     test_repeat_restart();
     test_device_marks();
     test_cover_epoch();

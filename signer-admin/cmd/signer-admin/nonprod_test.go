@@ -93,23 +93,32 @@ func TestNonProdFakeRunners(t *testing.T) {
 
 // setup -build hoodi, devnet or ci-test refuses a time lock above the
 // non-prod cap, which such a runner would refuse at start; the mainnet
-// build takes it.
+// build takes it. Each file is on the build's own chain (the mainnet build
+// takes the test chain on the dev platform).
 func TestSetupBuildChain(t *testing.T) {
 	dir := t.TempDir()
 	keys := approvers(t, dir, 3)
 	ca := caDER(t)
 	limit := int(runnerchain.Devnet.Limits().MaxTimeLock)
-	file := func(timeLock int) string {
-		return writeFile(t, filepath.Join(t.TempDir(), "setup.conf"),
-			setupText(dir, ca, genesisTime(), lockedText(keys, 2, timeLock, fee1), "a", "b"))
+	file := func(build string, timeLock int) string {
+		text := setupText(dir, ca, genesisTime(), lockedText(keys, 2, timeLock, fee1), "a", "b")
+		switch build {
+		case "hoodi":
+			text = withChain(t, text, hoodiFork, hoodiRoot)
+		case "devnet":
+			text = withChain(t, text, devnetFork, testChainRoot)
+		case "ci-test":
+			text = withChain(t, text, ciTestFork, ciTestRoot)
+		}
+		return writeFile(t, filepath.Join(t.TempDir(), "setup.conf"), text)
 	}
-	over := file(limit + 1)
 	for _, c := range []string{"hoodi", "devnet", "ci-test"} {
-		wantIn(t, failTool(t, "setup", "-build", c, "-out", filepath.Join(t.TempDir(), "out"), over),
+		wantIn(t, failTool(t, "setup", "-build", c, "-out", filepath.Join(t.TempDir(), "out"), file(c, limit+1)),
 			fmt.Sprintf("signer a: locked: change_delay_seconds %d, at most %d in a non-prod build", limit+1, limit))
-		mustTool(t, "setup", "-build", c, "-out", filepath.Join(t.TempDir(), "out"), file(limit))
+		mustTool(t, "setup", "-build", c, "-out", filepath.Join(t.TempDir(), "out"), file(c, limit))
 	}
 	// No -build is mainnet.
+	over := file("mainnet", limit+1)
 	mustTool(t, "setup", "-out", filepath.Join(t.TempDir(), "out"), over)
 	mustTool(t, "setup", "-build", "mainnet", "-out", filepath.Join(t.TempDir(), "out"), over)
 	for _, bad := range []string{"testnet", "default", "citest"} {

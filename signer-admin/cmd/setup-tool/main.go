@@ -14,7 +14,11 @@
 //	    on stderr (setupwire.UnsafeSingleKeyWarning); encode and check.
 //	    On mainnet such a setup also needs
 //	    sealing_key_release.no_lock_accepted, or encode refuses it
-//	    (setupwire.CheckSingleKeyProd), as signer-admin setup does.
+//	    (setupwire.CheckSingleKeyProd), as signer-admin setup does. A
+//	    chain no runner build starts on is refused too
+//	    (runnerchain.CheckAnyBuild): a public network's fork version
+//	    with another root, a prod chain other than mainnet, mainnet's
+//	    values with other times.
 //	setup-tool check [-platform P] [-chain CHAIN_JSON] FILE
 //	    Decode FILE strictly and print setup_sha256, platform, signer,
 //	    signing_mode, policy_root and platform_commitment. Refuse a setup
@@ -41,6 +45,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/lidofinance/tee-signer/governance/runnerchain"
 	"github.com/lidofinance/tee-signer/governance/setuptext"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/platform/setup"
@@ -109,6 +114,11 @@ func encode(human, out string) error {
 	s, err := setuptext.ParseSetup(human, text)
 	if err != nil {
 		return err
+	}
+	// Every runner refuses at start a setup of a chain its build does not
+	// run on, so a chain no build runs on is refused here, first.
+	if err := runnerchain.CheckAnyBuild(&s.Chain); err != nil {
+		return fmt.Errorf("%s: no runner starts on this chain: %w", human, err)
 	}
 	if err := setupwire.CheckSingleKeyProd(&s.Platform, &s.Chain); err != nil {
 		return err

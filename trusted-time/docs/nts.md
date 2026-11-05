@@ -132,7 +132,15 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   oldest sample of the quorum in force is over 60 s old on the local
   clock. The host sets that clock's rate: if it blocks the servers and runs
   the clock fast, the bound ages too slowly, and only this limit keeps the
-  time served within 60 s of real time. The other direction has no such limit: a
+  time a quorum in force serves within 60 s of real time. A new quorum can
+  get further ahead on a counter the host can set: a drift refusal starts a
+  new history, so the next quorum is checked against the refused one only,
+  and against the coarse clock, which ages on the same counter and can
+  itself run up to 75 s ahead (`Anchored.MaxAdvance`). After one refusal a
+  time 75 + 30 + 1 s, about 106 s, ahead of real time can be served. Nitro
+  is not affected: the host cannot set `CLOCK_MONOTONIC_RAW` there. The
+  restart floor's one epoch (384 s on mainnet) covers 106 s
+  (signer-core/README.md, "Restart floor"). The other direction has no such limit: a
   host that runs the clock slow makes the samples look young and the polls
   rare, so the time served falls behind real time without a bound until
   the drift check sees new samples. On a platform without a host-proof
@@ -145,7 +153,9 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   of the 4 operators. If every server is out of reach, signing stops within
   60 s and resumes with the next quorum: within about one interval after a
   short outage, later after a long one, when the cookies ran out and NTS-KE
-  backs off (up to 1024 s). HEALTH reports `sample_age_ms`, `max_sample_age_ms` and, while the
+  backs off (up to 1024 s; before the first quorum of a run NTS-KE is tried
+  again every 16 s, so a relay that comes up late does not push the first
+  quorum past the runner's start wait). HEALTH reports `sample_age_ms`, `max_sample_age_ms` and, while the
   clock refuses, the reason in `refused`. Local time is
   `CLOCK_MONOTONIC_RAW` (`nts.Monotonic`), not Go's `CLOCK_MONOTONIC`, which
   an NTP daemon in the kernel slews. Each
@@ -156,7 +166,8 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   baseline, `drift_err_ppm` what the bounds leave open; a quorum is refused
   exactly when |drift_ppm| > 500 + drift_err_ppm. The HTTPS-date quorum is
   the coarse check (NTS time outside -30 s to +31 s of it is refused: 30 s
-  plus the Date header's 1 s resolution), the certificate clock of NTS-KE
+  plus the Date header's 1 s resolution; a refusal stops `Now` until a
+  quorum passes, as a drift refusal does), the certificate clock of NTS-KE
   (no reading: NTS-KE is refused) and the NTP era. Its `Anchored` clock ages on `CLOCK_MONOTONIC_RAW` too.
   There is no fallback to it.
 

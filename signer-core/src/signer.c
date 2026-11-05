@@ -388,6 +388,10 @@ int sc_signer_import(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
     if (!genesis_validators_root ||
         memcmp(genesis_validators_root, s->cfg.genesis_validators_root, SC_ROOT_LEN) != 0)
         return SC_ERR_ARG;
+    /* The same checks sc_slashing_import makes, before the repeat roots go:
+     * an import it refuses must leave the validator as it was. */
+    if (!imported || (imported->flags & ~(SC_WM_HAS_BLOCK | SC_WM_HAS_ATTESTATION)))
+        return SC_ERR_ARG;
     drop_repeat(v);
     if (s->cfg.mark_scope == SC_MARKS_PER_VALIDATOR) {
         rc = sc_slashing_import(&v->slash, imported, counted_store, s, pubkey);
@@ -1011,13 +1015,15 @@ int sc_sign_builder_request_auth(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LE
         return SC_ERR_UNKNOWN_VALIDATOR;
     if ((rc = gloas_epoch_ok(s, req->slot / s->cfg.slots_per_epoch, NULL)) != SC_OK)
         return rc;
-    sc_htr_builder_auth_data(req->data, req->data_len, data_root);
+    if ((rc = sc_htr_builder_auth_data(req->data, req->data_len, data_root)) != SC_OK)
+        return rc;
     for (i = 0; i < s->cfg.builder_auth_root_count; i++)
         if (memcmp(s->cfg.builder_auth_roots[i], data_root, SC_ROOT_LEN) == 0)
             break;
     if (i == s->cfg.builder_auth_root_count)
         return SC_ERR_POLICY_BUILDER_AUTH;
-    sc_htr_builder_request_auth(req, obj);
+    if ((rc = sc_htr_builder_request_auth(req, obj)) != SC_OK)
+        return rc;
     sc_signer_signing_root(s, SC_DOMAIN_BUILDER_REQUEST_AUTH, 0, obj, root);
     sign_root(s, v, root, signature);
     return SC_OK;

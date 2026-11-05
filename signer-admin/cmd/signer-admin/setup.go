@@ -121,7 +121,7 @@ func buildSetups(name string, data []byte, clusterID [32]byte) ([]*setupwire.Set
 func cmdSetup(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
 	dir := fs.String("out", "", "folder for the binary setups, one NAME.setup per signer")
-	build := fs.String("build", string(runnerchain.Mainnet), fmt.Sprintf("the chain of the runners' build: mainnet, hoodi, devnet or ci-test; a non-prod runner (all but mainnet) refuses a time lock above %d s at start, so this refuses it here",
+	build := fs.String("build", string(runnerchain.Mainnet), fmt.Sprintf("the chain of the runners' build: mainnet, hoodi, devnet or ci-test; a runner refuses at start a setup of a chain its build does not run on (a non-prod build runs on its own chain only, the mainnet build on mainnet or, on the dev platform, any non-prod chain) and a non-prod runner (all but mainnet) a time lock above %d s, so this refuses them here",
 		runnerchain.Devnet.Limits().MaxTimeLock))
 	allowGCPSingle := fs.Bool("allow-gcp-unsafe-single-key", false, "accept, in the setup of a one-signer GCP cluster, that the signer holds keys alone (1 of 1); UNSAFE: "+setupwire.UnsafeSingleKeyWarning)
 	if err := fs.Parse(args); err != nil {
@@ -146,10 +146,17 @@ func cmdSetup(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	// The parser checks the mainnet build's cap (30 days) and, on a prod
-	// chain, its floor (the 2-day default); a non-prod build's are 30 and 2
-	// minutes.
+	// A runner of the build refuses a setup of a chain it does not run on
+	// before anything else, so the chain comes first: genesis values of two
+	// chains, or a build whose runners never start on the file's chain, are
+	// refused before the time lock, whose floor follows the chain and whose
+	// cap follows the build. The parser checks the mainnet build's cap (30
+	// days) and, on a prod chain, its floor (the 2-day default); a non-prod
+	// build's are 30 and 2 minutes.
 	for _, s := range setups {
+		if err := fl.CheckSetupChain(&s.Chain); err != nil {
+			return fmt.Errorf("signer %s: a %s runner refuses the setup at start: %w", s.SignerName, fl, err)
+		}
 		if err := fl.Limits().CheckTimeLock(&s.Chain, &s.Locked); err != nil {
 			return fmt.Errorf("signer %s: %w", s.SignerName, err)
 		}
