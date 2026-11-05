@@ -420,14 +420,22 @@ func cmdDraft(args []string, out io.Writer) error {
 		}
 		return errors.New("draft needs the state of every signer it drafts for (-signers names a part of the cluster)")
 	}
+	return writeDraft(c, states, body, *margin, *outPath, out)
+}
+
+// writeDraft checks body against the signers' states read by draft, fills
+// in its version, prev_hash, activate_at and salts, prints a summary and
+// the diff against the active values, and writes the body and its active
+// file to outPath and outPath.active.
+func writeDraft(c *cluster, states []*signerState, body *setupwire.UpdateBody, margin time.Duration, outPath string, out io.Writer) error {
 	// The waits are the signers' image constants: a non-prod build's run in
 	// minutes.
 	fl, lim, err := clusterLimits(c, states)
 	if err != nil {
 		return err
 	}
-	if *margin > time.Duration(lim.ActivationHorizon)*time.Second {
-		return fmt.Errorf("-margin %v: want 0 to %v, the activation horizon of a %s build", *margin, time.Duration(lim.ActivationHorizon)*time.Second, fl)
+	if margin > time.Duration(lim.ActivationHorizon)*time.Second {
+		return fmt.Errorf("-margin %v: want 0 to %v, the activation horizon of a %s build", margin, time.Duration(lim.ActivationHorizon)*time.Second, fl)
 	}
 	if body.Locked != nil {
 		if err := lim.CheckTimeLock(&c.members[0].setup.Chain, body.Locked); err != nil {
@@ -553,7 +561,7 @@ func cmdDraft(args []string, out io.Writer) error {
 	if body.IsRotation(&a.locked.Approvers) {
 		fprintf(out, "  rotation: approvals_needed of the active approvers sign, and every one of the %d new keys signs too\n", len(body.Locked.Approvers.Keys))
 	}
-	fprintf(out, "  wait %v (%s build), activate_at %s (now + wait + margin %v)\n", time.Duration(min(wait, math.MaxInt64/uint64(time.Second)))*time.Second, fl, when(body.ActivateAt), *margin)
+	fprintf(out, "  wait %v (%s build), activate_at %s (now + wait + margin %v)\n", time.Duration(min(wait, math.MaxInt64/uint64(time.Second)))*time.Second, fl, when(body.ActivateAt), margin)
 	if err := diffAgainst(out, a, body); err != nil {
 		return err
 	}
@@ -572,13 +580,13 @@ func cmdDraft(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(*outPath, raw, 0o644); err != nil {
+	if err := os.WriteFile(outPath, raw, 0o644); err != nil {
 		return err
 	}
-	if err := os.WriteFile(*outPath+".active", append(aj, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(outPath+".active", append(aj, '\n'), 0o644); err != nil {
 		return err
 	}
 	fprintf(out, "body_sha256 %s\n", fullHex(hash))
-	fprintf(out, "wrote %s and %s\n", *outPath, *outPath+".active")
+	fprintf(out, "wrote %s and %s\n", outPath, outPath+".active")
 	return nil
 }
