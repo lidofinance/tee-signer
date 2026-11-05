@@ -114,7 +114,7 @@ has slashing-log "$(affected slashing-log slashing-log/record.go)" \
   "devkit governance signer-protocol platform trusted-time markformat web3signer-api"
 # governance: markformat names only signer-protocol, which names governance.
 has governance-transitive "$(affected governance governance/x.go)" \
-  "governance signer-protocol markformat tee-signer" "devkit trusted-time web3signer-api"
+  "governance signer-protocol markformat tee-signer signer-admin" "devkit trusted-time web3signer-api"
 
 # ci-scope.sh: CI_MODULES|CI_CORE|CI_E2E|CI_TESTS.
 expect scope-docs-only "none|0|0|0" "$(scope docs-only README.md docs/new.md LICENSE .github/CODEOWNERS)"
@@ -126,6 +126,11 @@ expect scope-makefile "ALL|1|1|1" "$(scope makefile Makefile)"
 expect scope-ci-all "ALL|1|1|1" "$(CI_ALL=1 scope ci-all README.md)"
 expect scope-push "ALL|1|1|1" "$(GITHUB_EVENT_NAME=push scope push README.md)"
 expect scope-pull-request "none|0|0|0" "$(GITHUB_EVENT_NAME=pull_request scope pull-request docs/x.md)"
+# The signer-admin tests that start a dev runner run for a change to
+# signer-admin and to the runner and the modules it is built from.
+for f in signer-admin/x.go tee-signer/x.go signer-protocol/x.go governance/x.go platform/x.go trusted-time/x.go; do
+  has "scope-dev-runner-${f%%/*}" "$(scope "dev-runner-${f%%/*}" "$f" | tr '|' ' ')" "signer-admin tee-signer 0 1" "ALL"
+done
 has scope-slashing-log "$(scope slashing-log slashing-log/record.go | tr '|' ' ')" "slashing-log tee-signer tests 0 1" "web3signer-api ALL"
 
 if [ "$fails" -ne 0 ]; then

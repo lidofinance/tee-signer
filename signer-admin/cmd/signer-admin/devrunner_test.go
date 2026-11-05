@@ -24,7 +24,7 @@ import (
 // SIGNER_ADMIN_RUNNER names the runner binary: a build with the dev
 // platform (go build -tags platform_dev in this repo's tee-signer/, or its
 // runner-dev-debugimport) at cloud commit 26a6df5 or later.
-// scripts/cloud-integration.sh sets it; without it the test is skipped.
+// scripts/test-modules.sh sets it; without it the test is skipped.
 func TestFlowDevRunners(t *testing.T) {
 	bin := os.Getenv("SIGNER_ADMIN_RUNNER")
 	if bin == "" {
