@@ -339,16 +339,72 @@ func TestShareIndicesFromPublicKeys(t *testing.T) {
 		t.Fatal("a key with a foreign share is served")
 	}
 
-	// 3 of 3, and a whole key on every signer.
+	// 3 of 3, a whole key on one signer, and a whole key on two signers.
 	k3 := splitKey(t, 3, 3)
 	g3, err := deriveGroup(k3.pk, []share{{node: 0, pub: pubOf(&k3.shares[0])}, {node: 1, pub: pubOf(&k3.shares[1])},
 		{node: 2, pub: pubOf(&k3.shares[2])}}, 3)
 	if err != nil || g3.threshold != 3 {
 		t.Fatalf("3 of 3: %+v %v", g3, err)
 	}
-	g1, err := deriveGroup(k3.pk, []share{{node: 0, pub: k3.pk}, {node: 1, pub: k3.pk}}, 2)
+	g1, err := deriveGroup(k3.pk, []share{{node: 0, pub: k3.pk}}, 1)
 	if err != nil || g1.threshold != 1 {
-		t.Fatalf("whole key: %+v %v", g1, err)
+		t.Fatalf("whole key on one signer: %+v %v", g1, err)
+	}
+	if g, err := deriveGroup(k3.pk, []share{{node: 0, pub: k3.pk}, {node: 1, pub: k3.pk}}, 2); err == nil {
+		t.Fatalf("whole key on two signers: %+v", g)
+	}
+	// 2 of 4 with every share: two signers on each side of a pair.
+	k4 := splitKey(t, 2, 4)
+	var sh4 []share
+	for i := range k4.shares {
+		sh4 = append(sh4, share{node: i, pub: pubOf(&k4.shares[i])})
+	}
+	if g, err := deriveGroup(k4.pk, sh4, 4); err == nil {
+		t.Fatalf("2 of 4: %+v", g)
+	}
+}
+
+// A whole key on two signers is not served: each could sign one side of a
+// conflicting pair. The log names the key. The same key on one signer is
+// served.
+func TestWholeKeyOnTwoSignersRefused(t *testing.T) {
+	k := splitKey(t, 2, 3)
+	w := splitKey(t, 1, 1)
+	fakes := cluster([]*testKey{k}, 3)
+	for _, f := range fakes[:2] {
+		f.keys = append(f.keys, proto.ValidatorKey{Pubkey: proto.Pubkey(w.pk), SharePubkey: proto.Pubkey(w.pk), Index: proto.IndexUnknown})
+		f.secret[proto.Pubkey(w.pk)] = &w.sk
+	}
+	runners, names := make([]runner, len(fakes)), make([]string, len(fakes))
+	for i, f := range fakes {
+		runners[i], names[i] = f, fmt.Sprintf("signer-%d", i+1)
+	}
+	var logs strings.Builder
+	s := newSigners(names, runners, 0, 2*time.Second, slog.New(slog.NewTextHandler(&logs, nil)))
+	if _, err := s.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if s.HasKey(context.Background(), w.pk) {
+		t.Fatal("a whole key on two signers is served")
+	}
+	if !s.HasKey(context.Background(), k.pk) {
+		t.Fatal("the 2 of 3 key is not served")
+	}
+	if l := logs.String(); !strings.Contains(l, "key refused") || !strings.Contains(l, fmt.Sprintf("%#x", w.pk)) {
+		t.Fatalf("no refusal naming the key in the log: %s", l)
+	}
+
+	fakes = cluster([]*testKey{k}, 3)
+	fakes[0].keys = append(fakes[0].keys, proto.ValidatorKey{Pubkey: proto.Pubkey(w.pk), SharePubkey: proto.Pubkey(w.pk), Index: proto.IndexUnknown})
+	fakes[0].secret[proto.Pubkey(w.pk)] = &w.sk
+	setRoot(fakes)
+	s = newTestSigners(t, fakes)
+	sig, err := signWith(t, s, w.pk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyBLS(w.pk, testRoot, sig); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -362,6 +418,26 @@ func TestShareIndicesWithAGap(t *testing.T) {
 	}
 	if _, err := deriveGroup(k.pk, []share{{node: 0, pub: pubOf(&k.shares[0])}, {node: 1, pub: pubOf(&k.shares[2])}}, 2); err == nil {
 		t.Fatal("index 3 found with max 2")
+	}
+}
+
+// A whole key on one signer next to a real split of the same key on
+// others is refused, whatever max_share_index: the whole-key signer signs
+// alone, so it and the split signers form disjoint signing sets.
+func TestWholeKeyNextToSharesRefused(t *testing.T) {
+	for _, c := range []struct{ t, n int }{{2, 2}, {2, 3}} {
+		k := splitKey(t, c.t, c.n)
+		var sh []share
+		for i := range k.shares {
+			sh = append(sh, share{node: i, pub: pubOf(&k.shares[i])})
+		}
+		sh = append(sh, share{node: len(sh), pub: k.pk})
+		g, err := deriveGroup(k.pk, sh, maxShareIndex)
+		if err == nil {
+			t.Errorf("%d of %d plus the whole key: served with threshold %d", c.t, c.n, g.threshold)
+		} else if !strings.Contains(err.Error(), "whole key") {
+			t.Errorf("%d of %d plus the whole key: %v", c.t, c.n, err)
+		}
 	}
 }
 
