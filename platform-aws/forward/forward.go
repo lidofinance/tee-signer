@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -68,6 +69,29 @@ type Forwarder struct {
 	// each source IP address.
 	mu        sync.Mutex
 	perSource map[string]int
+
+	accepted, refusedMax, refusedSource, dialFailed atomic.Uint64
+	open                                            atomic.Int64
+}
+
+// Stats are the forwarder's counts since it started.
+type Stats struct {
+	Accepted         uint64 // connections accepted, refused ones included
+	Open             int64  // connections being forwarded now
+	RefusedMaxConns  uint64 // closed at accept: MaxConns reached
+	RefusedPerSource uint64 // closed at accept: MaxConnsPerSource reached
+	DialFailures     uint64 // Dial to the other side failed
+}
+
+// Stats returns the counts so far.
+func (f *Forwarder) Stats() Stats {
+	return Stats{
+		Accepted:         f.accepted.Load(),
+		Open:             f.open.Load(),
+		RefusedMaxConns:  f.refusedMax.Load(),
+		RefusedPerSource: f.refusedSource.Load(),
+		DialFailures:     f.dialFailed.Load(),
+	}
 }
 
 // runnerHandshakeTimeout is server.handshakeTimeout of tee-signer: the
@@ -163,8 +187,10 @@ func (f *Forwarder) Serve(ctx context.Context, l net.Listener) error {
 			}
 			return err
 		}
+		f.accepted.Add(1)
 		src := sourceOf(c)
 		if !f.takeSource(src) {
+			f.refusedSource.Add(1)
 			f.Log.Warn("too many connections in their handshake window from one address, closing", "remote", c.RemoteAddr().String(), "max_per_source", f.maxConnsPerSource(), "window", f.handshakeWindow().String())
 			c.Close()
 			continue
@@ -172,15 +198,18 @@ func (f *Forwarder) Serve(ctx context.Context, l net.Listener) error {
 		select {
 		case slots <- struct{}{}:
 		default:
+			f.refusedMax.Add(1)
 			f.Log.Warn("too many connections, closing", "remote", c.RemoteAddr().String(), "max", f.maxConns())
 			f.giveSource(src)
 			c.Close()
 			continue
 		}
 		wg.Add(1)
+		f.open.Add(1)
 		go func() {
 			defer wg.Done()
 			defer func() { <-slots }()
+			defer f.open.Add(-1)
 			// The count per source ends with the handshake window or with
 			// the connection, whichever comes first; exactly one of the
 			// two gives it back.
@@ -204,6 +233,7 @@ func (f *Forwarder) handle(ctx context.Context, client net.Conn) {
 	target, err := f.Dial(dctx)
 	cancel()
 	if err != nil {
+		f.dialFailed.Add(1)
 		f.Log.Warn("dial failed, closing the client", "remote", client.RemoteAddr().String(), "err", err)
 		return
 	}

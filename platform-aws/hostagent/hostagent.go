@@ -19,8 +19,10 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/lidofinance/tee-signer/platform"
@@ -39,6 +41,61 @@ type Server struct {
 	// Setup returns the setup's bytes. nil: SETUP answers NOT_FOUND.
 	Setup func() ([]byte, error)
 	Log   *slog.Logger
+
+	mu    sync.Mutex
+	stats Stats
+}
+
+// Stats are the agent's counts since it started.
+type Stats struct {
+	Connections uint64 // connections from the enclave accepted
+	Open        int64  // connections open now
+	ReadErrors  uint64 // connections ended by a frame that did not read
+	// Requests by kind (get, put, list, creds, exit, setup, other) and
+	// result: ok, refused (a status code, NOT_FOUND included) or error.
+	Requests map[[2]string]uint64
+	// CredsExpiry is the expiry of the last credentials handed out.
+	CredsExpiry time.Time
+}
+
+// Stats returns a copy of the counts so far.
+func (s *Server) Stats() Stats {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st := s.stats
+	st.Requests = maps.Clone(s.stats.Requests)
+	return st
+}
+
+func (s *Server) count(fn func(st *Stats)) {
+	s.mu.Lock()
+	fn(&s.stats)
+	s.mu.Unlock()
+}
+
+var kinds = map[wire.MsgType]string{
+	agentwire.TypeGet: "get", agentwire.TypePut: "put", agentwire.TypeList: "list",
+	agentwire.TypeCreds: "creds", agentwire.TypeExit: "exit", agentwire.TypeSetup: "setup",
+}
+
+func (s *Server) countRequest(t wire.MsgType, err error) {
+	kind, ok := kinds[t]
+	if !ok {
+		kind = "other"
+	}
+	result := "ok"
+	var refused *backend.RefusedError
+	if errors.As(err, &refused) {
+		result = "refused"
+	} else if err != nil {
+		result = "error"
+	}
+	s.count(func(st *Stats) {
+		if st.Requests == nil {
+			st.Requests = map[[2]string]uint64{}
+		}
+		st.Requests[[2]string{kind, result}]++
+	})
 }
 
 // ExitFile is a Server.Exit that logs the line and replaces path with
@@ -76,15 +133,21 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 
 func (s *Server) handle(ctx context.Context, c net.Conn) {
 	defer c.Close()
+	s.count(func(st *Stats) { st.Connections++; st.Open++ })
+	defer s.count(func(st *Stats) { st.Open-- })
 	for {
 		f, err := wire.ReadFrame(c)
 		if err != nil {
-			if !errors.Is(err, io.EOF) && s.Log != nil {
-				s.Log.Warn("hostagent read", "err", err)
+			if !errors.Is(err, io.EOF) {
+				s.count(func(st *Stats) { st.ReadErrors++ })
+				if s.Log != nil {
+					s.Log.Warn("hostagent read", "err", err)
+				}
 			}
 			return
 		}
 		body, err := s.do(ctx, f)
+		s.countRequest(f.Type, err)
 		payload := wire.EncodeOK(body)
 		if err != nil {
 			payload = wire.EncodeError(err)
@@ -131,6 +194,7 @@ func (s *Server) do(ctx context.Context, f wire.Frame) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+		s.count(func(st *Stats) { st.CredsExpiry = c.Expiration })
 		resp = c
 	case agentwire.TypeExit:
 		if s.Exit == nil {

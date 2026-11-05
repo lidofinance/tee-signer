@@ -17,6 +17,10 @@
 //
 //	hostagent -setup setup.bin -proxy-routes
 //
+// -metrics-listen 127.0.0.1:PORT serves Prometheus metrics; with
+// -metrics-nitro-cli nitro-cli they include the enclave state
+// (platform-aws/README.md, "Metrics").
+//
 // Build it with -tags platform_aws: only that build has vsock
 // (scripts/build-runner.sh does).
 package main
@@ -30,7 +34,9 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
+	"github.com/lidofinance/tee-signer/platform-aws/cmd/internal/metrics"
 	"github.com/lidofinance/tee-signer/platform-aws/hostagent"
 	"github.com/lidofinance/tee-signer/platform/filestore"
 	"github.com/lidofinance/tee-signer/platform/setup"
@@ -44,8 +50,21 @@ func main() {
 	exitFile := flag.String("exit-file", "", "file for the runner's fatal error line (EXIT), replaced on each report; default DIR/last-exit.txt")
 	setupFile := flag.String("setup", "", "the signer's binary setup, handed to the enclave at every start (SETUP)")
 	routes := flag.Bool("proxy-routes", false, "print the vsock-proxy routes of -setup (PORT HOST HOSTPORT) and exit")
+	mAddr := flag.String("metrics-listen", "", "HOST:PORT for Prometheus metrics at /metrics, plain HTTP without authentication; empty = off")
+	mRemote := flag.Bool("metrics-allow-remote", false, "allow a -metrics-listen address that is not loopback")
+	mNitro := flag.String("metrics-nitro-cli", "", "nitro-cli to run (describe-enclaves) at each scrape for the enclave state metrics; empty = off")
 	flag.Parse()
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	if *mNitro != "" && *mAddr == "" {
+		fmt.Fprintln(os.Stderr, "hostagent: -metrics-nitro-cli needs -metrics-listen")
+		os.Exit(2)
+	}
+	if *mAddr != "" {
+		if err := metrics.CheckAddr(*mAddr, *mRemote); err != nil {
+			fmt.Fprintln(os.Stderr, "hostagent:", err)
+			os.Exit(2)
+		}
+	}
 
 	var st *setup.Setup
 	if *setupFile != "" {
@@ -111,6 +130,23 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if *mAddr != "" {
+		start := time.Now()
+		var enc *enclaveState
+		if *mNitro != "" {
+			enc = &enclaveState{run: nitroCLI(*mNitro), procDir: "/proc"}
+		}
+		collect := func(w *metrics.Writer) {
+			writeAgentMetrics(w, srv.Stats(), start)
+			if enc != nil {
+				enc.write(w)
+			}
+		}
+		if err := metrics.Start(ctx, *mAddr, *mRemote, collect, log); err != nil {
+			fmt.Fprintln(os.Stderr, "hostagent:", err)
+			os.Exit(1)
+		}
+	}
 	log.Info("hostagent listening", "addr", a.String(), "dir", *dir, "creds", *creds)
 	if err := srv.Serve(ctx, l); err != nil {
 		fmt.Fprintln(os.Stderr, err)
