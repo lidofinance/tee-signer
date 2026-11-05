@@ -1,7 +1,8 @@
 package main
 
 // The commands of share import: probe, import-draft, import, and the import
-// order paths of show, sign and assemble.
+// order path of assemble. The import order paths of show and sign are in
+// sign.go.
 
 import (
 	"bufio"
@@ -194,45 +195,6 @@ func writeActive(path string, setupRaw, lockedRaw []byte) error {
 	return os.WriteFile(path+".active", append(aj, '\n'), 0o644)
 }
 
-// loadSetupActive reads an active file of a setup and its locked group in
-// force, as import-draft writes it.
-func loadSetupActive(path string) (*orderActive, error) {
-	var f activeFile
-	if err := readStrictJSON(path, &f); err != nil {
-		return nil, err
-	}
-	raw, err := hex.DecodeString(f.Setup)
-	if err != nil {
-		return nil, fmt.Errorf("%s: setup: not hex", path)
-	}
-	a := &orderActive{}
-	if a.setup, err = setupwire.DecodeSetup(raw); err != nil {
-		return nil, fmt.Errorf("%s: setup: %w", path, err)
-	}
-	a.locked = &a.setup.Locked
-	h, _ := a.setup.GroupHash(setupwire.GroupLocked)
-	a.ref = ref{0, h}
-	if f.Locked != "" {
-		lb, err := hex.DecodeString(f.Locked)
-		if err != nil {
-			return nil, fmt.Errorf("%s: locked: not hex", path)
-		}
-		u, err := setupwire.DecodeUpdateBody(lb)
-		if err != nil {
-			return nil, fmt.Errorf("%s: locked: %w", path, err)
-		}
-		if u.Group != setupwire.GroupLocked || u.Matches(a.setup) != nil {
-			return nil, fmt.Errorf("%s: locked: an update of another group or cluster", path)
-		}
-		uh, err := setupwire.UpdateHash(lb)
-		if err != nil {
-			return nil, err
-		}
-		a.locked, a.ref = u.Locked, ref{u.Version, uh}
-	}
-	return a, nil
-}
-
 // ---- import-draft ----
 
 func cmdImportDraft(args []string, out io.Writer) error {
@@ -310,91 +272,6 @@ func cmdImportDraft(args []string, out io.Writer) error {
 	fprintf(out, "  approvers in force: locked version %d, %d of %d sign\n", r.version, locked.Approvers.ApprovalsNeeded, len(locked.Approvers.Keys))
 	fprintf(out, "order_sha256 %s\nwrote %s and %s\n", fullHex(importorder.Hash(raw)), *outPath, *outPath+".active")
 	return nil
-}
-
-// isImportFile reports whether raw starts like an import order body or a
-// signed one.
-func isImportFile(raw []byte) bool { return len(raw) > 0 && (raw[0] == 'I' || raw[0] == 'J') }
-
-// readImport reads an import order body or a signed one.
-func readImport(raw []byte) (*importorder.Body, []byte, *importorder.Order, error) {
-	if raw[0] == 'J' {
-		o, err := importorder.Decode(raw)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		body, err := o.Body.Encode()
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		return &o.Body, body, o, nil
-	}
-	b, err := importorder.DecodeBody(raw)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	return b, raw, nil, nil
-}
-
-func showImport(out io.Writer, path string, raw []byte, activePath string) error {
-	b, body, signed, err := readImport(raw)
-	if err != nil {
-		return fmt.Errorf("%s: %w", path, err)
-	}
-	fprintf(out, "import order\ncluster_id = 0x%x\nchain_hash = 0x%x\ntarget_setup_sha256 = 0x%x\nnot_after = %s\nt = %d\nn = %d\nshare_index = %d\n",
-		b.ClusterID, b.ChainHash, b.Target, when(b.NotAfter), b.T, b.N, b.ShareIndex)
-	for _, v := range b.Validators {
-		fprintf(out, "validator = %s commitments_sha256 0x%x\n", v.Pubkey, v.CommitmentsHash)
-	}
-	fprintf(out, "\norder_sha256 %s\n", fullHex(importorder.Hash(body)))
-	a, err := optionalSetupActive(path, activePath)
-	if err != nil {
-		return err
-	}
-	single := b.T == 1 && b.N == 1
-	if a == nil && single {
-		fprintf(out, "1 of 1: the target holds the whole key; show with its active values (-active, or %s.active) says whether it is a GCP signer, where that is UNSAFE\n", path)
-	}
-	if a != nil {
-		if h, _ := a.setup.Hash(); h != b.Target || a.setup.ClusterID != b.ClusterID {
-			fprintf(out, "target: the active values are not of this order's target\n")
-		} else {
-			fprintf(out, "target: %s, the setup of the active values; approvers of its locked version %d\n", a.setup.SignerName, a.ref.version)
-			fprintf(out, "target signing_mode = %s\n", a.setup.SigningMode)
-			if err := setupwire.CheckThresholdOn(a.setup, int(b.T), int(b.N)); err != nil {
-				fprintf(out, "WARNING %s: its runner refuses this order: %v\n", a.setup.SignerName, err)
-			}
-			// What import-draft printed to the drafter, for each approver
-			// before sign.
-			if single && a.setup.Platform.Platform == setupwire.PlatformGCP {
-				fprintf(out, "WARNING %s: 1 of 1 on GCP: %s\n", a.setup.SignerName, setupwire.UnsafeSingleKeyWarning)
-			}
-		}
-	}
-	if signed != nil {
-		for _, ap := range signed.Approvals {
-			fprintf(out, "approver_signature position %d\n", ap.Position)
-		}
-		if a != nil {
-			if err := signed.Verify(&a.locked.Approvers); err != nil {
-				return fmt.Errorf("signatures: %w", err)
-			}
-			fprintf(out, "signatures: complete and valid against the approver set %s in force\n", hex8(a.locked.Approvers.Hash()))
-		}
-	}
-	return nil
-}
-
-// optionalSetupActive loads activePath, or path.active when it exists.
-func optionalSetupActive(path, activePath string) (*orderActive, error) {
-	p := activePath
-	if p == "" {
-		p = path + ".active"
-		if _, err := os.Stat(p); errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-	}
-	return loadSetupActive(p)
 }
 
 // ---- import ----
@@ -761,30 +638,7 @@ func importBatches(ac *remoteadmin.Client, cl *runnerclient.Client, order []byte
 	return done, nil
 }
 
-// ---- sign and assemble of import orders ----
-
-// signKind signs an import order body.
-func signKind(out io.Writer, path string, raw []byte, key adminapprover.Signer, hashed bool, outPath string) error {
-	b, err := importorder.DecodeBody(raw)
-	if err != nil {
-		return fmt.Errorf("%s: %w", path, err)
-	}
-	ctx, hash := setupwire.CtxImportOrder, importorder.Hash(raw)
-	what := fmt.Sprintf("import order of %d validators for setup %s", len(b.Validators), hex8(b.Target))
-	sig, err := adminapprover.Sign(key, ctx, hashed, raw)
-	if err != nil {
-		return err
-	}
-	s := &sigFile{bodyHash: hash, key: adminapprover.Key(key), sig: sig, context: ctx.String(), hashed: hashed}
-	if outPath == "" {
-		outPath = fmt.Sprintf("%s.%s.sig", path, hex.EncodeToString(s.key[:4]))
-	}
-	if err := os.WriteFile(outPath, s.format(), 0o644); err != nil {
-		return err
-	}
-	fprintf(out, "signed %s, sha256 %s, %s form, with key %s\nwrote %s\n", what, fullHex(hash), adminapprover.Form(hashed), hex.EncodeToString(s.key[:]), outPath)
-	return nil
-}
+// ---- assemble of import orders ----
 
 // collect checks signature files against hash and the set, and returns the
 // approvals in ascending positions.
@@ -851,49 +705,4 @@ func assembleKind(out io.Writer, path string, raw []byte, activePath string, sig
 	}
 	fprintf(out, "import order for setup %s: %d approvers (k %d)\nwrote %s\n", hex8(b.Target), len(approvals), set.ApprovalsNeeded, outPath)
 	return nil
-}
-
-// ---- the signing messages, for show ----
-
-// printSigning names both messages an approver may sign for raw, so an
-// approver can compare them over a second channel: the direct form and
-// the hashed form.
-func printSigning(out io.Writer, raw []byte) {
-	ctx, body, ok := signingInput(raw)
-	if !ok {
-		return
-	}
-	direct := setupwire.ApprovalMessage(ctx, false, body)
-	d := sha256.Sum256(direct)
-	hc, _ := setupwire.HashedContext(ctx)
-	fprintf(out, "signing message, direct form: %s and the body, %d bytes, sha256 %s\n", ctx, len(direct), fullHex(d))
-	fprintf(out, "signing message, hashed form (sign -hashed): sha256 of %s and sha256 %s, the 32 bytes %s\n", hc, fullHex(d),
-		fullHex([32]byte(setupwire.ApprovalMessage(ctx, true, body))))
-}
-
-// signingInput is the approver context and the signed body of any file
-// show reads.
-func signingInput(raw []byte) (setupwire.Context, []byte, bool) {
-	if len(raw) == 0 {
-		return setupwire.Context{}, nil, false
-	}
-	switch {
-	case isImportFile(raw):
-		if _, body, _, err := readImport(raw); err == nil {
-			return setupwire.CtxImportOrder, body, true
-		}
-	case raw[0] == 'U':
-		if u, err := setupwire.DecodeUpdate(raw); err == nil {
-			if h, err := u.Body.Header(); err == nil {
-				return setupwire.CtxConfigUpdate, h, true
-			}
-		}
-	default:
-		if b, err := setupwire.DecodeUpdateBody(raw); err == nil {
-			if h, err := b.Header(); err == nil {
-				return setupwire.CtxConfigUpdate, h, true
-			}
-		}
-	}
-	return setupwire.Context{}, nil, false
 }
