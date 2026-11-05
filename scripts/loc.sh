@@ -11,9 +11,10 @@
 #                               its tags, plus the C core, plus the Rust NTS
 #                               crate for the builds with the tag nts
 #   scripts/loc.sh scope        the rows of SECURITY-SCOPE.md: the files the
-#                               AWS release runner links, per row, and the
-#                               share-import tool with its verifier, then any linked file no
-#                               row covers
+#                               AWS release runner links, per row, the files
+#                               share-import links that the runner does not,
+#                               and the approver's view, then any linked file
+#                               no row covers
 #   scripts/loc.sh files MOD    the counted files of one module
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
@@ -81,9 +82,10 @@ case "${1:-modules}" in
   scope)
     # The rows of SECURITY-SCOPE.md, in its order: a label, then the Go
     # package directories (dir/... takes the packages under it too). @core is
-    # the C signer core, @rust the Rust NTS core, @shareimport the share-import
-    # tool and the attestation-verify code it checks the runner with (without
-    # the GCP and dev verifiers), which the runner does not link.
+    # the C signer core, @rust the Rust NTS core. @shareimport is what the
+    # share-import tool links and no earlier row counts, without the GCP and
+    # dev verifiers. @approverview is the printer of governance/setuptext and
+    # the show and sign commands of signer-admin.
     rows=(
       "1  signer-core|signer-core/core signer-core/threshold @core"
       "2  markformat|markformat"
@@ -99,12 +101,16 @@ case "${1:-modules}" in
       "12 platform, platform/setup|platform platform/setup"
       "13 enclave side of the parent links|platform-aws/hostagent/agentclient platform-aws/hostagent/agentwire platform-aws/udprelay/relayclient"
       "14 share-import, attestation-verify|@shareimport"
+      "15 approver view: setuptext printer, show, sign|@approverview"
     )
     files signer-core | grep -E '\.(c|h)$' >"$tmp/core.list"
     files trusted-time | grep -E '\.(rs|h)$' >"$tmp/rust.list"
     tags="netgo,osusergo,$(runner_tags runner-aws)"
     (cd tee-signer && GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go list -deps -tags "$tags"       -f '{{if .Module}}{{range .GoFiles}}{{println $.Module.Path $.Dir .}}{{end}}{{range .CgoFiles}}{{println $.Module.Path $.Dir .}}{{end}}{{range .CFiles}}{{println $.Module.Path $.Dir .}}{{end}}{{range .HFiles}}{{println $.Module.Path $.Dir .}}{{end}}{{end}}' .) |
       awk '$1 ~ /^github.com[/]lidofinance[/]tee-signer[/]/ { print $2 "/" $3 }' | sed "s#^$ROOT/##" >"$tmp/go.list"
+    (cd signer-admin && GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go list -deps -tags netgo,osusergo \
+      -f '{{if .Module}}{{range .GoFiles}}{{println $.Module.Path $.Dir .}}{{end}}{{range .CgoFiles}}{{println $.Module.Path $.Dir .}}{{end}}{{end}}' ./cmd/share-import) |
+      awk '$1 ~ /^github.com[/]lidofinance[/]tee-signer[/]/ { print $2 "/" $3 }' | sed "s#^$ROOT/##" >"$tmp/shareimport.list"
     : >"$tmp/seen.list"
     for row in "${rows[@]}"; do
       for p in ${row#*|}; do
@@ -112,10 +118,9 @@ case "${1:-modules}" in
           @core) cat "$tmp/core.list" ;;
           @rust) cat "$tmp/rust.list" ;;
           @shareimport)
-            for d in signer-admin/cmd/share-import signer-admin/remote/admin signer-protocol/remote attestation-verify attestation-verify/azureid attestation-verify/runnerclient \
-              attestation-verify/runnerclient/verify attestation-verify/runnerclient/internal/optset; do
-              find "$d" -maxdepth 1 -name '*.go' -not -name '*_test.go'
-            done | grep -vxE 'attestation-verify/gcp\.go|attestation-verify/runnerclient/verify/(gcp_cs|dev)\.go' ;;
+            grep -vxF -f "$tmp/seen.list" "$tmp/shareimport.list" |
+              grep -vxE 'attestation-verify/gcp\.go|attestation-verify/runnerclient/verify/(gcp_cs|dev)\.go' || true ;;
+          @approverview) printf '%s\n' governance/setuptext/format.go signer-admin/cmd/signer-admin/sign.go ;;
           */...) awk -v b="${p%/...}" '{ d = $0; sub(/[/][^/]*$/, "", d) } d == b || index(d, b "/") == 1' "$tmp/go.list" ;;
           *) awk -v b="$p" '{ d = $0; sub(/[/][^/]*$/, "", d) } d == b' "$tmp/go.list" ;;
         esac

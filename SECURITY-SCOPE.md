@@ -2,14 +2,15 @@
 
 The audit scope of the first version is the code that runs inside the TEE
 of the AWS runner: the release build `runner-aws` (build tags
-`platform_aws,nts`), which runs in a Nitro enclave, and the one tool
-that handles a plaintext key share, with the attestation check it relies
-on. The table lists that code in priority
-order. Audit time goes to the top rows first.
+`platform_aws,nts`), which runs in a Nitro enclave, the one tool that
+handles a plaintext key share, with the attestation check it relies on,
+and the code that shows approvers what they sign. The table lists that
+code in priority order. Audit time goes to the top rows first.
 
-`scripts/loc.sh scope` counts the code lines of each row from the files
-that build links, and names any linked file that no row covers. Row 14 is
-counted from its own directories.
+`scripts/loc.sh scope` counts the code lines of each row and names any
+file `runner-aws` links that no row covers. Rows 1 to 13 count the files
+`runner-aws` links, row 14 the files `share-import` links that rows 1 to
+13 do not, and row 15 its two files.
 
 ## In scope
 
@@ -24,11 +25,12 @@ counted from its own directories.
 | 7 | `tee-signer/server` | The protocol handler: signing, share import (one share, or a batch under one mark log record), setup updates, sealing, and the connection limits (`limits.go`). Only the admin role signs voluntary exits. |
 | 8 | [trusted-time](trusted-time): `clock`, `nts` and the Rust NTS core (`rust/`) | The runner's clock. The NTS client parses answers from the network. |
 | 9 | `governance/setupwire`, `governance/importorder` and `governance/runnerchain` | The setup, approver signatures, updates, time locks and import orders the runner checks, and the chains each build may run on. |
-| 10 | [tee-signer](tee-signer), the root package | Starts the runner: reads its flags and wires the platform, setup, clock, mark log and server. It refuses a setup for a chain its build may not run on; the mainnet build runs only on mainnet, by genesis fork version and genesis validators root. |
+| 10 | [tee-signer](tee-signer), the root package, and the enclave image `platform-aws/deploy/enclave/Dockerfile` | Starts the runner: reads its flags and wires the platform, setup, clock, mark log and server. It refuses a setup for a chain its build may not run on; the mainnet build runs only on mainnet, by genesis fork version and genesis validators root. The Dockerfile is the measured image: its ENTRYPOINT flags, among them the coarse-time URLs, `-nts-wait` and `-nts-max-bound`, go into PCR0. `scripts/nitro-eif.sh` and `scripts/eif-check.sh` build and check the image reproducibly; the audit does not cover them. |
 | 11 | [signer-protocol](signer-protocol) | Decodes every frame a client sends, and holds the build constants package. |
 | 12 | [platform](platform): `platform` and `platform/setup` | The sealing and key release interface, the mainnet key rule, and the setup loading. |
 | 13 | `platform-aws/hostagent/agentclient`, `platform-aws/hostagent/agentwire` and `platform-aws/udprelay/relayclient` | The enclave side of the links to the parent instance. They parse what the parent sends, which the enclave does not trust. |
-| 14 | `signer-admin/cmd/share-import` with the clients it sends through (`signer-admin/remote/admin`, `signer-protocol/remote`), and in [attestation-verify](attestation-verify) the root package, `azureid` and `runnerclient` (with `verify` and `internal/optset`) | `share-import` runs on the operator machine, outside the TEE. It reads a plaintext key share and seals it to the runner's attested import key; the runner cannot check that step. It trusts the runner's key only after the attestation-verify check, so a wrong check could seal a plaintext share to a key that is not the runner's. The GCP and dev verifiers (`gcp.go`, `runnerclient/verify/gcp_cs.go`, `runnerclient/verify/dev.go`) are not audited. |
+| 14 | `signer-admin/cmd/share-import`; `signer-admin/remote/admin`, whose `ImportShareSealedWith` asks for the nonce and IDENTITY, checks the attestation, seals the share and sends it; `signer-protocol/remote`, which binds the runner's TLS key to the attested identity (TLS key hash, nonce in the user data); and in [attestation-verify](attestation-verify) the root package, `azureid` and `runnerclient` (with `verify` and `internal/optset`) | `share-import` runs on the operator machine, outside the TEE. It reads a plaintext key share and seals it to the runner's attested import key; the runner cannot check that step. It trusts the runner's key only after the attestation-verify check, so a wrong check could seal a plaintext share to a key that is not the runner's. The other packages it links are in rows 1 to 13. The GCP and dev verifiers (`gcp.go`, `runnerclient/verify/gcp_cs.go`, `runnerclient/verify/dev.go`) are not audited. |
+| 15 | What the approver sees and signs: the printer of `governance/setuptext` (`format.go`) and the `show` and `sign` commands of `signer-admin` (`cmd/signer-admin/sign.go`) | Approver signatures allow images, client CAs, approver changes and import orders. `show` prints a draft, its diff against the active values and the hash of the signing message; `sign -expect-sha256` signs only the draft with that hash. If the printer drops or misprints a field, approvers sign what they did not see. `format.go` also holds the name tables the parser uses. `sign.go` also holds helpers that `draft` and `assemble` call; the small ones in `cluster.go` (`hex8`, `fullHex`, `when`, `fprintf`) are not counted. The parser (`parse.go`) and the other commands are not audited. |
 
 ### Time and key release
 
@@ -72,8 +74,10 @@ code. The Azure platform is kept on purpose.
 - The rest of [attestation-verify](attestation-verify): the GCP and dev
   verifiers and the `cmd/attest-verify` tool.
 - [signer-admin](signer-admin) and the other tools, except `share-import`
-  (row 14), and [web3signer-api](web3signer-api).
-- The deploy files (`platform-*/deploy`).
+  (row 14) and `show` and `sign` with the setuptext printer (row 15), and
+  [web3signer-api](web3signer-api).
+- The deploy files (`platform-*/deploy`), except the enclave Dockerfile
+  (row 10).
 - The build and release scripts (the release gate, `check-deps.sh`, the
   image scripts). They run in CI.
 - Third-party code: the vendored blst and the Rust crates, pinned by

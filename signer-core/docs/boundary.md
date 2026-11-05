@@ -74,6 +74,15 @@ import, and a repeat is the same signature.
   slot time changes, or a smaller `max_epochs_ahead` after a restart can
   map the clock to a lower floor than the signatures of the run before
   need.
+- The chain values of the setup. The mainnet build refuses any chain but
+  mainnet's exact genesis fork version and genesis validators root
+  (`governance/runnerchain` `CheckChain`). It must refuse any
+  `genesis_time`, `seconds_per_slot` and `slots_per_epoch` but mainnet's
+  the same way; main does not check them yet. The fork schedule stays the
+  operator's check: `setup-tool check -chain governance/chains/mainnet.json`
+  compares a setup's chain values and first fork schedule with mainnet's,
+  and `signer-admin show` prints each fork schedule change to the
+  approvers.
 - Storage, for liveness. A lost or old mark costs the epochs up to the
   floor, not safety. A garbled mark can cost more: the floor only raises a
   stored value, so a mark with high values refuses every vote or block up
