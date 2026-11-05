@@ -4,7 +4,6 @@ package main
 // order paths of show, sign and assemble.
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -17,7 +16,6 @@ import (
 	"os"
 	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
@@ -27,6 +25,7 @@ import (
 	admincluster "github.com/lidofinance/tee-signer/signer-admin/cluster"
 	remoteadmin "github.com/lidofinance/tee-signer/signer-admin/remote/admin"
 	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-core/threshold"
 	cloud "github.com/lidofinance/tee-signer/signer-protocol"
 )
 
@@ -404,6 +403,7 @@ func optionalSetupActive(path, activePath string) (*orderActive, error) {
 
 // share is one line of the shares file.
 type share struct {
+	line   int // line number in the file, from 1
 	pubkey cloud.Pubkey
 	index  uint64
 	secret [32]byte
@@ -421,6 +421,9 @@ type share struct {
 //
 // whose share pubkey must be the secret's. The file holds secrets, so it
 // must be a regular file of mode 0600 or stricter, like an approver key.
+// The secrets are decoded from the file's bytes straight into the shares,
+// with no string in between, and the shares slice is sized up front: an
+// append that grew it would leave secrets in the old array.
 func readShares(path string) ([]share, error) {
 	if err := adminapprover.CheckPrivateFile(path); err != nil {
 		return nil, err
@@ -430,48 +433,94 @@ func readShares(path string) ([]share, error) {
 		return nil, err
 	}
 	defer clear(data)
-	var out []share
-	sc := bufio.NewScanner(bytes.NewReader(data))
-	for n := 1; sc.Scan(); n++ {
-		l, _, _ := strings.Cut(sc.Text(), "#")
-		f := strings.Fields(l)
+	out := make([]share, 0, bytes.Count(data, []byte{'\n'})+1)
+	fail := func(n int, format string, a ...any) ([]share, error) {
+		for i := range out {
+			clear(out[i].secret[:])
+		}
+		return nil, fmt.Errorf("%s:%d: "+format, append([]any{path, n}, a...)...)
+	}
+	for n, rest := 1, data; len(rest) > 0; n++ {
+		line, more, _ := bytes.Cut(rest, []byte{'\n'})
+		rest = more
+		l, _, _ := bytes.Cut(line, []byte{'#'})
+		f := bytes.Fields(l)
 		if len(f) == 0 {
 			continue
 		}
-		var pkField, indexField, secField, sharePub string
+		var pkField, indexField, secField, sharePub []byte
 		switch len(f) {
 		case 3:
 			pkField, indexField, secField = f[0], f[1], f[2]
 		case 4:
 			secField, pkField, indexField, sharePub = f[0], f[1], f[2], f[3]
 		default:
-			return nil, fmt.Errorf("%s:%d: want pubkey, index and secret", path, n)
+			return fail(n, "want pubkey, index and secret")
 		}
-		s := share{index: cloud.IndexUnknown}
-		if err := s.pubkey.UnmarshalText([]byte(pkField)); err != nil {
-			return nil, fmt.Errorf("%s:%d: pubkey: %w", path, n, err)
+		out = out[:len(out)+1]
+		s := &out[len(out)-1]
+		s.line, s.index = n, cloud.IndexUnknown
+		if err := s.pubkey.UnmarshalText(pkField); err != nil {
+			return fail(n, "pubkey: %w", err)
 		}
-		if indexField != "-" {
-			i, err := strconv.ParseUint(indexField, 10, 64)
+		if string(indexField) != "-" {
+			i, err := strconv.ParseUint(string(indexField), 10, 64)
 			if err != nil {
-				return nil, fmt.Errorf("%s:%d: index: %w", path, n, err)
+				return fail(n, "index: %w", err)
 			}
 			s.index = i
 		}
-		if sharePub != "" {
-			if err := s.sharePub.UnmarshalText([]byte(sharePub)); err != nil {
-				return nil, fmt.Errorf("%s:%d: share pubkey: %w", path, n, err)
+		if sharePub != nil {
+			if err := s.sharePub.UnmarshalText(sharePub); err != nil {
+				return fail(n, "share pubkey: %w", err)
 			}
 		}
-		sec, err := hex.DecodeString(strings.TrimPrefix(secField, "0x"))
-		if err != nil || len(sec) != 32 {
-			return nil, fmt.Errorf("%s:%d: secret: want 32 bytes of hex", path, n)
+		sec := bytes.TrimPrefix(secField, []byte("0x"))
+		if len(sec) != 2*len(s.secret) {
+			return fail(n, "secret: want 32 bytes of hex")
 		}
-		copy(s.secret[:], sec)
-		clear(sec)
-		out = append(out, s)
+		if _, err := hex.Decode(s.secret[:], sec); err != nil {
+			return fail(n, "secret: want 32 bytes of hex")
+		}
 	}
-	return out, sc.Err()
+	return out, nil
+}
+
+// checkShareIndex refuses the shares of another signer: under an import
+// order, every share that the split file knows must be the share of the
+// order's index, the public key of the commitments at that index. It runs
+// before the runner is dialed, so a wrong file is refused with nothing
+// sealed and nothing sent. The runner makes the same check inside the
+// TEE; this one keeps the share out of it.
+func checkShareIndex(sharesPath string, shares []share, split *splitFile, o *importorder.Order) error {
+	for i := range shares {
+		s := &shares[i]
+		comm, ok := split.commitmentsOf(s.pubkey)
+		if !ok {
+			continue // reported in the import loop, as before
+		}
+		sp, err := core.PubkeyOf(s.secret)
+		if err != nil {
+			continue // reported in the import loop
+		}
+		want, err := threshold.FeldmanEval(comm, uint64(o.Body.ShareIndex))
+		if err != nil {
+			return fmt.Errorf("commitments of %s: %w", s.pubkey, err)
+		}
+		if want == sp {
+			continue
+		}
+		which := "not a share"
+		for x := 1; x <= int(o.Body.N); x++ {
+			if p, err := threshold.FeldmanEval(comm, uint64(x)); err == nil && p == sp {
+				which = fmt.Sprintf("share %d", x)
+				break
+			}
+		}
+		return fmt.Errorf("%s:%d is %s of validator %s, the order is for share index %d; nothing sent",
+			sharesPath, s.line, which, s.pubkey, o.Body.ShareIndex)
+	}
+	return nil
 }
 
 // chainOf reads a runner's setup file, or the -config file of a runner
@@ -517,6 +566,10 @@ func cmdImport(args []string, out io.Writer) error {
 		(*orderPath == "") != (*commPath == "") || *chainPath != "" && (byCluster || *icPath == "") {
 		return errors.New("usage: signer-admin import (-cluster cluster.json -signer NAME | -conn cloud.json [-setup FILE]) " +
 			"[-order import.signed -commitments FILE] -shares FILE [-interchange FILE] [-skip-loaded]")
+	}
+	// The shares file is plaintext: no core dumps from here on.
+	if err := lockSecrets(os.Stderr); err != nil {
+		return err
 	}
 	var (
 		name  string
@@ -606,6 +659,11 @@ func cmdImport(args []string, out io.Writer) error {
 			clear(shares[i].secret[:])
 		}
 	}()
+	if o != nil {
+		if err := checkShareIndex(*sharesPath, shares, split, o); err != nil {
+			return err
+		}
+	}
 
 	cl, err := dial()
 	if err != nil {
@@ -665,7 +723,8 @@ func cmdImport(args []string, out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("%s: batch import probe: %w", name, err)
 	}
-	for _, s := range shares {
+	for i := range shares {
+		s := &shares[i] // not a copy of the secret
 		if held[s.pubkey] {
 			skipped++
 			continue

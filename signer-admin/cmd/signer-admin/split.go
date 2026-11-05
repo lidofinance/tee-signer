@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+	"unsafe"
 
 	"golang.org/x/crypto/scrypt"
 
@@ -32,7 +33,7 @@ import (
 
 // ---- split ----
 
-const splitUsage = "usage: signer-admin split -keystores DIR -password-file FILE -t T -n N -signers NAME,... [-chain mainnet|hoodi|devnet|ci-test] [-expect FILE] -out DIR"
+const splitUsage = "usage: signer-admin split -keystores DIR -password-file FILE -t T -n N -signers NAME,... [-chain mainnet|hoodi|devnet|ci-test] [-expect FILE] [-allow-swap] -out DIR"
 
 // splitOutFS checks that the output folder's parent is on tmpfs. Tests
 // replace it.
@@ -59,7 +60,9 @@ var (
 //	OUT/manifest.json          public: t, n, share indices, every share
 //	                           pubkey and the sha256 of split.json
 //
-// OUT must be a new folder on tmpfs; split warns when swap is on. With
+// OUT must be a new folder on tmpfs. split refuses to run with swap on,
+// unless -allow-swap says the swap device is safe (zram, encrypted), and
+// turns core dumps off and locks its memory first (lockSecrets). With
 // -expect, exactly the listed keys are split, in that order, and every one
 // must be found.
 func cmdSplit(args []string, out io.Writer) error {
@@ -71,12 +74,16 @@ func cmdSplit(args []string, out io.Writer) error {
 	signers := fs.String("signers", "", "signer names of cluster.json, comma separated, in share index order 1..n")
 	chain := fs.String("chain", string(runnerchain.Mainnet), "the chain of the signers' setups: mainnet, hoodi, devnet or ci-test; t and n must pass its threshold rule")
 	expect := fs.String("expect", "", "file with one 0xPUBKEY per line: exactly these keys are split, in this order")
+	allowSwap := fs.Bool("allow-swap", false, "go on with swap on (zram or an encrypted swap device), with a warning")
 	outDir := fs.String("out", "", "output folder: new, on tmpfs")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 || *ksDir == "" || *passFile == "" || *outDir == "" || *signers == "" || *t == 0 || *n == 0 {
 		return errors.New(splitUsage)
+	}
+	if err := lockSecrets(os.Stderr); err != nil {
+		return err
 	}
 	names := strings.Split(*signers, ",")
 	if len(names) != *n {
@@ -125,7 +132,9 @@ func cmdSplit(args []string, out io.Writer) error {
 	if err := splitOutFS(filepath.Dir(*outDir)); err != nil {
 		return err
 	}
-	warnSwap(splitSwaps)
+	if err := checkSwap(splitSwaps, *allowSwap); err != nil {
+		return err
+	}
 	var want []cloud.Pubkey
 	if *expect != "" {
 		if want, err = readExpect(*expect); err != nil {
@@ -154,8 +163,9 @@ func cmdSplit(args []string, out io.Writer) error {
 		byPub[k.pub] = k
 	}
 	if *expect == "" {
-		for _, k := range keys {
-			want = append(want, k.pub)
+		// By index: a range by value would copy each key.
+		for i := range keys {
+			want = append(want, keys[i].pub)
 		}
 	} else {
 		for _, pk := range want {
@@ -202,13 +212,22 @@ func writeSplit(dir string, names []string, idx map[string]uint8, t, n int, want
 		SplitSHA   string              `json:"split_sha256"`
 	}{T: t, N: n, ShareIndex: idx}
 	sf := splitFile{T: uint8(t), N: uint8(n), Shares: idx}
+	// One shares.txt per signer, each sized up front: an append that grew
+	// a buffer would leave the share secrets in the old array, out of reach
+	// of the clear. The lines are built with hex.AppendEncode, not fmt,
+	// whose pooled buffers keep what they formatted.
+	const lineLen = len("0x") + 64 + len(" ") + 98 + len(" - ") + 98 + len("\n")
 	lines := make([][]byte, n)
+	for i := range lines {
+		lines[i] = make([]byte, 0, lineLen*len(want))
+	}
 	defer func() {
 		for i := range lines {
 			clear(lines[i])
 		}
 	}()
 	for _, pk := range want {
+		// splitDeal takes the secret by value and clears that copy.
 		shares, comm, err := splitDeal(byPub[pk].secret, t, n)
 		if err != nil {
 			return fmt.Errorf("%s: %w", pk, err)
@@ -223,7 +242,13 @@ func writeSplit(dir string, names []string, idx map[string]uint8, t, n int, want
 		sf.Validators = append(sf.Validators, splitValidator{Pubkey: pk, Commitments: comm})
 		mv := manifestValidator{Pubkey: pk, SharePubkeys: map[string]cloud.Pubkey{}}
 		for i := range shares {
-			lines[i] = fmt.Appendf(lines[i], "0x%x %s - %s\n", shares[i].Secret[:], pk, pubs[i])
+			l := append(lines[i], "0x"...)
+			l = hex.AppendEncode(l, shares[i].Secret[:])
+			l = append(l, ' ')
+			l = append(l, pk.String()...)
+			l = append(l, " - "...)
+			l = append(l, pubs[i].String()...)
+			lines[i] = append(l, '\n')
 			clear(shares[i].Secret[:])
 			mv.SharePubkeys[names[i]] = pubs[i]
 		}
@@ -292,7 +317,8 @@ func checkDealt(pk cloud.Pubkey, shares []software.Share, comm []cloud.Pubkey, t
 		return nil, fmt.Errorf("%s: commitment 0 is not the key", pk)
 	}
 	pubs := make([]cloud.Pubkey, len(shares))
-	for i, s := range shares {
+	for i := range shares {
+		s := &shares[i] // not a copy of the secret
 		sp, err := core.PubkeyOf(s.Secret)
 		if err != nil {
 			return nil, fmt.Errorf("%s: share %d: %w", pk, s.ID, err)
@@ -431,31 +457,35 @@ func readKeystores(dir, passFile string) ([]dealtKey, error) {
 			return nil, fmt.Errorf("%s: the password has characters outside printable ASCII, which this tool does not normalize", passFile)
 		}
 	}
-	// Preallocated: an append that grows the slice would leave copies of
-	// the secrets in the old array, out of reach of the caller's clear.
+	// Preallocated, and each keystore is decrypted into its slot: an append
+	// that grew the slice would leave copies of the secrets in the old
+	// array, out of reach of the caller's clear.
 	keys := make([]dealtKey, 0, len(fs))
 	for _, f := range fs {
-		secret, pub, err := decryptKeystore(f, pw)
+		keys = keys[:len(keys)+1]
+		k := &keys[len(keys)-1]
+		k.source = f
+		pub, err := decryptKeystore(f, pw, &k.secret)
 		if err != nil {
 			return keys, err
 		}
-		keys = append(keys, dealtKey{pub: pub, secret: secret, source: f})
-		clear(secret[:])
+		k.pub = pub
 	}
 	return keys, nil
 }
 
 // decryptKeystore decrypts one EIP-2335 keystore (version 4, kdf scrypt or
-// pbkdf2 with hmac-sha256, checksum sha256, cipher aes-128-ctr) and checks
-// that the secret's public key is the keystore's pubkey.
-func decryptKeystore(path string, password []byte) (secret [32]byte, pub cloud.Pubkey, err error) {
-	fail := func(format string, a ...any) ([32]byte, cloud.Pubkey, error) {
+// pbkdf2 with hmac-sha256, checksum sha256, cipher aes-128-ctr) into
+// secret and checks that the secret's public key is the keystore's pubkey.
+// On an error secret is cleared.
+func decryptKeystore(path string, password []byte, secret *[32]byte) (cloud.Pubkey, error) {
+	fail := func(format string, a ...any) (cloud.Pubkey, error) {
 		clear(secret[:])
-		return [32]byte{}, cloud.Pubkey{}, fmt.Errorf("%s: "+format, append([]any{path}, a...)...)
+		return cloud.Pubkey{}, fmt.Errorf("%s: "+format, append([]any{path}, a...)...)
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return secret, pub, err
+		return cloud.Pubkey{}, err
 	}
 	var ks keystoreFile
 	if err := json.Unmarshal(raw, &ks); err != nil {
@@ -490,7 +520,9 @@ func decryptKeystore(path string, password []byte) (secret [32]byte, pub cloud.P
 		if ksString(p["prf"]) != "hmac-sha256" || iter < 1 || iter > 1<<24 {
 			return fail("pbkdf2 prf %v, c %v: want hmac-sha256 and 1 <= c <= 2^24", p["prf"], p["c"])
 		}
-		dk, err = pbkdf2.Key(sha256.New, string(password), salt, iter, 32)
+		// pbkdf2.Key takes a string; a conversion would copy the password
+		// where nothing clears it, so the string shares the caller's bytes.
+		dk, err = pbkdf2.Key(sha256.New, unsafe.String(unsafe.SliceData(password), len(password)), salt, iter, 32)
 	default:
 		return fail("kdf %q, want scrypt or pbkdf2", c.KDF.Function)
 	}
@@ -519,14 +551,15 @@ func decryptKeystore(path string, password []byte) (secret [32]byte, pub cloud.P
 		return fail("%v", err)
 	}
 	cipher.NewCTR(blk, iv).XORKeyStream(secret[:], ct)
-	got, err := core.PubkeyOf(secret)
+	// PubkeyOf takes the secret by value: one copy this code cannot clear.
+	got, err := core.PubkeyOf(*secret)
 	if err != nil {
 		return fail("secret: %v", err)
 	}
 	if want, err := parseKeyHex(ks.Pubkey); err != nil || want != got {
 		return fail("the public key of the secret is not the keystore's pubkey")
 	}
-	return secret, got, nil
+	return got, nil
 }
 
 func ksString(v any) string { s, _ := v.(string); return s }
@@ -540,25 +573,35 @@ func ksInt(v any) int {
 	return int(f)
 }
 
-// warnSwap prints a warning to stderr when the swaps file (/proc/swaps)
-// lists an active swap device or cannot be read. With swap on, tmpfs
-// pages and the heap, and the secrets in them, can reach a disk.
-func warnSwap(path string) {
+// checkSwap refuses to go on when the swaps file (/proc/swaps) lists an
+// active swap device or cannot be read: with swap on, tmpfs pages and the
+// heap, and the secrets in them, can reach a disk. With allow (-allow-swap,
+// for zram or an encrypted swap device) it warns on stderr instead.
+func checkSwap(path string, allow bool) error {
+	var why string
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "signer-admin split: warning: cannot read %s, so swap may be on; run swapoff -a first\n", path)
-		return
-	}
-	// The first line is the header, each further line a swap device.
-	var devs []string
-	for i, l := range strings.Split(string(raw), "\n") {
-		if f := strings.Fields(l); i > 0 && len(f) > 0 {
-			devs = append(devs, f[0])
+		why = fmt.Sprintf("cannot read %s, so swap may be on", path)
+	} else {
+		// The first line is the header, each further line a swap device.
+		var devs []string
+		for i, l := range strings.Split(string(raw), "\n") {
+			if f := strings.Fields(l); i > 0 && len(f) > 0 {
+				devs = append(devs, f[0])
+			}
+		}
+		if len(devs) > 0 {
+			why = fmt.Sprintf("swap is on (%s), so secrets can reach a disk", strings.Join(devs, ", "))
 		}
 	}
-	if len(devs) > 0 {
-		fmt.Fprintf(os.Stderr, "signer-admin split: warning: swap is on (%s), so secrets can reach a disk; run swapoff -a first\n", strings.Join(devs, ", "))
+	if why == "" {
+		return nil
 	}
+	if allow {
+		fmt.Fprintf(os.Stderr, "signer-admin split: warning: %s\n", why)
+		return nil
+	}
+	return fmt.Errorf("%s; run swapoff -a first, or pass -allow-swap for zram or an encrypted swap device", why)
 }
 
 // tmpfsMagic is the f_type of tmpfs (linux/magic.h).

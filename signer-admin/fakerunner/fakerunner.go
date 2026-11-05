@@ -60,6 +60,16 @@ type Runner struct {
 	// batch: it takes IMPORT_SHARES_SEALED (ServeBatch); else it refuses
 	// the type, as an older runner does.
 	batch bool
+	// image, if set (SetImage), is the image check HEALTH reports.
+	image *cloud.ImageCheck
+}
+
+// SetImage makes HEALTH report ic as the runner's image check, as a cloud
+// runner reports its own image.
+func (r *Runner) SetImage(ic cloud.ImageCheck) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.image = &ic
 }
 
 // SetSigner adds k to the runner's keys and makes it answer SIGN with sign.
@@ -246,6 +256,7 @@ func (r *Runner) serve(c net.Conn) {
 				h.Setup, h.ConfigHash = &s, s.SetupHash
 				h.ClockSource, h.ClockTrusted = "fake", true
 			}
+			h.Image = r.image
 			r.mu.Unlock()
 			body, _ := wire.EncodeHealth(h)
 			answer = wire.EncodeOK(body)

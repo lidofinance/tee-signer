@@ -435,7 +435,8 @@ func TestSplitKDFBounds(t *testing.T) {
 			writeKeystore(t, dir, "a", c.kdf, splitTestPassword)
 			p := filepath.Join(dir, "keystore-a.json")
 			setKDFParam(t, p, c.key, c.v)
-			_, _, err := decryptKeystore(p, []byte(splitTestPassword))
+			var sk [32]byte
+			_, err := decryptKeystore(p, []byte(splitTestPassword), &sk)
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("got %v, want %q", err, c.want)
 			}
@@ -521,42 +522,6 @@ func captureStderr(t *testing.T, f func()) string {
 	os.Stderr = old
 	w.Close()
 	return string(<-done)
-}
-
-// split warns on stderr, and goes on, when /proc/swaps lists an active
-// swap device or cannot be read: tmpfs pages and the heap can reach the
-// swap disk. It prints nothing when no swap is on.
-func TestSplitSwapWarning(t *testing.T) {
-	const head = "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n"
-	for _, c := range []struct {
-		name, swaps, want string
-	}{
-		{"swap on", head + "/swap.img                               file\t\t4194300\t\t0\t\t-2\n", "swap is on (/swap.img)"},
-		{"no swap", head, ""},
-		{"unreadable", "", "cannot read"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			e := newSplitEnv(t, "scrypt")
-			// newSplitEnv restores splitSwaps.
-			if c.swaps == "" {
-				splitSwaps = filepath.Join(e.dir, "missing")
-			} else {
-				writeFile(t, splitSwaps, c.swaps)
-			}
-			var out string
-			stderr := captureStderr(t, func() {
-				out = mustTool(t, e.args("-chain", "devnet", "-t", "2", "-n", "3", "-signers", "a,b,c")...)
-			})
-			wantIn(t, out, "split 1 keys 2 of 3")
-			if c.want == "" {
-				if stderr != "" {
-					t.Fatalf("stderr: %q, want nothing", stderr)
-				}
-				return
-			}
-			wantIn(t, stderr, "warning: ", c.want)
-		})
-	}
 }
 
 // A dealt split that does not check out (a wrong commitment, a short

@@ -255,15 +255,22 @@ func cmdSign(args []string, out io.Writer) error {
 		return fmt.Errorf("%s is signed already; sign the body that draft or import-draft wrote", fs.Arg(0))
 	}
 	var body *setupwire.UpdateBody
+	var a *active
 	if !isImportFile(raw) {
 		if body, err = setupwire.DecodeUpdateBody(raw); err != nil {
 			return fmt.Errorf("%s: %w", fs.Arg(0), err)
 		}
-	}
-	// draft checks the image list against every signer of the cluster;
-	// the active file holds one signer's setup, so sign checks that one.
-	if body != nil && body.Locked != nil {
-		if a, err := optionalActive(fs.Arg(0)+".active", true, body); err == nil && a != nil {
+		// draft checks the image list against every signer of the cluster;
+		// the active file holds one signer's setup, so sign checks that one.
+		// A file that is there but does not load is refused, not skipped:
+		// the body would go unchecked.
+		activePath := fs.Arg(0) + ".active"
+		if a, err = optionalActive(activePath, true, body); err != nil {
+			return fmt.Errorf("%s does not load: %w; nothing signed", activePath, err)
+		}
+		if a == nil {
+			fprintf(out, "no active values (%s): the own-image check does not run; draft writes the file next to the body\n", activePath)
+		} else if body.Locked != nil {
 			if err := checkOwnImages([]*member{{name: a.setup.SignerName, setup: a.setup}}, body.Locked); err != nil {
 				return fmt.Errorf("%s: %w; nothing signed", fs.Arg(0), err)
 			}
@@ -301,7 +308,7 @@ func cmdSign(args []string, out io.Writer) error {
 		return err
 	}
 	fprintf(out, "signed %s version %d, body_sha256 %s, activate_at %s, with key %s\n", body.Group, body.Version, fullHex(s.bodyHash), when(body.ActivateAt), hex.EncodeToString(s.key[:]))
-	if a, err := optionalActive(fs.Arg(0)+".active", true, body); err == nil && a != nil {
+	if a != nil {
 		if p := position(a.locked.Approvers.Keys, s.key); p >= 0 {
 			fprintf(out, "the key is active approver %d\n", p)
 		}
@@ -343,6 +350,13 @@ func cmdAssemble(args []string, out io.Writer) error {
 	a, err := loadActive(*activePath, body)
 	if err != nil {
 		return err
+	}
+	// The image list against the active file's signer, as sign checks it:
+	// the signatures may come from a body sign never saw.
+	if body.Locked != nil {
+		if err := checkOwnImages([]*member{{name: a.setup.SignerName, setup: a.setup}}, body.Locked); err != nil {
+			return err
+		}
 	}
 	set := &a.locked.Approvers
 	hash, err := body.Hash()

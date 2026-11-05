@@ -21,8 +21,13 @@ import (
 // format is the shared format line's value, mode the signing_mode line's.
 func cloudSetupText(t *testing.T, format int, mode, nitroExtra, azureExtra string) string {
 	t.Helper()
-	dir := t.TempDir()
-	keys := approvers(t, dir, 3)
+	return cloudSetupTextKeys(t, format, mode, nitroExtra, azureExtra, approvers(t, t.TempDir(), 3))
+}
+
+// cloudSetupTextKeys is cloudSetupText with the given approvers, for tests
+// that sign updates of the cluster.
+func cloudSetupTextKeys(t *testing.T, format int, mode, nitroExtra, azureExtra string, keys []approver) string {
+	t.Helper()
 	var b strings.Builder
 	fmt.Fprintf(&b, `setup_format_version = %d
 signing_mode = %s

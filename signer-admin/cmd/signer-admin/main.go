@@ -36,10 +36,12 @@
 //	    One line per signer: setup, version and hash per group, pending
 //	    update with its effective time, approver set, clock. Marks signers
 //	    that differ from the rest.
-//	signer-admin draft -cluster cluster.json -group locked|open [-margin 10m] [-out update.bin] FILE
+//	signer-admin draft -cluster cluster.json -group locked|open [-margin 10m] [-drop-running-image NAME,...] [-out update.bin] FILE
 //	    Read the new values of one group, check that every signer is at the
 //	    same version, print the diff and write the body to sign (update.bin)
-//	    and the values it replaces (update.bin.active).
+//	    and the values it replaces (update.bin.active). A locked update must
+//	    list the image each signer runs, unless -drop-running-image names
+//	    the signer: the update retires that image on purpose.
 //	signer-admin show [-active FILE] FILE
 //	    Decode a body or a signed update offline and print its values, the
 //	    diff against the active values and the body hash.
@@ -56,8 +58,10 @@
 //	signer-admin assemble [-active FILE] [-out update.signed] update.bin SIG...
 //	    Check the signatures against the active approvers (and, for a
 //	    rotation, every new key) and write the signed update.
-//	signer-admin push -cluster cluster.json [-raise-min] update.signed
+//	signer-admin push -cluster cluster.json [-raise-min] [-drop-running-image NAME,...] update.signed
 //	    Send the signed update to every signer and print what each one says.
+//	    A locked update is checked first against the image each signer runs,
+//	    as draft checks it.
 //	signer-admin probe -cluster cluster.json [-signers NAME,...]
 //	    Tell, per signer, whether admin messages from its connection file's
 //	    certificate pass the runner's role check (adminops.go): a message
@@ -92,13 +96,14 @@
 //	    admin role may sign an exit. The tool posts nothing; to broadcast:
 //	      curl -X POST -H 'Content-Type: application/json' --data @exit.json \
 //	        http://BEACON:5052/eth/v1/beacon/pool/voluntary_exits
-//	signer-admin split -keystores DIR -password-file FILE -t T -n N -signers NAME,... [-chain mainnet|hoodi|devnet|ci-test] [-expect FILE] -out DIR
+//	signer-admin split -keystores DIR -password-file FILE -t T -n N -signers NAME,... [-chain mainnet|hoodi|devnet|ci-test] [-expect FILE] [-allow-swap] -out DIR
 //	    Offline, as a trusted dealer: decrypt EIP-2335 keystores, split
 //	    each key t of n with Feldman commitments, check each share against
 //	    the commitments and that t shares recover the key, and write
 //	    OUT/split.json for import-draft,
 //	    OUT/shares/NAME/shares.txt (mode 0600) for import -shares and
-//	    OUT/manifest.json (split.go). OUT must be a new folder on tmpfs.
+//	    OUT/manifest.json (split.go). OUT must be a new folder on tmpfs;
+//	    swap must be off (or -allow-swap), core dumps are turned off.
 //	signer-admin issue-client-cert -ca-cert FILE -ca-key FILE -role admin|attest|signing -name CN -out DIR
 //	signer-admin issue-client-cert -ca-cert FILE -ca-key FILE -make-intermediate ROLE -name CN -out DIR
 //	    Issue one client certificate of a role, or a role intermediate from
@@ -171,17 +176,17 @@ const usage = `usage:
   signer-admin setup [-build mainnet|hoodi|devnet|ci-test] [-allow-gcp-unsafe-single-key] -out DIR FILE
   signer-admin pin -cluster cluster.json [-signers NAME,...]
   signer-admin status -cluster cluster.json [-signers NAME,...]
-  signer-admin draft -cluster cluster.json -group locked|open [-margin 10m] [-out update.bin] FILE
+  signer-admin draft -cluster cluster.json -group locked|open [-margin 10m] [-drop-running-image NAME,...] [-out update.bin] FILE
   signer-admin show [-active FILE] FILE
   signer-admin sign -key FILE|openpgp:KEYGRIP [-hashed] -expect-sha256 HEX [-out FILE] update.bin|import.bin
   signer-admin approver-key -key FILE|openpgp:KEYGRIP | -openpgp FILE [-fingerprint HEX]
   signer-admin assemble [-active FILE] [-out update.signed] update.bin SIG...
-  signer-admin push -cluster cluster.json [-raise-min] [-signers NAME,...] update.signed
+  signer-admin push -cluster cluster.json [-raise-min] [-signers NAME,...] [-drop-running-image NAME,...] update.signed
   signer-admin probe -cluster cluster.json [-signers NAME,...]
   signer-admin import-draft -cluster cluster.json -signer NAME -split FILE [-not-after 12h] [-allow-gcp-unsafe-single-key] [-out import.bin]
   signer-admin import -cluster cluster.json -signer NAME -order import.signed -shares FILE -commitments FILE
   signer-admin exit -cluster cluster.json [-signers NAME,...] [-split FILE] -pubkey 0x... -index N -epoch E -out exit.json
-  signer-admin split -keystores DIR -password-file FILE -t T -n N -signers NAME,... [-chain mainnet|hoodi|devnet|ci-test] [-expect FILE] -out DIR
+  signer-admin split -keystores DIR -password-file FILE -t T -n N -signers NAME,... [-chain mainnet|hoodi|devnet|ci-test] [-expect FILE] [-allow-swap] -out DIR
   signer-admin issue-client-cert -ca-cert FILE -ca-key FILE -role admin|attest|signing|-make-intermediate ROLE -name CN -out DIR`
 
 func run(args []string, out io.Writer) error {

@@ -720,10 +720,18 @@ func (s *Setup) CheckOwnImageListed() error {
 // ImageListed reports whether images, an allowed_image_measurements list,
 // holds an image of p's kind. The dev platform has no kind and passes any
 // list. CheckOwnImageListed applies it to a setup, and signer-admin draft
-// to a locked update for each signer of the cluster.
+// to a locked update for each signer of the cluster. It is the rule by
+// kind, for a signer whose running image is unknown; a tool that knows
+// the measurement a runner reports checks it with Image.Listed.
 func (p Platform) ImageListed(images []Image) bool {
 	k, ok := p.ImageKind()
 	return !ok || slices.ContainsFunc(images, func(im Image) bool { return im.Kind == k })
+}
+
+// Listed reports whether images, an allowed_image_measurements list, names
+// im: an entry of the same kind and measurement.
+func (im Image) Listed(images []Image) bool {
+	return slices.ContainsFunc(images, func(x Image) bool { return compareImages(x, im) == 0 })
 }
 
 // Encode returns the group's values as a setup and an update body carry

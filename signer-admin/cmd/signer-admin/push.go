@@ -21,11 +21,12 @@ func cmdPush(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("push", flag.ContinueOnError)
 	cf := addClusterFlags(fs)
 	raise := fs.Bool("raise-min", false, "once every signer has the update in force, raise min_<group>_version in each cloud.json to its version")
+	drop := fs.String("drop-running-image", "", "signer names, comma-separated: the locked update drops the image these signers run on purpose, after their hosts switched to a listed image")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("usage: signer-admin push -cluster cluster.json [-raise-min] [-signers NAME,...] update.signed")
+		return errors.New("usage: signer-admin push -cluster cluster.json [-raise-min] [-signers NAME,...] [-drop-running-image NAME,...] update.signed")
 	}
 	raw, err := os.ReadFile(fs.Arg(0))
 	if err != nil {
@@ -46,6 +47,28 @@ func cmdPush(args []string, out io.Writer) error {
 	c, err := cf.load()
 	if err != nil {
 		return err
+	}
+	// The image rules, for every signer the update goes to: draft checked
+	// the signers it was drafted for, and this is the last step before the
+	// runners, which accept a list without their own image.
+	if b.Locked != nil {
+		if err := checkOwnImages(c.members, b.Locked); err != nil {
+			return err
+		}
+		states, errs := readAll(c, *cf.timeout)
+		if err := errors.Join(errs...); err != nil {
+			for i, m := range c.members {
+				if errs[i] != nil {
+					fprintf(out, "%s error: %v\n", m.name, errs[i])
+				}
+			}
+			return errors.New("a locked update needs the state of every signer it is pushed to, for the image each runs (-signers names a part of the cluster)")
+		}
+		if err := checkRunningImages(c.members, states, b.Locked, splitNames(*drop)); err != nil {
+			return err
+		}
+	} else if *drop != "" {
+		return errors.New("-drop-running-image: an open update changes no image")
 	}
 	want := ref{b.Version, hash}
 	states := make([]*cloud.SetupState, len(c.members))
