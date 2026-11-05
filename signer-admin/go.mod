@@ -9,7 +9,6 @@ require (
 	github.com/x448/float16 v0.8.4 // indirect
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.45.0 // indirect
 )
 
 require (
@@ -20,6 +19,7 @@ require (
 	github.com/lidofinance/tee-signer/signer-core v0.0.0
 	github.com/lidofinance/tee-signer/signer-protocol v0.0.0
 	golang.org/x/crypto v0.52.0
+	golang.org/x/sys v0.45.0
 )
 
 replace (

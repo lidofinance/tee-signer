@@ -92,13 +92,14 @@
 //	    admin role may sign an exit. The tool posts nothing; to broadcast:
 //	      curl -X POST -H 'Content-Type: application/json' --data @exit.json \
 //	        http://BEACON:5052/eth/v1/beacon/pool/voluntary_exits
-//	signer-admin split -keystores DIR -password-file FILE -t T -n N -signers NAME,... [-chain mainnet|hoodi|devnet|ci-test] [-expect FILE] -out DIR
+//	signer-admin split -keystores DIR -password-file FILE -t T -n N -signers NAME,... [-chain mainnet|hoodi|devnet|ci-test] [-expect FILE] [-allow-swap] -out DIR
 //	    Offline, as a trusted dealer: decrypt EIP-2335 keystores, split
 //	    each key t of n with Feldman commitments, check each share against
 //	    the commitments and that t shares recover the key, and write
 //	    OUT/split.json for import-draft,
 //	    OUT/shares/NAME/shares.txt (mode 0600) for import -shares and
-//	    OUT/manifest.json (split.go). OUT must be a new folder on tmpfs.
+//	    OUT/manifest.json (split.go). OUT must be a new folder on tmpfs;
+//	    swap must be off (or -allow-swap), core dumps are turned off.
 //	signer-admin issue-client-cert -ca-cert FILE -ca-key FILE -role admin|attest|signing -name CN -out DIR
 //	signer-admin issue-client-cert -ca-cert FILE -ca-key FILE -make-intermediate ROLE -name CN -out DIR
 //	    Issue one client certificate of a role, or a role intermediate from
@@ -181,7 +182,7 @@ const usage = `usage:
   signer-admin import-draft -cluster cluster.json -signer NAME -split FILE [-not-after 12h] [-allow-gcp-unsafe-single-key] [-out import.bin]
   signer-admin import -cluster cluster.json -signer NAME -order import.signed -shares FILE -commitments FILE
   signer-admin exit -cluster cluster.json [-signers NAME,...] [-split FILE] -pubkey 0x... -index N -epoch E -out exit.json
-  signer-admin split -keystores DIR -password-file FILE -t T -n N -signers NAME,... [-chain mainnet|hoodi|devnet|ci-test] [-expect FILE] -out DIR
+  signer-admin split -keystores DIR -password-file FILE -t T -n N -signers NAME,... [-chain mainnet|hoodi|devnet|ci-test] [-expect FILE] [-allow-swap] -out DIR
   signer-admin issue-client-cert -ca-cert FILE -ca-key FILE -role admin|attest|signing|-make-intermediate ROLE -name CN -out DIR`
 
 func run(args []string, out io.Writer) error {

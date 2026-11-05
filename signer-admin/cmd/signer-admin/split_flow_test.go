@@ -65,20 +65,23 @@ func TestSplitEIP2335Vectors(t *testing.T) {
 	for name, ks := range map[string]string{"scrypt": eipScrypt, "pbkdf2": eipPBKDF2} {
 		t.Run(name, func(t *testing.T) {
 			p := writeFile(t, filepath.Join(dir, name, "keystore-"+name+".json"), ks)
-			secret, pub, err := decryptKeystore(p, []byte(eipEncoded))
+			var secret [32]byte
+			pub, err := decryptKeystore(p, []byte(eipEncoded), &secret)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if fmt.Sprintf("%x", secret) != eipSecret || pub.String() != "0x"+eipPubkey {
 				t.Fatalf("secret %x, pubkey %s", secret, pub)
 			}
-			if _, _, err := decryptKeystore(p, []byte("testpassword")); err == nil {
+			if _, err := decryptKeystore(p, []byte("testpassword"), &secret); err == nil {
 				t.Fatal("another password opened the keystore")
 			}
 		})
 	}
 	splitOutFS = func(string) error { return nil }
-	t.Cleanup(func() { splitOutFS = checkTmpfs })
+	oldSwaps := splitSwaps
+	splitSwaps = writeFile(t, filepath.Join(dir, "swaps"), "Filename\tType\tSize\tUsed\tPriority\n")
+	t.Cleanup(func() { splitOutFS, splitSwaps = checkTmpfs, oldSwaps })
 	pass := writePrivate(t, filepath.Join(dir, "password.txt"), eipPassword+"\n")
 	wantIn(t, failTool(t, "split", "-keystores", filepath.Join(dir, "scrypt"), "-password-file", pass, "-chain", "devnet",
 		"-t", "2", "-n", "3", "-signers", "a,b,c", "-out", filepath.Join(dir, "out")), "outside printable ASCII")
