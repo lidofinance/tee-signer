@@ -1,46 +1,49 @@
 package main
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/lidofinance/tee-signer/governance/runnerchain"
+	"github.com/lidofinance/tee-signer/governance/setuptext"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
-	"github.com/lidofinance/tee-signer/signer-admin/fakerunner"
 )
 
-// draft -group locked refuses an update whose allowed_image_measurements
-// lists no image of a signer's platform, and names the signer and the
-// kind; with an image of every platform kept it drafts. sign refuses such
-// a body too, for the signer of the active file.
+// draft -group locked and sign refuse an update whose
+// allowed_image_measurements lists no image of a signer's platform, and
+// name the signer and the kind; with an image of every platform kept it
+// passes. Both commands call checkOwnImages: draft for every member, sign
+// for the signer of the active file. The check is tested here directly:
+// draft reads every member's state first, and a cloud platform setup
+// refuses the dev verifier that a fake runner would need.
 func TestDraftRefusesLockedWithoutOwnImage(t *testing.T) {
 	full := cloudSetupText(t, 4, "threshold", "", "")
 	dir := t.TempDir()
 	conf := writeFile(t, filepath.Join(dir, "setup.conf"), full)
 	mustTool(t, "setup", "-out", filepath.Join(dir, "setups"), conf)
-	var signers []map[string]string
+	var members []*member
 	for _, n := range []string{"gsigner-1", "gsigner-2", "gsigner-3"} {
-		r := fakerunner.StartSetupAs(t, mustRead(t, filepath.Join(dir, "setups", n+".setup")), runnerchain.Mainnet)
-		cert, key := r.ClientFiles(t, t.TempDir())
-		writeJSONFile(t, filepath.Join(dir, n, "cloud.json"), map[string]any{
-			"address": r.Addr(), "client_cert": cert, "client_key": key, "accounts": "accounts.json", "slots_per_epoch": 2,
-			"attestation": map[string]any{"verifier": "dev"},
-		})
-		signers = append(signers, map[string]string{"name": n, "cloud": n + "/cloud.json", "setup": "setups/" + n + ".setup"})
+		s, err := setupwire.DecodeSetup(mustRead(t, filepath.Join(dir, "setups", n+".setup")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		members = append(members, &member{name: n, setup: s})
 	}
-	cl := writeJSONFile(t, filepath.Join(dir, "cluster.json"), map[string]any{"signers": signers})
-	mustTool(t, "pin", "-cluster", cl)
 
-	// The same approvers as the setup, so the update is no rotation.
 	var approverLines string
 	for _, l := range strings.Split(full, "\n") {
 		if strings.HasPrefix(l, "approvers = ") {
 			approverLines += l + "\n"
 		}
 	}
-	locked := approverLines + lockedText(nil, 2, 0, fee1, fee2)
+	locked := func(images string) *setupwire.Locked {
+		t.Helper()
+		l, err := setuptext.ParseLocked("locked.conf", []byte(approverLines+lockedText(nil, 2, 0, fee1, fee2)+images))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return l
+	}
 	without := func(kind string) string {
 		var keep []string
 		for _, l := range strings.Split(cloudImages, "\n") {
@@ -50,48 +53,22 @@ func TestDraftRefusesLockedWithoutOwnImage(t *testing.T) {
 		}
 		return strings.Join(keep, "\n")
 	}
+	if err := checkOwnImages(members, locked(cloudImages)); err != nil {
+		t.Fatalf("every image kind kept: %v", err)
+	}
 	for kind, signer := range map[string]string{"azure": "gsigner-1", "nitro": "gsigner-2", "gcp": "gsigner-3"} {
-		file := writeFile(t, filepath.Join(dir, "no-"+kind+".conf"), locked+without(kind))
-		body := filepath.Join(dir, "no-"+kind+".bin")
-		wantIn(t, failTool(t, "draft", "-cluster", cl, "-group", "locked", "-margin", "0s", "-out", body, file),
-			"signer "+signer, "platform is "+kind, "lists no "+kind+" image")
-		if _, err := os.Stat(body); !os.IsNotExist(err) {
-			t.Fatalf("no %s image: the refused draft wrote %s (stat: %v)", kind, body, err)
+		l := locked(without(kind))
+		err := checkOwnImages(members, l)
+		if err == nil {
+			t.Fatalf("no %s image: passed", kind)
 		}
-	}
-	file := writeFile(t, filepath.Join(dir, "all.conf"), locked+cloudImages)
-	body := filepath.Join(dir, "all.bin")
-	wantIn(t, mustTool(t, "draft", "-cluster", cl, "-group", "locked", "-margin", "0s", "-out", body, file),
-		"locked update version 1 for 3 signers", "wrote "+body)
-
-	// sign: the drafted body without one image kind, next to the same active
-	// file (gsigner-1's setup, an Azure signer).
-	b, err := setupwire.DecodeUpdateBody(mustRead(t, body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	keys := approvers(t, dir, 1)
-	for kind, refused := range map[setupwire.ImageKind]bool{setupwire.ImageAzure: true, setupwire.ImageNitro: false} {
-		c := *b
-		lc := *b.Locked
-		lc.AllowedImageMeasurements = nil
-		for _, im := range b.Locked.AllowedImageMeasurements {
-			if im.Kind != kind {
-				lc.AllowedImageMeasurements = append(lc.AllowedImageMeasurements, im)
+		wantIn(t, err.Error(), "signer "+signer, "platform is "+kind, "lists no "+kind+" image")
+		// sign checks only the signer of its active file.
+		for _, m := range members {
+			err := checkOwnImages([]*member{m}, l)
+			if (m.name == signer) != (err != nil) {
+				t.Fatalf("no %s image, %s alone: %v", kind, m.name, err)
 			}
-		}
-		c.Locked = &lc
-		raw, err := c.Encode()
-		if err != nil {
-			t.Fatal(err)
-		}
-		edited := writeFile(t, filepath.Join(dir, "no-"+kind.String()+"-edited.bin"), string(raw))
-		writeFile(t, edited+".active", string(mustRead(t, body+".active")))
-		args := []string{"sign", "-key", keys[0].file, "-expect-sha256", expectOf(t, edited), edited}
-		if refused {
-			wantIn(t, failTool(t, args...), "signer gsigner-1", "lists no azure image", "nothing signed")
-		} else {
-			wantIn(t, mustTool(t, args...), "wrote ")
 		}
 	}
 }
