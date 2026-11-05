@@ -14,7 +14,7 @@ import (
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
-// What a Nitro runner puts in its attestation (runner/platform/nitro).
+// What a Nitro runner puts in its attestation (platform-aws/nitro).
 const (
 	nitroPlatform = "nitro"
 	nitroFormat   = "aws-nitro-cose-sign1"

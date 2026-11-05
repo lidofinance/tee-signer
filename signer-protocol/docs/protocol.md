@@ -1,7 +1,7 @@
 # Runner wire protocol, version 1
 
 The remote backend (`signer-protocol/remote`, in the client process) and the runner
-(`runner/`, inside the TEE) talk over one stream: TCP, a unix socket or
+(`tee-signer/`, inside the TEE) talk over one stream: TCP, a unix socket or
 vsock. On GCP and Azure the TCP stream, and on AWS the vsock stream, runs
 inside mutual TLS 1.3 (see "Channel binding" below). The reference code is
 `signer-protocol/wire/wire.go`;
@@ -678,7 +678,7 @@ with `SC_ERR_BAD_KEY`. `-sealed-import=false` turns the message off.
 `signer-admin/cmd/share-import` is the dealer tool; it reads the share from a
 file or stdin and takes the verifier settings of `attestation-verify/runnerclient`
 (`-verifier dev|azure-maa|aws-nitro|gcp-cs`, and the settings of the
-verifier, see `attest/README.md`). `signer-admin import` does the same with
+verifier, see `attestation-verify/README.md`). `signer-admin import` does the same with
 the settings of each signer's connection file (`cloud.json`).
 
 ### IMPORT_SHARES_SEALED
@@ -929,7 +929,7 @@ the table (an unknown one, or a new message nobody added) is `FORBIDDEN`
 for every role.
 
 A TLS client's role comes from its verified certificate chain
-(`runner/attls.RoleOf`), in this order:
+(`tee-signer/attls.RoleOf`), in this order:
 
 1. Attest-only: the leaf, or any CA certificate of a verified chain, lists
    `1.2.840.113556.1.8000.2554.49247.57036.45844.17649.38356.1811430.10320378.1`

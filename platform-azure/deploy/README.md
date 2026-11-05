@@ -39,8 +39,7 @@ state copy, signer name and optional network entry names. An Azure store
 names `account`, `container`, `subscription` and `resource_group`, because
 the lock check reads the storage account and the container with its
 immutability policy from the management plane, which addresses the
-account by its subscription and group. `signer-config setup` (the
-signing client's tool) makes the setups of a
+account by its subscription and group. `signer-admin setup` makes the setups of a
 cluster with one `cluster_id`. `signer-admin/cmd/setup-tool encode` makes one
 binary setup from a human `key = value` file
 (`governance/setuptext/testdata/setup-azure.conf` is an example), and

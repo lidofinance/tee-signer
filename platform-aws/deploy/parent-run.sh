@@ -16,7 +16,7 @@
 # security group's egress for them (main.tf nts_egress).
 #
 # The EIF is the same for every signer (scripts/nitro-eif.sh). What makes it
-# this signer is its setup: the binary file signer-config setup (or signer-admin/cmd/setup-tool)
+# this signer is its setup: the binary file signer-admin setup (or signer-admin/cmd/setup-tool encode)
 # makes, with the chain, the client CA, the KMS key and region, the mark
 # bucket and the signer name.
 # The host agent checks it with the runner's decoder and hands it to the
@@ -45,7 +45,7 @@ MEMORY_MIB="${MEMORY_MIB:-512}"
 for tool in hostagent forwarder udprelay; do
   [ -x "$HERE/$tool" ] || { echo "$HERE/$tool: no such program (scripts/build-runner.sh builds it)" >&2; exit 1; }
 done
-[ -n "${SETUP:-}" ] || { echo "set SETUP to the signer's binary setup (signer-config setup, or signer-admin/cmd/setup-tool encode)" >&2; exit 1; }
+[ -n "${SETUP:-}" ] || { echo "set SETUP to the signer's binary setup (signer-admin setup, or signer-admin/cmd/setup-tool encode)" >&2; exit 1; }
 SETUP="$(cd "$(dirname "$SETUP")" && pwd)/$(basename "$SETUP")"
 # The routes of the setup, one "PORT HOST HOSTPORT" line each. The agent
 # refuses a setup the runner would refuse, and one for another platform.

@@ -2,7 +2,7 @@
 // remote backend over TCP, a unix socket and (if the kernel allows)
 // vsock. Chain time is compressed: 1-second slots, 2 slots per epoch.
 //
-// There is one runner binary per cloud (runner/platforms.go, and
+// There is one runner binary per cloud (tee-signer/platforms.go, and
 // scripts/build-runner.sh builds them). Each test uses the binary its
 // platform needs. A variable names the binary to test; when it is unset the
 // test builds the binary itself, with the tags in runnerBuilds below.

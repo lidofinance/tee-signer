@@ -68,7 +68,7 @@ func SyncSelectionRoot(slot, subcommitteeIndex uint64) backend.Root {
 }
 
 // typedParts returns the object root, domain type and slot of a message of
-// backend/aggregates.go; ok is false for any other message.
+// signer-protocol/aggregates.go; ok is false for any other message.
 func (c *Config) typedParts(m backend.Message) (obj backend.Root, dt backend.DomainType, slot uint64, ok bool, err error) {
 	switch v := m.(type) {
 	case *backend.SelectionProof:
@@ -89,7 +89,7 @@ func (c *Config) typedParts(m backend.Message) (obj backend.Root, dt backend.Dom
 	return obj, dt, slot, true, err
 }
 
-// typedSigningRoot is SigningRoot for the kinds of backend/aggregates.go.
+// typedSigningRoot is SigningRoot for the kinds of signer-protocol/aggregates.go.
 func (c *Config) typedSigningRoot(m backend.Message) (backend.Root, bool, error) {
 	obj, dt, slot, ok, err := c.typedParts(m)
 	if !ok || err != nil {

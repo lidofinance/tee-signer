@@ -54,7 +54,7 @@ var (
 	// The approver set hash in IDENTITY: over approvals_needed:u8 n:u8 and the keys.
 	CtxApproverSet = Context{"signer-approver-set-v1"}
 
-	// State copy (runner/statestore): the snapshot's AES-GCM AAD and the
+	// State copy (slashing-log/statestore): the snapshot's AES-GCM AAD and the
 	// snapshot key's key-release AAD, both over setup_hash.
 	CtxState    = Context{"signer-state-v1"}
 	CtxStateKey = Context{"signer-state-key-v1"}

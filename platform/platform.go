@@ -58,7 +58,7 @@ type Clock interface {
 // the same image that lost its state directory opens what an earlier
 // process made. Only the attested runner can make a blob that opens, so a
 // blob that opens was made by it (or by whoever controls key release). The
-// mark log keeps its signing keys this way (runner/markstore).
+// mark log keeps its signing keys this way (slashing-log).
 type Keys interface {
 	// NewKey returns a fresh random key and its wrapped form, bound to aad.
 	NewKey(ctx context.Context, aad []byte) (key, blob []byte, err error)
@@ -108,10 +108,10 @@ type Platform struct {
 	// enclaves have no network, so there it dials through vsock-proxy.
 	// nil means http.DefaultClient.
 	HTTPClient *http.Client
-	// Dial opens the NTS clock's connections (runner/clock.NTS, build tag
+	// Dial opens the NTS clock's connections (trusted-time/clock.NTS, build tag
 	// nts): TCP for NTS-KE and UDP for NTP. A Nitro enclave has no network,
 	// so there TCP goes through vsock-proxy and UDP through the parent's
-	// relay (runner/udprelay). nil means net.Dialer.
+	// relay (platform-aws/udprelay). nil means net.Dialer.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
 	// Close releases platform resources (devices, sessions). May be nil.
 	Close func() error
@@ -121,7 +121,7 @@ type Platform struct {
 	// nil.
 	RecordCredentials func(ctx context.Context) (Credentials, error)
 	// StorageToken, if set, returns an OAuth bearer token for the platform's
-	// object store, for the mark log (runner/markstore): on GCP the
+	// object store, for the mark log (slashing-log): on GCP the
 	// federated token of the attested workload, on Azure the managed
 	// identity's token for https://storage.azure.com/. Only the attested
 	// runner can get it. expires is when the token expires, zero when the
@@ -270,7 +270,7 @@ func (o Options) CheckNoLock(r *KeyRule) error {
 }
 
 // DurableFunc wraps the platform's local store in a durable copy outside
-// the host (runner/statestore) and restores the local store from it first.
+// the host (slashing-log/statestore) and restores the local store from it first.
 // p carries what the copy needs: Store (the local store), Keys,
 // StorageToken, RecordCredentials and HTTPClient; its Sealer is not yet set.
 // The platform uses the returned store from then on.

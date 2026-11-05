@@ -51,7 +51,7 @@ type UpdateBody struct {
 	Locked     *Locked
 	Open       *Open
 	// Salts has one salt per leaf of the group (NumLockedLeaves or
-	// NumOpenLeaves). signer-config draft draws them for each update.
+	// NumOpenLeaves). signer-admin draft draws them for each update.
 	Salts Salts
 }
 
@@ -69,7 +69,7 @@ type Update struct {
 }
 
 // CheckValues applies the body's value rules, without the salts: a body
-// that signer-config read from a human file before it drew them.
+// that signer-admin read from a human file before it drew them.
 func (u *UpdateBody) CheckValues() error {
 	if u.ClusterID == ([32]byte{}) {
 		return errors.New("update: cluster_id is zero")

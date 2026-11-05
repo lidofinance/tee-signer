@@ -7,12 +7,12 @@
 //	gcp    the instance metadata attribute signer-setup, base64 (gcp.MetadataSetup)
 //	dev    SIGNER_SETUP, or a file for local runners (Env, File)
 //
-// Load decodes the bytes with the shared strict decoder (backend/setupwire),
+// Load decodes the bytes with the shared strict decoder (governance/setupwire),
 // refuses a setup for another platform and computes setup_hash. The methods
 // of Setup then give the values that were flags before: the platform
 // options, the mark and state stores, the signer name, the client CA and
 // max_keys. The runner turns the chain, safety and first config
-// values into its chain config itself (runner/setupcfg.go).
+// values into its chain config itself (tee-signer/start.go, chainConfig).
 //
 // The setup is not secret. A host that hands over other bytes gets a runner
 // with another setup_hash in its identity, another mark log and another

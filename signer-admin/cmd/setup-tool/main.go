@@ -1,6 +1,6 @@
 // Command setup-tool makes and checks the binary setup of a signer for the
-// cloud scripts in this repo. It uses the runner's decoder (backend/setupwire,
-// runner/setup), so what it accepts is what the runner accepts. signer-config
+// cloud scripts in this repo. It uses the runner's decoder (governance/setupwire,
+// platform/setup), so what it accepts is what the runner accepts. signer-admin
 // is the operator's tool (cluster ids, n setups, pins); this
 // one covers one file at a time.
 //
@@ -9,7 +9,7 @@
 //	    OUT (mode 0644) and print its setup_sha256. A file without salts
 //	    gets fresh random ones: the policy salts of this signer alone (a
 //	    cluster whose signers share one policy_root comes from
-//	    signer-config setup) and its platform salt. A GCP setup with
+//	    signer-admin setup) and its platform salt. A GCP setup with
 //	    sealing_key_release.unsafe_single_key_accepted gets a WARNING
 //	    on stderr (setupwire.UnsafeSingleKeyWarning); encode and check.
 //	    On mainnet such a setup also needs
@@ -23,7 +23,7 @@
 //	    do. With -platform, refuse a setup for another platform. With
 //	    -chain, refuse
 //	    a setup whose chain or first fork schedule differs from the runner
-//	    chain.json (cloud/chains/chain.sh picks that file by chain name).
+//	    chain.json (governance/chains/chain.sh picks that file by chain name).
 //	setup-tool show FILE
 //	    Print the human form of a binary setup.
 //	setup-tool chain-lines CHAIN_JSON

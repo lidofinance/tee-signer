@@ -12,8 +12,8 @@ import (
 	"github.com/lidofinance/tee-signer/trusted-time/clock"
 )
 
-// ntsServers: in a debug build (the runner/e2e tests), two variables replace
-// the public operators with test servers (runner/nts/ntstest):
+// ntsServers: in a debug build (the tests/e2e tests), two variables replace
+// the public operators with test servers (trusted-time/nts/ntstest):
 //
 //	RUNNER_NTS_TEST_SERVERS=op=host[@ke-host:port],...  operator, TLS name and NTS-KE address
 //	RUNNER_NTS_TEST_ROOTS=file.pem                      the roots of all of them

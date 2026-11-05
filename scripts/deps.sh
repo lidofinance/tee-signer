@@ -36,7 +36,7 @@ if ! command -v go >/dev/null; then
 fi
 gov="$(go env GOVERSION | sed 's/^go//')"
 if [ "$(printf '%s\n1.26\n' "$gov" | sort -V | head -1)" != "1.26" ]; then
-  echo "Go $gov is too old; need >= 1.26 (runner/go.mod)." >&2
+  echo "Go $gov is too old; need >= 1.26 (tee-signer/go.mod)." >&2
   exit 1
 fi
 log "go $gov"

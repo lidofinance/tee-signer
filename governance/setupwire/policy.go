@@ -49,7 +49,7 @@ type PolicySalts struct {
 func checkSalts(what string, s Salts, n int) error {
 	if len(s) != n {
 		if len(s) == 0 {
-			return fmt.Errorf("%s: no salts; signer-config draws them", what)
+			return fmt.Errorf("%s: no salts; signer-admin draws them", what)
 		}
 		return fmt.Errorf("%s: %d salts, want one for each of the %d leaves", what, len(s), n)
 	}
@@ -100,11 +100,11 @@ func NewPolicySalts(r io.Reader) (PolicySalts, error) {
 }
 
 // Salted reports whether the setup has salts. One read from an operator's
-// human file has none until signer-config draws them.
+// human file has none until signer-admin draws them.
 func (s *Setup) Salted() bool { return !s.unsalted() }
 
 // DrawSalts gives the setup the policy salts p and a platform salt from r.
-// signer-config setup draws p once for the signers of a cluster and calls
+// signer-admin setup draws p once for the signers of a cluster and calls
 // this for each of them.
 func (s *Setup) DrawSalts(p PolicySalts, r io.Reader) error {
 	ps, err := NewSalts(r, 1)

@@ -46,7 +46,7 @@ type resolved struct {
 }
 
 // DefaultNames are the NTS-KE hosts of the runner's four operators
-// (runner/nts.PublicServers); each names itself as its NTP server, except
+// (trusted-time/nts.PublicServers); each names itself as its NTP server, except
 // Netnod.
 var DefaultNames = []string{"time.cloudflare.com", "nts.netnod.se", "ptbtime1.ptb.de", "ntppool1.time.nl"}
 

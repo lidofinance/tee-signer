@@ -46,7 +46,7 @@
 #   teardown          delete everything except the KMS key ring and key
 #
 # Settings (environment): see common.sh. The ones you set for a test:
-#   SETUP_FILE    vm-create: the signer's binary setup (signer-config setup
+#   SETUP_FILE    vm-create: the signer's binary setup (signer-admin setup
 #                 for the signers of a cluster, or signer-admin/cmd/setup-tool
 #                 encode). vm-create checks it with the runner's decoder (a
 #                 GCP setup of chain CHAIN, naming this project's WIF
@@ -510,7 +510,7 @@ Names     key $KMS_KEY_RESOURCE
 Setup     ${SETUP_FILE:-SETUP_FILE (unset)}, chain ${CHAIN:-unset (set CHAIN)}; build folder $OUT, image tag $IMAGE_TAG
 
 Step 0, local: platform-gcp/deploy/build-image.sh   (builds twice, writes $OUT/runner.digest; the same image for every signer)
-        and the signer's setup (SETUP_FILE): signer-config setup -out setups cluster.conf, or signer-admin/cmd/setup-tool encode setup.conf setup.bin
+        and the signer's setup (SETUP_FILE): signer-admin setup -out setups cluster.conf, or signer-admin/cmd/setup-tool encode setup.conf setup.bin
 Then each step below needs CONFIRM=yes: CONFIRM=yes platform-gcp/deploy/deploy.sh <step>
 Read-only before the first step: platform-gcp/deploy/deploy.sh preflight
 

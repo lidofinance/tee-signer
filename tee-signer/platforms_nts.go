@@ -6,7 +6,7 @@ package main
 // the default runners stay byte for byte the same. This file's name sorts
 // after platform_*.go, so its init runs after theirs and can wrap the
 // platforms they registered. With -nts-clock (or RUNNER_NTS_CLOCK=1) every
-// platform gets the NTS clock (runner/clock.NTS) in place of its own. The
+// platform gets the NTS clock (trusted-time/clock.NTS) in place of its own. The
 // cloud images set the flags in their measured command (the enclave image,
 // the CCE policy, the Confidential Space image), so the host cannot turn the
 // clock off; the variables are for local runs. A flag that is set wins

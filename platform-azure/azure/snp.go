@@ -42,7 +42,7 @@ type ReportSource interface {
 
 // runtimeReportData is the REPORT_DATA that binds runtime data: its
 // SHA-256 in the first 32 bytes, zeros after. MAA and the verifier in
-// attest/azureid compute the same value.
+// attestation-verify/azureid compute the same value.
 func runtimeReportData(runtimeData []byte) [reportDataSize]byte {
 	var rd [reportDataSize]byte
 	sum := sha256.Sum256(runtimeData)

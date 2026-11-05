@@ -20,8 +20,8 @@ if [ -n "$SUFFIX" ]; then
   case "$IMAGE_TAG" in *"$SUFFIX") ;; *) IMAGE_TAG="$IMAGE_TAG$SUFFIX" ;; esac
 fi
 
-# Setup of signer N: SETUP_FILE_N, a binary setup. signer-config setup (the signing
-# client's tool) writes one per signer of a cluster with one cluster_id;
+# Setup of signer N: SETUP_FILE_N, a binary setup. signer-admin setup writes
+# one per signer of a cluster with one cluster_id;
 # signer-admin/cmd/setup-tool encode makes a single one. It holds what were
 # per-signer flags: chain config, client CA, MAA host, vault and key, mark
 # and state stores (the mark log is required; an Azure store names its
@@ -38,7 +38,7 @@ setup_file() { local v="SETUP_FILE_$1"; echo "${!v:-}"; }
 need_setup() {
   local n="$1" f out kid part
   f="$(setup_file "$n")"
-  [ -n "$f" ] || die "set SETUP_FILE_$n to the binary setup of signer $n (signer-config setup, or signer-admin/cmd/setup-tool encode)"
+  [ -n "$f" ] || die "set SETUP_FILE_$n to the binary setup of signer $n (signer-admin setup, or signer-admin/cmd/setup-tool encode)"
   out="$(check_setup "$f" azure)" || die "SETUP_FILE_$n=$f refused"
   [ "$(setup_value "$f" sealing_key_release.maa_endpoint)" = "$(signer_maa_endpoint "$n")" ] ||
     die "SETUP_FILE_$n names attestation provider $(setup_value "$f" sealing_key_release.maa_endpoint), this deploy $(signer_maa_endpoint "$n")"

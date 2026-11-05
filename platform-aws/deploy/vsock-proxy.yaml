@@ -5,7 +5,7 @@
 # platform-aws/deploy/enclave/Dockerfile. Format from vsock_proxy/configs/vsock-proxy.yaml
 # in aws-nitro-enclaves-cli v1.5.2. Only these destinations can be proxied.
 # The four on port 4460 are the NTS-KE servers of the enclave's NTS clock
-# (runner/nts.PublicServers); their NTP goes through udprelay, not through
+# (trusted-time/nts.PublicServers); their NTP goes through udprelay, not through
 # vsock-proxy, which is TCP only. No DynamoDB: the setup's mark log is the
 # clone protection.
 allowlist:

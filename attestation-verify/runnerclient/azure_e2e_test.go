@@ -64,7 +64,7 @@ import (
 
 const (
 	// debugFakeTCBM is the TCB version of the debug runner's fake report
-	// (runner/platform/azure/hooks_debug.go, debugFakeTCB).
+	// (platform-azure/azure/hooks_debug.go, debugFakeTCB).
 	debugFakeTCBM = "1c01000000000004"
 	fakeVCEK      = "-----BEGIN CERTIFICATE-----\nVkNFSw==\n-----END CERTIFICATE-----\n"
 	fakeCertChain = "-----BEGIN CERTIFICATE-----\nQVNL\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nQVJL\n-----END CERTIFICATE-----\n"
@@ -695,7 +695,7 @@ func fastChainAttester() backend.Root {
 	return backend.ComputeDomain(backend.DomainBeaconAttester, backend.Version{0, 0, 0, 1}, gvr)
 }
 
-// A BLS key for the lost-state test (made with backend/core, which this
+// A BLS key for the lost-state test (made with signer-core/core, which this
 // module does not link): secret and public key.
 const (
 	lostStateSecret = "70a0039da91e3c6d9993cfa2f2f446ee1747b47ebd247b03f36afabecb23beef"
@@ -705,7 +705,7 @@ const (
 // A restart with lost local state on the Azure path: the runner releases
 // the Key Vault key again, derives the same key wrapping key from it and
 // reads its mark log (a file log here; the WORM fakes of the three stores
-// run in runner/e2e and runner/markstore). Its share is gone with the
+// run in tests/e2e and slashing-log). Its share is gone with the
 // state; after a sealed import it continues from the newest mark: a vote
 // with a source below the log's is refused. The import carries no history,
 // so it sets the share's own source floor at the import: the first honest

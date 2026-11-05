@@ -121,7 +121,7 @@ static const prof_t PROFS[] = {
     /* Cloud runner with the removed DynamoDB clone guard (chain.json 32,2,2, max 2),
      * floor only, margin 3, record with ahead 0. */
     {"cloud", PV, {32, 2, 2}, 2, 0, 1, 3, 1, 0, CLK_ANCH, 1, 1, 0, 0, 0},
-    /* Cloud runner with cloud/chain.testnet.json (32,1,1, max 1), margin 2. */
+    /* Cloud runner (chain.json 32,1,1, max 1), margin 2. */
     {"cloud-t", PV, {32, 1, 1}, 1, 0, 1, 2, 1, 0, CLK_ANCH, 1, 1, 0, 0, 0},
     /* Cloud runner without a clone guard: clones are out
      * of its threat model, rollback is not. */

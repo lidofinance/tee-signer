@@ -3,7 +3,7 @@
 // enclave (package agentclient). The runner links this package and
 // agentclient, never the agent.
 //
-// Protocol: wire framing (backend/wire) with JSON payloads and these types:
+// Protocol: wire framing (signer-protocol/wire) with JSON payloads and these types:
 //
 //	0x41 GET   {"key"}            -> {"value": base64} or status NOT_FOUND
 //	0x42 PUT   {"key","value"}    -> {}

@@ -29,7 +29,7 @@ type Deleter interface {
 
 // Batcher is a Store that writes a whole Change at once: after a failed
 // call or a crash, it and a restart hold all of the change or none of it
-// (runner/statestore).
+// (slashing-log/statestore).
 type Batcher interface {
 	Apply(c *Change) error
 }

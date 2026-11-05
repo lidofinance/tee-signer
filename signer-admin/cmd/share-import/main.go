@@ -25,7 +25,7 @@
 // verified identity; -tls-key-pin adds a pin of the runner's TLS key.
 // A runner with a setup takes a share only under an import order that k
 // of its approvers signed (package importorder): -order names the file
-// with the signed order (binary, as signer-config writes it), and
+// with the signed order (binary, as signer-admin assemble writes it), and
 // -commitments the file with the validator's t public commitments of the
 // split, one 0x-hex G1 point per line, commitment 0 first (the validator
 // key). t, n and the share index come from the order.

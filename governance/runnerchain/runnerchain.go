@@ -12,7 +12,7 @@
 //     People, the dashboard and the tools read it here.
 //   - the subject common name of the TLS certificate it makes at start:
 //     CertName of its chain. Only the runner holds the certificate's key,
-//     and the attested identity binds that key, so attest/runnerclient
+//     and the attested identity binds that key, so attestation-verify/runnerclient
 //     checks the build here, in the handshake, before it sends anything.
 //
 // Neither changes the wire protocol. IDENTITY and ATTEST do not carry the

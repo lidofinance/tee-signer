@@ -21,8 +21,8 @@ package nitro
 // platform's network is used.
 //
 // Release builds have no such option (hooks_release.go). The aws-nitro test
-// in attest/runnerclient (nitro_e2e_test.go) uses it, with documents from
-// attest/internal/testgen.
+// in attestation-verify/runnerclient (nitro_e2e_test.go) uses it, with documents from
+// attestation-verify/internal/testgen.
 
 import (
 	"bytes"

@@ -12,7 +12,7 @@
 //   - ntstest/: a loopback NTS-KE and NTP server for tests, with its own
 //     AES-SIV.
 //
-// runner/clock.NTS builds the runner's clock on this package.
+// trusted-time/clock.NTS builds the runner's clock on this package.
 //
 // The package has code only in a build with the tag nts. Without the tag it
 // is empty, so no default build links Rust code or needs the library.

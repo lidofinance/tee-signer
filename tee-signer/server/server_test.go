@@ -60,7 +60,7 @@ func constState(s backend.SetupState) func() backend.SetupState {
 
 // A runner with TLS names its TLS key in the identity, and the attested
 // user data covers that name. Without it the identity has no key hash, and
-// no client built by attest/runnerclient can bind the channel.
+// no client built by attestation-verify/runnerclient can bind the channel.
 func TestIdentityCarriesTheTLSKeyHash(t *testing.T) {
 	hash := sha256.Sum256([]byte("the runner's TLS key"))
 	nonce := bytes.Repeat([]byte{7}, 32)

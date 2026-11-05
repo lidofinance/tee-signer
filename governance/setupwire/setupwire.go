@@ -2,7 +2,7 @@
 // binary encoding, its strict decoder, the human "key = value" form, the
 // salted policy tree and the platform commitment that setup_hash covers
 // (policy.go), the registry of signing contexts, and the value checks that
-// need no clock or stored state. The runner and signer-config use it.
+// need no clock or stored state. The runner and signer-admin use it.
 // attestation-verify/docs/attestation-statement.md gives the layouts and
 // hashes byte by byte.
 //
@@ -283,7 +283,7 @@ type Setup struct {
 	SigningMode            SigningMode
 	Locked                 Locked
 	Open                   Open
-	// PolicySalts are the salts of the policy leaves. signer-config setup
+	// PolicySalts are the salts of the policy leaves. signer-admin setup
 	// draws them once per cluster, so every signer of a cluster with the
 	// same public values has the same policy_root.
 	PolicySalts PolicySalts
@@ -1064,7 +1064,7 @@ var (
 	// keeps one encoding). A group name must not end with a period.
 	azSubscriptionRE  = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	azResourceGroupRE = regexp.MustCompile(`^[A-Za-z0-9_().-]{0,89}[A-Za-z0-9_()-]$`)
-	// As runner/platform/azure: host names without scheme or path, and a
+	// As platform-azure/azure: host names without scheme or path, and a
 	// Key Vault key name with an optional version.
 	hostRE = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?$`)
 	kidRE  = regexp.MustCompile(`^[A-Za-z0-9-]{1,127}(/[0-9a-f]{32})?$`)
@@ -1108,7 +1108,7 @@ func (s *Setup) Check() error {
 		return err
 	}
 	if s.PlatformSalt == ([32]byte{}) {
-		return errors.New("setup: platform_salt is zero; signer-config setup draws it")
+		return errors.New("setup: platform_salt is zero; signer-admin setup draws it")
 	}
 	return s.checkSingleOnGCP()
 }
@@ -1127,7 +1127,7 @@ func (s *Setup) checkSingleOnGCP() error {
 }
 
 // CheckValues applies the value rules to the whole setup, without the
-// salts: a setup that signer-config read from a human file before it drew
+// salts: a setup that signer-admin read from a human file before it drew
 // them.
 func (s *Setup) CheckValues() error {
 	if len(s.SignerName) > MaxSignerName || !signerNameRE.MatchString(s.SignerName) {

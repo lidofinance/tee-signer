@@ -11,9 +11,9 @@ import (
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
-// ChainFile is a runner chain.json (core.Config's file form, cloud/chains):
+// ChainFile is a runner chain.json (core.Config's file form, governance/chains):
 // what the images held before the setup. The deploy scripts still pick a
-// chain by name (cloud/chains/chain.sh), so they compare the setup with it.
+// chain by name (governance/chains/chain.sh), so they compare the setup with it.
 type ChainFile struct {
 	GenesisValidatorsRoot    backend.Root    `json:"genesis_validators_root"`
 	GenesisForkVersion       backend.Version `json:"genesis_fork_version"`
@@ -88,7 +88,7 @@ func (c *ChainFile) Schedule() ([]setupwire.Fork, error) {
 }
 
 // CompareChain refuses a setup whose chain identity or first fork schedule
-// differs from the chain file's: the fields cloud/chains/chain.sh calls
+// differs from the chain file's: the fields governance/chains/chain.sh calls
 // chain fields, with the forks as Schedule gives them.
 func CompareChain(s *setupwire.Setup, c *ChainFile) error {
 	sched, err := c.Schedule()
@@ -132,7 +132,7 @@ func CompareChain(s *setupwire.Setup, c *ChainFile) error {
 
 // ChainLines writes the chain, safety and open parts of a human setup file
 // from a chain file, and the locked values the file holds, for an operator
-// who builds a setup for a chain (cloud/azure/chain-from-devnet.sh writes
+// who builds a setup for a chain (platform-azure/deploy/chain-from-devnet.sh writes
 // a devnet's chain.json). The rest of the setup (names, platform,
 // approvers) is the operator's.
 func ChainLines(c *ChainFile) (string, error) {

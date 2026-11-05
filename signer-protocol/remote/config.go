@@ -14,7 +14,7 @@ import (
 // SetupState returns the runner's setup state from a fresh IDENTITY: it asks
 // with a new nonce, checks that the attestation user data covers the
 // identity, and has verify check the attestation document (with the setup
-// pins, when attest/runnerclient built verify). The state is the one the
+// pins, when attestation-verify/runnerclient built verify). The state is the one the
 // runner attests now, not the one of the connection's first IDENTITY.
 func (c *Client) SetupState(ctx context.Context, verify VerifyFunc) (*backend.SetupState, error) {
 	if verify == nil {

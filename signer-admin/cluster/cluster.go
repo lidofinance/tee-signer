@@ -1,6 +1,6 @@
 // Package cluster reads the cluster files of signer-admin: cluster.json,
 // which lists the signers of one cluster, and each signer's connection
-// file (cloud.json, as attest/runnerclient reads it). It reads a signer's
+// file (cloud.json, as attestation-verify/runnerclient reads it). It reads a signer's
 // attested state and probes the client role of a connection (probe.go).
 //
 // cluster.json lists the signers of one cluster, with paths relative to it:

@@ -350,7 +350,7 @@ func buildVectors(t *testing.T) []byte {
 	human := humanForms(t)
 	var v vectors
 	v.Description = fmt.Sprintf("Golden vectors of the attestation statement, setup format %d (docs/attestation-statement.md). ", FormatVersion) +
-		"Hex is 0x-prefixed; every hash is SHA-256. Made by backend/setupwire TestStatementVectors -update; the test recomputes them."
+		"Hex is 0x-prefixed; every hash is SHA-256. Made by governance/setupwire TestStatementVectors -update; the test recomputes them."
 	v.Contexts = map[string]string{}
 	for _, c := range []struct {
 		key string

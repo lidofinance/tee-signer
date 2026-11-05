@@ -1,6 +1,6 @@
 package e2e
 
-// The runner is one binary per cloud (runner/platforms.go). These tests run
+// The runner is one binary per cloud (tee-signer/platforms.go). These tests run
 // the real binaries: each has its own platform and refuses the others by
 // name, and a binary built without a platform tag refuses to start.
 

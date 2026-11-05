@@ -16,7 +16,7 @@ import (
 )
 
 // What a Confidential Space runner puts in its attestation
-// (runner/platform/gcp).
+// (platform-gcp/gcp).
 const (
 	gcpPlatform = "gcp"
 	gcpFormat   = "gcp-confidential-space-jwt"

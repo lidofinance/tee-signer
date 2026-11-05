@@ -8,7 +8,7 @@
 // caller; the check makes sure the caller reaches the attested runner.
 // On AWS the enclave listens on vsock and the parent instance, which
 // forwards the traffic, is not trusted, so the runner serves mutual TLS
-// there as well. A client built by attest/runnerclient reaches it over TCP,
+// there as well. A client built by attestation-verify/runnerclient reaches it over TCP,
 // through a plain forwarder on the parent that copies bytes (the TLS ends
 // inside the enclave). A client on the parent can also dial vsock with
 // WithTLS.

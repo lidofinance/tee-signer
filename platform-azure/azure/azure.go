@@ -4,7 +4,7 @@
 // port listens there. UNTESTED on Azure: it compiles and runs against
 // fakes; nothing ran in a confidential container group.
 //
-// Flows (sources in cloud/azure/README.md and in the files named here):
+// Flows (sources in platform-azure/deploy/README.md and in the files named here):
 //
 //   - Attestation (maa.go, snp_linux.go, collateral.go): the runner asks
 //     the SEV-SNP guest device for a report whose REPORT_DATA is the
@@ -18,7 +18,7 @@
 //     key, gets an MAA token that offers it in x-ms-runtime, gets a Key
 //     Vault token from the group's managed identity, and asks Key Vault to
 //     release the exportable RSA key. Key Vault releases it only if the MAA
-//     token satisfies the key's release policy (cloud/azure/skr-policy.json.tmpl
+//     token satisfies the key's release policy (platform-azure/deploy/skr-policy.json.tmpl
 //     pins hostdata) and wraps it to the wrapping key. The sealing data key
 //     and the AES key of platform.Keys (the mark log's keys) are both
 //     derived from the released key and setup_hash (HKDF-SHA256 over its

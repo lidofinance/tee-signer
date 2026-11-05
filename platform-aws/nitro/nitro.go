@@ -20,7 +20,7 @@
 //     vsock-proxy on the parent: one vsock port per host:port.
 //   - Way in: the runner listens on vsock and serves mutual TLS 1.3 there
 //     (package attls, -tls-client-ca, required on this platform). The parent
-//     is not trusted. It forwards bytes (runner/cmd/forwarder) and has no
+//     is not trusted. It forwards bytes (platform-aws/cmd/forwarder) and has no
 //     client certificate. The TLS key is made in the enclave and its hash
 //     is in the identity, which the NSM document covers.
 //   - Clock: the enclave's system clock is set by the host. Options are

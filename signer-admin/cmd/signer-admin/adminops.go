@@ -1,6 +1,6 @@
 package main
 
-// The commands signer-config did not have: probe, import-draft, import, and the import
+// The commands of share import: probe, import-draft, import, and the import
 // order paths of show, sign and assemble.
 
 import (

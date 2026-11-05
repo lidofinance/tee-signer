@@ -9,7 +9,7 @@ import (
 
 // WithChain puts the genesis fork version into the TLS certificate as an
 // OCTET STRING under backend.RunnerChainOID, the form the clients read
-// (attest/runnerclient checkChain). Without it there is no such extension.
+// (attestation-verify/runnerclient checkChain). Without it there is no such extension.
 func TestServerCertificateNamesTheChain(t *testing.T) {
 	ca := newRoot(t, "root", now0.Add(-day(1)), now0.Add(day(1)))
 	find := func(opts ...Option) (backend.Version, bool) {

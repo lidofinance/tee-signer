@@ -61,7 +61,7 @@ import (
 )
 
 // Prefixes are the parts of the platform store that the copy holds. A
-// build hook may add one (runner/hooks.go). Not in it: rr/ (repeat roots of older builds, never read now), wm/ (persisted
+// build hook may add one (tee-signer/hooks.go). Not in it: rr/ (repeat roots of older builds, never read now), wm/ (persisted
 // marks, not used with the mark log)
 // and mark-hint/ (written on every mark record; without it the claim
 // compares nothing, as on any restart with lost state).

@@ -70,7 +70,7 @@
 #
 # Setup: the image and the command hold no chain config, client CA, vault,
 # key, attestation provider or mark log. Each signer's setup holds them, made with
-# signer-config setup (one per signer of a cluster) or signer-admin/cmd/setup-tool
+# signer-admin setup (one per signer of a cluster) or signer-admin/cmd/setup-tool
 # encode from a human file. group-deploy N checks
 # SETUP_FILE_N with the runner's decoder: an Azure setup, of chain CHAIN
 # (governance/chains/chain.sh picks its chain config), naming this deploy's
@@ -293,7 +293,7 @@ cmd_plan() {
   cat <<EOF
 Azure steps in order. Each one needs CONFIRM=yes. Local steps first:
   build-image.sh, then deploy.sh policy (all three signers, no Azure), and a
-  setup per signer (SETUP_FILE_N: signer-config setup for a cluster, or
+  setup per signer (SETUP_FILE_N: signer-admin setup for a cluster, or
   signer-admin/cmd/setup-tool encode)
 Resource group $RG, registry $ACR_NAME, vault $VAULT, network entry ${NETWORK:-none (the runner alone)}.
 Build folder $OUT, image tag signer-runner:$IMAGE_TAG, setups of chain ${CHAIN:-unset (set CHAIN)}.
