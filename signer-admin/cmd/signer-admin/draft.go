@@ -352,6 +352,24 @@ func forkClash(s *setupwire.Setup, lists [][]setupwire.SlotTimeChange, old, next
 	return e, limit, e <= limit
 }
 
+// checkOwnImages refuses locked values whose allowed_image_measurements
+// list no image of a member's platform: once in force, that signer's
+// runner would refuse every import and signature, and only another locked
+// update, which its approvers sign, could list its image again
+// (setupwire.Setup.CheckOwnImageListed, the same rule for a setup).
+func checkOwnImages(members []*member, l *setupwire.Locked) error {
+	for _, m := range members {
+		p := m.setup.Platform.Platform
+		if p.ImageListed(l.AllowedImageMeasurements) {
+			continue
+		}
+		k, _ := p.ImageKind()
+		return fmt.Errorf("signer %s: platform is %s, but the new allowed_image_measurements lists no %s image: its runner would refuse every import and signature once the update is in force; keep a line allowed_image_measurements = %s ...",
+			m.name, p, k, k)
+	}
+	return nil
+}
+
 func cmdDraft(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("draft", flag.ContinueOnError)
 	cf := addClusterFlags(fs)
@@ -413,6 +431,9 @@ func cmdDraft(args []string, out io.Writer) error {
 	}
 	if body.Locked != nil {
 		if err := lim.CheckTimeLock(body.Locked); err != nil {
+			return err
+		}
+		if err := checkOwnImages(c.members, body.Locked); err != nil {
 			return err
 		}
 	}

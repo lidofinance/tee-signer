@@ -387,7 +387,7 @@ Free Tier`.
 ```sh
 sudo apt-get install -y qemu-user-static   # once, "make deps" does it too
 ARCH=aarch64 scripts/nitro-eif.sh
-make eif EIF_ARCH=aarch64                  # the same
+scripts/nitro-eif.sh aarch64                # the same, arch as the argument
 ```
 
 The image is generic: no chain config, client CA or region goes in

@@ -1,5 +1,5 @@
-// Package fakerunner is a cloud runner for the tests of cloud-import,
-// proof-check and signer-admin. It serves mutual TLS 1.3 on 127.0.0.1 with
+// Package fakerunner is a cloud runner for the tests of signer-admin and
+// proof-check. It serves mutual TLS 1.3 on 127.0.0.1 with
 // a client CA of its own, and answers IDENTITY with the dev platform's
 // document and a setup state the test sets, HEALTH, PUBLIC_KEYS and
 // IMPORT_SHARE_SEALED. It opens each sealed share with a real HPKE key, so a

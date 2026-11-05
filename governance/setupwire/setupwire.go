@@ -709,14 +709,20 @@ func (p Platform) ImageKind() (k ImageKind, ok bool) {
 // make and check setups call it; the runner does not, it checks its own
 // measurement at run time (tee-signer/server.ImageGate).
 func (s *Setup) CheckOwnImageListed() error {
-	k, ok := s.Platform.Platform.ImageKind()
-	if !ok {
+	if s.Platform.Platform.ImageListed(s.Locked.AllowedImageMeasurements) {
 		return nil
 	}
-	if slices.ContainsFunc(s.Locked.AllowedImageMeasurements, func(im Image) bool { return im.Kind == k }) {
-		return nil
-	}
+	k, _ := s.Platform.Platform.ImageKind()
 	return fmt.Errorf("setup: platform is %s, but allowed_image_measurements lists no %s image: the runner would refuse every import and signature until a locked update lists its image; add a line allowed_image_measurements = %s ...", s.Platform.Platform, k, k)
+}
+
+// ImageListed reports whether images, an allowed_image_measurements list,
+// holds an image of p's kind. The dev platform has no kind and passes any
+// list. CheckOwnImageListed applies it to a setup, and signer-admin draft
+// to a locked update for each signer of the cluster.
+func (p Platform) ImageListed(images []Image) bool {
+	k, ok := p.ImageKind()
+	return !ok || slices.ContainsFunc(images, func(im Image) bool { return im.Kind == k })
 }
 
 // Encode returns the group's values as a setup and an update body carry

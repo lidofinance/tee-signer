@@ -1,6 +1,6 @@
 // Package runnerclient connects to a cloud runner over mutual TLS and checks
 // its attestation before it trusts the connection. The signing
-// client, its cloud-import tool and share-import build their client here,
+// client, signer-admin (import among others) and share-import build their client here,
 // so all of them apply the same checks; the attestation check has no switch.
 //
 // On every new connection, as docs/protocol.md ("Channel binding") says:

@@ -16,8 +16,7 @@ import (
 )
 
 // interchangeFile is the part of an EIP-3076 slashing protection file
-// (format version 5) that import needs. Ported from the signing client's
-// cloud-import.
+// (format version 5) that signer-admin import needs.
 type interchangeFile struct {
 	Metadata struct {
 		FormatVersion         string `json:"interchange_format_version"`
