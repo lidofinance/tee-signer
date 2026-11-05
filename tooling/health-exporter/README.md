@@ -113,7 +113,7 @@ Every metric has the label `runner`, the name given on the command line.
 | `tee_signer_validators` | gauge | Keys or shares loaded |
 | `tee_signer_started_timestamp_seconds` | gauge | Runner start time |
 | `tee_signer_health_rtt_seconds` | gauge | Duration of the last HEALTH call on an open connection |
-| `tee_signer_clock_skew_seconds` | gauge | Runner clock minus this host's clock, from the same call. A call that opens a new connection also times the dial and attestation check, so it leaves both values as they were; they are absent until the first call on an open connection |
+| `tee_signer_clock_skew_seconds` | gauge | Runner clock minus this host's clock, from the same call. A poll that opens a new connection makes a second call on it and takes both values from that one, so they leave out the dial and attestation check. Both are absent after a failed poll; skew is also absent when the runner reports no clock in ms |
 | `tee_signer_clock_trusted` | gauge | The runner's clock is a trusted source |
 | `tee_signer_allow_unverified_nonslashable` | gauge | The runner signs bare roots it cannot check |
 | `tee_signer_unverified_signatures_total` | counter | Such signatures since start |

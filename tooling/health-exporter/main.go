@@ -36,9 +36,9 @@ type runner struct {
 
 	mu       sync.Mutex
 	h        *backend.Health // nil after a failed call
-	rtt      time.Duration
-	skew     time.Duration // runner clock minus local clock, at the middle of the call
-	timed    bool          // rtt and skew come from a call on an open connection
+	rtt      time.Duration   // of the call that gave h, on an open connection
+	skew     time.Duration   // runner clock minus local clock, at the middle of that call
+	skewOK   bool            // that call's answer had the clock in ms
 	errs     uint64
 	verified uint64
 }
@@ -116,21 +116,25 @@ func (r *runner) poll(timeout time.Duration) {
 	h, err := r.cl.Health(ctx)
 	t1 := time.Now()
 	r.mu.Lock()
+	dialed := r.verified != v0
+	r.mu.Unlock()
+	if err == nil && dialed {
+		// The call opened a new connection, so it also timed the dial and
+		// the attestation check. Time a second call on that connection.
+		t0 = time.Now()
+		h, err = r.cl.Health(ctx)
+		t1 = time.Now()
+	}
+	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err != nil {
 		r.errs++
-		r.h = nil
+		r.h, r.skewOK = nil, false
 		log.Printf("%s: health: %v", r.name, err)
 		return
 	}
-	r.h = h
-	// A call that opened a new connection also timed the dial and the
-	// attestation check: keep the previous rtt and skew.
-	if r.verified != v0 {
-		return
-	}
-	r.rtt, r.skew, r.timed = t1.Sub(t0), 0, true
-	if h.ClockUnixMS != 0 {
+	r.h, r.rtt, r.skewOK = h, t1.Sub(t0), h.ClockUnixMS != 0
+	if r.skewOK {
 		mid := t0.Add(t1.Sub(t0) / 2)
 		r.skew = time.UnixMilli(int64(h.ClockUnixMS)).Sub(mid)
 	}
@@ -171,7 +175,7 @@ func render(w io.Writer, rs []*runner) {
 	q := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`).Replace
 	for _, r := range rs {
 		r.mu.Lock()
-		h, rtt, skew, timed, errs, verified := r.h, r.rtt, r.skew, r.timed, r.errs, r.verified
+		h, rtt, skew, skewOK, errs, verified := r.h, r.rtt, r.skew, r.skewOK, r.errs, r.verified
 		r.mu.Unlock()
 		l := fmt.Sprintf(`runner="%s"`, q(r.name))
 		one := "{" + l + "}"
@@ -207,10 +211,8 @@ func render(w io.Writer, rs []*runner) {
 		}
 		gauge("tee_signer_validators", "Validator keys or shares loaded.", one, float64(h.Validators))
 		gauge("tee_signer_started_timestamp_seconds", "Runner start time, unix seconds.", one, float64(h.StartedUnix))
-		if timed {
-			gauge("tee_signer_health_rtt_seconds", "Duration of the last HEALTH call on an open connection.", one, rtt.Seconds())
-		}
-		if timed && h.ClockUnixMS != 0 {
+		gauge("tee_signer_health_rtt_seconds", "Duration of the last HEALTH call on an open connection.", one, rtt.Seconds())
+		if skewOK {
 			gauge("tee_signer_clock_skew_seconds", "Runner clock minus this host's clock.", one, skew.Seconds())
 		}
 		gauge("tee_signer_clock_trusted", "1 if the runner's clock is a trusted source.", one, b2f(h.ClockTrusted))

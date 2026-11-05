@@ -6,7 +6,10 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -231,8 +234,8 @@ func slowDial(t *testing.T, addr string, d time.Duration) string {
 	return "tcp:" + ln.Addr().String()
 }
 
-// A poll that opens a new connection times the dial and the attestation
-// check too, so it must not set rtt or skew.
+// A poll that opens a new connection times a second call on it, so its rtt
+// leaves out the dial and the attestation check.
 func TestPollRTTSkipsNewConnection(t *testing.T) {
 	fr := fakerunner.Start(t, backend.SetupState{})
 	const dial = 500 * time.Millisecond
@@ -244,11 +247,179 @@ func TestPollRTTSkipsNewConnection(t *testing.T) {
 	r.poll(10 * time.Second)
 	out := rendered(r)
 	wantLine(t, out, `tee_signer_up{runner="s1"} 1`)
-	if strings.Contains(out, "tee_signer_health_rtt_seconds{") || strings.Contains(out, "tee_signer_clock_skew_seconds{") {
-		t.Errorf("rtt or skew from a poll that dialed:\n%s", out)
+	wantLine(t, out, `tee_signer_attestations_verified_total{runner="s1"} 1`)
+	if rtt := rttOf(t, out); rtt <= 0 || rtt >= (dial/2).Seconds() {
+		t.Errorf("rtt of a poll that dialed %v, want above 0 and below %v:\n%s", rtt, (dial / 2).Seconds(), out)
 	}
+}
+
+// proxy forwards to addr. Each chunk from the runner waits delay first.
+// kill closes every open connection. With idle set, a connection that
+// carries nothing for idle is closed, as a runner -idle-timeout or a NAT
+// would.
+type proxy struct {
+	addr  string
+	delay atomic.Int64
+	idle  time.Duration
+	mu    sync.Mutex
+	conns []net.Conn
+}
+
+func startProxy(t *testing.T, addr string, idle time.Duration) *proxy {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	p := &proxy{addr: "tcp:" + ln.Addr().String(), idle: idle}
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			up, err := net.Dial("tcp", strings.TrimPrefix(addr, "tcp:"))
+			if err != nil {
+				c.Close()
+				continue
+			}
+			p.mu.Lock()
+			p.conns = append(p.conns, c, up)
+			p.mu.Unlock()
+			go p.pipe(up, c)
+			go p.pipe(c, up)
+		}
+	}()
+	return p
+}
+
+func (p *proxy) pipe(dst, src net.Conn) {
+	defer dst.Close()
+	defer src.Close()
+	buf := make([]byte, 32<<10)
+	for {
+		if p.idle > 0 {
+			src.SetReadDeadline(time.Now().Add(p.idle))
+		}
+		n, err := src.Read(buf)
+		if n > 0 {
+			time.Sleep(time.Duration(p.delay.Load()))
+			if _, err := dst.Write(buf[:n]); err != nil {
+				return
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func (p *proxy) kill() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, c := range p.conns {
+		c.Close()
+	}
+	p.conns = nil
+}
+
+// rttOf returns the exported rtt of runner s1, or -1 if there is none.
+func rttOf(t *testing.T, out string) float64 {
+	t.Helper()
+	for _, l := range strings.Split(out, "\n") {
+		if v, ok := strings.CutPrefix(l, `tee_signer_health_rtt_seconds{runner="s1"} `); ok {
+			f, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return f
+		}
+	}
+	return -1
+}
+
+// After an outage, the first poll that answers exports an rtt it measured
+// itself, not the one from before the outage.
+func TestPollRTTFreshAfterOutage(t *testing.T) {
+	fr := fakerunner.Start(t, backend.SetupState{})
+	p := startProxy(t, fr.Addr(), 0)
+	const slow = 300 * time.Millisecond
+	p.delay.Store(int64(slow))
+	r, err := newRunner("s1", writeConn(t, p.addr, fr, ""), 20*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.cl.Close()
+	r.poll(20 * time.Second)
+	r.poll(20 * time.Second)
+	if rtt := rttOf(t, rendered(r)); rtt < slow.Seconds() {
+		t.Fatalf("rtt through the slow proxy %v, want at least %v", rtt, slow.Seconds())
+	}
+	p.kill()
+	p.delay.Store(0)
+	r.poll(20 * time.Second) // on the killed connection: fails
+	out := rendered(r)
+	wantLine(t, out, `tee_signer_health_errors_total{runner="s1"} 1`)
+	r.poll(20 * time.Second)
+	out = rendered(r)
+	wantLine(t, out, `tee_signer_up{runner="s1"} 1`)
+	if rtt := rttOf(t, out); rtt < 0 || rtt >= slow.Seconds()/2 {
+		t.Errorf("rtt after the outage %v, want present and below %v:\n%s", rtt, slow.Seconds()/2, out)
+	}
+}
+
+// A runner that closes idle connections before the next poll makes every
+// answering poll dial. rtt is still exported. The fake runner reports no
+// clock in ms, so skew stays absent.
+func TestPollRTTWithIdleClose(t *testing.T) {
+	fr := fakerunner.Start(t, backend.SetupState{})
+	const idle = 1 * time.Second
+	p := startProxy(t, fr.Addr(), idle)
+	r, err := newRunner("s1", writeConn(t, p.addr, fr, ""), 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.cl.Close()
+	answered := 0
+	for i := 0; i < 3; i++ {
+		if i > 0 {
+			time.Sleep(idle + idle/2)
+		}
+		r.poll(10 * time.Second)
+		out := rendered(r)
+		if !strings.Contains(out, `tee_signer_up{runner="s1"} 1`) {
+			continue
+		}
+		answered++
+		if rttOf(t, out) < 0 {
+			t.Errorf("poll %d: no rtt:\n%s", i, out)
+		}
+		if strings.Contains(out, "tee_signer_clock_skew_seconds{") {
+			t.Errorf("poll %d: skew without a clock in ms:\n%s", i, out)
+		}
+	}
+	if answered == 0 {
+		t.Fatal("no poll answered")
+	}
+}
+
+// Skew comes only from a measured answer with a clock in ms. The fake
+// runner's answer has none; a later answer with one, from a poll that did
+// not measure, must not export the skew stored as 0.
+func TestPollSkewOnlyWhenMeasured(t *testing.T) {
+	fr := fakerunner.Start(t, backend.SetupState{})
+	r, err := newRunner("s1", writeConn(t, fr.Addr(), fr, ""), 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.cl.Close()
 	r.poll(10 * time.Second)
-	if r.rtt <= 0 || r.rtt >= dial/2 {
-		t.Errorf("rtt on an open connection %v, want above 0 and below %v", r.rtt, dial/2)
+	r.poll(10 * time.Second)
+	h := *r.h
+	h.ClockUnixMS = uint64(time.Now().UnixMilli())
+	r.h = &h
+	if out := rendered(r); strings.Contains(out, "tee_signer_clock_skew_seconds{") {
+		t.Errorf("skew that was never measured:\n%s", out)
 	}
 }
