@@ -74,7 +74,10 @@ type NTSServer struct {
 //     stops using the server for NTSMaxPoll (RFC 5905 section 7.4 says for
 //     good, but a Kiss-o'-Death is not authenticated, so anyone on the path
 //     could send it); NTSN drops the keys and runs NTS-KE again (RFC 8915
-//     section 5.7). NTS-KE failures back off from Interval to NTSMaxPoll.
+//     section 5.7). NTS-KE failures back off from Interval to NTSMaxPoll
+//     once a quorum has been served; until then NTS-KE is tried again every
+//     Interval, so a relay that comes up late does not push the first
+//     quorum past the runner's start wait.
 //   - The latest sample of each server, at most MaxAge (and 4 x Interval)
 //     old, goes to the Rust quorum (one server may be wrong). The result
 //     is an offset from the local monotonic clock and an error bound.
@@ -98,7 +101,8 @@ type NTSServer struct {
 //     steady rate over rho that the bounds hide on a short pair.
 //   - Coarse, the HTTPS-date quorum, is checked on every quorum: an NTS
 //     time more than MaxCoarseDiff from it, after its one-second resolution
-//     (NTSCoarseResolution), is refused. The coarse clock must age its
+//     (NTSCoarseResolution), is refused, and Now fails until a quorum
+//     passes, as after a drift refusal. The coarse clock must age its
 //     reading on the same local clock (Anchored.Local = nts.Monotonic), or a
 //     slewed Go monotonic clock adds its error. Coarse also gives
 //     the certificate-validity time of NTS-KE and the NTP era. If Coarse has
@@ -125,6 +129,9 @@ type NTS struct {
 	mu     sync.Mutex // result, highest, lastErr
 	peers  []*ntsPeer
 	result *ntsResult // served by Now; nil until a quorum passes all checks
+	// served is set once a quorum has passed; before that NTS-KE is tried
+	// again every Interval, without backoff.
+	served atomic.Bool
 	// hist holds the quorums of the drift check, oldest first: the last one
 	// (served or refused) at the end, the baseline at index 0. A refused
 	// quorum starts a new history.
@@ -324,7 +331,11 @@ func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time) {
 		if err != nil {
 			p.stats.KEFail++
 			p.lastErr = err
-			p.keWait = min(max(2*p.keWait, n.interval()), n.maxPollD())
+			if n.served.Load() {
+				p.keWait = min(max(2*p.keWait, n.interval()), n.maxPollD())
+			} else {
+				p.keWait = n.interval()
+			}
 			p.nextKE = now + int64(p.keWait)
 			n.logf(slog.LevelWarn, "nts: key exchange failed", "operator", p.srv.Operator, "host", p.srv.Host, "retry_in", p.keWait, "err", err)
 			return
@@ -404,13 +415,20 @@ func (n *NTS) combine(coarse time.Time, coarseLocal int64) error {
 	// The coarse reading was taken before the polls: move it forward by
 	// the local time since then.
 	diff := t.Sub(coarse.Add(time.Duration(now - coarseLocal)))
-	n.mu.Lock()
-	n.coarseDiff = diff
-	n.mu.Unlock()
-	if coarseRefused(diff, n.maxDiff(), NTSCoarseResolution) {
+	refused := coarseRefused(diff, n.maxDiff(), NTSCoarseResolution)
+	if refused {
 		err = fmt.Errorf("clock: nts: quorum time %s is %v from the coarse clock (allowed %v to %v with its %v resolution); refused",
 			t.UTC().Format(time.RFC3339Nano), diff, -n.maxDiff(), n.maxDiff()+NTSCoarseResolution, NTSCoarseResolution)
-		n.setErr(err)
+	}
+	n.mu.Lock()
+	n.coarseDiff = diff
+	if refused {
+		// The quorum in force is not served on: Now fails until a quorum
+		// passes this check.
+		n.result, n.lastErr = nil, err
+	}
+	n.mu.Unlock()
+	if refused {
 		n.logf(slog.LevelError, "nts: coarse check failed", "diff", diff, "max", n.maxDiff(), "resolution", NTSCoarseResolution)
 		return err
 	}
@@ -476,6 +494,7 @@ func (n *NTS) combine(coarse time.Time, coarseLocal int64) error {
 	n.result = cur
 	n.lastErr = nil
 	n.mu.Unlock()
+	n.served.Store(true)
 	// Every quorum at debug level; a change of members at info.
 	level := slog.LevelDebug
 	if joined := strings.Join(members, ","); joined != prev {
