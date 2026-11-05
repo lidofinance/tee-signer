@@ -11,7 +11,8 @@ environment: AWS Nitro Enclaves, Azure confidential containers (SEV-SNP) or
 GCP Confidential Space. The runner keeps validator keys or key shares sealed
 to its measured image, refuses slashable messages, and keeps its signing marks
 in an external append-only log, so a restarted, rolled back or cloned runner
-cannot sign below them. Operators set it up with an approver-signed setup.
+cannot sign below them. Operators set it up with a setup whose hash every
+client pins (`setup_sha256`); approvers sign the changes that follow.
 Everything that talks to the runner (the signing client, the gateway, validator
 clients, the operator tools) is untrusted, and the runner checks what they send.
 
