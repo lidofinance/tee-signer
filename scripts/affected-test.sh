@@ -45,7 +45,7 @@ affected() {
 }
 
 # scope <case> <file>...: as affected, but prints the values ci-scope.sh
-# sets: CI_MODULES CI_CORE CI_E2E CI_TESTS CI_AWS_TF, separated by "|".
+# sets: CI_MODULES CI_CORE CI_E2E CI_E2E_GATEWAY CI_TESTS CI_AWS_TF, separated by "|".
 scope() {
   local name="$1" f
   shift
@@ -57,7 +57,7 @@ scope() {
   git -C "$tmp" add -A
   git -C "$tmp" commit -q -m "$name"
   (cd "$tmp" && CI_ALL="${CI_ALL:-0}" GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME:-}" bash scripts/ci-scope.sh main 2>/dev/null) |
-    sed -n 's/^\(CI_MODULES\|CI_CORE\|CI_E2E\|CI_TESTS\|CI_AWS_TF\)=//p' | paste -sd '|'
+    sed -n 's/^\(CI_MODULES\|CI_CORE\|CI_E2E\|CI_E2E_GATEWAY\|CI_TESTS\|CI_AWS_TF\)=//p' | paste -sd '|'
   git -C "$tmp" checkout -q main
 }
 
@@ -92,8 +92,10 @@ has() {
 }
 
 check docs-only "" README.md slashing-log/docs/marklog.md docs/new.md LICENSE
-check leaf-module web3signer-api web3signer-api/api.go
-check leaf-module-and-docs web3signer-api web3signer-api/api.go tee-signer/README.md
+# web3signer-api: itself and the gateway, which uses it.
+check leaf-module "web3signer-api gateway" web3signer-api/api.go
+check leaf-module-and-docs "web3signer-api gateway" web3signer-api/api.go tee-signer/README.md
+check gateway gateway gateway/cmd/gateway/main.go
 check tests-module tests tests/e2e/x_test.go
 check makefile ALL Makefile
 check signer-core ALL signer-core/go/core.go
@@ -116,16 +118,19 @@ has slashing-log "$(affected slashing-log slashing-log/record.go)" \
 has governance-transitive "$(affected governance governance/x.go)" \
   "governance signer-protocol markformat tee-signer signer-admin" "devkit trusted-time web3signer-api"
 
-# ci-scope.sh: CI_MODULES|CI_CORE|CI_E2E|CI_TESTS|CI_AWS_TF.
-expect scope-docs-only "none|0|0|0|0" "$(scope docs-only README.md docs/new.md LICENSE .github/CODEOWNERS)"
-expect scope-leaf "web3signer-api|0|0|1|0" "$(scope leaf web3signer-api/api.go)"
-expect scope-tests "tests|0|1|1|0" "$(scope tests tests/e2e/x_test.go)"
-expect scope-signer-core "ALL|1|1|1|0" "$(scope signer-core signer-core/src/sign.c)"
-expect scope-markformat "ALL|1|1|1|0" "$(scope markformat markformat/markformat.go)"
-expect scope-makefile "ALL|1|1|1|0" "$(scope makefile Makefile)"
-expect scope-ci-all "ALL|1|1|1|1" "$(CI_ALL=1 scope ci-all README.md)"
-expect scope-push "ALL|1|1|1|1" "$(GITHUB_EVENT_NAME=push scope push README.md)"
-expect scope-pull-request "none|0|0|0|0" "$(GITHUB_EVENT_NAME=pull_request scope pull-request docs/x.md)"
+# ci-scope.sh: CI_MODULES|CI_CORE|CI_E2E|CI_E2E_GATEWAY|CI_TESTS|CI_AWS_TF.
+expect scope-docs-only "none|0|0|0|0|0" "$(scope docs-only README.md docs/new.md LICENSE .github/CODEOWNERS)"
+# web3signer-api and gateway: no runner holds them, the gateway e2e test runs.
+expect scope-leaf "web3signer-api gateway|0|0|1|1|0" "$(scope leaf web3signer-api/api.go)"
+expect scope-gateway "gateway|0|0|1|1|0" "$(scope gateway gateway/cmd/gateway/main.go)"
+expect scope-gateway-docs "none|0|0|0|0|0" "$(scope gateway-docs gateway/README.md)"
+expect scope-tests "tests|0|1|1|1|0" "$(scope tests tests/e2e/x_test.go)"
+expect scope-signer-core "ALL|1|1|1|1|0" "$(scope signer-core signer-core/src/sign.c)"
+expect scope-markformat "ALL|1|1|1|1|0" "$(scope markformat markformat/markformat.go)"
+expect scope-makefile "ALL|1|1|1|1|0" "$(scope makefile Makefile)"
+expect scope-ci-all "ALL|1|1|1|1|1" "$(CI_ALL=1 scope ci-all README.md)"
+expect scope-push "ALL|1|1|1|1|1" "$(GITHUB_EVENT_NAME=push scope push README.md)"
+expect scope-pull-request "none|0|0|0|0|0" "$(GITHUB_EVENT_NAME=pull_request scope pull-request docs/x.md)"
 # The signer-admin tests that start a dev runner run for a change to
 # signer-admin and to the runner and the modules it is built from.
 for f in signer-admin/x.go tee-signer/x.go signer-protocol/x.go governance/x.go platform/x.go trusted-time/x.go; do
@@ -135,12 +140,12 @@ has scope-slashing-log "$(scope slashing-log slashing-log/record.go | tr '|' ' '
 # CI_AWS_TF: platform-aws/deploy/ other than docs, the Terraform scripts
 # and the workflow; not the rest of platform-aws.
 has scope-aws-tf "$(scope aws-tf platform-aws/deploy/main.tf | tr '|' ' ')" "platform-aws tee-signer tests 0 1" "ALL"
-expect scope-aws-tf-flag "1" "$(scope aws-tf-flag platform-aws/deploy/target/main.tf | cut -d'|' -f5)"
-expect scope-aws-tf-docs "none|0|0|0|0" "$(scope aws-tf-docs platform-aws/deploy/README.md)"
-expect scope-aws-go "0" "$(scope aws-go platform-aws/nitro.go | cut -d'|' -f5)"
-expect scope-aws-tf-script "ALL|1|1|1|1" "$(scope aws-tf-script scripts/aws-tf-test.sh)"
-expect scope-tf-validate "ALL|1|1|1|1" "$(scope tf-validate scripts/tf-validate.sh)"
-expect scope-workflow "ALL|1|1|1|1" "$(scope workflow .github/workflows/ci.yml)"
+expect scope-aws-tf-flag "1" "$(scope aws-tf-flag platform-aws/deploy/target/main.tf | cut -d'|' -f6)"
+expect scope-aws-tf-docs "none|0|0|0|0|0" "$(scope aws-tf-docs platform-aws/deploy/README.md)"
+expect scope-aws-go "0" "$(scope aws-go platform-aws/nitro.go | cut -d'|' -f6)"
+expect scope-aws-tf-script "ALL|1|1|1|1|1" "$(scope aws-tf-script scripts/aws-tf-test.sh)"
+expect scope-tf-validate "ALL|1|1|1|1|1" "$(scope tf-validate scripts/tf-validate.sh)"
+expect scope-workflow "ALL|1|1|1|1|1" "$(scope workflow .github/workflows/ci.yml)"
 
 if [ "$fails" -ne 0 ]; then
   echo "affected-test: $fails of $n cases failed" >&2
