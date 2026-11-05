@@ -38,7 +38,11 @@ Every commit is signed (GPG or SSH, with a key on your GitHub account).
   that goes into a runner changes, or `tests/`; the signer-core suites
   when `signer-core/` or `markformat/` changes. A change to a shared
   input (`Makefile`, `scripts/`, `.github/`, `devkit/`, C or Rust code)
-  tests everything. So do a push to main and a manual run. A nightly run (`fuzz-nightly.yml`) fuzzes every target for 30 s.
+  tests everything. So do a push to main and a manual run.
+  On a pull request the `aws-terraform` job runs `scripts/tf-validate.sh`
+  and `scripts/aws-tf-test.sh` (a mock provider, no AWS account) only when
+  a file under `platform-aws/deploy/` other than docs changes, or those
+  scripts. A nightly run (`fuzz-nightly.yml`) fuzzes every target for 30 s.
 - Get at least one reviewer approval. The author does not count.
 - Squash when merging; the final commit follows the rules above.
 

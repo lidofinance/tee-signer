@@ -70,7 +70,10 @@ check_started() {
 }
 
 # 1. Nitro CLI and allocator (AWS docs: nitro-enclave-cli-install.html).
-sudo dnf install -y aws-nitro-enclaves-cli aws-nitro-enclaves-cli-devel
+#    Installed once: a start at boot (signer-runner.service) needs no
+#    package repository.
+rpm -q aws-nitro-enclaves-cli aws-nitro-enclaves-cli-devel >/dev/null 2>&1 ||
+  sudo dnf install -y aws-nitro-enclaves-cli aws-nitro-enclaves-cli-devel
 sudo usermod -aG ne "$USER" || true
 sed -e "s/^cpu_count:.*/cpu_count: $CPU_COUNT/" -e "s/^memory_mib:.*/memory_mib: $MEMORY_MIB/" \
   "$HERE/allocator.yaml" | sudo tee /etc/nitro_enclaves/allocator.yaml >/dev/null

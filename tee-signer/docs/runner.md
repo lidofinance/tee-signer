@@ -159,6 +159,8 @@ make release-gate  # the release gate: self-test, tree check, every runner build
 | `make-test-ca.sh` | test PKI for client certificates: root, intermediate, one short-lived client certificate per role |
 | `kms-policy.sh` | PCR3 for a parent role ARN, KMS policy with PCR0/1/2/3, self-test against AWS's PCR3 example |
 | `tf-validate.sh` | `terraform validate` of `platform-aws/deploy/main.tf` in the pinned Terraform image |
+| `aws-tf-test.sh` | `terraform test` of `platform-aws/deploy/main.tf` with a mock AWS provider: the default names, the name variables, `extra_egress`, `prev_pcrs` |
+| `tf-providers.sh` | the AWS provider of a given version in a folder for `TF_PLUGIN_DIR`, so CI caches it instead of downloading it on every run |
 | `runner-size.sh` | a table of the Go code each runner build links and its size |
 
 `third_party/`, `build/` and `logs/` are git-ignored.

@@ -23,6 +23,8 @@
 #   deploy names     scripts/side-by-side-test.sh
 #   GCP deploy       scripts/gcp-deploy-test.sh: the public and private entries,
 #                    the egress rules, a subnet of its own, a previous digest
+#   AWS service      scripts/aws-parent-service-test.sh: the parent's systemd
+#                    unit and its restart logic, with a fake nitro-cli
 #   Azure template   scripts/azure-template-test.sh: the rendered group and
 #                    its CCE policy with and without the optional parameters
 #   fuzz             scripts/fuzz.sh: every Go fuzz target for FUZZ_TIME (3s),
@@ -134,6 +136,9 @@ if [ "$e2e" = 1 ]; then
   bash "$ROOT/scripts/gcp-deploy-test.sh"
   bash "$ROOT/scripts/azure-template-test.sh"
 fi
+
+log "AWS parent service: the unit, restart after a failure, none after a stop"
+bash "$ROOT/scripts/aws-parent-service-test.sh"
 
 if [ "${FUZZ_TIME:-3s}" != 0 ]; then
   FUZZ_TIME="${FUZZ_TIME:-3s}" bash "$ROOT/scripts/fuzz.sh"

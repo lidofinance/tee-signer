@@ -51,7 +51,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      # Sets CI_MODULES, FUZZ_MODULES, CI_CORE, CI_E2E and CI_TESTS.
+      # Sets CI_MODULES, FUZZ_MODULES, CI_CORE, CI_E2E, CI_TESTS and CI_AWS_TF.
       - name: scope
         # shell: bash runs with pipefail, so a failing ci-scope.sh fails the step.
         shell: bash
@@ -92,7 +92,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      # Sets CI_MODULES, FUZZ_MODULES, CI_CORE, CI_E2E and CI_TESTS.
+      # Sets CI_MODULES, FUZZ_MODULES, CI_CORE, CI_E2E, CI_TESTS and CI_AWS_TF.
       - name: scope
         # shell: bash runs with pipefail, so a failing ci-scope.sh fails the step.
         shell: bash
@@ -119,7 +119,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      # Sets CI_MODULES, FUZZ_MODULES, CI_CORE, CI_E2E and CI_TESTS.
+      # Sets CI_MODULES, FUZZ_MODULES, CI_CORE, CI_E2E, CI_TESTS and CI_AWS_TF.
       - name: scope
         # shell: bash runs with pipefail, so a failing ci-scope.sh fails the step.
         shell: bash
@@ -146,3 +146,43 @@ jobs:
         with:
           name: logs
           path: logs/
+
+  # terraform validate and terraform test (mock provider) of
+  # platform-aws/deploy. No AWS account is used.
+  aws-terraform:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      # The history, for the diff against the base branch.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      # Sets CI_MODULES, FUZZ_MODULES, CI_CORE, CI_E2E, CI_TESTS and CI_AWS_TF.
+      - name: scope
+        # shell: bash runs with pipefail, so a failing ci-scope.sh fails the step.
+        shell: bash
+        run: bash scripts/ci-scope.sh | tee -a "$GITHUB_ENV"
+      - name: no tests
+        if: env.CI_AWS_TF != '1'
+        run: echo "platform-aws/deploy and its Terraform checks did not change, nothing to test."
+      # main.tf pins no provider version, so terraform init takes the newest.
+      # The cache key is that version.
+      - name: provider version
+        if: env.CI_AWS_TF == '1'
+        shell: bash
+        run: |
+          v="$(bash scripts/tf-providers.sh latest)"
+          echo "TF_AWS_PROVIDER=$v" | tee -a "$GITHUB_ENV"
+      - uses: actions/cache@v4
+        id: tf-providers
+        if: env.CI_AWS_TF == '1'
+        with:
+          path: build/tf-plugins
+          key: tf-aws-${{ runner.os }}-${{ runner.arch }}-${{ env.TF_AWS_PROVIDER }}
+      - if: env.CI_AWS_TF == '1' && steps.tf-providers.outputs.cache-hit != 'true'
+        run: bash scripts/tf-providers.sh build/tf-plugins "$TF_AWS_PROVIDER"
+      - if: env.CI_AWS_TF == '1'
+        run: TF_PLUGIN_DIR="$PWD/build/tf-plugins" bash scripts/tf-validate.sh
+      - if: env.CI_AWS_TF == '1'
+        run: TF_PLUGIN_DIR="$PWD/build/tf-plugins" bash scripts/aws-tf-test.sh
