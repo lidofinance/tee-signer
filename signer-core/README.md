@@ -245,6 +245,10 @@ The cost: after each load, votes sign from target F + 1 with a source of F
 or above, so about `max_epochs_ahead` + 2 epochs of attestations are missed,
 and none signs while the chain does not justify epoch F.
 
+[`docs/boundary.md`](docs/boundary.md) lists, for each input the core takes
+from its host, what it assumes and what it checks itself, and the trust
+that remains.
+
 [`markformat`](../markformat/README.md) provides the fixed 32-byte watermark storage
 record. The core only handles in-memory watermark values.
 Rollback protection of that record (RPMB or similar) is the TA's job.

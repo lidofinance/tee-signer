@@ -48,6 +48,12 @@ every module builds and tests on its own.
 | [devkit](devkit) | Test helpers: fuzz oracles and driver, goroutine leak and lock order checks |
 | [tests](tests) | End-to-end tests across modules, against the built runners |
 
+## Security scope
+
+[SECURITY-SCOPE.md](SECURITY-SCOPE.md) sets the audit scope: the code that
+runs inside the TEE of the AWS runner, in priority order, and what stays
+out. `scripts/loc.sh scope` counts its code lines.
+
 ## Build
 
 Inside an Ubuntu 22.04 or 24.04 workbench (native, WSL2 or a VM), with Go
