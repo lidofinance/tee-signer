@@ -60,6 +60,15 @@ Support refuses such a request. The runner sees a changed policy only at
 its next start. `platform-aws/deploy/README.md` lists the account controls
 that cover this.
 
+## Platform firmware
+
+The cloud provider runs and patches the host firmware and microcode: the
+Nitro system on AWS, and the SEV-SNP and TDX firmware on Azure and GCP. The
+verifiers do not check a minimum TCB version. During a firmware
+vulnerability, stop the affected runner until the provider patches it. With
+a threshold across clouds, each runner holds one share. A minimum TCB check
+for self-hosted runners is tracked in #113.
+
 ## Kept in the project, not audited
 
 [platform-azure](platform-azure) and [platform-gcp](platform-gcp) stay in
