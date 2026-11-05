@@ -56,8 +56,7 @@ func checkChainSetup(raw []byte) error {
 	if err != nil {
 		return nil
 	}
-	ch := &s.Chain
-	if err := runnerchain.Build.CheckChain([4]byte(ch.GenesisForkVersion), [32]byte(ch.GenesisValidatorsRoot)); err != nil {
+	if err := runnerchain.Build.CheckChain(&s.Chain); err != nil {
 		return fmt.Errorf("setup refused by this %s build: %w", runnerchain.Build, err)
 	}
 	h, err := s.Hash()

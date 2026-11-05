@@ -3,6 +3,9 @@ package runnerchain
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -15,6 +18,12 @@ func fork(t *testing.T, s string) (f [4]byte) {
 		t.Fatal(err)
 	}
 	return f
+}
+
+// on is a chain with these genesis values and mainnet's slot times.
+func on(f [4]byte, r [32]byte) *setupwire.Chain {
+	return &setupwire.Chain{GenesisForkVersion: f, GenesisValidatorsRoot: r, GenesisTime: setupwire.MainnetGenesisTime,
+		SecondsPerSlot: setupwire.MainnetSecondsPerSlot, SlotsPerEpoch: setupwire.MainnetSlotsPerEpoch, Preset: setupwire.PresetMainnet}
 }
 
 func root(t *testing.T, s string) (r [32]byte) {
@@ -64,14 +73,14 @@ func TestTableMatchesSources(t *testing.T) {
 // version with mainnet's root.
 func TestMainnetOwnChainOnly(t *testing.T) {
 	mf, mr := fork(t, public["mainnet"][0]), root(t, public["mainnet"][1])
-	if err := Mainnet.CheckChain(mf, mr); err != nil {
+	if err := Mainnet.CheckChain(on(mf, mr)); err != nil {
 		t.Fatalf("mainnet: %v", err)
 	}
 	for name, v := range public {
 		if name == "mainnet" {
 			continue
 		}
-		if err := Mainnet.CheckChain(fork(t, v[0]), root(t, v[1])); err == nil || !strings.Contains(err.Error(), "a mainnet build runs on mainnet") {
+		if err := Mainnet.CheckChain(on(fork(t, v[0]), root(t, v[1]))); err == nil || !strings.Contains(err.Error(), "a mainnet build runs on mainnet") {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
@@ -82,9 +91,48 @@ func TestMainnetOwnChainOnly(t *testing.T) {
 		"devnet fork version, mainnet root":  {otherFork, mr},
 		"mainnet fork version, other root":   {mf, otherRoot},
 	} {
-		if err := Mainnet.CheckChain(v.f, v.r); err == nil {
+		if err := Mainnet.CheckChain(on(v.f, v.r)); err == nil {
 			t.Errorf("%s: accepted", what)
 		}
+	}
+}
+
+// The mainnet build takes mainnet's genesis time, seconds per slot and
+// slots per epoch only, and names the field and mainnet's value.
+func TestMainnetTimesOnly(t *testing.T) {
+	for _, c := range []struct {
+		field string
+		set   func(*setupwire.Chain)
+	}{
+		{"genesis_time 1606824024: mainnet's is 1606824023", func(c *setupwire.Chain) { c.GenesisTime++ }},
+		{"seconds_per_slot 6: mainnet's is 12", func(c *setupwire.Chain) { c.SecondsPerSlot = 6 }},
+		{"slots_per_epoch 8: mainnet's is 32", func(c *setupwire.Chain) { c.SlotsPerEpoch = 8 }},
+		{"preset minimal: mainnet's is mainnet", func(c *setupwire.Chain) { c.Preset = setupwire.PresetMinimal }},
+	} {
+		ch := on(fork(t, public["mainnet"][0]), root(t, public["mainnet"][1]))
+		c.set(ch)
+		if err := Mainnet.CheckChain(ch); err == nil || !strings.Contains(err.Error(), c.field) {
+			t.Errorf("%s: %v", c.field, err)
+		}
+	}
+}
+
+// The mainnet times in code are those of governance/chains/mainnet.json.
+func TestMainnetTimesMatchChainFile(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "chains", "mainnet.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f struct {
+		GenesisTime    uint64 `json:"genesis_time"`
+		SecondsPerSlot uint64 `json:"seconds_per_slot"`
+		SlotsPerEpoch  uint64 `json:"slots_per_epoch"`
+	}
+	if err := json.Unmarshal(b, &f); err != nil {
+		t.Fatal(err)
+	}
+	if f.GenesisTime != setupwire.MainnetGenesisTime || f.SecondsPerSlot != setupwire.MainnetSecondsPerSlot || f.SlotsPerEpoch != setupwire.MainnetSlotsPerEpoch {
+		t.Errorf("mainnet.json %+v", f)
 	}
 }
 
@@ -103,7 +151,7 @@ func TestNonProdBuildsOwnChainOnly(t *testing.T) {
 	own := map[Chain][]values{Hoodi: {hoodi}, CITest: {ci}, Devnet: {devnet}}
 	for c, oks := range own {
 		for _, v := range oks {
-			if err := c.CheckChain(v.f, v.r); err != nil {
+			if err := c.CheckChain(on(v.f, v.r)); err != nil {
 				t.Errorf("%s build on its own chain %x/%x: %v", c, v.f, v.r[:4], err)
 			}
 		}
@@ -111,7 +159,7 @@ func TestNonProdBuildsOwnChainOnly(t *testing.T) {
 			if c == Hoodi && name == "hoodi" {
 				continue
 			}
-			err := c.CheckChain(fork(t, pv[0]), root(t, pv[1]))
+			err := c.CheckChain(on(fork(t, pv[0]), root(t, pv[1])))
 			if err == nil || !strings.Contains(err.Error(), "chain "+name+" ") || !strings.Contains(err.Error(), "a "+string(c)+" build runs on") {
 				t.Errorf("%s build on %s: %v", c, name, err)
 			}
@@ -123,7 +171,7 @@ func TestNonProdBuildsOwnChainOnly(t *testing.T) {
 				if what == "its fork version" && name != "hoodi" {
 					want = "a prod chain"
 				}
-				if err := c.CheckChain(v.f, v.r); err == nil || !strings.Contains(err.Error(), want) {
+				if err := c.CheckChain(on(v.f, v.r)); err == nil || !strings.Contains(err.Error(), want) {
 					t.Errorf("%s build, %s with %s only: %v, want %q", c, name, what, err, want)
 				}
 			}
@@ -134,13 +182,13 @@ func TestNonProdBuildsOwnChainOnly(t *testing.T) {
 				continue
 			}
 			for _, v := range ovs {
-				if err := c.CheckChain(v.f, v.r); err == nil {
+				if err := c.CheckChain(on(v.f, v.r)); err == nil {
 					t.Errorf("%s build accepted the chain of the %s build (%x/%x)", c, other, v.f, v.r[:4])
 				}
 			}
 		}
 	}
-	if err := Chain("testnet").CheckChain(otherFork, otherRoot); err == nil {
+	if err := Chain("testnet").CheckChain(on(otherFork, otherRoot)); err == nil {
 		t.Error("an unknown build accepted a devnet")
 	}
 }
@@ -152,14 +200,14 @@ func TestNonProdBuildsOwnChainOnly(t *testing.T) {
 func TestNonProdRefusesUnknownChains(t *testing.T) {
 	for _, v := range []values{{[4]byte{0xde, 0xad, 0xbe, 0xef}, otherRoot}, {[4]byte{0x10, 0, 0, 0x39}, otherRoot}, {ciTestFork, otherRoot}} {
 		for _, c := range []Chain{Hoodi, Devnet, CITest} {
-			if err := c.CheckChain(v.f, v.r); err == nil {
+			if err := c.CheckChain(on(v.f, v.r)); err == nil {
 				t.Errorf("%s build accepted fork version %x root %x", c, v.f, v.r[:4])
 			}
 		}
 	}
 	// The devnet build on its own devnet: ethereum-package's fork version,
 	// a root of its own.
-	if err := Devnet.CheckChain(otherFork, otherRoot); err != nil {
+	if err := Devnet.CheckChain(on(otherFork, otherRoot)); err != nil {
 		t.Errorf("devnet build on a Kurtosis devnet: %v", err)
 	}
 }
@@ -179,7 +227,7 @@ func TestNonProdRefusesProdChains(t *testing.T) {
 				continue
 			}
 			for _, rt := range [][32]byte{root(t, public["mainnet"][1]), otherRoot, {}} {
-				err := c.CheckChain([4]byte(r.ForkVersion), rt)
+				err := c.CheckChain(on([4]byte(r.ForkVersion), rt))
 				if err == nil || !strings.Contains(err.Error(), "chain "+r.Name+" (") || !strings.Contains(err.Error(), "a prod chain") {
 					t.Errorf("%s build on prod chain %s, root %x: %v", c, r.Name, rt[:4], err)
 				}
