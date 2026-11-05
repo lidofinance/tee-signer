@@ -1,0 +1,37 @@
+# The parent tools and the enclave as one service (README.md, "Restarts").
+# parent-service.sh runs parent-run.sh and exits when the enclave or a
+# parent tool ends; systemd then starts the set again after a wait.
+# systemctl stop terminates the enclave and stops the tools, with no restart.
+#
+# Install: the files of platform-aws/deploy, the EIF and the parent tools in
+# /opt/signer-runner, the settings in /etc/signer-runner/parent.env
+# (parent.env.example). The settings hold file names and sizes, no secret.
+[Unit]
+Description=Signer runner: parent tools and Nitro enclave
+Wants=network-online.target nitro-enclaves-allocator.service
+After=network-online.target nitro-enclaves-allocator.service
+# No start limit: systemd keeps starting it after failures, as Azure
+# does. parent-service.sh waits longer between starts (README.md, "Restarts").
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# The user that runs parent-run.sh by hand: in group ne, with sudo.
+User=ec2-user
+EnvironmentFile=/etc/signer-runner/parent.env
+ExecStart=/opt/signer-runner/parent-service.sh run
+ExecStopPost=/opt/signer-runner/parent-service.sh cleanup
+Restart=on-failure
+RestartSec=5
+# 3: an enclave or parent tools that this service did not start.
+RestartPreventExitStatus=3
+# SIGTERM to parent-service.sh alone: it terminates the enclave and stops
+# the tools, then systemd kills whatever is left.
+KillMode=mixed
+TimeoutStopSec=60
+# The failure count of parent-service.sh, kept across restarts only.
+RuntimeDirectory=signer-runner
+RuntimeDirectoryPreserve=restart
+
+[Install]
+WantedBy=multi-user.target

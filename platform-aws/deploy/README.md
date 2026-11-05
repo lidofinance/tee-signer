@@ -16,11 +16,12 @@ setup ("Setup").
 | `enclave/Dockerfile` | the generic enclave image: static runner and the flags that are the same for every operator (`-setup platform`, the NTS clock). Built into an EIF by `scripts/nitro-eif.sh`. The fixed vsock port map is in its comments |
 | `test-client-ca.pem` | public root certificate of a test PKI (`scripts/make-test-ca.sh`), for a test setup's `allowed_client_ca` (base64 of its DER). Its private key is not in the repo |
 | `kms-key-policy.json.tmpl` | key policy: `Decrypt`/`GenerateDataKey` only with `kms:RecipientAttestation:PCR0/1/2/3`; `Encrypt` for the key admin only with exactly the encryption context `purpose=record-creds` (the record credentials), so the admin cannot make a sealing key (`purpose=sealing`) or a mark log key (`signer-key`), which carry setup_hash (`platform-aws/nitro`, `slashing-log/docs/marklog.md`, "Record keys"); `DescribeKey`, `GetKeyPolicy` and `ListGrants` for the parent role, which the runner reads at start for key_release_hash and the lock check (`platform-aws/nitro` KeyRule). `platform-aws/nitro/planting_test.go` evaluates these conditions. `scripts/kms-policy.sh` renders it per build to `build/nitro/kms-key-policy-<arch>.json` |
-| `main.tf` | KMS key (PCR0-3), parent role, enclave-enabled EC2 instance, the record writer user (the mark log's S3 credentials), the mark bucket's policy (`mark_bucket`), and an optional inbound rule for the network entry (`entry_cidrs`). Optional `ssh_public_key` and `ssh_cidrs` give a key pair and an SSH rule for the operator. Variables `instance_type` (default `c6g.large`) and `region` (default `eu-central-1`) are the Graviton choice, see "Graviton (arm64)" |
+| `main.tf` | KMS key (PCR0-3), parent role, enclave-enabled EC2 instance, the record writer user (the mark log's S3 credentials), the mark bucket's policy (`mark_bucket`), and an optional inbound rule for the network entry (`entry_cidrs`). Optional `ssh_public_key` and `ssh_cidrs` give a key pair and an SSH rule for the operator. Variables `instance_type` (default `c6g.large`) and `region` (default `eu-central-1`) are the Graviton choice, see "Graviton (arm64)". The name variables and `extra_egress` are in "Steps". `scripts/aws-tf-test.sh` tests it with a mock provider |
 | `target/main.tf` | a second signer next to a running one. Its own root module and state, so no plan of it can change the running signer. It reads the parent role, instance profile, security group and key pair by name. It makes a new KMS key that releases to the target EIF's PCR0..2 alone (the same PCR3, the parent role's read of the key and its policy, the admin's `record-creds` encrypt) and, with `instance = true`, a second `c6g.large` parent. The admin encrypts a second access key of the record writer under the new key. `scripts/tf-validate.sh` validates it |
 | `parent-run.sh` | parent setup: allocator, one vsock-proxy per route of the signer's setup (KMS, STS, the coarse-time host, the mark bucket, four NTS-KE), the host agent with the setup (`SETUP`), udprelay, `nitro-cli run-enclave`, the forwarder (network entry). Runs on x86_64 and arm64 parents (`SETUP`, `CPU_COUNT`, `MEMORY_MIB`) |
 | `../../platform-aws/cmd/forwarder` | the network entry: a plain TCP to vsock byte forwarder, no TLS. Built by `scripts/build-runner.sh`, started by `parent-run.sh` |
 | `../../platform-aws/cmd/udprelay` | the NTS clock's NTP path: vsock 7102 to UDP 123 and 4123, for an allowlist of the four NTS operators, with rate limits (package `platform-aws/udprelay`). Built by `scripts/build-runner.sh`, started by `parent-run.sh` |
+| `signer-runner.service`, `parent-service.sh`, `parent.env.example` | the parent as a systemd service: `parent-run.sh` at boot, a new start after the enclave or a parent tool ends, none after `systemctl stop` ("Restarts"). `scripts/aws-parent-service-test.sh` tests it with a fake `nitro-cli` |
 | `allocator.yaml`, `vsock-proxy.yaml` | parent config in the formats shipped with nitro-cli v1.5.2. `vsock-proxy.yaml` is an example: `parent-run.sh` writes the allowlist from the setup |
 
 ## Setup
@@ -345,7 +346,7 @@ setup, on both sides.
 The parent may run an overlay network entry of the operator. The security
 group allows outbound TCP 443, and with `nts_egress` the NTS clock's
 TCP 4460 and UDP 123 and 4123, so such an entry gets only relayed paths
-over TCP. If TLS handshakes stall on such a path, set a smaller MTU, for
+over TCP, unless `extra_egress` opens more. If TLS handshakes stall on such a path, set a smaller MTU, for
 example 1280 on the parent and 1200 on the client. `prev_pcrs` lets the KMS
 key accept a second image's PCRs next to `pcr0..2`, so a rollback needs no
 key policy change.
@@ -755,28 +756,114 @@ The full order of a deploy, with the setup, is in
 3. The writer credentials (see "Clone protection", steps 2 and 3).
 4. Copy the EIF, the parent binaries and the files of
    `platform-aws/deploy/` to the instance, install the Nitro CLI, and run
-   `SETUP=<setup> parent-run.sh` in a new session.
+   `SETUP=<setup> parent-run.sh` in a new session, or install
+   `signer-runner.service` ("Restarts").
 5. Check the PCRs on the parent ("Check the PCRs on the parent"), then the
    proof from a client (see "Verify").
 
+The names default to one node per account: role and instance profile
+`signer-parent`, security group and instance `signer-node`. For a second
+node in the account, or to take over resources made earlier, set
+`parent_role_name`, `parent_role_description`, `security_group_name`,
+`security_group_description`, `instance_name`, `key_description` and
+`key_tags`, and import the existing resources (`terraform import`, or
+`import` blocks in a file of the operator's next to `main.tf`). A plan with
+no changes shows that they match. Three of these matter more than the
+others. PCR3 is computed from the role's ARN, so a new role name means a new
+key policy. A new security group description replaces the group. A locked
+key's description and tags can never change. `extra_egress` adds outbound
+rules to the four of the security group, for example for a network entry
+the operator runs on the parent; the enclave still reaches only the routes
+of its setup.
+
 `parent-run.sh` starts the processes on the parent (`vsock-proxy` for each
-route, `hostagent`, `udprelay`, `forwarder`) with `nohup`, not as services.
-A reboot ends them and needs `parent-run.sh` again. The store under
-`/var/lib/signer-runner` stays.
+route, `hostagent`, `udprelay`, `forwarder`) with `nohup`. Run by hand, a
+reboot ends them and needs `parent-run.sh` again. `signer-runner.service`
+does that at boot ("Restarts"). The store under `/var/lib/signer-runner`
+stays.
 
 A runner that fails sends the line it prints (`runner: ...`) to the host
 agent before it exits (hostagent EXIT). The agent writes it with the time to
 `/var/lib/signer-runner/last-exit.txt` (`-exit-file`) and to its log.
 
-Nothing in this deploy restarts the enclave after it exits. A start
-failure ends it, and that includes an NTS outage at start: with no NTS
-quorum within `-nts-wait` (90 s) the runner exits rather than run without
-keys. On mainnet, run the enclave step of `parent-run.sh`
-(`nitro-cli run-enclave`) under a service unit that restarts on failure,
-or restart it by hand. The reason for each exit is in `last-exit.txt`.
-Nothing else leaves the enclave this way: one line of printable ASCII, at
-most 2048 bytes, the same text a console would show. An enclave that is not
-in debug mode has no console.
+The reason for each exit is in `last-exit.txt`. Nothing else leaves the
+enclave this way: one line of printable ASCII, at most 2048 bytes, the same
+text a console would show. An enclave that is not in debug mode has no
+console.
+
+## Restarts
+
+`signer-runner.service` runs `parent-run.sh` at boot, after the allocator
+and the network, and starts it again after a failure, as `restartPolicy`
+OnFailure does on Azure and `tee-restart-policy=OnFailure` on GCP.
+`nitro-cli run-enclave` returns once the enclave runs, so
+`parent-service.sh`, the unit's main process, checks the enclave
+(`nitro-cli describe-enclaves`) and the parent tools that `parent-run.sh`
+started every 10 seconds (`WATCH_INTERVAL`). When the enclave or any of
+the tools has ended, it logs the reason with the line of `last-exit.txt`,
+terminates the enclave, stops the tools and exits 1. systemd starts the
+whole set again.
+
+- A crash and an exit on purpose are the same here. The runner ends only on
+  an error: a refused setup, an image that the setup does not list, no NTS
+  quorum within `-nts-wait` (90 s), a sealing key it cannot open. Each is a
+  non-zero exit, which OnFailure restarts on Azure and GCP, so the service
+  restarts each too. The exit 0 of the other platforms comes from a stop
+  signal, and nothing sends one inside an enclave. So a refused setup, a
+  missing EIF or an image that the setup does not allow also restarts,
+  every few minutes once the wait is at `BACKOFF_MAX`: check the journal.
+  A later locked update that allows the image takes effect at the next
+  restart.
+- `systemctl stop signer-runner` is the clean stop. The main process alone
+  gets SIGTERM (`KillMode=mixed`), terminates the enclave, stops the tools
+  and exits 0, and systemd does not restart a stopped unit. An enclave
+  terminated by hand with `nitro-cli terminate-enclave` while the unit runs
+  counts as a failure and is started again.
+- The wait before a start grows after each failure: 10 s, then doubled up to
+  300 s (`BACKOFF_BASE`, `BACKOFF_MAX`). An enclave that ran 600 s
+  (`BACKOFF_RESET`) starts the count again. The unit has no start limit
+  (`StartLimitIntervalSec=0`): like Azure, it keeps trying, every 300 s
+  once the wait is at its longest, so a signer comes back by itself after
+  an outage of any length, for example of NTS. A setup the runner refuses
+  is retried the same way; `last-exit.txt` and the journal show the
+  reason.
+- One enclave and one set of tools. The service starts only when no
+  enclave and none of `hostagent`, `forwarder`, `udprelay` and `vsock-proxy`
+  runs. Otherwise it exits 3, which the unit does not restart, and touches
+  neither, so a set started by hand stays as it is. `ExecStopPost`
+  terminates an enclave that the service started and left behind, for
+  example after the main process was killed.
+
+The settings go in `/etc/signer-runner/parent.env` (`parent.env.example`):
+`SETUP` and `STATE_DIR` as absolute paths, and if needed `EIF`,
+`CPU_COUNT`, `MEMORY_MIB`, `ENTRY_PORT` and `ENCLAVE_CID`. They hold file
+names and sizes, no secret, and reach `parent-run.sh` in its environment.
+The logs of the tools stay in `/tmp`, those of the service in the journal
+(`journalctl -u signer-runner`).
+
+Install, on the parent, as `ec2-user` (the user of the unit, `User=`).
+A parent that uses another account sets `User=` in a drop-in
+(`systemctl edit signer-runner`); that account must own `STATE_DIR` and be
+in the group `ne`.
+
+```sh
+sudo dnf install -y aws-nitro-enclaves-cli aws-nitro-enclaves-cli-devel
+sudo usermod -aG ne ec2-user
+sudo install -d -o ec2-user -g ec2-user /opt/signer-runner
+cp runner-$(uname -m).eif hostagent forwarder udprelay parent-run.sh parent-service.sh   allocator.yaml signer.setup /opt/signer-runner/
+sudo install -d /etc/signer-runner
+sudo install -m 644 parent.env.example /etc/signer-runner/parent.env   # then edit SETUP, STATE_DIR
+sudo install -m 644 signer-runner.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now signer-runner
+systemctl status signer-runner
+```
+
+A parent that runs `parent-run.sh` by hand moves to the service in one
+short downtime: `nitro-cli terminate-enclave --all`, stop the four tools
+(`pkill -x 'hostagent|forwarder|udprelay|vsock-proxy'`), then the steps
+above with the same `STATE_DIR` and `SETUP`. The store stays, so the
+runner starts from it as after any restart.
 
 ## Verify
 

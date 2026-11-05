@@ -83,6 +83,51 @@ variable "nts_egress" {
   default     = true
 }
 
+# Names. The defaults are those of one node per account. Set them to keep
+# the names of resources made earlier (terraform import), or for a second
+# node in the same account. The parent role's name is in PCR3, so changing
+# it changes the key policy.
+variable "parent_role_name" {
+  description = "IAM role and instance profile of the parent (PCR3 is computed from its ARN)"
+  default     = "signer-parent"
+}
+variable "parent_role_description" {
+  description = "description of the parent role; null: none"
+  type        = string
+  default     = null
+}
+variable "security_group_name" {
+  default = "signer-node"
+}
+variable "security_group_description" {
+  description = "a new description replaces the security group, so keep that of an existing one"
+  default     = "Managed by Terraform"
+}
+variable "instance_name" {
+  description = "Name tag of the parent instance"
+  default     = "signer-node"
+}
+variable "key_description" {
+  description = "description of the KMS key. Once the policy is locked it can never change, so keep that of an existing key"
+  default     = "signer-runner sealing key, enclave-only"
+}
+variable "key_tags" {
+  description = "tags of the KMS key. Once the policy is locked they can never change, so keep those of an existing key"
+  type        = map(string)
+  default     = {}
+}
+variable "extra_egress" {
+  description = "more outbound rules of the parent, for example for a network entry the operator runs on it. The enclave reaches only the routes of its setup either way (vsock-proxy, udprelay)"
+  type = list(object({
+    description = string
+    protocol    = string
+    from_port   = number
+    to_port     = number
+    cidr_blocks = list(string)
+  }))
+  default = []
+}
+
 variable "mark_bucket" {
   description = "S3 bucket of the mark log (the setups' mark_store.bucket), made outside Terraform with Object Lock and a default retention in compliance mode. When set, this file writes its bucket policy: the record writer (the enclave's credentials) may create and read records and update bodies under marks/ and config/ of any setup, give each new object its own compliance retention, list versions and read the Object Lock configuration (the runner's lock check); the parent role writes nothing; plain HTTP is refused. One policy for every setup of this image, so a new setup needs no change here. null: no bucket policy."
   type        = string
@@ -94,7 +139,8 @@ provider "aws" { region = var.region }
 data "aws_caller_identity" "me" {}
 
 resource "aws_iam_role" "parent" {
-  name = "signer-parent"
+  name        = var.parent_role_name
+  description = var.parent_role_description
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -106,7 +152,7 @@ resource "aws_iam_role" "parent" {
 }
 
 resource "aws_iam_instance_profile" "parent" {
-  name = "signer-parent"
+  name = var.parent_role_name
   role = aws_iam_role.parent.name
 }
 
@@ -114,8 +160,9 @@ resource "aws_iam_instance_profile" "parent" {
 # target/main.tf: the Go tests run the template through the lock check,
 # not this file.
 resource "aws_kms_key" "enclave" {
-  description         = "signer-runner sealing key, enclave-only"
+  description         = var.key_description
   enable_key_rotation = true
+  tags                = var.key_tags
   # KMS refuses a policy that does not let the caller change it later
   # unless this is set. A mistake in a locked policy is permanent.
   bypass_policy_lockout_safety_check = var.key_policy_locked
@@ -297,7 +344,7 @@ locals {
 
   # Egress: HTTPS (KMS, STS, S3, the clock URLs, an overlay
   # network entry's coordination and relays over TCP), the NTS clock's
-  # NTS-KE and NTP when nts_egress is set.
+  # NTS-KE and NTP when nts_egress is set, and the rules of extra_egress.
   egress_rules = concat(
     [merge(local.no_rule, { from_port = 443, to_port = 443, cidr_blocks = ["0.0.0.0/0"] })],
     var.nts_egress ? [merge(local.no_rule, {
@@ -313,12 +360,14 @@ locals {
       to_port     = p
       cidr_blocks = ["0.0.0.0/0"]
     })] : [],
+    [for r in var.extra_egress : merge(local.no_rule, r)],
   )
 }
 
 resource "aws_security_group" "node" {
-  name   = "signer-node"
-  vpc_id = data.aws_subnet.sel.vpc_id
+  name        = var.security_group_name
+  description = var.security_group_description
+  vpc_id      = data.aws_subnet.sel.vpc_id
   # Inbound: only the network entry, and only from entry_cidrs, plus SSH
   # from ssh_cidrs while the parent is set up. The forwarder copies bytes to
   # the enclave, where mutual TLS ends. The parent is not trusted, and
@@ -365,7 +414,7 @@ resource "aws_instance" "node" {
   metadata_options {
     http_tokens = "required" # IMDSv2, used by the host agent
   }
-  tags = { Name = "signer-node" }
+  tags = { Name = var.instance_name }
 }
 
 output "kms_key_arn" { value = aws_kms_key.enclave.arn }
