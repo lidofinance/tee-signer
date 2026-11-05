@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -454,4 +455,29 @@ func TestKeyListKeepsAnswersOfASignerThatIsDown(t *testing.T) {
 	if g, ok := s.keys.lookup(k.pk); !ok || len(g.shares) != 3 {
 		t.Fatalf("group %+v", g)
 	}
+}
+
+// A signer that was down at the first load joins once a request finds the
+// list older than keysMaxAge, even a request for a key the list has.
+func TestKeyListReloadsWhenStaleOnAHit(t *testing.T) {
+	k := splitKey(t, 2, 3)
+	fakes := cluster([]*testKey{k}, 3)
+	fakes[0].set(func(f *fakeRunner) { f.err = io.EOF })
+	s := newTestSigners(t, fakes)
+	if g, ok := s.keys.lookup(k.pk); !ok || len(g.shares) != 2 {
+		t.Fatalf("first load: group %+v", g)
+	}
+	fakes[0].set(func(f *fakeRunner) { f.err = nil })
+	var skew atomic.Int64
+	s.keys.now = func() time.Time { return time.Now().Add(time.Duration(skew.Load())) }
+	skew.Store(int64(keysMaxAge + time.Second))
+	if !s.HasKey(context.Background(), k.pk) {
+		t.Fatal("key lost")
+	}
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if g, _ := s.keys.lookup(k.pk); len(g.shares) == 3 {
+			return
+		}
+	}
+	t.Fatal("the signer that was down did not join")
 }
