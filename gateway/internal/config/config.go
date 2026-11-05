@@ -375,10 +375,17 @@ func (c *Config) ServerTLS() servertls.Settings {
 	return s
 }
 
+// maxSigners caps the signers and the share indices: the search for share
+// indices (backend deriveGroup) grows fast with both.
+const maxSigners = 8
+
 func (c *Config) loadSigners(base string) error {
 	s := &c.Signers
 	if len(s.Nodes) == 0 {
 		return errors.New("signers.nodes is required")
+	}
+	if len(s.Nodes) > maxSigners {
+		return fmt.Errorf("signers: at most %d", maxSigners)
 	}
 	if s.ClientCert == "" || s.ClientKey == "" {
 		return errors.New("signers.client_cert and signers.client_key are required")
@@ -407,8 +414,8 @@ func (c *Config) loadSigners(base string) error {
 	if s.MaxShareIndex == 0 {
 		s.MaxShareIndex = len(s.Nodes)
 	}
-	if s.MaxShareIndex < len(s.Nodes) || s.MaxShareIndex > 64 {
-		return fmt.Errorf("signers.max_share_index must be %d (the number of signers) to 64", len(s.Nodes))
+	if s.MaxShareIndex < len(s.Nodes) || s.MaxShareIndex > maxSigners {
+		return fmt.Errorf("signers.max_share_index must be %d (the number of signers) to %d", len(s.Nodes), maxSigners)
 	}
 	for _, p := range []*string{&s.ClientCert, &s.ClientKey} {
 		if !filepath.IsAbs(*p) {

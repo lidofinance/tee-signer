@@ -2,6 +2,7 @@ package config
 
 import (
 	"crypto/tls"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -354,6 +355,37 @@ func TestLoopback(t *testing.T) {
 	} {
 		if got := Loopback(addr); got != want {
 			t.Errorf("Loopback(%q) = %v", addr, got)
+		}
+	}
+}
+
+// At most 8 signers and share indices up to 8: the search for share
+// indices grows fast with both.
+func TestSignersLimit(t *testing.T) {
+	cfg := func(nodes int, extra string) string {
+		s := pin + "signers:\n  client_cert: c\n  client_key: k\n" + extra + "  nodes:\n"
+		for i := 1; i <= nodes; i++ {
+			s += fmt.Sprintf("    - {address: \"tcp:127.0.0.1:%d\", attestation: {verifier: dev}}\n", i)
+		}
+
+		return s
+	}
+	c, err := loadRaw(t, cfg(8, "  max_share_index: 8\n"))
+	if err != nil || len(c.Signers.Nodes) != 8 || c.Signers.MaxShareIndex != 8 {
+		t.Fatalf("8 signers, max_share_index 8: %v", err)
+	}
+	if c, err = loadRaw(t, cfg(8, "")); err != nil || c.Signers.MaxShareIndex != 8 {
+		t.Fatalf("8 signers, default max_share_index: %v", err)
+	}
+	for name, c := range map[string]struct {
+		body, want string
+	}{
+		"9 signers":          {cfg(9, ""), "signers: at most 8"},
+		"max_share_index 9":  {cfg(3, "  max_share_index: 9\n"), "must be 3 (the number of signers) to 8"},
+		"max_share_index 64": {cfg(3, "  max_share_index: 64\n"), "must be 3 (the number of signers) to 8"},
+	} {
+		if _, err := loadRaw(t, c.body); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", name, err, c.want)
 		}
 	}
 }

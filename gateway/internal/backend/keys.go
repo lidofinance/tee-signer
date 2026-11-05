@@ -12,8 +12,10 @@ import (
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 )
 
-// maxShareIndex bounds the share indices the gateway tries.
-const maxShareIndex = 64
+// maxShareIndex bounds the share indices the gateway tries. The config
+// allows at most 8 signers, and the search in deriveGroup grows fast with
+// the highest index: a key that fit nothing took 163 s at 64.
+const maxShareIndex = 8
 
 // share is one signer's share of a validator key.
 type share struct {
