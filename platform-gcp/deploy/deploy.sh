@@ -19,9 +19,13 @@
 # and its commands, and refuses to run unless CONFIRM=yes is set:
 #   services-enable   enable the APIs the setup needs
 #   network-create    VPC and subnet of the signer
-#   address-reserve   static external IPv4 address (the entry's address)
-#   firewall-create   TCP 7100 from OPERATOR_IP only (the network entry)
+#   subnet-create     the subnet alone, in the existing VPC (SUBNET, SUBNET_RANGE)
+#   address-reserve   static external IPv4 address (the public entry's address)
+#   firewall-create   TCP 7100 from OPERATOR_IP only (public), or from
+#                     ENTRY_SOURCE_RANGES and ENTRY_SOURCE_TAGS (private)
 #   firewall-delete   delete the TCP 7100 rule (when another entry replaces it)
+#   egress-create     outbound from the VM: TCP 80, 443, 4460 and UDP 123, 4123
+#                     only, everything else denied
 #   registry-create   Artifact Registry Docker repository
 #   image-push        push the image that build-image.sh made
 #   kms-create        key ring and HSM key that wrap the runner's data key
@@ -54,10 +58,20 @@
 #   OPERATOR_IP   public IPv4 address of the machine that runs the signing client
 #                 (firewall-create; one address, /32)
 #   HARDWARE      amd-sev (default, THIS TEST ONLY) or intel-tdx (production)
-#   NETWORK_ENTRY public (default; common.sh). The build overlay
+#   NETWORK_ENTRY public (default) or private (common.sh). The build overlay
 #                 (SIGNER_BUILD_OVERLAY_DIR) adds its entries, their
 #                 settings and commands
+#   PRIVATE_IP    the VM's subnet address (vm-create; default: GCP picks one)
+#   ENTRY_SOURCE_RANGES, ENTRY_SOURCE_TAGS
+#                 private: who may reach TCP 7100 (firewall-create), CIDR
+#                 blocks and network tags, comma-separated
+#   SUBNET, SUBNET_RANGE, NET_TAG, FW_RULE, FW_EGRESS_ALLOW, FW_EGRESS_DENY
+#                 a subnet, tag and rules of the signer's own in the shared
+#                 VPC (common.sh)
 #   IMAGE_TAG     registry tag of image-push (default poc)
+#   PREV_IMAGE_DIGEST
+#                 wif-create, provider-update: a second digest the WIF
+#                 condition takes, the image being replaced (common.sh)
 #   VM, ADDRESS_NAME, KMS_KEY, WIF_POOL, WIF_PROVIDER
 #                 a second signer next to a running one (common.sh): its
 #                 own VM, address,
@@ -143,15 +157,33 @@ operator_ip() {
 }
 
 # The WIF attribute condition. All of it must hold, or the STS exchange fails:
-# a production Confidential Space image (no debug), the pinned image digest,
-# the VM's service account, and the hardware model.
+# a production Confidential Space image (no debug), the pinned image digest
+# (or one of two with PREV_IMAGE_DIGEST), the VM's service account, and the
+# hardware model.
+digest_condition() {
+  local d
+  d="$(image_digest)"
+  if [ -n "$PREV_IMAGE_DIGEST" ] && [ "$PREV_IMAGE_DIGEST" != "$d" ]; then
+    printf '%s' "assertion.submods.container.image_digest in ['$PREV_IMAGE_DIGEST', '$d']"
+  else
+    printf '%s' "assertion.submods.container.image_digest == '$d'"
+  fi
+}
 attribute_condition() {
   printf '%s' "assertion.swname == 'CONFIDENTIAL_SPACE'" \
     " && 'STABLE' in assertion.submods.confidential_space.support_attributes" \
     " && assertion.dbgstat == 'disabled-since-boot'" \
     " && assertion.hwmodel == '$GCP_HWMODELS'" \
-    " && assertion.submods.container.image_digest == '$(image_digest)'" \
+    " && $(digest_condition)" \
     " && '$SERVICE_ACCOUNT' in assertion.google_service_accounts"
+}
+# The images the condition takes, for the step descriptions.
+digests_text() {
+  if [ -n "$PREV_IMAGE_DIGEST" ] && [ "$PREV_IMAGE_DIGEST" != "$(image_digest)" ]; then
+    echo "image $(image_digest) or the previous one $PREV_IMAGE_DIGEST"
+  else
+    echo "image $(image_digest) only"
+  fi
 }
 
 # ---- steps ------------------------------------------------------------------
@@ -169,13 +201,39 @@ cmd_network_create() {
     --range="$SUBNET_RANGE" --project="$PROJECT_ID"
 }
 
+# A subnet of the signer's own in the existing VPC.
+cmd_subnet_create() {
+  if [ "$DRY" != 1 ] && side_by_side && ! own_subnet; then
+    die "subnet $SUBNET is the running signer's: set SUBNET and SUBNET_RANGE for a subnet of this signer's own"
+  fi
+  gate subnet-create "subnet $SUBNET ($SUBNET_RANGE, $REGION) in the existing VPC $VPC"
+  run gcloud compute networks subnets create "$SUBNET" --network="$VPC" --region="$REGION" \
+    --range="$SUBNET_RANGE" --project="$PROJECT_ID"
+}
+
 cmd_address_reserve() {
+  if [ "$NETWORK_ENTRY" = private ] && [ "$DRY" != 1 ]; then die "NETWORK_ENTRY=private: the VM gets no external address"; fi
   gate address-reserve "reserve the regional external IPv4 address $ADDRESS_NAME, so the signing client's address survives a VM restart (billed while reserved)"
   run gcloud compute addresses create "$ADDRESS_NAME" --region="$REGION" --project="$PROJECT_ID"
 }
 
 cmd_firewall_create() {
-  local ip
+  local ip src=()
+  if [ "$NETWORK_ENTRY" = private ]; then
+    if [ -z "$ENTRY_SOURCE_RANGES$ENTRY_SOURCE_TAGS" ]; then
+      [ "$DRY" = 1 ] || die "NETWORK_ENTRY=private: set ENTRY_SOURCE_RANGES or ENTRY_SOURCE_TAGS (who may reach TCP $SIGNER_PORT)"
+      src=(--source-tags="<ENTRY_SOURCE_TAGS>")
+    fi
+    [ -z "$ENTRY_SOURCE_RANGES" ] || src+=(--source-ranges="$ENTRY_SOURCE_RANGES")
+    [ -z "$ENTRY_SOURCE_TAGS" ] || src+=(--source-tags="$ENTRY_SOURCE_TAGS")
+    local from="${ENTRY_SOURCE_RANGES:+$ENTRY_SOURCE_RANGES}"
+    [ -z "$ENTRY_SOURCE_TAGS" ] || from="${from:+$from and }VMs tagged $ENTRY_SOURCE_TAGS"
+    gate firewall-create "the network entry: ingress TCP $SIGNER_PORT from ${from:-<ENTRY_SOURCE_TAGS>} to VMs tagged $NET_TAG in $VPC. Nothing else comes in. Mutual TLS is what protects the runner"
+    run gcloud compute firewall-rules create "$FW_RULE" --network="$VPC" --direction=INGRESS --priority=1000 \
+      --allow="tcp:$SIGNER_PORT" "${src[@]}" --target-tags="$NET_TAG" \
+      --description="Signer: TCP $SIGNER_PORT from the network entry only" --project="$PROJECT_ID"
+    return 0
+  fi
   ip="$(operator_ip)"
   gate firewall-create "the network entry: ingress TCP $SIGNER_PORT from $ip/32 to VMs tagged $NET_TAG in $VPC. Nothing else comes in. The firewall limits exposure and denial of service. Mutual TLS is what protects the runner"
   run gcloud compute firewall-rules create "$FW_RULE" --network="$VPC" --direction=INGRESS --priority=1000 \
@@ -187,6 +245,23 @@ cmd_firewall_create() {
 cmd_firewall_delete() {
   gate firewall-delete "delete $FW_RULE (TCP $SIGNER_PORT from the operator). firewall-create makes it again"
   run gcloud compute firewall-rules delete "$FW_RULE" --project="$PROJECT_ID" --quiet
+}
+
+# Outbound from the VM: TCP 443 (Google APIs, the registry, the coarse time
+# sources, the peer attestation hosts), the NTS clock's TCP 4460 and UDP 123
+# and 4123, and TCP 80, on which the launcher fetches the CA certificate that
+# its attestation key certificate names. Everything else is denied. The
+# metadata server (DNS, tokens) is always reachable. An overlay entry needs
+# its own rules next to these.
+EGRESS_ALLOW="tcp:80,tcp:443,tcp:4460,udp:123,udp:4123"
+cmd_egress_create() {
+  gate egress-create "egress of VMs tagged $NET_TAG: allow $EGRESS_ALLOW to anywhere ($FW_EGRESS_ALLOW, priority 1000), deny the rest ($FW_EGRESS_DENY, priority 65000)"
+  run gcloud compute firewall-rules create "$FW_EGRESS_ALLOW" --network="$VPC" --direction=EGRESS --priority=1000 \
+    --allow="$EGRESS_ALLOW" --destination-ranges=0.0.0.0/0 --target-tags="$NET_TAG" \
+    --description="Signer: outbound for KMS, STS, the registry, the clock and the launcher" --project="$PROJECT_ID"
+  run gcloud compute firewall-rules create "$FW_EGRESS_DENY" --network="$VPC" --direction=EGRESS --priority=65000 \
+    --action=DENY --rules=all --destination-ranges=0.0.0.0/0 --target-tags="$NET_TAG" \
+    --description="Signer: no other outbound" --project="$PROJECT_ID"
 }
 
 cmd_registry_create() {
@@ -260,7 +335,7 @@ cmd_sa_bindings() {
 cmd_wif_create() {
   local cond
   cond="$(attribute_condition)"
-  gate wif-create "workload identity pool $WIF_POOL and OIDC provider $WIF_PROVIDER. It takes tokens from $CS_ISSUER with audience $STS_AUDIENCE only, and only for image $(image_digest) on hardware $GCP_HWMODELS (production image, not debug, STABLE). The pool's principal set, and nothing else, may encrypt and decrypt with $KMS_KEY. Keep the pool to this one provider: any provider added to it gets the key"
+  gate wif-create "workload identity pool $WIF_POOL and OIDC provider $WIF_PROVIDER. It takes tokens from $CS_ISSUER with audience $STS_AUDIENCE only, and only for $(digests_text) on hardware $GCP_HWMODELS (production image, not debug, STABLE). The pool's principal set, and nothing else, may encrypt and decrypt with $KMS_KEY. Keep the pool to this one provider: any provider added to it gets the key"
   run gcloud iam workload-identity-pools create "$WIF_POOL" --location=global \
     --display-name="Signer PoC" --project="$PROJECT_ID"
   run gcloud iam workload-identity-pools providers create-oidc "$WIF_PROVIDER" --location=global \
@@ -300,7 +375,7 @@ cmd_bucket_bind() {
 cmd_provider_update() {
   local cond
   cond="$(attribute_condition)"
-  gate provider-update "after a rebuild: provider $WIF_PROVIDER takes image $(image_digest) only"
+  gate provider-update "after a rebuild: provider $WIF_PROVIDER takes $(digests_text)"
   run gcloud iam workload-identity-pools providers update-oidc "$WIF_PROVIDER" --location=global \
     --workload-identity-pool="$WIF_POOL" --attribute-condition="$cond" --project="$PROJECT_ID"
 }
@@ -328,10 +403,19 @@ cmd_vm_create() {
   args+=(--maintenance-policy="$MAINTENANCE" --shielded-secure-boot
     --image-project="$CS_IMAGE_PROJECT" --image-family="$CS_IMAGE_FAMILY"
     --boot-disk-size="$BOOT_DISK_SIZE" --boot-disk-type="$BOOT_DISK_TYPE"
-    --network="$VPC" --subnet="$SUBNET" --address="$ADDRESS_NAME" --tags="$NET_TAG"
+    --network="$VPC" --subnet="$SUBNET")
+  [ -z "$PRIVATE_IP" ] || args+=(--private-network-ip="$PRIVATE_IP")
+  local where="external address $ADDRESS_NAME"
+  if [ "$NETWORK_ENTRY" = private ]; then
+    args+=(--no-address)
+    where="no external address, ${PRIVATE_IP:-a subnet address} in $SUBNET"
+  else
+    args+=(--address="$ADDRESS_NAME")
+  fi
+  args+=(--tags="$NET_TAG"
     --service-account="$SERVICE_ACCOUNT" --scopes=cloud-platform --labels=purpose=signer-poc
     --metadata="$meta")
-  local what="$VM in $ZONE: $MACHINE, $CC_TYPE, image family $CS_IMAGE_FAMILY (production), service account $SERVICE_ACCOUNT, external address $ADDRESS_NAME, setup_sha256 $setup_hash. It bills per second while it exists"
+  local what="$VM in $ZONE: $MACHINE, $CC_TYPE, image family $CS_IMAGE_FAMILY (production), service account $SERVICE_ACCOUNT, $where, setup_sha256 $setup_hash. It bills per second while it exists"
   # A network entry of the build overlay may make its own vm-create.
   if devnet_has gcp_vm_create && devnet_gcp_vm_create "$what" "$mff" "${args[@]}"; then
     return 0
@@ -348,20 +432,37 @@ cmd_vm_delete() {
 cmd_teardown() {
   # A second signer shares the network, rules, registry and service account
   # with the running one: list its own deletes, never the shared ones.
+  local r
   if side_by_side; then
     show "teardown of a second signer: its own resources only (the network, firewall rules, registry, key ring and service account are shared)"
     show "  \$ $(quote gcloud compute instances delete "$VM" --zone="$ZONE" --project="$PROJECT_ID" --quiet)"
-    show "  \$ $(quote gcloud compute addresses delete "$ADDRESS_NAME" --region="$REGION" --project="$PROJECT_ID" --quiet)"
+    [ "$NETWORK_ENTRY" = private ] || show "  \$ $(quote gcloud compute addresses delete "$ADDRESS_NAME" --region="$REGION" --project="$PROJECT_ID" --quiet)"
+    if own_rules; then
+      for r in "$FW_RULE" "$FW_EGRESS_ALLOW" "$FW_EGRESS_DENY"; do
+        show "  \$ $(quote gcloud compute firewall-rules delete "$r" --project="$PROJECT_ID" --quiet)"
+      done
+    fi
+    if own_subnet; then
+      show "  \$ $(quote gcloud compute networks subnets delete "$SUBNET" --region="$REGION" --project="$PROJECT_ID" --quiet)"
+    fi
     show "  \$ $(quote gcloud iam workload-identity-pools providers delete "$WIF_PROVIDER" --location=global --workload-identity-pool="$WIF_POOL" --project="$PROJECT_ID" --quiet)"
     show "  \$ $(quote gcloud iam workload-identity-pools delete "$WIF_POOL" --location=global --project="$PROJECT_ID" --quiet)"
     show "  key $KMS_KEY stays (GCP cannot delete a key); destroy its version: $(quote gcloud kms keys versions destroy 1 --key="$KMS_KEY" --keyring="$KMS_RING" --location="$REGION" --project="$PROJECT_ID")"
     [ "$DRY" = 1 ] && return 0
     die "teardown refuses with VM, ADDRESS_NAME, KMS_KEY, WIF_POOL or WIF_PROVIDER set: run the deletes above yourself"
   fi
-  gate teardown "delete the VM, firewall rule, address, subnet, VPC, registry, WIF provider and pool, and the service account. The KMS key ring and key stay: GCP cannot delete them"
+  gate teardown "delete the VM, firewall rules, address, subnet, VPC, registry, WIF provider and pool, and the service account. The KMS key ring and key stay: GCP cannot delete them"
   run gcloud compute instances delete "$VM" --zone="$ZONE" --project="$PROJECT_ID" --quiet
   run gcloud compute firewall-rules delete "$FW_RULE" --project="$PROJECT_ID" --quiet
-  run gcloud compute addresses delete "$ADDRESS_NAME" --region="$REGION" --project="$PROJECT_ID" --quiet
+  # The egress rules, if egress-create made them.
+  for r in "$FW_EGRESS_ALLOW" "$FW_EGRESS_DENY"; do
+    if [ "$DRY" = 1 ] || gcloud compute firewall-rules describe "$r" --project="$PROJECT_ID" >/dev/null 2>&1; then
+      run gcloud compute firewall-rules delete "$r" --project="$PROJECT_ID" --quiet
+    fi
+  done
+  if [ "$NETWORK_ENTRY" != private ]; then
+    run gcloud compute addresses delete "$ADDRESS_NAME" --region="$REGION" --project="$PROJECT_ID" --quiet
+  fi
   run gcloud compute networks subnets delete "$SUBNET" --region="$REGION" --project="$PROJECT_ID" --quiet
   run gcloud compute networks delete "$VPC" --project="$PROJECT_ID" --quiet
   run gcloud artifacts repositories delete "$AR_REPO" --location="$REGION" --project="$PROJECT_ID" --quiet
@@ -372,6 +473,14 @@ cmd_teardown() {
 }
 
 # ---- read-only commands -----------------------------------------------------
+network_line() {
+  case "$NETWORK_ENTRY" in
+    public) echo "entry: external IPv4 address $ADDRESS_NAME, firewall $FW_RULE: TCP $SIGNER_PORT from the operator's IP only; subnet $SUBNET, tag $NET_TAG" ;;
+    private) echo "entry: no external address, ${PRIVATE_IP:-a subnet address} in $SUBNET ($SUBNET_RANGE), firewall $FW_RULE: TCP $SIGNER_PORT from ${ENTRY_SOURCE_RANGES:-}${ENTRY_SOURCE_RANGES:+${ENTRY_SOURCE_TAGS:+ and }}${ENTRY_SOURCE_TAGS:+tags $ENTRY_SOURCE_TAGS}; tag $NET_TAG. Outbound (Cloud NAT or a gateway) is the operator's" ;;
+    *) echo "entry: $NETWORK_ENTRY (build overlay); subnet $SUBNET, tag $NET_TAG" ;;
+  esac
+}
+
 cmd_plan() {
   DRY=1
   local digest
@@ -392,7 +501,7 @@ EOF
   fi
   cat <<EOF
 Image     $IMAGE_REPO@$digest
-Network   entry: external IPv4 address $ADDRESS_NAME, firewall $FW_RULE: TCP $SIGNER_PORT from the operator's IP only
+Network   $(network_line)
 Names     key $KMS_KEY_RESOURCE
           service account $SERVICE_ACCOUNT
           WIF provider $WIF_PROVIDER_RESOURCE
@@ -406,14 +515,27 @@ Then each step below needs CONFIRM=yes: CONFIRM=yes platform-gcp/deploy/deploy.s
 Read-only before the first step: platform-gcp/deploy/deploy.sh preflight
 
 EOF
-  local n=1 s steps="services-enable network-create address-reserve firewall-create registry-create image-push
+  # The entry's address, and the egress rules for an entry of this folder
+  # (an overlay entry needs other outbound rules).
+  local addr="" egress=""
+  [ "$NETWORK_ENTRY" = private ] || addr="address-reserve"
+  if repo_entry; then egress="egress-create"; fi
+  local n=1 s steps="services-enable network-create $addr firewall-create $egress registry-create image-push
     kms-create sa-create sa-bindings wif-create bucket-bind vm-create"
   if side_by_side; then
     # The project's network, rules, registry, key ring and service account
-    # are the running signer's; the second signer adds its own parts only.
-    steps="address-reserve image-push kms-key-create wif-create bucket-bind vm-create"
-    echo "A second signer next to a running one: VM $VM, address $ADDRESS_NAME, key $KMS_KEY, pool $WIF_POOL, provider $WIF_PROVIDER."
-    echo "The network $VPC, the firewall rules, the registry $AR_REPO, the key ring $KMS_RING and $SERVICE_ACCOUNT are shared and exist."
+    # are the running signer's; the second signer adds its own parts only:
+    # with SUBNET and NET_TAG set, its subnet and rules too.
+    local own="" mine=""
+    if own_subnet; then own="subnet-create"; mine="subnet $SUBNET"; fi
+    if own_rules; then own="$own firewall-create $egress"; mine="${mine:+$mine, }tag $NET_TAG and its firewall rules"; fi
+    steps="$own $addr image-push kms-key-create wif-create bucket-bind vm-create"
+    echo "A second signer next to a running one: VM $VM, ${addr:+address $ADDRESS_NAME, }key $KMS_KEY, pool $WIF_POOL, provider $WIF_PROVIDER${mine:+, $mine}."
+    if [ -n "$mine" ]; then
+      echo "The network $VPC, the registry $AR_REPO, the key ring $KMS_RING and $SERVICE_ACCOUNT are shared and exist."
+    else
+      echo "The network $VPC, the firewall rules, the registry $AR_REPO, the key ring $KMS_RING and $SERVICE_ACCOUNT are shared and exist."
+    fi
     echo
   fi
   for s in $steps; do
@@ -424,6 +546,7 @@ EOF
     n=$((n + 1))
   done
   echo "After a rebuild (new digest): build-image.sh, image-push, provider-update, vm-delete, vm-create."
+  echo "With PREV_IMAGE_DIGEST set to the running digest, provider-update takes both images until a second provider-update without it."
   echo
   printf 'Redeploy. '
   cmd_provider_update
@@ -439,7 +562,7 @@ EOF
 }
 
 cmd_preflight() {
-  local fail=0 api enabled d
+  local fail=0 api enabled d r
   ok() { echo "ok    $*"; }
   bad() { echo "FAIL  $*"; fail=1; }
   note() { echo "note  $*"; }
@@ -458,8 +581,11 @@ cmd_preflight() {
     if grep -qx "$api.googleapis.com" <<<"$enabled"; then ok "API $api is on"; else note "API $api is not in the enabled list (services-enable turns it on)"; fi
   done
   free "VPC $VPC" gcloud compute networks describe "$VPC" --project="$PROJECT_ID"
-  free "address $ADDRESS_NAME" gcloud compute addresses describe "$ADDRESS_NAME" --region="$REGION" --project="$PROJECT_ID"
-  free "firewall rule $FW_RULE" gcloud compute firewall-rules describe "$FW_RULE" --project="$PROJECT_ID"
+  [ "$NETWORK_ENTRY" = private ] ||
+    free "address $ADDRESS_NAME" gcloud compute addresses describe "$ADDRESS_NAME" --region="$REGION" --project="$PROJECT_ID"
+  for r in "$FW_RULE" "$FW_EGRESS_ALLOW" "$FW_EGRESS_DENY"; do
+    free "firewall rule $r" gcloud compute firewall-rules describe "$r" --project="$PROJECT_ID"
+  done
   free "registry $AR_REPO" gcloud artifacts repositories describe "$AR_REPO" --location="$REGION" --project="$PROJECT_ID"
   free "key ring $KMS_RING" gcloud kms keyrings describe "$KMS_RING" --location="$REGION" --project="$PROJECT_ID"
   free "service account $SA_NAME" gcloud iam service-accounts describe "$SERVICE_ACCOUNT" --project="$PROJECT_ID"
@@ -490,7 +616,11 @@ cmd_verifier_config() {
   addr="${SIGNER_ADDRESS:-}"
   # A network entry of the build overlay may name the address.
   [ -n "$addr" ] || addr="$(devnet_hook gcp_signer_address)"
-  if [ -z "$addr" ]; then
+  # A private VM: its subnet address. The client reaches it through the
+  # operator's entry, so SIGNER_ADDRESS usually names that entry instead.
+  if [ -z "$addr" ] && [ "$NETWORK_ENTRY" = private ]; then
+    addr="$PRIVATE_IP"
+  elif [ -z "$addr" ]; then
     addr="$(gcloud compute addresses describe "$ADDRESS_NAME" --region="$REGION" --project="$PROJECT_ID" \
       --format='value(address)' 2>/dev/null || true)"
   fi
@@ -546,9 +676,11 @@ main() {
     logs) cmd_logs ;;
     services-enable) cmd_services_enable ;;
     network-create) cmd_network_create ;;
+    subnet-create) cmd_subnet_create ;;
     address-reserve) cmd_address_reserve ;;
     firewall-create) cmd_firewall_create ;;
     firewall-delete) cmd_firewall_delete ;;
+    egress-create) cmd_egress_create ;;
     registry-create) cmd_registry_create ;;
     image-push) cmd_image_push ;;
     kms-create) cmd_kms_create ;;
