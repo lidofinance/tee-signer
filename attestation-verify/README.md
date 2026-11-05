@@ -115,7 +115,9 @@ cl, err := c.New() // refuses a bad or incomplete configuration
   (`DevLocalOnly`; `share-import` without TLS also takes a `unix:` socket
   and vsock CID 1). It is refused with `mainnet`, and in the handshake for
   a runner whose certificate names a prod chain. A runner on this machine
-  whose certificate names a non-prod chain, or none, stays open to it.
+  whose certificate names a non-prod chain, or none, stays open to it. A
+  mark of the fork version alone, from an older runner, cannot show the
+  root, so dev refuses it.
   `signer-admin` refuses it for a member whose setup names a cloud
   platform, whatever the address. There is
   no setting for debug mode (Nitro: PCR0 to PCR2 all

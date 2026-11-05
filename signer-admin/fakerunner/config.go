@@ -138,7 +138,7 @@ func (c *configModel) accept(raw []byte, now uint64) (uint8, error) {
 	// As the runner: the floor is for a new locked update, after the
 	// again paths.
 	if b.Group == setupwire.GroupLocked && b.Locked != nil {
-		if err := b.Locked.CheckChangeDelay(c.setup.Chain.GenesisForkVersion); err != nil {
+		if err := b.Locked.CheckChangeDelay(&c.setup.Chain); err != nil {
 			return 0, badRequest("%v", err)
 		}
 	}
@@ -155,7 +155,7 @@ func (c *configModel) accept(raw []byte, now uint64) (uint8, error) {
 	if err := u.Verify(&c.locked().Approvers); err != nil {
 		return 0, badRequest("%v", err)
 	}
-	wait := c.limits.Wait(c.setup.Chain.GenesisForkVersion, c.locked(), b)
+	wait := c.limits.Wait(&c.setup.Chain, c.locked(), b)
 	if err := c.limits.CheckActivateAt(b.ActivateAt, now, wait); err != nil {
 		return 0, badRequest("%v", err)
 	}

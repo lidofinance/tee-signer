@@ -376,8 +376,9 @@ any SEV-SNP VM meets, and keep a way to the key after the lock. A mainnet setup'
 names the version.
 
 On a prod chain (`setupwire.ProdChain`: the chain table's prod property
-for the setup's `genesis_fork_version`, true for mainnet and for any fork
-version without a row; the test of the threshold rule too) the runner refuses
+for the setup's `genesis_fork_version` and `genesis_validators_root`, true
+for mainnet and for any pair no non-prod row matches in both values; the
+test of the threshold rule too) the runner refuses
 to start when the rule is not locked or when it cannot read the rule
 (no read grant). The error starts with `prod chain:` and comes before the
 key release, so nothing is sealed or opened. GCP has no lock: a GCP runner
@@ -923,8 +924,8 @@ order (the status of each refusal in brackets):
    answers `outcome` 2. This comes before the floor of step 5, so an
    update from before the floor that is in force or pending can be sent
    again to restore a lost body.
-5. On a prod chain (mainnet, or a chain without a row in the chain
-   table) a new `locked` update's time lock is at least the image default
+5. On a prod chain (mainnet, or genesis values no row of the chain
+   table matches) a new `locked` update's time lock is at least the image default
    of 48 hours. A non-prod chain takes 0. The tools hold a new setup of a
    prod chain to the same floor (`setup-tool encode`, `signer-admin
    setup`); the runner does not refuse a pinned setup or a stored update
@@ -1145,10 +1146,17 @@ pins a known key instead or as well.
 
 The server certificate names the runner's chain: a non-critical
 extension `backend.RunnerChainOID` (the admin OID's arc, last arc 3)
-holds the setup's genesis fork version as an OCTET STRING of 4 bytes.
-`attestation-verify/runnerclient` refuses, in the handshake, a runner whose value is
-mainnet's unless its attestation settings say `mainnet`, and a runner of
-another chain if they do. The settings decide the client's mainnet rules
+holds the setup's genesis fork version and genesis validators root as an
+OCTET STRING of 36 bytes. `attestation-verify/runnerclient` refuses, in
+the handshake, a runner whose values make a prod chain
+(`setupwire.ProdChain`) unless its attestation settings say `mainnet`,
+and a runner of another chain if they do. Older runners, mainnet ones
+included, wrote the fork version alone (4 bytes), which cannot show the
+root. A client takes such a mark as prod unless a non-prod row of the
+chain table has the fork version (`setupwire.ProdForkVersion`); with
+such a row's fork version, the setting alone decides. The `dev` verifier
+refuses every such mark.
+The settings decide the client's mainnet rules
 (`key_release_sha256` for `azure-maa` and `aws-nitro`), and IDENTITY
 does not name the chain, so without the mark a setting left out would fail
 open. The mark is readable by anyone who starts a handshake, like the

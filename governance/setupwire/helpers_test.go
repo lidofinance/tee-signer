@@ -116,6 +116,17 @@ func sampleOpen() Open {
 	}
 }
 
+// chainWith is sampleChain with genesis fork version f, and mainnet's
+// root when f is mainnet's.
+func chainWith(f backend.Version) *Chain {
+	c := sampleChain()
+	c.GenesisForkVersion = f
+	if f == MainnetForkVersion {
+		c.GenesisValidatorsRoot = mainnetRoot
+	}
+	return &c
+}
+
 func sampleChain() Chain {
 	return Chain{
 		GenesisValidatorsRoot:    backend.Root{0x4b, 0x36},

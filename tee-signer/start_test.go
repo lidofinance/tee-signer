@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/asn1"
 	"errors"
 	"io"
 	"log/slog"
@@ -14,10 +16,39 @@ import (
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/platform/setup"
+	"github.com/lidofinance/tee-signer/signer-core/core"
+	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/transport"
+	"github.com/lidofinance/tee-signer/tee-signer/attls"
 )
 
 var quietLog = slog.New(slog.NewTextHandler(io.Discard, nil))
+
+// The runner's TLS certificate names both genesis values: a client takes
+// a mark of the fork version alone of a non-prod row's chain by its
+// setting, so a mark without the root could hide a prod chain.
+func TestChainMarkHasRoot(t *testing.T) {
+	cfg := core.Config{GenesisForkVersion: backend.Version{0, 0, 0, 1}, GenesisValidatorsRoot: backend.Root{0x4b, 31: 0x95}}
+	st, err := setup.Load(sampleSetup(t, "dev-single"), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc, _, err := attls.ServerConfig(st.ClientCAPEM(), nil, chainMark(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := append(cfg.GenesisForkVersion[:], cfg.GenesisValidatorsRoot[:]...)
+	for _, e := range tc.Certificates[0].Leaf.Extensions {
+		var b []byte
+		if e.Id.Equal(backend.RunnerChainOID) {
+			if _, err := asn1.Unmarshal(e.Value, &b); err != nil || !bytes.Equal(b, want) {
+				t.Fatalf("chain mark %x (%v), want %x", b, err, want)
+			}
+			return
+		}
+	}
+	t.Fatal("no chain mark")
+}
 
 // sampleSetup is the sample setup setup-<name> of governance/setupwire
 // (nitro, azure, gcp, dev-single, ...).

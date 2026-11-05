@@ -18,7 +18,7 @@ func TestCheckThreshold(t *testing.T) {
 		{MainnetForkVersion, 2, 3, false}, {MainnetForkVersion, 3, 5, false}, {MainnetForkVersion, 3, 4, true},
 		{MainnetForkVersion, 4, 5, true}, {MainnetForkVersion, 1, 1, true}, {MainnetForkVersion, 2, 2, true},
 	} {
-		if err := CheckThreshold(c.fork, c.t, c.n); (err == nil) != c.ok {
+		if err := CheckThreshold(c.fork, backend.Root{0x4b, 0x36}, c.t, c.n); (err == nil) != c.ok {
 			t.Errorf("fork %x, %d of %d: %v, want ok %v", c.fork, c.t, c.n, err, c.ok)
 		}
 	}

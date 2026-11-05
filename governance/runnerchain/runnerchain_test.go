@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/lidofinance/tee-signer/governance/setupwire"
-	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
 // The times of each build: one minute in a non-prod build for each day
@@ -79,22 +78,26 @@ func TestSameRulesAsSetupwire(t *testing.T) {
 		{Group: setupwire.GroupLocked, Locked: lockedWith(nil, img(1), img(2))},
 	}
 	// Mainnet, a prod chain with the floor, and the ci-test row's chain.
-	chains := []backend.Version{setupwire.MainnetForkVersion, {0, 0, 0, 1}}
-	for _, gfv := range chains {
-		if got, want := l.MinTimeLock(gfv), setupwire.MinChangeDelay(gfv); got != want {
+	chains := []*setupwire.Chain{
+		{GenesisForkVersion: setupwire.MainnetForkVersion, GenesisValidatorsRoot: root(t, public["mainnet"][1])},
+		{GenesisForkVersion: ciTestFork, GenesisValidatorsRoot: ciTestRootBytes},
+	}
+	for _, ch := range chains {
+		gfv := ch.GenesisForkVersion
+		if got, want := l.MinTimeLock(ch), setupwire.MinChangeDelay(ch); got != want {
 			t.Errorf("chain %x: MinTimeLock %d, setupwire %d", gfv, got, want)
 		}
 		for i, a := range actives {
-			if got, want := l.TimeLock(gfv, a), a.ChangeDelayOn(gfv); got != want {
+			if got, want := l.TimeLock(ch, a), a.ChangeDelayOn(ch); got != want {
 				t.Errorf("chain %x active %d: TimeLock %d, setupwire %d", gfv, i, got, want)
 			}
 			underCap := a.ChangeDelaySeconds == nil || *a.ChangeDelaySeconds <= setupwire.MaxTimeLock
-			if got, want := l.CheckTimeLock(gfv, a) == nil, underCap && a.CheckChangeDelay(gfv) == nil; got != want {
+			if got, want := l.CheckTimeLock(ch, a) == nil, underCap && a.CheckChangeDelay(ch) == nil; got != want {
 				t.Errorf("chain %x active %d: CheckTimeLock ok %v, want %v", gfv, i, got, want)
 			}
 			for j, u := range updates {
-				w := l.Wait(gfv, a, u)
-				if want := setupwire.Wait(gfv, a, u); w != want {
+				w := l.Wait(ch, a, u)
+				if want := setupwire.Wait(ch, a, u); w != want {
 					t.Errorf("chain %x active %d update %d: Wait %d, setupwire %d", gfv, i, j, w, want)
 				}
 				for _, at := range []uint64{0, 1000 + w + l.ActivationHorizon, 1001 + w + l.ActivationHorizon} {
@@ -110,18 +113,18 @@ func TestSameRulesAsSetupwire(t *testing.T) {
 	// non-prod chain takes 0.
 	one := l.DefaultTimeLock - 1
 	for _, c := range []struct {
-		gfv backend.Version
-		tl  *uint64
-		ok  bool
+		ch *setupwire.Chain
+		tl *uint64
+		ok bool
 	}{
-		{setupwire.MainnetForkVersion, new(uint64), false},
-		{setupwire.MainnetForkVersion, &one, false},
-		{setupwire.MainnetForkVersion, &l.DefaultTimeLock, true},
-		{setupwire.MainnetForkVersion, nil, true},
-		{backend.Version{0, 0, 0, 1}, new(uint64), true},
+		{chains[0], new(uint64), false},
+		{chains[0], &one, false},
+		{chains[0], &l.DefaultTimeLock, true},
+		{chains[0], nil, true},
+		{chains[1], new(uint64), true},
 	} {
-		if err := l.CheckTimeLock(c.gfv, lockedWith(c.tl)); (err == nil) != c.ok {
-			t.Errorf("chain %x time lock %v: %v, want ok %v", c.gfv, c.tl, err, c.ok)
+		if err := l.CheckTimeLock(c.ch, lockedWith(c.tl)); (err == nil) != c.ok {
+			t.Errorf("chain %x time lock %v: %v, want ok %v", c.ch.GenesisForkVersion, c.tl, err, c.ok)
 		}
 	}
 }

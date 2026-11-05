@@ -83,7 +83,7 @@ func TestStartMainnetKeyRule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if setupwire.ProdChain(st.Chain.GenesisForkVersion) {
+	if st.Chain.Prod() {
 		t.Fatal("the sample setup is on mainnet")
 	}
 	write := func(s *setupwire.Setup) string {
@@ -98,6 +98,11 @@ func TestStartMainnetKeyRule(t *testing.T) {
 		return path
 	}
 	testnet := write(st)
+	// The sample's ci-test fork version with mainnet's root signs mainnet
+	// messages, so the runner takes it as prod.
+	_, st.Chain.GenesisValidatorsRoot, _ = setupwire.PublicNetworkValues("mainnet")
+	st.Locked.ChangeDelaySeconds = nil
+	partial := write(st)
 	st.Chain.GenesisForkVersion = setupwire.MainnetForkVersion
 	st.Locked.ChangeDelaySeconds = nil
 	mainnet := write(st)
@@ -110,7 +115,7 @@ func TestStartMainnetKeyRule(t *testing.T) {
 	for _, c := range []struct {
 		path string
 		want bool
-	}{{testnet, false}, {mainnet, true}, {mainnetZero, true}} {
+	}{{testnet, false}, {partial, true}, {mainnet, true}, {mainnetZero, true}} {
 		var events []string
 		var opts platform.Options
 		s, _, _, err := startPlatform(context.Background(), &startArgs{platformName: "dev", setupSrc: "file:" + c.path},

@@ -150,7 +150,7 @@ func cmdSetup(args []string, out io.Writer) error {
 	// chain, its floor (the 2-day default); a non-prod build's are 30 and 2
 	// minutes.
 	for _, s := range setups {
-		if err := fl.Limits().CheckTimeLock(s.Chain.GenesisForkVersion, &s.Locked); err != nil {
+		if err := fl.Limits().CheckTimeLock(&s.Chain, &s.Locked); err != nil {
 			return fmt.Errorf("signer %s: %w", s.SignerName, err)
 		}
 	}
@@ -192,7 +192,7 @@ func cmdSetup(args []string, out io.Writer) error {
 		if err := setupwire.CheckThresholdOn(s, len(setups), len(setups)); err != nil {
 			return fmt.Errorf("signer %s: a cluster of %d signer(s) can hold no key: %w", s.SignerName, len(setups), err)
 		}
-		if err := setupwire.CheckSingleKeyProd(&s.Platform, s.Chain.GenesisForkVersion); err != nil {
+		if err := setupwire.CheckSingleKeyProd(&s.Platform, &s.Chain); err != nil {
 			return fmt.Errorf("signer %s: %w in the signer's section (-allow-gcp-unsafe-single-key does not set it)", s.SignerName, err)
 		}
 		if err := s.CheckOwnImageListed(); err != nil {

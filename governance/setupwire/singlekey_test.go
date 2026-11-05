@@ -72,7 +72,7 @@ func TestCheckSingleKeyProd(t *testing.T) {
 		if c.mainnet {
 			s.Chain.GenesisForkVersion = MainnetForkVersion
 		}
-		err := CheckSingleKeyProd(&s.Platform, s.Chain.GenesisForkVersion)
+		err := CheckSingleKeyProd(&s.Platform, &s.Chain)
 		if refused := err != nil; refused != c.refused {
 			t.Errorf("mainnet %v single %v no_lock %v: err %v, want refused %v", c.mainnet, c.single, c.noLock, err, c.refused)
 		}
