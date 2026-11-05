@@ -36,6 +36,7 @@ type group struct {
 // signatures of any t of them combine with those indices into pk's
 // signature. A key that fits no t and no indices is refused: its
 // signatures would never combine. t = 1 means every share is pk itself.
+// A group is also refused unless 2t > k (checkOverlap).
 //
 // The search tries the indices in increasing order, so signers listed in
 // the order of their indices match at the first try.
@@ -57,7 +58,7 @@ func deriveGroup(pk phase0.BLSPubKey, shares []share, maxIndex int) (group, erro
 			out[i].index = uint64(i + 1)
 		}
 
-		return group{threshold: 1, shares: out}, nil
+		return group{threshold: 1, shares: out}, checkOverlap(1, k)
 	}
 	idx := make([]uint64, k)
 	used := make([]bool, maxIndex+1)
@@ -89,12 +90,29 @@ func deriveGroup(pk phase0.BLSPubKey, shares []share, maxIndex int) (group, erro
 				out[i].index = idx[i]
 			}
 
-			return group{threshold: t, shares: out}, nil
+			return group{threshold: t, shares: out}, checkOverlap(t, k)
 		}
 		clear(used)
 	}
 
 	return group{}, fmt.Errorf("no threshold up to %d and no share indices 1 to %d make the %d share keys interpolate to the key", k, maxIndex, k)
+}
+
+// checkOverlap refuses a group of k shares with threshold t unless any two
+// sets of t signers share one: otherwise two signers that never saw each
+// other's request could each sign one side of a conflicting pair, as with
+// a whole key on two signers. The signers check each split at import
+// (governance/setupwire CheckThreshold), but none of them sees the shares
+// the others hold.
+func checkOverlap(t, k int) error {
+	if 2*t > k {
+		return nil
+	}
+	if t == 1 {
+		return fmt.Errorf("the whole key is on %d signers; it must be on one only", k)
+	}
+
+	return fmt.Errorf("threshold %d of %d shares: two sets of %d signers can be disjoint; want 2t > shares", t, k, t)
 }
 
 // interpolates reports whether the share keys with these indices give pk.
