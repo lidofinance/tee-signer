@@ -745,7 +745,8 @@ int sc_slot_times_check(const sc_config *cfg, const sc_slot_times *times);
  * The slot and the epoch at unix time now under cfg's genesis_time,
  * seconds_per_slot and slots_per_epoch and the changes in times (NULL: none).
  * 0 before genesis; the slot saturates at UINT64_MAX. times must pass
- * sc_slot_times_check.
+ * sc_slot_times_check; a change that would not (slot time 0, or a start
+ * outside 64 bits) ends the walk, and the slot time before it stays.
  */
 uint64_t sc_slot_at(const sc_config *cfg, const sc_slot_times *times, uint64_t now);
 uint64_t sc_epoch_at(const sc_config *cfg, const sc_slot_times *times, uint64_t now);

@@ -95,9 +95,11 @@ uint64_t sc_slot_at(const sc_config *cfg, const sc_slot_times *times, uint64_t n
         count = SC_MAX_SLOT_TIMES;
     for (uint32_t i = 0; i < count; i++) {
         uint64_t slot, dur;
-        /* A change whose start does not fit 64 bits never comes;
-         * sc_slot_times_check refuses it anyway. */
-        if (!mul_fits(times->changes[i].epoch, cfg->slots_per_epoch, &slot) || slot < start_slot ||
+        /* A change whose start does not fit 64 bits never comes, and one
+         * with slot time 0 would divide by zero below: the walk ends before
+         * either, though sc_slot_times_check refuses both anyway. */
+        if (times->changes[i].seconds_per_slot == 0 ||
+            !mul_fits(times->changes[i].epoch, cfg->slots_per_epoch, &slot) || slot < start_slot ||
             !mul_fits(slot - start_slot, secs, &dur) || start > UINT64_MAX - dur)
             break;
         if (now < start + dur)
