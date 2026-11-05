@@ -30,6 +30,8 @@ The prover side of this backend, the in-process attestation, is one of
 several. The [runner docs](../../tee-signer/docs/runner.md#provers-and-verifiers)
 describe how provers and verifiers fit together, and how to add a platform.
 
+To move a running signer to a new image, see [docs/upgrade.md](../../docs/upgrade.md).
+
 ## Setup
 
 The image and the runner's command are the same for every signer of every
@@ -572,10 +574,13 @@ the released Key Vault key, and restores it before it claims the mark log
 covers it. Without a state copy, a runner that lost its state makes a new
 data key and the shares need a new import.
 
-A new image gets a new Key Vault key, which cannot open the old image's
-state or mark log. The new image starts as a new signer: a new setup and
-mark log, and the shares imported again with their interchange maxima
-(`slashing-log/docs/durable-state.md`, "A new image").
+With an immutable key (the default), a new image gets a new Key Vault
+key, which cannot open the old image's state or mark log. The new image
+starts as a new signer: a new setup and mark log, and the shares imported
+again with their interchange maxima
+(`slashing-log/docs/durable-state.md`, "A new image"). A key made with
+`KEY_IMMUTABLE=false` (non-prod chains only) can take the new image in
+place (`docs/upgrade.md`).
 
 ## Key, identity and registry
 
@@ -760,8 +765,9 @@ template.
 
 ### A new image for a running signer
 
-A new runner image gives a new policy hash, so it needs a new key and a new
-group next to the running one. The old runner hands over to the new one.
+A new runner image gives a new policy hash. With an immutable key it needs
+a new key and a new group next to the running one, and the shares imported
+again. A mutable key can move in place instead (`docs/upgrade.md`).
 
 1. Local: `build-image.sh`, then `deploy.sh policy N`.
 2. `image-push` with another `IMAGE_TAG`, so the running image keeps its tag.

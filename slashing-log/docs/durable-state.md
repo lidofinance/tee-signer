@@ -269,20 +269,23 @@ On a cloud object store each commit is at least one object create.
 ## A new image
 
 On Azure each image gets a new Key Vault key version whose release policy
-names the image's CCE policy hash, and the release policy cannot change
-afterwards. A new image opens neither the old image's sealing key (so not
-its sealed shares or state copy) nor its mark log records. This image has
-no handover, so a new Azure image starts as a new signer: a new setup and
-mark log, and the shares imported again with the sealed import, with
-their interchange maxima or under the import floor.
+names the image's CCE policy hash. The release policy is immutable by
+default and then cannot change afterwards. A new image opens neither the
+old image's sealing key (so not its sealed shares or state copy) nor its
+mark log records. This image has no handover, so a new Azure image starts
+as a new signer: a new setup and mark log, and the shares imported again
+with the sealed import, with their interchange maxima or under the import
+floor. A key made with `KEY_IMMUTABLE=false` (non-prod chains only) can
+name the new hash next to the old one, as on AWS and GCP below
+(`docs/upgrade.md`).
 
-On AWS and GCP the KMS key policy and the WIF provider condition can name
-the new measurement next to the old one: the old ciphertext, the old log's
-record keys and the state copy stay readable, and the new image reads its
-predecessor's log as on a restart. If the old image still runs when the
-new one claims the log, its next write finds the new image's record, which
-it may not be able to read, and it stops (`marklog.md`, "Clone"). Those
-policies are mutable: an account
+On AWS (with `key_policy_locked = false`) and GCP the KMS key policy and
+the WIF provider condition can name the new measurement next to the old
+one: the old ciphertext, the old log's record keys and the state copy stay
+readable, and the new image reads its predecessor's log as on a restart.
+If the old image still runs when the new one claims the log, its next
+write finds the new image's record, which it may not be able to read, and
+it stops (`marklog.md`, "Clone"). Those policies are mutable: an account
 admin who edits them can let another workload release the key without
 anyone's signature.
 
