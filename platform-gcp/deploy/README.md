@@ -91,11 +91,10 @@ CHAIN=<chain> CHAIN_JSON=chain.json SETUP_FILE=signer-3.bin CONFIRM=yes platform
 
 ## Hardware: default and production
 
-`HARDWARE=intel-tdx` (`c3-highcpu-4`, hwmodel `GCP_INTEL_TDX`) is the
-default on a prod `CHAIN`. Production must run on it, so that no chip family
-holds two of the three shares. The verifier accepts every hwmodel on its
-list, so production lists `GCP_INTEL_TDX` only. With `mainnet` set the
-client refuses any other hwmodel in `gcp_hwmodels`.
+`HARDWARE=intel-tdx` (`c3-standard-4`, hwmodel `GCP_INTEL_TDX`) is the
+default on a prod `CHAIN`. Production must run on it. The verifier accepts
+every hwmodel on its list, so production lists `GCP_INTEL_TDX` only. With
+`mainnet` set the client refuses any other hwmodel in `gcp_hwmodels`.
 
 `HARDWARE=amd-sev` (`n2d-highcpu-2`, hwmodel `GCP_AMD_SEV`) is for tests on
 a non-prod `CHAIN` (hoodi, devnet, ci-test) and is the default there; the
@@ -103,21 +102,21 @@ scripts refuse it on a prod chain. `GCP_AMD_SEV` is SEV without SNP: it
 encrypts guest memory but does not protect its integrity, so the host can
 replay or remap encrypted pages. TDX protects integrity. Also, Azure runs
 on AMD SEV-SNP, so a GCP signer on AMD puts two of the three shares on one
-chip family. Keep the
-`HARDWARE` a signer was deployed with: `provider-update` with another value
-moves the WIF condition to the other hwmodel, and the running VM no longer
-gets the key. The `provider-update` gate names the hwmodel.
+chip family. Keep the `HARDWARE` a signer was deployed with:
+`provider-update` with another value moves the WIF condition to the other
+hwmodel, and the running VM no longer gets the key. The `provider-update`
+gate names the hwmodel.
 
-Google's supported-configurations page names `c3-standard-*` for TDX and
-does not name `c3-highcpu-*`. Check that before a production deploy, or set
-`MACHINE`. The settings sit in `common.sh`, in the WIF condition that
+GCP offers TDX on `c3-standard-*`, not on `c3-highcpu-*`; `c3-standard-4`
+is the smallest C3 TDX shape (tested on 2026-11-06). Set `MACHINE` for a
+larger one. The settings sit in `common.sh`, in the WIF condition that
 `deploy.sh wif-create` writes, and in the file that
 `deploy.sh verifier-config` writes.
 
 | Setting | `amd-sev` (non-prod default) | `intel-tdx` (prod default) |
 | --- | --- | --- |
 | Hardware | AMD SEV, Milan | Intel TDX |
-| Machine | `n2d-highcpu-2` (2 vCPU, 2 GiB) | `c3-highcpu-4` (see above) |
+| Machine | `n2d-highcpu-2` (2 vCPU, 2 GiB) | `c3-standard-4` (4 vCPU, 16 GiB) |
 | `--confidential-compute-type` | `SEV` | `TDX` |
 | Maintenance policy | `MIGRATE` (live migration, N2D with SEV only) | `TERMINATE` |
 | `gcp_hwmodels` | `["GCP_AMD_SEV"]` | `["GCP_INTEL_TDX"]` |

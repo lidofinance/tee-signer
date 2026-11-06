@@ -501,7 +501,7 @@ EOF
     cat <<EOF
           THIS IS THE TEST SETTING. Azure runs on AMD SEV-SNP too, so a test on AMD
           SEV puts two of the three shares on one chip family. Production uses
-          HARDWARE=intel-tdx (c3-highcpu-4, hwmodel GCP_INTEL_TDX).
+          HARDWARE=intel-tdx (c3-standard-4, hwmodel GCP_INTEL_TDX).
 EOF
   fi
   cat <<EOF

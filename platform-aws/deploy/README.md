@@ -469,7 +469,8 @@ key policy change.
 ## PCRs of the image
 
 `scripts/nitro-eif.sh` builds the EIF twice from scratch, compares the
-PCRs, and prints PCR0, PCR1 and PCR2. Record the PCRs of the commit you
+PCRs, and prints PCR0, PCR1 and PCR2. If any of them differs between the
+two builds, the script stops with an error. Record the PCRs of the commit you
 deploy. Any change to the runner binary or a flag changes PCR2 and PCR0, and
 so does a comment added to a Go file, because it moves the line numbers in
 the binary. PCR1 covers the kernel and ramdisk. The image holds no chain
@@ -887,8 +888,16 @@ The full order of a deploy, with the setup, is in
    proof from a client (see "Verify").
 
 The names default to one node per account: role and instance profile
-`signer-parent`, security group and instance `signer-node`. For a second
-node in the account, or to take over resources made earlier, set
+`signer-parent`, security group and instance `signer-node`, record writer
+`signer-record-writer-node-1` and key pair `signer-node-operator-node-1`.
+For a second node in the account, set `node_key` (it names the record
+writer and the key pair) and `parent_role_name`. IAM names are global to
+the account, so these two must differ even for a node in another region.
+In the same region, set `security_group_name` too. Give each node its own
+mark bucket, named after the node (for example `<org>-marks-<node_key>`):
+each node's apply writes the whole bucket policy, so two nodes on one
+bucket would drop each other's record writer, and the runner whose writer
+is dropped stops signing. To take over resources made earlier, set
 `parent_role_name`, `parent_role_description`, `security_group_name`,
 `security_group_description`, `instance_name`, `key_description` and
 `key_tags`, and import the existing resources (`terraform import`, or
@@ -900,6 +909,17 @@ key's description and tags can never change. `extra_egress` adds outbound
 rules to the four of the security group, for example for a network entry
 the operator runs on the parent; the enclave still reaches only the routes
 of its setup.
+
+Upgrade note for a node with `ssh_public_key` set: the key pair was
+`signer-node-operator` before it was named per `node_key`. The next plan
+replaces it with `signer-node-operator-<node_key>` (same public key) and
+leaves the instance alone. A new `key_name` would replace the instance, and
+the host store on its disk with it, so `main.tf` ignores changes to the
+instance's `key_name`: EC2 reads the key pair only at launch, and the
+parent keeps the key it has. The resource address does not change, so no
+`terraform state mv` is needed. A `target/main.tf` deploy reads the key pair
+by name: set its `key_pair_name` to the `key_pair_name` output of
+`main.tf`. Its instance ignores a new `key_name` too.
 
 `parent-run.sh` starts the processes on the parent (`vsock-proxy` for each
 route, `hostagent`, `udprelay`, `forwarder`) with `nohup`. Run by hand, a

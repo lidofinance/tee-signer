@@ -183,9 +183,9 @@ case "$HARDWARE" in
     ;;
   intel-tdx)
     CC_TYPE=TDX
-    # Google's supported-configurations page names c3-standard-* for TDX and does
-    # not name c3-highcpu-*. Check before the production run.
-    MACHINE="${MACHINE:-c3-highcpu-4}"
+    # GCP offers TDX on c3-standard-*, not c3-highcpu-*. c3-standard-4
+    # (4 vCPU, 16 GiB) is the smallest C3 TDX shape; tested on 2026-11-06.
+    MACHINE="${MACHINE:-c3-standard-4}"
     MIN_CPU_PLATFORM=""
     MAINTENANCE=TERMINATE
     GCP_HWMODELS=GCP_INTEL_TDX

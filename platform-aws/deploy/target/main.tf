@@ -65,8 +65,8 @@ variable "key_policy_locked" {
 variable "parent_role_name" { default = "signer-parent" }
 variable "security_group_name" { default = "signer-node" }
 variable "key_pair_name" {
-  description = "the running parent's key pair (signer-node-operator); empty: none"
-  default     = "signer-node-operator"
+  description = "the running parent's key pair: the key_pair_name output of ../main.tf (signer-node-operator-<node_key>, signer-node-operator before that). Empty: none. No default, so a target never takes another node's key by mistake"
+  type        = string
 }
 
 provider "aws" { region = var.region }
@@ -194,6 +194,11 @@ resource "aws_instance" "target" {
     http_tokens = "required" # IMDSv2, used by the host agent
   }
   tags = { Name = var.name }
+  # As in ../main.tf: a new key_name would replace the instance, and EC2
+  # reads the key pair only at launch.
+  lifecycle {
+    ignore_changes = [key_name]
+  }
 }
 
 output "kms_key_arn" { value = local.kms_key.arn }

@@ -165,7 +165,7 @@ make release-gate  # the release gate: self-test, tree check, every runner build
 | `upstream-tests.sh` | signer-core's own suites (unit, ssz_static, bls/sign, EIP-3076) against the library `build-core.sh` built |
 | `chain-test.sh` | the tests of `governance/chains/chain.sh` and of the chain checks of the image builds and the deploy steps, offline |
 | `nitro-cli-image.sh` | nitro-cli built from source inside Docker, with `platform-aws/deploy/nitro-cli/target-arch.patch` applied |
-| `nitro-eif.sh` | the generic enclave image from `runner-aws`, for x86_64 or, through qemu, arm64 (`ARCH=aarch64`): `nitro-cli build-enclave` twice, PCR check, rendered KMS policy, then `eif-check.sh` |
+| `nitro-eif.sh` | the generic enclave image from `runner-aws`, for x86_64 or, through qemu, arm64 (`ARCH=aarch64`): `nitro-cli build-enclave` twice, PCR check (stops on a mismatch), rendered KMS policy, then `eif-check.sh` |
 | `eif-check.sh` | reads an EIF: arch flag, kernel header, the runner and its inputs in the ramdisk, PCR0/1/2 recomputed without nitro-cli |
 | `generic-images.sh` | `build`: the three generic images (Nitro arm64, Azure with its CCE policy, GCP) and their measurements in `build/generic/fingerprints.txt`; `check`: a build against a recorded list |
 | `make-test-ca.sh` | test PKI for client certificates: root, intermediate, one short-lived client certificate per role |
