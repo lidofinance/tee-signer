@@ -467,6 +467,9 @@ The KMS key policy takes these PCRs. `scripts/kms-policy.sh` renders it from
 the build, so a new image means a new rendered policy and a new key policy on
 the KMS key (or `prev_pcrs` during a rollover).
 
+Approve PCRs only from your own reproducible build; `scripts/eif-check.sh`
+is a second check, not a substitute.
+
 ## Graviton (arm64)
 
 The documented node is a `c6g.large` (Graviton, 2 vCPUs) in `eu-central-1`.
