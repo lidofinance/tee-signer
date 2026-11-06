@@ -390,7 +390,12 @@ func (u *Updates) reconcileLocked(now uint64) {
 	u.lastNow = now
 	u.logSt = u.opt.Log.State()
 	u.view = u.compute(u.logSt, now)
-	u.next = nextDue(u.view.state)
+	next := nextDue(u.view.state)
+	if next < u.next && u.signer != nil {
+		// TS-TIME-01: guards taken so far end at the old next time.
+		u.signer.Invalidate()
+	}
+	u.next = next
 	u.pruneLocked()
 	if u.signer == nil || u.stuck != nil {
 		return

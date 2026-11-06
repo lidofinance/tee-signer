@@ -1,10 +1,12 @@
 package server
 
 import (
+	"errors"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	wireadmin "github.com/lidofinance/tee-signer/signer-protocol/wire/admin"
 )
@@ -60,5 +62,30 @@ func TestSignAcrossEffectiveTimeUsesTheValuesInForce(t *testing.T) {
 	}
 	if err := e.register(x); err != nil {
 		t.Fatalf("the new fee recipient: %v", err)
+	}
+}
+
+// TS-TIME-01: a registration guarded while no update was pending must not
+// sign under the values an update accepted later replaces once it is in
+// force, even if no reconcile ran in between.
+func TestGuardBeforeAcceptEndsAtTheNewEffectiveTime(t *testing.T) {
+	e := newEnv(t, u64(0))
+	old := e.setup.Locked.AllowedFeeRecipients[0]
+	g, err := e.upd.beforeSign()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := e.body(locked, 1, e.groupHash(locked), e.now()+10)
+	b.Locked.AllowedFeeRecipients = []backend.Address{x}
+	e.mustSend(signed(t, b, first2, nil), wireadmin.ConfigAccepted)
+	e.clock.add(10)
+	m := &backend.ValidatorRegistration{FeeRecipient: old, GasLimit: 36_000_000, Timestamp: e.now(), Pubkey: e.pk}
+	cfg := e.signer.Config()
+	d, err := cfg.MessageDomain(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.signer.SignGuarded(backend.SignRequest{Pubkey: e.pk, Message: m, Domain: d}, g); !errors.Is(err, core.ErrConfigMoved) {
+		t.Fatalf("a guard taken before the update was accepted: %v, want ErrConfigMoved", err)
 	}
 }

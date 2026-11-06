@@ -448,6 +448,14 @@ func (s *Signer) SetPolicy(p Policy) error {
 	return nil
 }
 
+// Invalidate counts as a config change: every Guard taken before it fails
+// SignGuarded. A caller whose next update time moved earlier calls it.
+func (s *Signer) Invalidate() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.gen++
+}
+
 // Generation is the number of config changes the signer took so far.
 func (s *Signer) Generation() uint64 {
 	s.mu.Lock()
