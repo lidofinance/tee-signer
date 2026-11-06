@@ -525,6 +525,38 @@ func TestBodyCopiedBeforeHalfRetention(t *testing.T) {
 	}
 }
 
+// SLSTATE-01: an object with the body's bytes already under the next copy
+// name may be older than the refresh. Refresh skips it and writes a new
+// copy, so the copy time in the record is that of a new object.
+func TestBodyCopySkipsAnOlderIdenticalObject(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_800_000_000, 0)
+	s := testSetup("s")
+	l := &memLog{objs: map[string][][]byte{}}
+	m, _ := New(l, "s", testKey(1), Options{Setup: s, Clock: clockAt(&now), Log: quiet})
+	if _, _, err := m.Claim(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	u := openUpdate(t, 2, 5)
+	_, _, h, err := m.PutBody(ctx, u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := m.State()
+	st.Open = GroupState{Version: 2, Hash: h}
+	if err := m.SetState(ctx, st); err != nil {
+		t.Fatal(err)
+	}
+	l.objs[BodyName(s.Hash, setupwire.GroupOpen, 2, 2)] = [][]byte{bytes.Clone(u)}
+	now = now.Add(s.Retention()/2 - time.Hour)
+	if err := m.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := l.objs[BodyName(s.Hash, setupwire.GroupOpen, 2, 3)]; !ok {
+		t.Fatal("Refresh took the object already under copy 2 as its new copy")
+	}
+}
+
 // Two updates stored before either state is written: writing the first
 // state keeps the second body, so its state can follow (supersede).
 func TestBodiesKeptUntilNamed(t *testing.T) {

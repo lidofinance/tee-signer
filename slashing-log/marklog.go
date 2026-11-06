@@ -1054,7 +1054,7 @@ func (m *MarkLog) PutBody(ctx context.Context, raw []byte) (setupwire.Group, uin
 }
 
 // writeCopyLocked writes raw as copy n of body k, from n on, skipping names
-// that hold other objects.
+// that hold any object.
 func (m *MarkLog) writeCopyLocked(ctx context.Context, k bodyKey, raw []byte, from uint32) (BodyCopy, error) {
 	now, err := m.now()
 	if err != nil {
@@ -1066,32 +1066,11 @@ func (m *MarkLog) writeCopyLocked(ctx context.Context, k bodyKey, raw []byte, fr
 		}
 		name := BodyName(m.setup, k.g, k.v, n)
 		err := m.log.Create(ctx, name, raw)
-		if errors.Is(err, ErrExists) {
-			es, lerr := m.log.List(ctx, name)
-			if lerr != nil {
-				return BodyCopy{}, fmt.Errorf("markstore: body copy %s exists and cannot be read back: %w", name, lerr)
-			}
-			ours := false
-			for _, e := range es {
-				if e.Name != name {
-					continue
-				}
-				b, gerr := m.log.Get(ctx, e)
-				if gerr != nil && !errors.Is(gerr, ErrNotFound) {
-					return BodyCopy{}, fmt.Errorf("markstore: body copy %s exists and cannot be read back: %w", name, gerr)
-				}
-				ours = ours || bytes.Equal(b, raw)
-			}
-			if !ours {
-				m.opt.Log.Warn("mark log: body name taken by another object; skipping it", "name", name)
-				continue
-			}
-			err = nil // our own write; its reply was lost
-		}
-		if errors.Is(err, ErrHidden) {
-			// Another object hides under the name: a copy needs a name
-			// that holds this body only.
-			m.opt.Log.Warn("mark log: body name holds a hidden object; skipping it", "name", name, "err", err)
+		if errors.Is(err, ErrExists) || errors.Is(err, ErrHidden) {
+			// A copy needs a new object: one already under the name, even
+			// with these bytes, may be older than this copy's time
+			// (SLSTATE-01), and a hidden one may hold other bytes.
+			m.opt.Log.Warn("mark log: body name taken; skipping it", "name", name, "err", err)
 			continue
 		}
 		if err != nil {
