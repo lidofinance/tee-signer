@@ -5,9 +5,10 @@ import (
 	"time"
 )
 
-// frameTimeout bounds the read of one frame once its first byte is in: a
-// peer that declares a frame and stalls loses the connection
-// (ATTEST-BUDGET-01). A variable so a test can shorten it.
+// frameTimeout bounds the read of one frame once its first byte is in, and
+// the write of each answer: a peer that declares a frame and stalls, or
+// stops reading the answer, loses the connection (ATTEST-BUDGET-01,
+// TEE-BUDGET-02). A variable so a test can shorten it.
 var frameTimeout = 30 * time.Second
 
 // frameConn sets the read deadlines of a connection's frames and counts
