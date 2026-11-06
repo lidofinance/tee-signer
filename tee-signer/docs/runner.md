@@ -29,9 +29,15 @@ the platforms of the tags it was built with:
 | `debugimport` | | plaintext `IMPORT_SHARE`, `-allow-import`, and the fake-hardware options of the Azure and Nitro tests. Never in an image. |
 | `nonprod`, `chain_hoodi`, `chain_devnet`, `chain_ci_test` | | a non-prod build of that chain (below) |
 
-Every binary also holds the embedded root certificates
-(`golang.org/x/crypto/x509roots/fallback`), because the images have no CA
-bundle.
+The images have no CA bundle, and the runner does not use one. Each cloud
+client trusts its provider's roots only (`platform/cloudroots`): Amazon
+Root CA 1 to 4 and Starfield Services Root G2 for KMS, STS and S3; GTS
+Root R1, R3 and R4 for STS, IAM credentials, Cloud KMS and GCS; DigiCert
+Global Root G2 and G3 and Microsoft's RSA and ECC roots of 2017 for MAA,
+Key Vault (and its release JWS) and Blob storage. The coarse clock adds
+the NTS operators' roots, for its one host outside the cloud. A cloud
+moving to a root outside its list needs a new image
+([upgrade](../../docs/upgrade.md#a-cloud-moves-to-a-new-tls-root)).
 
 `scripts/build-runner.sh` builds these binaries for x86_64 and aarch64:
 
@@ -51,10 +57,10 @@ it. A binary built with no platform tag refuses to start. Without
 `-platform`, the only platform of the binary runs (dev, if it has several).
 
 `scripts/check-deps.sh` fails if a build links a package of another cloud,
-or a third-party module that is not on the allow list of its own cloud. In
-the Azure, GCP and dev builds that list holds the embedded roots only. It
-also reads the binaries (`go version -m`): their tags and linked modules
-must be the expected ones. `build-runner.sh` runs it.
+or a third-party module that is not on the allow list of its own cloud. The
+Azure, GCP and dev builds link no third-party module. It also reads the
+binaries (`go version -m`): their tags and linked modules must be the
+expected ones. `build-runner.sh` runs it.
 
 ### The chain switch
 

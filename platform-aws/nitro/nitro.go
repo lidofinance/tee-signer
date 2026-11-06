@@ -35,6 +35,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
@@ -55,6 +56,7 @@ import (
 	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/platform-aws/hostagent/agentclient"
 	"github.com/lidofinance/tee-signer/platform-aws/udprelay/relayclient"
+	"github.com/lidofinance/tee-signer/platform/cloudroots"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/transport"
 	"github.com/lidofinance/tee-signer/trusted-time/clock"
@@ -68,7 +70,8 @@ const sharePrefix = "shares/"
 
 // ProxyClient returns an HTTP client whose connections to each host:port
 // in routes go to the given vsock (or other transport) address, where
-// vsock-proxy forwards them. TLS still runs end to end inside the enclave.
+// vsock-proxy forwards them. TLS still runs end to end inside the enclave,
+// and trusts AWS's roots only (cloudroots).
 func ProxyClient(routes map[string]transport.Addr) *http.Client {
 	tr := &http.Transport{
 		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
@@ -80,6 +83,7 @@ func ProxyClient(routes map[string]transport.Addr) *http.Client {
 		},
 		ForceAttemptHTTP2:   true,
 		TLSHandshakeTimeout: 10 * time.Second,
+		TLSClientConfig:     &tls.Config{RootCAs: cloudroots.Pool(cloudroots.AWS)},
 	}
 	return &http.Client{Transport: tr, Timeout: 30 * time.Second}
 }

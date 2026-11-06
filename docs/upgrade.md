@@ -76,6 +76,16 @@ required for Nitro on a prod chain. A new image refuses format 4 setups.
    ([signer-admin/README.md](../signer-admin/README.md#splitting-existing-keys),
    "Splitting existing keys", steps 1 to 4).
 
+## A cloud moves to a new TLS root
+
+The runner trusts a few roots per cloud, listed in
+`platform/cloudroots`. If a cloud moves its KMS, STS, Key Vault, MAA or
+storage endpoints to a root outside that list, those calls fail at the
+TLS handshake: mark writes stop, so the signer stops signing, and it
+cannot start again. Clouds announce such moves months ahead. Add the
+root's PEM, its SHA-256 and its source to `platform/cloudroots`, and roll
+out the new image as below before the move.
+
 ## Rules
 
 - Keep k of n signers up. Switch one signer at a time, and finish it

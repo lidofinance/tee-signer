@@ -15,6 +15,7 @@ require (
 require (
 	github.com/lidofinance/tee-signer/devkit v0.0.0
 	github.com/lidofinance/tee-signer/governance v0.0.0
+	github.com/lidofinance/tee-signer/platform v0.0.0
 	github.com/lidofinance/tee-signer/signer-admin v0.0.0
 	github.com/lidofinance/tee-signer/signer-protocol v0.0.0
 )

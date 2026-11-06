@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -15,6 +16,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/lidofinance/tee-signer/platform/cloudroots"
 )
 
 // KeySet holds the RSA signing keys of one token issuer by key id.
@@ -167,6 +170,9 @@ func httpGet(ctx context.Context, client *http.Client, url string) ([]byte, erro
 	// on the URL (checkJWKSURI) would mean nothing if the answer could come
 	// from elsewhere.
 	c := *client
+	if err := pinIssuerRoots(&c, url); err != nil {
+		return nil, err
+	}
 	c.CheckRedirect = func(r *http.Request, via []*http.Request) error {
 		first := via[0].URL
 		if r.URL.Scheme != first.Scheme || hostPort(r.URL) != hostPort(first) {
@@ -197,6 +203,49 @@ func httpGet(ctx context.Context, client *http.Client, url string) ([]byte, erro
 		return nil, fmt.Errorf("attest: %s: %s", url, resp.Status)
 	}
 	return b, nil
+}
+
+// issuerRoots are the TLS roots for a key set host of a cloud token
+// issuer: Google's for Confidential Space (*.googleapis.com), Azure's for
+// MAA (*.attest.azure.net). nil for any other host.
+func issuerRoots(host string) *x509.CertPool {
+	host = strings.ToLower(host)
+	switch {
+	case strings.HasSuffix(host, ".googleapis.com"):
+		return cloudroots.Pool(cloudroots.Google)
+	case strings.HasSuffix(host, ".attest.azure.net"):
+		return cloudroots.Pool(cloudroots.Azure)
+	}
+	return nil
+}
+
+// pinIssuerRoots makes c trust only the issuer's roots when rawURL is on
+// a cloud issuer's host. A transport other than *http.Transport is the
+// caller's own and stays as it is.
+func pinIssuerRoots(c *http.Client, rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return err
+	}
+	roots := issuerRoots(u.Hostname())
+	if roots == nil {
+		return nil
+	}
+	var t *http.Transport
+	switch rt := c.Transport.(type) {
+	case nil:
+		t = http.DefaultTransport.(*http.Transport).Clone()
+	case *http.Transport:
+		t = rt.Clone()
+	default:
+		return nil
+	}
+	if t.TLSClientConfig == nil {
+		t.TLSClientConfig = &tls.Config{}
+	}
+	t.TLSClientConfig.RootCAs = roots
+	c.Transport = t
+	return nil
 }
 
 // FetchJWKS downloads and parses a key set over HTTPS.

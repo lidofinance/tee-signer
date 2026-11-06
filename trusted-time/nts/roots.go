@@ -65,27 +65,36 @@ var PublicServers = []Server{
 // its pinned hash.
 func RootPool(files []string) (*x509.CertPool, error) {
 	pool := x509.NewCertPool()
+	if err := AddRoots(pool, files); err != nil {
+		return nil, err
+	}
+	return pool, nil
+}
+
+// AddRoots adds the named root files to pool, each checked against its
+// pinned hash.
+func AddRoots(pool *x509.CertPool, files []string) error {
 	for _, name := range files {
 		want, ok := rootSHA256[name]
 		if !ok {
-			return nil, fmt.Errorf("nts: no pinned root %q", name)
+			return fmt.Errorf("nts: no pinned root %q", name)
 		}
 		data, err := rootFiles.ReadFile("roots/" + name)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		block, _ := pem.Decode(data)
 		if block == nil || block.Type != "CERTIFICATE" {
-			return nil, fmt.Errorf("nts: roots/%s is not a PEM certificate", name)
+			return fmt.Errorf("nts: roots/%s is not a PEM certificate", name)
 		}
 		if sum := sha256.Sum256(block.Bytes); hex.EncodeToString(sum[:]) != want {
-			return nil, fmt.Errorf("nts: roots/%s has sha256 %x, pinned %s", name, sum, want)
+			return fmt.Errorf("nts: roots/%s has sha256 %x, pinned %s", name, sum, want)
 		}
 		cert, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
-			return nil, fmt.Errorf("nts: roots/%s: %w", name, err)
+			return fmt.Errorf("nts: roots/%s: %w", name, err)
 		}
 		pool.AddCert(cert)
 	}
-	return pool, nil
+	return nil
 }

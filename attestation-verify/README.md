@@ -150,6 +150,9 @@ cl, err := c.New() // refuses a bad or incomplete configuration
   connection and kept for one hour. A token under an unknown key id causes
   one new fetch, at most every 30 seconds. After an hour a failed fetch
   fails the verification. These numbers are choices, not measurements.
+  A fetch from `*.attest.azure.net` trusts Azure's TLS roots only, and one
+  from `*.googleapis.com` Google's (`platform/cloudroots`), unless the
+  caller's client has a transport of its own.
 
 Command line (`cmd/attest-verify`), prints the verified fields as JSON,
 exit 0 verified, 1 refused, 2 usage:
