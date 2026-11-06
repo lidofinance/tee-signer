@@ -407,6 +407,46 @@ func TestShareWriteLostReplyLanded(t *testing.T) {
 	}
 }
 
+// A share write whose log record lands but whose reply is lost: the
+// runner stores no share, the log's next record carries the set before
+// (markstore.RecordShareSet keeps it), and the next start loads that set.
+func TestShareWriteLogReplyLost(t *testing.T) {
+	e := newTgtEnv(t, "dev", nil)
+	_, pkb, _ := historyPair(t, e)
+	before := e.marks.ShareSet()
+	skc, pkc := newKey(t)
+	e.loseShareRecord = true
+	if err := e.importSealed(pkc, skc, 7, nil); err == nil {
+		t.Fatal("an import whose log reply was lost succeeded")
+	}
+	if e.loseShareRecord {
+		t.Fatal("no record with a pending share set root was written")
+	}
+	if n := e.store.putsOf(shareKey(pkc)); n != 0 {
+		t.Fatalf("the share was stored %d times after the log error", n)
+	}
+	if got := e.marks.ShareSet(); got == nil || got.Pending != nil || got.Current != before.Current {
+		t.Fatalf("the next record would carry %+v, want %+v", got, before)
+	}
+	recs := e.records()
+	if sh := recs[len(recs)-1].Shares; sh == nil || sh.Pending == nil {
+		t.Fatalf("the record that landed carries %+v, want a pending root", sh)
+	}
+	e.clock.add(4 * testEpoch)
+	en := e.signer.EpochAt(e.now())
+	if err := e.signMsg(pkb, vote(en-1, en)); err != nil {
+		t.Fatal(err)
+	}
+	recs = e.records()
+	if sh := recs[len(recs)-1].Shares; sh == nil || sh.Pending != nil || sh.Current != before.Current {
+		t.Fatalf("the next record carries %+v, want %+v", sh, before)
+	}
+	e.restart()
+	if n := len(e.signer.Keys()); n != 2 || e.loadErr != nil || !e.recordOf(pkb).History {
+		t.Fatalf("after a restart: %d keys loaded, err %v", n, e.loadErr)
+	}
+}
+
 // B's record (with history) is stored and vouched for. The operator
 // removes every share, and B is imported again without history; that
 // store write fails. The host puts the old records back: the next start

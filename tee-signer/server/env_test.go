@@ -73,6 +73,10 @@ type tgtEnv struct {
 	// logDelay, if set, is the time each call to the mark log's store
 	// takes, as a remote store's round trip.
 	logDelay time.Duration
+	// loseShareRecord: the next record with a pending share set root
+	// lands, but its write answers with a timeout, as a lost reply. Not
+	// with lockDays.
+	loseShareRecord bool
 }
 
 // slowLog is a mark log store whose calls take delay each.
@@ -94,6 +98,22 @@ func (l slowLog) List(ctx context.Context, prefix string) ([]markstore.Entry, er
 func (l slowLog) Get(ctx context.Context, e markstore.Entry) ([]byte, error) {
 	time.Sleep(l.delay)
 	return l.Log.Get(ctx, e)
+}
+
+// lostShareReplyLog is the test env's file log that loses the reply of
+// the record e.loseShareRecord names.
+type lostShareReplyLog struct {
+	*markstore.FileLog
+	e *tgtEnv
+}
+
+func (l lostShareReplyLog) Create(ctx context.Context, name string, data []byte) error {
+	err := l.FileLog.Create(ctx, name, data)
+	if r, perr := markstore.Parse(data); err == nil && perr == nil && l.e.loseShareRecord && r.Shares != nil && r.Shares.Pending != nil {
+		l.e.loseShareRecord = false
+		return context.DeadlineExceeded
+	}
+	return err
 }
 
 // lockedFileLog is the test env's file log with the lock it reports.
@@ -166,7 +186,7 @@ func (e *tgtEnv) start() {
 	if e.fl, err = markstore.NewFileLog(filepath.Join(e.dir, "marks")); err != nil {
 		t.Fatal(err)
 	}
-	var l markstore.Log = e.fl
+	var l markstore.Log = lostShareReplyLog{FileLog: e.fl, e: e}
 	if e.lockDays > 0 {
 		l = lockedFileLog{FileLog: e.fl, e: e}
 	}

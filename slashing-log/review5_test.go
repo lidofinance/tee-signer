@@ -103,3 +103,54 @@ func TestSetStateLostReplyKept(t *testing.T) {
 		t.Fatalf("after a restart: open %+v, want %+v", got.Open, st.Open)
 	}
 }
+
+// RecordShareSet keeps the set before after an error, also when the record
+// landed and only its reply was lost: no caller stores a share after that
+// error, so the next record writes back the set the store holds. This pins
+// that SetState's lost-reply handling (SETUP-STATE-01) does not belong here.
+func TestRecordShareSetLostReplyKeepsSetBefore(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_800_000_000, 0)
+	l := &lostReplyLog{memLog: &memLog{objs: map[string][][]byte{}}}
+	opt := Options{Setup: testSetup("s"), Clock: clockAt(&now), Log: quiet}
+	m, _ := New(l, "s", testKey(1), opt)
+	if _, _, err := m.Claim(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	a := &ShareSet{Current: [32]byte{0xa}}
+	b := &ShareSet{Current: [32]byte{0xa}, Pending: &[32]byte{0xb}}
+	if err := m.RecordShareSet(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	l.lose = true
+	if err := m.RecordShareSet(ctx, b); err == nil {
+		t.Fatal("the lost reply did not reach RecordShareSet")
+	}
+	if got := m.ShareSet(); !sameShares(got, a) {
+		t.Fatalf("after the lost reply the next record carries %+v, want %+v", got, a)
+	}
+	claimed := func(l Log) *ShareSet {
+		t.Helper()
+		m2, _ := New(l, "s", testKey(1), opt)
+		if _, _, err := m2.Claim(ctx, true); err != nil {
+			t.Fatal(err)
+		}
+		return m2.ShareSet()
+	}
+	// A restart before the next record reads the record that landed.
+	snap := &memLog{objs: map[string][][]byte{}}
+	for k, v := range l.objs {
+		snap.objs[k] = append([][]byte(nil), v...)
+	}
+	if got := claimed(snap); !sameShares(got, b) {
+		t.Fatalf("a restart before the next record reads %+v, want %+v", got, b)
+	}
+	now = now.Add(time.Second)
+	if err := m.Append(ctx, mark(11)); err != nil {
+		t.Fatal(err)
+	}
+	if got := claimed(l); !sameShares(got, a) {
+		t.Fatalf("after the next record the log holds %+v, want %+v", got, a)
+	}
+}
