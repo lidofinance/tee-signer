@@ -91,20 +91,27 @@ CHAIN=<chain> CHAIN_JSON=chain.json SETUP_FILE=signer-3.bin CONFIRM=yes platform
 
 ## Hardware: default and production
 
-`HARDWARE=amd-sev` is the default (`n2d-highcpu-2`, hwmodel `GCP_AMD_SEV`),
-for tests. Azure runs on AMD SEV-SNP, so a GCP signer on AMD puts two of the
-three shares on one chip family.
+`HARDWARE=intel-tdx` (`c3-highcpu-4`, hwmodel `GCP_INTEL_TDX`) is the
+default on a prod `CHAIN`. Production must run on it, so that no chip family
+holds two of the three shares. The verifier accepts every hwmodel on its
+list, so production lists `GCP_INTEL_TDX` only. With `mainnet` set the
+client refuses any other hwmodel in `gcp_hwmodels`.
 
-Production must run on Intel TDX (`HARDWARE=intel-tdx`, `c3-highcpu-4`,
-hwmodel `GCP_INTEL_TDX`), so that no chip family holds two of the three
-shares. The verifier accepts every hwmodel on its list, so production lists
-`GCP_INTEL_TDX` only. Google's supported-configurations page names
-`c3-standard-*` for TDX and does not name `c3-highcpu-*`. Check that before a
-production deploy, or set `MACHINE`. The settings sit in `common.sh`, in the
-WIF condition that `deploy.sh wif-create` writes, and in the file that
+`HARDWARE=amd-sev` (`n2d-highcpu-2`, hwmodel `GCP_AMD_SEV`) is for tests on
+a non-prod `CHAIN` (hoodi, devnet, ci-test) and is the default there; the
+scripts refuse it on a prod chain. Azure runs on AMD SEV-SNP, so a GCP
+signer on AMD puts two of the three shares on one chip family. Keep the
+`HARDWARE` a signer was deployed with: `provider-update` with another value
+moves the WIF condition to the other hwmodel, and the running VM no longer
+gets the key. The `provider-update` gate names the hwmodel.
+
+Google's supported-configurations page names `c3-standard-*` for TDX and
+does not name `c3-highcpu-*`. Check that before a production deploy, or set
+`MACHINE`. The settings sit in `common.sh`, in the WIF condition that
+`deploy.sh wif-create` writes, and in the file that
 `deploy.sh verifier-config` writes.
 
-| Setting | `amd-sev` (default, tests) | `intel-tdx` (production) |
+| Setting | `amd-sev` (non-prod default) | `intel-tdx` (prod default) |
 | --- | --- | --- |
 | Hardware | AMD SEV, Milan | Intel TDX |
 | Machine | `n2d-highcpu-2` (2 vCPU, 2 GiB) | `c3-highcpu-4` (see above) |
@@ -619,7 +626,8 @@ assumes the launcher's log is named `confidential-space-launcher`).
   `gcp_hwmodels` to `GCP_INTEL_TDX` only, so one chip family never holds two
   shares, and run `HARDWARE=intel-tdx deploy.sh`. The verifier accepts every
   model on the list, so a list that names an AMD model would let a runner on
-  AMD hardware pass. The default `amd-sev` setting does not meet that.
+  AMD hardware pass. With `mainnet` set the client refuses such a list, and
+  the scripts refuse `HARDWARE=amd-sev` on a prod chain.
 - The setup's mark log is the clone protection; the runner has no other
   clone guard.
 - Whether the value of a `tee-env-` variable appears in the token does not

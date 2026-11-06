@@ -34,7 +34,8 @@ import (
 //     azure-maa or aws-nitro client needs it.
 //   - With mainnet set, a gcp-cs client needs gcp_project_id and
 //     gcp_service_account. GCP has no key rule hash, so these tie the
-//     runner to the operator's project.
+//     runner to the operator's project. Its gcp_hwmodels must be
+//     GCP_INTEL_TDX only (gcp_cs.go).
 //   - With mainnet set, the dev verifier is refused. It accepts an unsigned
 //     document, so it proves nothing about the runner that holds the
 //     share. Package runnerclient also refuses a runner whose certificate

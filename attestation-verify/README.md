@@ -83,7 +83,7 @@ cl, err := c.New() // refuses a bad or incomplete configuration
   |---|---|---|
   | `azure-maa` | `maa_host`, `cce_policy_sha256` | `compliance_status` (default `azure-compliant-uvm`) |
   | `aws-nitro` | `nitro_pcrs`: PCR0, PCR1 and PCR2 by index, 96 hex digits each (`{"0": "...", "1": "...", "2": "..."}`) | more PCRs (3 for the parent role, 8 for the EIF signing certificate), `nitro_root_sha256` |
-  | `gcp-cs` | `gcp_image_digest` (`sha256:` and 64 hex digits), `gcp_audience`, `gcp_hwmodels` (for example `GCP_AMD_SEV`, `GCP_INTEL_TDX`) | `gcp_issuer` (default `https://confidentialcomputing.googleapis.com`), `gcp_jwks_file` (a pinned key set instead of the issuer's), `gcp_service_account`, `gcp_project_id` (both required with `mainnet`) |
+  | `gcp-cs` | `gcp_image_digest` (`sha256:` and 64 hex digits), `gcp_audience`, `gcp_hwmodels` (for example `GCP_AMD_SEV`, `GCP_INTEL_TDX`; with `mainnet` set, any model other than `GCP_INTEL_TDX` is refused) | `gcp_issuer` (default `https://confidentialcomputing.googleapis.com`), `gcp_jwks_file` (a pinned key set instead of the issuer's), `gcp_service_account`, `gcp_project_id` (both required with `mainnet`) |
 
   The command line tools take the same settings as flags: `-nitro-pcr
   INDEX=HEX` and `-gcp-hwmodel NAME`, both repeated, `-nitro-root-sha256`,
@@ -140,7 +140,8 @@ cl, err := c.New() // refuses a bad or incomplete configuration
   SEV-SNP, AWS Nitro, GCP) set `gcp_hwmodels` to `GCP_INTEL_TDX` only
   (`-gcp-hwmodel GCP_INTEL_TDX`), so one chip family never holds two
   shares. The verifier accepts every model on the list, so a list that
-  names an AMD model would let a GCP runner on AMD hardware pass.
+  names an AMD model would let a GCP runner on AMD hardware pass. With
+  `mainnet` set, any model other than `GCP_INTEL_TDX` is refused.
 - On each connection it runs the handshake with the client certificate,
   IDENTITY with a fresh nonce, the verifier, and the check that the
   identity's TLS key hash is the key the handshake presented (signer-protocol/docs/protocol.md,

@@ -10,11 +10,13 @@
 #            subnet and rules and the teardown list deletes them
 #   switch   PREV_IMAGE_DIGEST: the WIF condition takes both digests;
 #            the VM metadata keeps tee-restart-policy=OnFailure
+#   hardware intel-tdx by default on a prod chain, amd-sev on a non-prod
+#            chain; the provider-update gate names the hwmodel
 #   refused  entry sources with the public entry, a private firewall rule
 #            without sources, an address for a private VM, bad names and
 #            addresses, a subnet-create on the running signer's subnet, a
 #            bad previous digest, wif-create and provider-update without
-#            a valid runner.digest
+#            a valid runner.digest, amd-sev on mainnet
 #
 # deploy.sh runs in a copy of the repo's scripts and cloud folders with a
 # fake gcloud that records its arguments, as in side-by-side-test.sh, so no
@@ -54,7 +56,7 @@ ln -s gcp "$work/build/gcp-ci-test"
 DEPLOY="$work/platform-gcp/deploy/deploy.sh"
 base=(-u SIGNER_BUILD_OVERLAY_DIR -u NETWORK_ENTRY -u PRIVATE_IP -u ENTRY_SOURCE_RANGES -u ENTRY_SOURCE_TAGS
   -u SUBNET -u SUBNET_RANGE -u NET_TAG -u FW_RULE -u FW_EGRESS_ALLOW -u FW_EGRESS_DENY -u CONFIRM
-  -u PREV_IMAGE_DIGEST
+  -u PREV_IMAGE_DIGEST -u HARDWARE
   MARK_STORE=gcs:bucket=signer-marks-2 PATH="$work/bin:$PATH")
 dep() { env "${base[@]}" "$@"; }
 # A private second signer with a subnet, tag and rules of its own.
@@ -143,6 +145,24 @@ has "--attribute-condition=assertion.swname == 'CONFIDENTIAL_SPACE'" "$(cat "$wo
 p="$(dep bash "$DEPLOY" plan 2>&1)"
 has "~tee-restart-policy=OnFailure~" "$p" && ok "restart policy OnFailure" || bad "restart policy: $(grep -o 'tee-restart-policy=[A-Za-z]*' <<<"$p")"
 
+# ---- hardware ---------------------------------------------------------------
+p="$(dep CHAIN=mainnet bash "$DEPLOY" plan 2>&1)"
+has "assertion.hwmodel == 'GCP_INTEL_TDX'" "$p" && has "--confidential-compute-type=TDX" "$p" && ! has "GCP_AMD_SEV" "$p" &&
+  ok "HARDWARE unset: intel-tdx, the WIF condition pins GCP_INTEL_TDX" || bad "HARDWARE unset: $(grep -E 'Hardware|hwmodel' <<<"$p")"
+p="$(dep HARDWARE=amd-sev CHAIN=ci-test bash "$DEPLOY" plan 2>&1)"
+has "assertion.hwmodel == 'GCP_AMD_SEV'" "$p" && ok "HARDWARE=amd-sev on a non-prod chain" || bad "amd-sev on ci-test: $(grep -E 'Hardware|hwmodel|gcp:' <<<"$p")"
+# A non-prod run without HARDWARE keeps amd-sev, so it does not move the WIF
+# condition of a running AMD signer to GCP_INTEL_TDX.
+p="$(dep CHAIN=ci-test bash "$DEPLOY" plan 2>&1)"
+has "assertion.hwmodel == 'GCP_AMD_SEV'" "$p" && ! has "GCP_INTEL_TDX'" "$p" &&
+  ok "HARDWARE unset on a non-prod chain: amd-sev" || bad "HARDWARE unset on ci-test: $(grep -E 'Hardware|hwmodel' <<<"$p")"
+p="$(dep HARDWARE=intel-tdx CHAIN=ci-test bash "$DEPLOY" plan 2>&1)"
+has "assertion.hwmodel == 'GCP_INTEL_TDX'" "$p" && ok "HARDWARE=intel-tdx on a non-prod chain" || bad "intel-tdx on ci-test: $(grep -E 'Hardware|hwmodel' <<<"$p")"
+: >"$work/gcloud.calls"
+run_rc dep CHAIN=ci-test bash "$DEPLOY" provider-update </dev/null
+[ "$rc" = 3 ] && has "on hardware GCP_AMD_SEV" "$out" && [ ! -s "$work/gcloud.calls" ] && ok "provider-update gate names the hwmodel" || bad "provider-update gate: rc $rc $out"
+: >"$work/gcloud.calls"
+
 # ---- refused ----------------------------------------------------------------
 refused() { # refused WHAT PATTERN ENV... -- CMD
   local what="$1" pat="$2" envs=()
@@ -166,6 +186,9 @@ refused "a bad NET_TAG" "NET_TAG=Signer_Tag is not" NET_TAG=Signer_Tag -- plan
 refused "an unknown entry without an overlay" "NETWORK_ENTRY must be public or private" NETWORK_ENTRY=example -- plan
 refused "subnet-create on the running signer's subnet" "is the running signer's" VM=signer-node-2 -- subnet-create
 refused "a bad PREV_IMAGE_DIGEST" "PREV_IMAGE_DIGEST=sha256:abc is not" PREV_IMAGE_DIGEST=sha256:abc -- provider-update
+refused "amd-sev on mainnet" "HARDWARE=amd-sev is for a non-prod CHAIN" HARDWARE=amd-sev CHAIN=mainnet -- plan
+refused "amd-sev on mainnet, wif-create" "HARDWARE=amd-sev is for a non-prod CHAIN" HARDWARE=amd-sev CHAIN=mainnet -- wif-create
+refused "an unknown HARDWARE" "HARDWARE must be intel-tdx or amd-sev" HARDWARE=amd-sev-snp CHAIN=ci-test -- plan
 
 # A missing or malformed runner.digest stops wif-create and provider-update
 # before any gcloud call, so no condition with an empty digest goes out.

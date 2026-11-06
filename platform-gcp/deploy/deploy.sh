@@ -57,7 +57,8 @@
 #                 picks its chain config)
 #   OPERATOR_IP   public IPv4 address of the machine that runs the signing client
 #                 (firewall-create; one address, /32)
-#   HARDWARE      amd-sev (default, THIS TEST ONLY) or intel-tdx (production)
+#   HARDWARE      intel-tdx (default on a prod CHAIN) or amd-sev (non-prod
+#                 CHAIN only, its default)
 #   NETWORK_ENTRY public (default) or private (common.sh). The build overlay
 #                 (SIGNER_BUILD_OVERLAY_DIR) adds its entries, their
 #                 settings and commands
@@ -379,7 +380,7 @@ cmd_provider_update() {
   # Once on its own: inside $(...) a failed check would not stop the step.
   image_digest >/dev/null
   cond="$(attribute_condition)"
-  gate provider-update "after a rebuild: provider $WIF_PROVIDER takes $(digests_text)"
+  gate provider-update "after a rebuild: provider $WIF_PROVIDER takes $(digests_text) on hardware $GCP_HWMODELS"
   run gcloud iam workload-identity-pools providers update-oidc "$WIF_PROVIDER" --location=global \
     --workload-identity-pool="$WIF_POOL" --attribute-condition="$cond" --project="$PROJECT_ID"
 }
