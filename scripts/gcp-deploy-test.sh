@@ -13,7 +13,8 @@
 #   refused  entry sources with the public entry, a private firewall rule
 #            without sources, an address for a private VM, bad names and
 #            addresses, a subnet-create on the running signer's subnet, a
-#            bad previous digest
+#            bad previous digest, wif-create and provider-update without
+#            a valid runner.digest
 #
 # deploy.sh runs in a copy of the repo's scripts and cloud folders with a
 # fake gcloud that records its arguments, as in side-by-side-test.sh, so no
@@ -165,6 +166,16 @@ refused "a bad NET_TAG" "NET_TAG=Signer_Tag is not" NET_TAG=Signer_Tag -- plan
 refused "an unknown entry without an overlay" "NETWORK_ENTRY must be public or private" NETWORK_ENTRY=example -- plan
 refused "subnet-create on the running signer's subnet" "is the running signer's" VM=signer-node-2 -- subnet-create
 refused "a bad PREV_IMAGE_DIGEST" "PREV_IMAGE_DIGEST=sha256:abc is not" PREV_IMAGE_DIGEST=sha256:abc -- provider-update
+
+# A missing or malformed runner.digest stops wif-create and provider-update
+# before any gcloud call, so no condition with an empty digest goes out.
+mv "$work/build/gcp/runner.digest" "$work/runner.digest.keep"
+refused "provider-update without runner.digest" "runner.digest: run" -- provider-update
+refused "wif-create without runner.digest" "runner.digest: run" -- wif-create
+echo sha256:abc >"$work/build/gcp/runner.digest"
+refused "provider-update with a malformed runner.digest" "does not hold a sha256 digest" -- provider-update
+refused "wif-create with a malformed runner.digest" "does not hold a sha256 digest" -- wif-create
+mv "$work/runner.digest.keep" "$work/build/gcp/runner.digest"
 
 [ "$fail" = 0 ] || exit 1
 echo "gcp-deploy-test: all cases as expected"
