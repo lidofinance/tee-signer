@@ -1,5 +1,6 @@
-// Package gcp is the Google Cloud Confidential Space platform. UNTESTED:
-// it compiles; nothing ran in a Confidential Space VM.
+// Package gcp is the Google Cloud Confidential Space platform. It ran in
+// Confidential Space VMs on AMD SEV and, on 2026-11-06, on Intel TDX
+// (c3-standard-4).
 //
 // Flows (sources in platform-gcp/deploy/README.md):
 //

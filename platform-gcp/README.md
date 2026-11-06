@@ -4,7 +4,7 @@
 > Not audited. Not for production or mainnet funds. Interfaces and formats will
 > change without notice.
 
-GCP Confidential Space: the platform (`gcp`: attestation token, workload identity federation, Cloud KMS) and the mark log on a Cloud Storage bucket with Bucket Lock and object versioning (`gcslog`). The platform compiles and its tests pass, but it has not run in a Confidential Space VM yet.
+GCP Confidential Space: the platform (`gcp`: attestation token, workload identity federation, Cloud KMS) and the mark log on a Cloud Storage bucket with Bucket Lock and object versioning (`gcslog`). It ran in Confidential Space VMs on AMD SEV and on Intel TDX (`c3-standard-4`).
 
 Deploy files: [deploy/](deploy/README.md).
 

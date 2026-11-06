@@ -95,19 +95,19 @@ CHAIN=<chain> CHAIN_JSON=chain.json SETUP_FILE=signer-3.bin CONFIRM=yes platform
 for tests. Azure runs on AMD SEV-SNP, so a GCP signer on AMD puts two of the
 three shares on one chip family.
 
-Production must run on Intel TDX (`HARDWARE=intel-tdx`, `c3-highcpu-4`,
+Production must run on Intel TDX (`HARDWARE=intel-tdx`, `c3-standard-4`,
 hwmodel `GCP_INTEL_TDX`), so that no chip family holds two of the three
 shares. The verifier accepts every hwmodel on its list, so production lists
-`GCP_INTEL_TDX` only. Google's supported-configurations page names
-`c3-standard-*` for TDX and does not name `c3-highcpu-*`. Check that before a
-production deploy, or set `MACHINE`. The settings sit in `common.sh`, in the
-WIF condition that `deploy.sh wif-create` writes, and in the file that
-`deploy.sh verifier-config` writes.
+`GCP_INTEL_TDX` only. GCP offers TDX on `c3-standard-*`, not on
+`c3-highcpu-*`; `c3-standard-4` is the smallest C3 TDX shape (tested on
+2026-11-06). Set `MACHINE` for a larger one. The settings sit in
+`common.sh`, in the WIF condition that `deploy.sh wif-create` writes, and in
+the file that `deploy.sh verifier-config` writes.
 
 | Setting | `amd-sev` (default, tests) | `intel-tdx` (production) |
 | --- | --- | --- |
 | Hardware | AMD SEV, Milan | Intel TDX |
-| Machine | `n2d-highcpu-2` (2 vCPU, 2 GiB) | `c3-highcpu-4` (see above) |
+| Machine | `n2d-highcpu-2` (2 vCPU, 2 GiB) | `c3-standard-4` (4 vCPU, 16 GiB) |
 | `--confidential-compute-type` | `SEV` | `TDX` |
 | Maintenance policy | `MIGRATE` (live migration, N2D with SEV only) | `TERMINATE` |
 | `gcp_hwmodels` | `["GCP_AMD_SEV"]` | `["GCP_INTEL_TDX"]` |
