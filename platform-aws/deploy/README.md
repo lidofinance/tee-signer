@@ -273,12 +273,16 @@ create and read objects under `marks/` and `config/`, set each new object's
 retention (`s3:PutObjectRetention`, see "Mark log"), list versions and read
 the Object Lock configuration (the runner's lock check needs
 `s3:GetBucketObjectLockConfiguration`); the parent role is denied every
-write. The policy also refuses a put under `marks/` or `config/` that names
-no retention or less than `mark_min_lock_days` days. `mark_min_lock_days`
-has no default and is required with `mark_bucket`: set it to the lowest
-`slashing_log_min_lock_days` of the setups that write to the bucket, never
-higher, or S3 refuses the runner's writes. AWS does not document how it
-rounds a part day, so the policy refuses fewer than
+write. No principal but the writer user may put objects, retention or
+replicas under `marks/` and `config/`, the account's root user and admins
+included: objects planted under a signer's path can stop its mark writes
+for `slashing_log_min_lock_days`. A principal that can change the bucket
+policy can still lift this. The policy also refuses a put under `marks/` or
+`config/` that names no retention or less than `mark_min_lock_days` days.
+`mark_min_lock_days` has no default and is required with `mark_bucket`: set
+it to the lowest `slashing_log_min_lock_days` of the setups that write to
+the bucket, never higher, or S3 refuses the runner's writes. AWS does not
+document how it rounds a part day, so the policy refuses fewer than
 `mark_min_lock_days` + 1 remaining days and the runner adds a day and an
 hour to its retention.
 Apply this policy only after every signer that writes to the bucket runs
