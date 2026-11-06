@@ -61,3 +61,45 @@ func TestReview5R7OwnLostReplyReadAsClone(t *testing.T) {
 		t.Errorf("the runner's own record latched %v: no slashable signing until a restart", lost)
 	}
 }
+
+// SETUP-STATE-01: a config state whose record lands but whose reply is
+// lost stays the log's state. The next record must not write the state
+// before it on top, and a restart reads it.
+func TestSetStateLostReplyKept(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_800_000_000, 0)
+	s := testSetup("s")
+	l := &lostReplyLog{memLog: &memLog{objs: map[string][][]byte{}}}
+	opt := Options{Setup: s, Clock: clockAt(&now), Log: quiet}
+	m, _ := New(l, "s", testKey(1), opt)
+	if _, _, err := m.Claim(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Append(ctx, mark(10)); err != nil {
+		t.Fatal(err)
+	}
+	_, _, h, err := m.PutBody(ctx, openUpdate(t, 1, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := m.State()
+	st.Open.Pending = &Pending{Version: 1, Hash: h, EffectiveAt: uint64(now.Unix()) + 3600}
+	l.lose = true
+	if err := m.SetState(ctx, st); err == nil {
+		t.Fatal("the lost reply did not reach SetState")
+	}
+	now = now.Add(time.Second)
+	if err := m.Append(ctx, mark(11)); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.State(); !got.Equal(st) {
+		t.Fatalf("after the next record: open %+v, want %+v", got.Open, st.Open)
+	}
+	m2, _ := New(l, "s", testKey(1), opt)
+	if _, _, err := m2.Claim(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := m2.State(); !got.Equal(st) {
+		t.Fatalf("after a restart: open %+v, want %+v", got.Open, st.Open)
+	}
+}

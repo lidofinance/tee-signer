@@ -1106,7 +1106,8 @@ func (m *MarkLog) writeCopyLocked(ctx context.Context, k bodyKey, raw []byte, fr
 // new pending update, an update that became active, or a pending one
 // replaced or dropped. Every update st names past version 0 must have its
 // body in the log first (PutBody, or read at Claim). A group's active
-// version never goes down, and version 0 is the setup's.
+// version never goes down, and version 0 is the setup's. After a failed
+// write st is the log's state all the same.
 func (m *MarkLog) SetState(ctx context.Context, st ConfigState) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1141,10 +1142,11 @@ func (m *MarkLog) SetState(ctx context.Context, st ConfigState) error {
 			return fmt.Errorf("markstore: %s version %d: the body is not in the log (PutBody first)", ref.key.g, ref.key.v)
 		}
 	}
-	old := m.state
+	// st stays after an error: its record may have landed with the reply
+	// lost (SETUP-STATE-01), and the next record writes st again, not the
+	// state before it.
 	m.state = st.Clone()
 	if err := m.appendLocked(ctx, m.mark); err != nil {
-		m.state = old
 		return err
 	}
 	m.pruneBodiesLocked()
