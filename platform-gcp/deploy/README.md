@@ -99,8 +99,11 @@ client refuses any other hwmodel in `gcp_hwmodels`.
 
 `HARDWARE=amd-sev` (`n2d-highcpu-2`, hwmodel `GCP_AMD_SEV`) is for tests on
 a non-prod `CHAIN` (hoodi, devnet, ci-test) and is the default there; the
-scripts refuse it on a prod chain. Azure runs on AMD SEV-SNP, so a GCP
-signer on AMD puts two of the three shares on one chip family. Keep the
+scripts refuse it on a prod chain. `GCP_AMD_SEV` is SEV without SNP: it
+encrypts guest memory but does not protect its integrity, so the host can
+replay or remap encrypted pages. TDX protects integrity. Also, Azure runs
+on AMD SEV-SNP, so a GCP signer on AMD puts two of the three shares on one
+chip family. Keep the
 `HARDWARE` a signer was deployed with: `provider-update` with another value
 moves the WIF condition to the other hwmodel, and the running VM no longer
 gets the key. The `provider-update` gate names the hwmodel.
