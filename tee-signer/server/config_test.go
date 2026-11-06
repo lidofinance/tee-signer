@@ -854,6 +854,27 @@ func TestConfigUpdateSlotTimes(t *testing.T) {
 	}
 }
 
+// SETUP-HORIZON-01: a slot time change at the earliest epoch the rule
+// takes, applied an epoch after its effective time, still goes into the
+// core: nothing signed after that time, so the runner keeps signing.
+func TestConfigUpdateSlotTimesAppliedLate(t *testing.T) {
+	e := newEnv(t, u64(3600))
+	t0 := e.now()
+	eT := (t0 + 3600 - testGenesis) / testEpoch
+	b := e.body(locked, 1, e.groupHash(locked), t0)
+	b.Locked.SlotTimeChanges = []setupwire.SlotTimeChange{{Epoch: eT + 4, SecondsPerSlot: 4}}
+	b.Locked.AllowedFeeRecipients = append(b.Locked.AllowedFeeRecipients, x)
+	e.mustSend(signed(t, b, first2, nil), wireadmin.ConfigAccepted)
+	e.clock.add(3600 + testEpoch)
+	if err := e.register(x); err != nil {
+		t.Fatalf("after a late apply: %v", err)
+	}
+	want := []core.SlotTimeChange{{Epoch: eT + 4, SecondsPerSlot: 4}}
+	if got := e.signer.Config().SlotTimeChanges; !slices.Equal(got, want) {
+		t.Fatalf("slot times in the core: %+v", got)
+	}
+}
+
 // A slot time change pending, then a fork update: the fork rule counts
 // epochs under the pending slot times too. 1 s slots from epoch 1079
 // (pending, in force at epoch 1075) bring the clock to epoch 1505 by

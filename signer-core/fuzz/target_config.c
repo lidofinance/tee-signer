@@ -161,19 +161,24 @@ static void do_slot_times(sc_signer *s, const sc_config *cfg, sc_slot_times *tim
 {
     sc_slot_times next, held;
     uint64_t activate_at = fz_near(in, g_now), lim, ts[2 * SC_MAX_SLOT_TIMES + 8];
-    int rc, n = 0;
+    int rc, rc_set, n = 0;
 
     fz_slot_times(&next, in);
     rc = sc_signer_check_slot_times(s, &next, activate_at);
     FUZZ_CHECK(rc == SC_OK || rc == SC_ERR_ARG || rc == SC_ERR_SCHEDULE);
     if (next.count > SC_MAX_SLOT_TIMES)
         FUZZ_CHECK(rc == SC_ERR_ARG);
-    FUZZ_CHECK(sc_signer_set_slot_times(s, &next, activate_at) == rc);
-    if (rc != SC_OK)
+    /* A set with activate_at counts the clock only as far as a signing call
+     * read it, and nothing signs here: only a schedule refusal may differ. */
+    rc_set = sc_signer_set_slot_times(s, &next, activate_at);
+    if (rc != SC_ERR_SCHEDULE || !activate_at)
+        FUZZ_CHECK(rc_set == rc);
+    if (rc_set != SC_OK)
         return;
     sc_signer_get_slot_times(s, &held);
     FUZZ_CHECK(held.count == next.count);
-    lim = rule_limit(cfg, times, NULL, 0, activate_at);
+    lim = activate_at ? sat_add(sat_add(sc_epoch_at(cfg, times, activate_at), cfg->max_epochs_ahead), 1)
+                      : rule_limit(cfg, times, NULL, 0, 0);
     /* Times up to the start of epoch lim + 1 under the old list. */
     ts[n++] = g_now;
     ts[n++] = activate_at;

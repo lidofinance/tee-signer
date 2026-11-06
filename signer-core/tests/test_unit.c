@@ -3388,6 +3388,22 @@ static void test_slot_times(void)
     h.fail_clock = 1;
     CHECK_RC(sc_signer_check_slot_times(r, &t, 0), SC_ERR_CLOCK);
     h.fail_clock = 0;
+
+    /* SETUP-HORIZON-01: a change checked for activate_at at the start of
+     * epoch E + 1 and set two epochs late still goes in when no signing call
+     * read the clock after activate_at; once one did, it does not. */
+    set_epoch(&h, E);
+    sc_signer *late = new_signer(&h, &cfg, 4, 0);
+    const uint64_t at = g + (E + 1) * EPOCH_SECONDS;
+    t = slot_times2(E + 5, 6, 0, 0);
+    CHECK_RC(sc_signer_check_slot_times(late, &t, at), SC_OK);
+    set_epoch(&h, E + 3);
+    CHECK_RC(sc_signer_check_slot_times(late, &t, at), SC_ERR_SCHEDULE);
+    CHECK_RC(sc_signer_set_slot_times(late, &t, at), SC_OK);
+    sc_signer *used = new_signer(&h, &cfg, 4, 0);
+    vkeys ku = add_validator(used, 24, 2003);
+    CHECK_RC(sc_sign_randao_reveal(used, ku.pk, E + 3, sig), SC_OK);
+    CHECK_RC(sc_signer_set_slot_times(used, &t, at), SC_ERR_SCHEDULE);
 }
 
 /*

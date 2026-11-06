@@ -335,7 +335,8 @@ func (s *Signer) CheckSlotTimes(next []SlotTimeChange, activateAt uint64) error 
 // SetSlotTimes replaces the signer's slot time changes with next, in force
 // from activateAt (unix seconds, 0 for now), through the core's rule
 // (sc_signer_set_slot_times): every epoch up to epoch(max(activateAt, now))
-// + MaxEpochsAhead + 1 must keep its slot time, or the result is a
+// + MaxEpochsAhead + 1 must keep its slot time, now being the latest clock
+// reading of a signing call when activateAt is set, or the result is a
 // *backend.RefusedError with StatusSchedule and nothing changes. The clock
 // horizon follows the new slot times at once; before activateAt both give
 // the same clock for every epoch the signer may sign.

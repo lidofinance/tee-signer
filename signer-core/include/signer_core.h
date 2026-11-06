@@ -769,12 +769,15 @@ int sc_signer_init_ext(void *mem, size_t mem_len, uint32_t max_validators,
  * changes in force, so the first epoch whose slot time changes is at least
  * epoch(T) + max_epochs_ahead + 2. Before T the signer signs no epoch past
  * epoch(T) + max_epochs_ahead, and both lists give the same clock for every
- * one of those epochs. Loaded validators and their slashing state stay.
+ * one of those epochs. With a non-zero activate_at, sc_signer_set_slot_times
+ * takes for the clock the latest reading of a signing call, so a change set
+ * after activate_at is held to the epochs the signer signed before it. Loaded
+ * validators and their slashing state stay.
  *
  * SC_OK: replaced. SC_ERR_SCHEDULE: the rule refused next. SC_ERR_ARG: next
  * fails sc_slot_times_check. SC_ERR_CLOCK: the clock failed. On any error
- * nothing changes. sc_signer_check_slot_times makes the same checks and
- * changes nothing.
+ * nothing changes. sc_signer_check_slot_times makes the same checks with the
+ * trusted clock and changes nothing.
  */
 int sc_signer_check_slot_times(const sc_signer *s, const sc_slot_times *next, uint64_t activate_at);
 int sc_signer_set_slot_times(sc_signer *s, const sc_slot_times *next, uint64_t activate_at);
