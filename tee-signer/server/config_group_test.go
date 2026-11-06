@@ -1,3 +1,5 @@
+//go:build !debugimport
+
 package server
 
 import (
