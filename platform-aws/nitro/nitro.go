@@ -44,6 +44,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -236,6 +237,9 @@ type Keys struct {
 	// Setup is setup_hash, in the context of every call but the record
 	// credentials'. Zero on the flag path.
 	Setup [32]byte
+	// CreationDate is the setup's sealing_key_release.kms_key_creation_date
+	// in Unix seconds; 0 when the setup has none (off prod only).
+	CreationDate int64
 }
 
 func (k Keys) setupHex() string { return hex.EncodeToString(k.Setup[:]) }
@@ -289,6 +293,13 @@ func (k Keys) KeyRule(ctx context.Context) (platform.KeyRule, string, error) {
 		return platform.KeyRule{}, "", fmt.Errorf("%w: %s resolves to %s, outside account %s in %s", errWrongKey, k.KeyID, arn, want.account, want.region)
 	case want.resource == "key" && arn != k.KeyID:
 		return platform.KeyRule{}, "", fmt.Errorf("%w: DescribeKey of %s answered %s", errWrongKey, k.KeyID, arn)
+	}
+	// AWS-KMS-02: the approvers checked in CloudTrail that the key with
+	// this creation date was created locked. A key locked after a mutable
+	// phase, or another key under the alias, has another date.
+	if k.CreationDate != 0 && (m.CreationDate == nil || m.CreationDate.Unix() != k.CreationDate) {
+		return platform.KeyRule{}, "", fmt.Errorf("%w: %s has CreationDate %s, the setup pins kms_key_creation_date %s",
+			errWrongKey, arn, aws.ToTime(m.CreationDate).UTC().Format(time.RFC3339), time.Unix(k.CreationDate, 0).UTC().Format(time.RFC3339))
 	}
 	p, err := k.Client.GetKeyPolicy(ctx, &kms.GetKeyPolicyInput{KeyId: aws.String(arn), PolicyName: aws.String("default")})
 	if err != nil {
@@ -359,7 +370,8 @@ func checkKeyID(id, region string) (keyARN, error) {
 // (platform.Options.ReadKeyRule) and returns it with the key ID every
 // later call uses: the ARN DescribeKey answered, or keys.KeyID when the
 // read did not get that far or did not run (the flag path). A kms_key_id
-// that errWrongKey refuses stops the start on every chain.
+// that errWrongKey refuses stops the start on every chain, and so does a
+// pinned kms_key_creation_date that the read could not compare.
 func readKeyRule(ctx context.Context, o platform.Options, keys Keys) (*platform.KeyRule, string, error) {
 	id := keys.KeyID
 	var wrong error
@@ -367,6 +379,12 @@ func readKeyRule(ctx context.Context, o platform.Options, keys Keys) (*platform.
 		r, arn, err := keys.KeyRule(ctx)
 		if errors.Is(err, errWrongKey) {
 			wrong = err
+		}
+		// arn is set only once the creation date compare has passed. An
+		// error before it leaves a pinned date unchecked, and that must
+		// stop the start off prod too, not count as an unread rule.
+		if err != nil && arn == "" && keys.CreationDate != 0 && wrong == nil {
+			wrong = fmt.Errorf("%w: kms_key_creation_date is pinned but DescribeKey gave no answer to compare: %v", errWrongKey, err)
 		}
 		if arn != "" {
 			id = arn
@@ -583,6 +601,7 @@ func (k Keys) OpenKey(ctx context.Context, blob, aad []byte) ([]byte, error) {
 //	agent=vsock:3:7101                       host agent (store + credentials)
 //	region=eu-west-1                         KMS region
 //	kms_key_id=arn:aws:kms:...               key whose policy checks the PCRs
+//	kms_key_creation_date=1793895285         the key's CreationDate (optional)
 //	proxy=kms.eu-west-1.amazonaws.com:443=vsock:3:8000[,host:port=addr...]
 //	                                         also the NTS-KE hosts, port 4460
 //	ntp_relay=vsock:3:7102                   the UDP relay on the parent, for
@@ -625,6 +644,11 @@ func New(o platform.Options) (*platform.Platform, error) {
 	seen := &platform.ImageSeen{}
 	keys := &Keys{Client: client, KeyID: keyID, Setup: o.SetupHash,
 		Recipient: func() (*rsa.PrivateKey, *types.RecipientInfo, error) { return kmsRecipient(n, seen) }}
+	if s := o.Param("kms_key_creation_date", ""); s != "" {
+		if keys.CreationDate, err = strconv.ParseInt(s, 10, 64); err != nil || keys.CreationDate <= 0 {
+			return fail(fmt.Errorf("nitro: kms_key_creation_date %q is not Unix seconds", s))
+		}
+	}
 
 	// key_release_hash and the lock, read before the sealing key is made or
 	// opened. On mainnet a key policy someone can still change stops the

@@ -28,6 +28,9 @@ type keyPolicyKMS struct {
 	grantKeyIDs         []string // the KeyId of each ListGrants call
 	policyKeyIDs        []string // the KeyId of each GetKeyPolicy call
 	dropMarker          bool     // a truncated page without NextMarker
+	created             float64  // CreationDate, epoch seconds; 0: left out
+	describeFail        bool     // DescribeKey answers a 500
+	noARN               bool     // DescribeKey answers without Arn
 }
 
 // isAlias reports whether a KeyId names an alias: GetKeyPolicy and
@@ -48,8 +51,20 @@ func (f *keyPolicyKMS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/x-amz-json-1.1")
 	switch r.Header.Get("X-Amz-Target") {
 	case "TrentService.DescribeKey":
-		json.NewEncoder(w).Encode(map[string]any{"KeyMetadata": map[string]any{"Arn": f.arn, "KeyId": in.KeyId,
-			"Origin": f.origin, "KeyManager": "CUSTOMER", "MultiRegion": f.multiRegion, "KeyState": "Enabled"}})
+		if f.describeFail {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"__type": "KMSInternalException", "message": "internal"})
+			return
+		}
+		m := map[string]any{"Arn": f.arn, "KeyId": in.KeyId,
+			"Origin": f.origin, "KeyManager": "CUSTOMER", "MultiRegion": f.multiRegion, "KeyState": "Enabled"}
+		if f.noARN {
+			delete(m, "Arn")
+		}
+		if f.created != 0 {
+			m["CreationDate"] = f.created
+		}
+		json.NewEncoder(w).Encode(map[string]any{"KeyMetadata": m})
 	case "TrentService.GetKeyPolicy":
 		f.policyKeyIDs = append(f.policyKeyIDs, in.KeyId)
 		if isAlias(in.KeyId) {

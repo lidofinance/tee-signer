@@ -150,6 +150,7 @@ func TestStoredChangeDelayBelowFloorDecodes(t *testing.T) {
 		s := samples(t)["setup-nitro"]
 		s.Chain.GenesisForkVersion = chain
 		s.Locked.ChangeDelaySeconds = u64p(0)
+		s.Platform.SealingKeyRelease.KMSKeyCreationDate = testCreationDate
 		raw := rawSetup(s)
 		got, err := DecodeSetup(raw)
 		if err != nil {

@@ -521,7 +521,9 @@ func TestPlantedBlobWithPlantedShareIsReportedStored(t *testing.T) {
 // (AWS-KMS-02): with key_policy_locked the admin gets no kms:PutKeyPolicy
 // and KMS is told to accept a policy nobody can change. The variable has
 // no default, so an existing key is never locked by a plan that did not
-// ask for it. The rest of the locked policy is the template's, which
+// ask for it. Each value of the flag has its own key resource, selected by
+// count, so a change of the flag replaces the key and never locks one in
+// place. The rest of the locked policy is the template's, which
 // TestPolicyTemplateWithoutPutKeyPolicyLocked runs through the lock check.
 func TestTerraformKeyCanBeCreatedLocked(t *testing.T) {
 	for _, name := range []string{"main.tf", filepath.Join("target", "main.tf")} {
@@ -533,6 +535,8 @@ func TestTerraformKeyCanBeCreatedLocked(t *testing.T) {
 		for _, want := range []string{
 			`bypass_policy_lockout_safety_check = var.key_policy_locked`,
 			`var.key_policy_locked ? [] : ["kms:PutKeyPolicy", "kms:ScheduleKeyDeletion"]`,
+			`count               = var.key_policy_locked ? 0 : 1`,
+			`count               = var.key_policy_locked ? 1 : 0`,
 		} {
 			if strings.Count(tf, want) != 1 {
 				t.Errorf("%s: want %s once", name, want)

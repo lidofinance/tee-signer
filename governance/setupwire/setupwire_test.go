@@ -110,11 +110,12 @@ func TestDecodeSetupBytes(t *testing.T) {
 		want string
 	}{
 		{"kind", set(0, 'X'), "not a setup"},
-		{"format 0", set(1, 0), "setup format 0, want 4"},
-		{"format 1 (before signing_mode)", set(1, 1), "setup format 1, want 4"},
-		{"format 2 (with the exit approval fields)", set(1, 2), "setup format 2, want 4"},
-		{"format 3 (with peer_attestation_hosts)", set(1, 3), "setup format 3, want 4"},
-		{"format 5", set(1, 5), "setup format 5, want 4"},
+		{"format 0", set(1, 0), "setup format 0, want 5"},
+		{"format 1 (before signing_mode)", set(1, 1), "setup format 1, want 5"},
+		{"format 2 (with the exit approval fields)", set(1, 2), "setup format 2, want 5"},
+		{"format 3 (with peer_attestation_hosts)", set(1, 3), "setup format 3, want 5"},
+		{"format 4 (without kms_key_creation_date)", set(1, 4), "setup format 4, want 5"},
+		{"format 6", set(1, 6), "setup format 6, want 5"},
 		{"empty signer name", set(o.private, 0), "signer_name is empty"},
 		{"oversize", append(slices.Clone(b), make([]byte, MaxSetup)...), "at most 65536"},
 		{"empty", nil, "short"},

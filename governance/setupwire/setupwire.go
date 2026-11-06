@@ -26,7 +26,7 @@
 //
 //	setup    = 'S' public public_salts locked locked_salts open open_salts
 //	           platform_salt[32] private
-//	public   = setup_format_version:u8(4) cluster_id[32] handover_generation:u64
+//	public   = setup_format_version:u8(5) cluster_id[32] handover_generation:u64
 //	           chain safety max_keys:u32 slashing_log_min_lock_days:u32
 //	           signing_mode:u8
 //	chain    = genesis_validators_root[32] genesis_fork_version[4] genesis_time:u64
@@ -49,7 +49,7 @@
 //	store    = nitro: bucket:str region:str
 //	           | azure: account:str container:str subscription:str resource_group:str
 //	           | gcp: bucket:str | dev: dir:str
-//	sealing_key_release = nitro: region:str kms_key_id:str
+//	sealing_key_release = nitro: region:str kms_key_id:str has:u8 [kms_key_creation_date:u64]
 //	           | azure: maa_endpoint:str akv_endpoint:str kid:str
 //	           | gcp: wif_provider:str kms_key:str attest_audience:str no_lock_accepted:u8
 //	                  unsafe_single_key_accepted:u8
@@ -93,7 +93,9 @@ const (
 	// exit_approvals_needed).
 	// Format 4 dropped peer_attestation_hosts, the last field of the
 	// private part.
-	FormatVersion = 4
+	// Format 5 added sealing_key_release.kms_key_creation_date to the
+	// Nitro key release.
+	FormatVersion = 5
 
 	kindSetup  = 'S'
 	kindBody   = 'B'
@@ -126,6 +128,10 @@ const (
 	// a longer one could never pass the runner's lock check.
 	MaxLockDays = 36500
 )
+
+// MaxKMSKeyCreationDate is 9999-12-31T23:59:59Z, the last time the text
+// form (RFC 3339) can write.
+const MaxKMSKeyCreationDate = 253402300799
 
 // MaxPlatformPrivate caps the private part, the bytes platform_commitment
 // covers. The attestation circuits hash it with a fixed bound (MAX_PRIVATE
@@ -369,6 +375,15 @@ type KeyRelease struct {
 	// must (Check, CheckThresholdOn): see UnsafeSingleKeyWarning.
 	// signer-admin setup sets it with -allow-gcp-unsafe-single-key.
 	UnsafeSingleKeyAccepted bool
+	// KMSKeyCreationDate (Nitro only,
+	// sealing_key_release.kms_key_creation_date): the key's CreationDate
+	// as KMS DescribeKey gives it, in Unix seconds; 0 when absent. The
+	// approvers check in CloudTrail that the key was created with its
+	// final locked policy and pin that creation here, so a key that had a
+	// mutable phase, or another key under the same alias, has another
+	// date and the runner does not start (AWS-KMS-02). Required on a prod
+	// chain (CheckValues).
+	KMSKeyCreationDate uint64
 }
 
 // Image is an entry of the allowed-images list.
@@ -892,6 +907,10 @@ func writeKeyRelease(w *writer, p Platform, k *KeyRelease) {
 	case PlatformNitro:
 		w.str(k.Region)
 		w.str(k.KMSKeyID)
+		w.flag(k.KMSKeyCreationDate != 0)
+		if k.KMSKeyCreationDate != 0 {
+			w.u64(k.KMSKeyCreationDate)
+		}
 	case PlatformAzure:
 		w.str(k.MAAEndpoint)
 		w.str(k.AKVEndpoint)
@@ -910,6 +929,9 @@ func readKeyRelease(r *reader, p Platform, k *KeyRelease) {
 	case PlatformNitro:
 		k.Region = r.str("sealing_key_release.region")
 		k.KMSKeyID = r.str("sealing_key_release.kms_key_id")
+		if r.flag("sealing_key_release.kms_key_creation_date presence") {
+			k.KMSKeyCreationDate = r.u64()
+		}
 	case PlatformAzure:
 		k.MAAEndpoint = r.str("sealing_key_release.maa_endpoint")
 		k.AKVEndpoint = r.str("sealing_key_release.akv_endpoint")
@@ -1148,6 +1170,9 @@ func (s *Setup) CheckValues() error {
 	if err := s.Platform.Check(); err != nil {
 		return err
 	}
+	if s.Platform.Platform == PlatformNitro && s.Platform.SealingKeyRelease.KMSKeyCreationDate == 0 && s.Chain.Prod() {
+		return errors.New("setup: a prod chain on nitro needs sealing_key_release.kms_key_creation_date, the CreationDate of a KMS key the approvers checked in CloudTrail was created locked (platform-aws/deploy/README.md)")
+	}
 	// The acceptance of a key held alone means nothing in a threshold
 	// setup, whose runner refuses every 1 of 1 order.
 	if s.Platform.SealingKeyRelease.UnsafeSingleKeyAccepted && s.SigningMode != SigningModeSingle {
@@ -1342,6 +1367,12 @@ func (k *KeyRelease) check(p Platform) error {
 	}
 	if k.UnsafeSingleKeyAccepted && p != PlatformGCP {
 		errs = append(errs, fmt.Errorf("sealing_key_release.unsafe_single_key_accepted does not apply to %s: only GCP has a key rule without a lock", p))
+	}
+	if k.KMSKeyCreationDate != 0 && p != PlatformNitro {
+		errs = append(errs, fmt.Errorf("sealing_key_release.kms_key_creation_date does not apply to %s", p))
+	}
+	if k.KMSKeyCreationDate > MaxKMSKeyCreationDate {
+		errs = append(errs, fmt.Errorf("sealing_key_release.kms_key_creation_date %d is after year 9999", k.KMSKeyCreationDate))
 	}
 	return firstErr("platform", errs)
 }

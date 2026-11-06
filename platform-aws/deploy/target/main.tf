@@ -34,6 +34,7 @@
 # admin role, the same values as its terraform.tfvars.
 
 terraform {
+  required_version = ">= 1.1" # moves a key made before count to [0]
   required_providers {
     aws = { source = "hashicorp/aws" }
   }
@@ -58,7 +59,7 @@ variable "pcr2" { description = "PCR2 of the target EIF" }
 variable "pcr3" { description = "PCR3 of the parent role, the running signer's value (the role does not change)" }
 variable "admin_role_arn" { description = "the role that administers the key and encrypts the record credentials" }
 variable "key_policy_locked" {
-  description = "true: create the key with its final policy, which no principal may change (no kms:PutKeyPolicy), so it never has a mutable phase (AWS-KMS-02, platform-aws/deploy/README.md). Required for a mainnet target. Once locked, the admin can never tag or untag the key, change its description or turn off its rotation, so any later Terraform change to aws_kms_key.target fails. Nobody can schedule its deletion either: the key stays until the account closes. Terraform must run as admin_role_arn. false: the admin keeps kms:PutKeyPolicy (tests, devnets)."
+  description = "true: create the key with its final policy, which no principal may change (no kms:PutKeyPolicy), so it never has a mutable phase (AWS-KMS-02, platform-aws/deploy/README.md). Required for a mainnet target. Once locked, the admin can never tag or untag the key, change its description or turn off its rotation, so any later Terraform change to aws_kms_key.target_locked fails. Nobody can schedule its deletion either: the key stays until the account closes. Terraform must run as admin_role_arn. false: the admin keeps kms:PutKeyPolicy (tests, devnets). Changing it replaces the key, as in ../main.tf."
   type        = bool
 }
 variable "parent_role_name" { default = "signer-parent" }
@@ -84,12 +85,8 @@ locals {
 
 # Keep the statements in step with ../main.tf and
 # ../kms-key-policy.json.tmpl (the template is what the lock check tests).
-resource "aws_kms_key" "target" {
-  description         = "signer-runner sealing key, enclave-only, ${var.name} (handover target)"
-  enable_key_rotation = true
-  # As in ../main.tf: a locked policy needs the lockout check bypassed.
-  bypass_policy_lockout_safety_check = var.key_policy_locked
-  policy = jsonencode({
+locals {
+  key_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
@@ -137,12 +134,51 @@ resource "aws_kms_key" "target" {
       }
     ]
   })
+  pcrs_ok = alltrue([for p in [var.pcr0, var.pcr1, var.pcr2, var.pcr3] : can(regex(local.hex96, p))])
+}
+
+# As in ../main.tf: one key resource per value of key_policy_locked, so a
+# change of the flag replaces the key.
+resource "aws_kms_key" "target" {
+  count               = var.key_policy_locked ? 0 : 1
+  description         = "signer-runner sealing key, enclave-only, ${var.name} (handover target)"
+  enable_key_rotation = true
+  policy              = local.key_policy
   lifecycle {
     precondition {
-      condition     = alltrue([for p in [var.pcr0, var.pcr1, var.pcr2, var.pcr3] : can(regex(local.hex96, p))])
+      condition     = local.pcrs_ok
       error_message = "pcr0..pcr3 must be 96 lowercase hex digits each."
     }
   }
+}
+
+resource "aws_kms_key" "target_locked" {
+  count               = var.key_policy_locked ? 1 : 0
+  description         = "signer-runner sealing key, enclave-only, ${var.name} (handover target)"
+  enable_key_rotation = true
+  # As in ../main.tf: a locked policy needs the lockout check bypassed.
+  bypass_policy_lockout_safety_check = var.key_policy_locked
+  policy                             = local.key_policy
+  # Terraform never writes the policy of this address after creation: a
+  # locked policy cannot change anyway, and a key moved here by mistake
+  # stays as it is in AWS (unlocked), which the runner's lock check refuses
+  # on a prod chain, instead of being locked in place (AWS-KMS-02).
+  lifecycle {
+    ignore_changes = [policy, bypass_policy_lockout_safety_check]
+    precondition {
+      condition     = local.pcrs_ok
+      error_message = "pcr0..pcr3 must be 96 lowercase hex digits each."
+    }
+  }
+}
+
+locals {
+  kms_key = one(concat(aws_kms_key.target, aws_kms_key.target_locked))
+}
+
+# The key's CreationDate, for sealing_key_release.kms_key_creation_date.
+data "aws_kms_key" "target" {
+  key_id = local.kms_key.arn
 }
 
 resource "aws_instance" "target" {
@@ -160,7 +196,8 @@ resource "aws_instance" "target" {
   tags = { Name = var.name }
 }
 
-output "kms_key_arn" { value = aws_kms_key.target.arn }
+output "kms_key_arn" { value = local.kms_key.arn }
+output "kms_key_creation_date" { value = data.aws_kms_key.target.creation_date }
 output "parent_role_arn" { value = data.aws_iam_role.parent.arn }
 output "instance_id" { value = var.instance ? aws_instance.target[0].id : "" }
 output "public_ip" { value = var.instance ? aws_instance.target[0].public_ip : "" }

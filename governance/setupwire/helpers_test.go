@@ -169,8 +169,9 @@ func samples(t testing.TB) map[string]*Setup {
 			SignerName: name, Platform: p, PlatformSalt: sha256.Sum256([]byte("test platform salt " + name))}
 	}
 	nitro := base("signer-1", 1, 1024, 3650, PlatformConfig{Platform: PlatformNitro,
-		SlashingLogStore:  Store{Bucket: "signer-marks", Region: "eu-west-1"},
-		SealingKeyRelease: KeyRelease{Region: "eu-west-1", KMSKeyID: "arn:aws:kms:eu-west-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab"}})
+		SlashingLogStore: Store{Bucket: "signer-marks", Region: "eu-west-1"},
+		SealingKeyRelease: KeyRelease{Region: "eu-west-1", KMSKeyID: "arn:aws:kms:eu-west-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab",
+			KMSKeyCreationDate: testCreationDate}})
 	nitro.Locked.ChangeDelaySeconds = nil
 	azStore := func() Store {
 		return Store{Account: "signermarks", Container: "marks", Subscription: "0b2c3d4e-5f60-4718-9a2b-3c4d5e6f7a8b", ResourceGroup: "signer-rg"}

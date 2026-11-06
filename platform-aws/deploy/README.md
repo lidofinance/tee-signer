@@ -186,9 +186,73 @@ SETUP=signer-2.bin platform-aws/deploy/parent-run.sh               # on the pare
   afterwards. The policy never changes again: a new image gets a new key
   (`target/main.tf`) and the shares imported again, so set `prev_pcrs` at creation if a
   rollback image should keep this key. The variable has no default.
-  Setting it to true on an existing key makes Terraform lock that key's
-  policy for good, so keep `false` for a devnet key that should stay
-  mutable.
+  Each value has its own key resource: `aws_kms_key.enclave` (unlocked)
+  and `aws_kms_key.enclave_locked`, one of them with `count = 1`. So a
+  change of the flag destroys one key and creates the other, also on the
+  first apply of this file, and never locks a key in place, which would
+  not undo its mutable phase (AWS-KMS-02). Terraform schedules the old key
+  for deletion (30 days; `aws kms cancel-key-deletion` stops it), and the
+  shares sealed under it must be imported again under the new key. Before
+  such an apply, check that the plan destroys `aws_kms_key.enclave[0]`
+  and creates `aws_kms_key.enclave_locked[0]`, and updates no key in
+  place. A key made before this split sits at `aws_kms_key.enclave`;
+  Terraform moves it to `aws_kms_key.enclave[0]` by itself, so an
+  unlocked key plans no change. A key that an older version of this file
+  created locked sits there too, and Terraform cannot tell it from an
+  unlocked one. Only for a key that was created locked, move it before
+  the first plan with this file:
+  `terraform state mv aws_kms_key.enclave 'aws_kms_key.enclave_locked[0]'`.
+  Check first that it was: the CloudTrail `CreateKey` check below, and
+  `aws kms get-key-policy --key-id ID --policy-name default --output text`
+  (the same in bash and PowerShell) must not contain `kms:PutKeyPolicy`.
+  Terraform never writes the policy of `enclave_locked` after creation
+  (`ignore_changes`), so after a correct move the plan shows no change to
+  the key. For the same reason a change of `pcr0` to `pcr2` or `prev_pcrs`
+  plans no change on `enclave_locked` and gives no warning: the old key
+  still releases to the old image only, and a new image needs a new key
+  (`target/main.tf`). An unlocked key moved there by mistake stays
+  unlocked, which the runner refuses on a prod chain. Without the move the plan
+  creates a second locked key and tries to destroy the first, which its
+  policy refuses; do not apply such a plan.
+- Flipping `key_policy_locked` destroys the old key: Terraform calls
+  `ScheduleKeyDeletion`, and once the pending window ends every share
+  sealed under that key is gone. The signer moves as a new signer, with
+  a new setup and the shares imported again
+  ([docs/upgrade.md](../../docs/upgrade.md#when-this-works)).
+  `target/main.tf` has the same pair (`aws_kms_key.target`,
+  `aws_kms_key.target_locked`).
+- The setup pins the key's creation (AWS-KMS-02). KMS shows a key's
+  current policy and its `CreationDate`, not when the policy was locked.
+  So before they sign a setup, the approvers check the key's history:
+  1. In CloudTrail (the key's region, event source `kms.amazonaws.com`),
+     the `CreateKey` event whose `responseElements.keyMetadata.arn` is the
+     key has `requestParameters.bypassPolicyLockoutSafetyCheck` set to
+     `true` and a `requestParameters.policy` that is the locked policy:
+     it passes the lock check and hashes to the `key_release_sha256` the
+     verifiers pin.
+  2. No `PutKeyPolicy` event for the key without an `errorCode` follows
+     it.
+  3. `aws kms describe-key --key-id ARN` gives a `CreationDate` at the
+     same instant, to the second, as
+     `responseElements.keyMetadata.creationDate` of that event. The CLI
+     prints a fraction and an offset (`2026-10-31T01:44:48.048000+00:00`)
+     where CloudTrail prints `2026-10-31T01:44:48Z`, so compare the first
+     19 characters, or both as Unix seconds (`date -u -d TIME +%s` in
+     bash, `([DateTimeOffset]'TIME').ToUnixTimeSeconds()` in PowerShell).
+  CloudTrail event history keeps 90 days; for an older key, read a trail
+  that has logged KMS management events since the key was created. The
+  setup then carries that time, to the second, as
+  `sealing_key_release.kms_key_creation_date` (RFC 3339, for example
+  `2026-11-05T16:14:45Z`; `terraform output kms_key_creation_date` prints
+  it; the CLI form with a fraction and `+00:00` reads the same, the
+  fraction dropped), and `setup-tool show` prints it next to `kms_key_id`.
+  At every start on a setup the runner compares it with the
+  `CreationDate` of `DescribeKey` in whole Unix seconds and stops on any
+  other key, on every chain, so a replaced key or another key under the
+  same alias does not start. It also stops when
+  `DescribeKey` fails or gives no answer to compare. A Nitro setup of a
+  prod chain must carry it; off prod it may be left out, and the runner
+  then skips the compare.
 - The routes follow from the setup over a fixed port map: KMS and STS of
   the key release region on vsock 8000 and 8001, `www.cloudflare.com` on
   8002, the mark bucket on 8004 and NTS-KE on 8005 to 8008.

@@ -142,6 +142,13 @@ func TestNitroOptionsAndRoutes(t *testing.T) {
 			t.Fatalf("option %s = %q, want %q", k, o[k], v)
 		}
 	}
+	if got := o["kms_key_creation_date"]; got != "1793895285" {
+		t.Fatalf("kms_key_creation_date = %q", got)
+	}
+	n.Wire.Platform.SealingKeyRelease.KMSKeyCreationDate = 0
+	if _, ok := n.Options()["kms_key_creation_date"]; ok {
+		t.Fatal("kms_key_creation_date set for a setup without it")
+	}
 	wantProxy := "kms.eu-west-1.amazonaws.com:443=vsock:3:8000,sts.eu-west-1.amazonaws.com:443=vsock:3:8001," +
 		"www.cloudflare.com:443=vsock:3:8002,signer-marks.s3.eu-west-1.amazonaws.com:443=vsock:3:8004," +
 		"time.cloudflare.com:4460=vsock:3:8005,nts.netnod.se:4460=vsock:3:8006,ptbtime1.ptb.de:4460=vsock:3:8007," +
@@ -149,7 +156,7 @@ func TestNitroOptionsAndRoutes(t *testing.T) {
 	if o["proxy"] != wantProxy {
 		t.Fatalf("proxy\n%s\nwant\n%s", o["proxy"], wantProxy)
 	}
-	if strings.Contains(o["proxy"], "8003") || strings.Contains(o["proxy"], "dynamodb") || len(o) != 6 {
+	if strings.Contains(o["proxy"], "8003") || strings.Contains(o["proxy"], "dynamodb") || len(o) != 7 {
 		t.Fatalf("options %v", o)
 	}
 	lines, err := NitroProxyLines(n)

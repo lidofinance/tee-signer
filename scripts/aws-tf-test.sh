@@ -10,6 +10,11 @@
 #              resources; extra_egress adds its rule after the four
 #   prev_pcrs  the key policy takes both images' PCR0 and PCR2 as lists and
 #              one PCR1 as a string when the two are equal
+#   locked     key_policy_locked = true makes the key at enclave_locked with
+#              the lockout check bypassed and none at enclave; the key's
+#              creation date reaches the kms_key_creation_date output
+#   locked_pcr_change
+#              a new pcr0 leaves the locked key's policy as it was
 #
 # The provider comes from TF_PLUGIN_DIR (a folder with
 # registry.terraform.io/hashicorp/aws/...), or terraform init downloads it
@@ -41,6 +46,12 @@ mock_provider "aws" {
   mock_resource "aws_iam_user" {
     defaults = { arn = "arn:aws:iam::111122223333:user/writer" }
   }
+  mock_resource "aws_kms_key" {
+    defaults = { arn = "arn:aws:kms:eu-west-1:111122223333:key/00000000-0000-4000-8000-000000000000" }
+  }
+  mock_data "aws_kms_key" {
+    defaults = { creation_date = "2026-11-05T16:14:45Z" }
+  }
 }
 
 variables {
@@ -65,7 +76,7 @@ run "defaults" {
     error_message = "security group or instance name changed"
   }
   assert {
-    condition     = aws_kms_key.enclave.description == "signer-runner sealing key, enclave-only" && length(coalesce(aws_kms_key.enclave.tags, {})) == 0
+    condition     = aws_kms_key.enclave[0].description == "signer-runner sealing key, enclave-only" && length(coalesce(aws_kms_key.enclave[0].tags, {})) == 0
     error_message = "key description or tags changed"
   }
   assert {
@@ -73,7 +84,7 @@ run "defaults" {
     error_message = "egress is not 443, 4460, 123 and 4123, or there is an ingress rule"
   }
   assert {
-    condition     = jsondecode(aws_kms_key.enclave.policy).Statement[2].Condition.StringEqualsIgnoreCase["kms:RecipientAttestation:PCR0"] == "$(h 1)"
+    condition     = jsondecode(aws_kms_key.enclave[0].policy).Statement[2].Condition.StringEqualsIgnoreCase["kms:RecipientAttestation:PCR0"] == "$(h 1)"
     error_message = "PCR0 is not the one value"
   }
 }
@@ -105,7 +116,7 @@ run "names" {
     error_message = "security group or instance names not used"
   }
   assert {
-    condition     = aws_kms_key.enclave.description == "node a sealing key" && aws_kms_key.enclave.tags["node"] == "a"
+    condition     = aws_kms_key.enclave[0].description == "node a sealing key" && aws_kms_key.enclave[0].tags["node"] == "a"
     error_message = "key_description or key_tags not used"
   }
   assert {
@@ -120,10 +131,41 @@ run "prev_pcrs" {
     prev_pcrs = { pcr0 = "$(h 5)", pcr1 = "$(h 2)", pcr2 = "$(h 6)" }
   }
   assert {
-    condition = (jsondecode(aws_kms_key.enclave.policy).Statement[2].Condition.StringEqualsIgnoreCase["kms:RecipientAttestation:PCR0"] == ["$(h 1)", "$(h 5)"]
-      && jsondecode(aws_kms_key.enclave.policy).Statement[2].Condition.StringEqualsIgnoreCase["kms:RecipientAttestation:PCR1"] == "$(h 2)"
-    && jsondecode(aws_kms_key.enclave.policy).Statement[2].Condition.StringEqualsIgnoreCase["kms:RecipientAttestation:PCR2"] == ["$(h 3)", "$(h 6)"])
+    condition = (jsondecode(aws_kms_key.enclave[0].policy).Statement[2].Condition.StringEqualsIgnoreCase["kms:RecipientAttestation:PCR0"] == ["$(h 1)", "$(h 5)"]
+      && jsondecode(aws_kms_key.enclave[0].policy).Statement[2].Condition.StringEqualsIgnoreCase["kms:RecipientAttestation:PCR1"] == "$(h 2)"
+    && jsondecode(aws_kms_key.enclave[0].policy).Statement[2].Condition.StringEqualsIgnoreCase["kms:RecipientAttestation:PCR2"] == ["$(h 3)", "$(h 6)"])
     error_message = "prev_pcrs not in the key policy as lists"
+  }
+}
+
+run "locked" {
+  command = apply
+  variables {
+    key_policy_locked = true
+  }
+  assert {
+    condition     = length(aws_kms_key.enclave) == 0 && length(aws_kms_key.enclave_locked) == 1 && aws_kms_key.enclave_locked[0].bypass_policy_lockout_safety_check
+    error_message = "a locked key is not at enclave_locked with the lockout check bypassed"
+  }
+  assert {
+    condition     = jsondecode(aws_kms_key.enclave_locked[0].policy).Statement[2].Condition.StringEqualsIgnoreCase["kms:RecipientAttestation:PCR0"] == "$(h 1)"
+    error_message = "PCR0 is not in the locked key's policy"
+  }
+  assert {
+    condition     = output.kms_key_creation_date == "2026-11-05T16:14:45Z"
+    error_message = "kms_key_creation_date is not the key's creation date"
+  }
+}
+
+run "locked_pcr_change" {
+  command = plan
+  variables {
+    key_policy_locked = true
+    pcr0              = "$(h 7)"
+  }
+  assert {
+    condition     = jsondecode(aws_kms_key.enclave_locked[0].policy).Statement[2].Condition.StringEqualsIgnoreCase["kms:RecipientAttestation:PCR0"] == "$(h 1)"
+    error_message = "a plan writes the policy of the locked key"
   }
 }
 EOF

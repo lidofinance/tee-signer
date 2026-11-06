@@ -40,6 +40,42 @@ the clock's restart floor epoch
 ([slashing-log/docs/marklog.md](../slashing-log/docs/marklog.md#source-gate),
 "Source gate"). The order and the rules below still apply.
 
+## A new setup format
+
+A runner image reads one setup format (`setup_format_version`) and
+refuses the others, and the format is part of `setup_hash`. So across a
+format change no signer can move on its old setup: each one moves as a
+new signer, as above.
+
+Format 5 added `sealing_key_release.kms_key_creation_date` (AWS-KMS-02),
+required for Nitro on a prod chain. A new image refuses format 4 setups.
+
+1. Build `signer-admin` and `setup-tool` from the new commit.
+2. Nitro on a prod chain: check the key's CloudTrail history
+   ([platform-aws/deploy/README.md](../platform-aws/deploy/README.md#setup),
+   "Setup", the bullet "The setup pins the key's creation"). Then add
+   `sealing_key_release.kms_key_creation_date = <terraform output
+   kms_key_creation_date>` to the signer's section. A key that fails the
+   check needs a new locked key (`target/main.tf`).
+   Nitro off prod: the date is optional. A key made with
+   `key_policy_locked = false` fails the CloudTrail check by design, so
+   skip the check. Pinning the date still binds the setup to that key.
+3. Set `setup_format_version = 5` and run
+   `signer-admin setup -out DIR FILE`. It prints each new `setup_sha256`.
+4. The approvers read each setup with `setup-tool show FILE` and approve
+   its `setup_sha256`.
+5. Put the new setups in force one signer at a time, as new signers:
+   stop the old signer and start the new one on its setup (above, and
+   "Rules" below). No locked update comes first: a locked update applies under
+   the old setup_hash, and each new setup lists the new image in its own
+   `allowed_image_measurements`.
+6. Import the shares again under new import orders. An import order names
+   the setup_hash of its target (`target_setup_hash`), so no order signed
+   for the old setup works on the new one: `approvals_needed` approvers
+   sign a new order for each signer, then `assemble` and `import`
+   ([signer-admin/README.md](../signer-admin/README.md#splitting-existing-keys),
+   "Splitting existing keys", steps 1 to 4).
+
 ## Rules
 
 - Keep k of n signers up. Switch one signer at a time, and finish it
@@ -47,8 +83,9 @@ the clock's restart floor epoch
 - Never run the old and the new image of one signer at the same time.
   They share one mark log; the second writer finds a record it did not
   write and stops.
-- Put the locked update that lists the new images in force on every
-  signer before the first switch.
+- Same setup format only: put the locked update that lists the new
+  images in force on every signer before the first switch. Across a
+  format change the new setups list them ("A new setup format").
 
 ## Downtime per signer
 

@@ -8,6 +8,10 @@ The setup and the approver rules: the setup format, approver sets, signed update
 
 Chain configs the setups and image builds use are in [chains/](chains). The real-cloud test procedure of the generic images is [docs/setup-phase-cloud-test.md](docs/setup-phase-cloud-test.md).
 
+## Setup format changes
+
+A runner image reads one setup format (`setupwire.FormatVersion`). Format 5 added `sealing_key_release.kms_key_creation_date`; every setup must be encoded again and approved again. Steps: [docs/upgrade.md](../docs/upgrade.md#a-new-setup-format), "A new setup format".
+
 Module path `github.com/lidofinance/tee-signer/governance`, with its own `go.mod`. It uses other modules of this repo only through their public packages (`scripts/check-imports.sh`).
 
 Test it on its own from the repo root: `scripts/test-modules.sh governance`.
