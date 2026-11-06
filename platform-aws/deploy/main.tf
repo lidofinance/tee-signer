@@ -54,7 +54,7 @@ variable "key_policy_locked" {
   type        = bool
 }
 variable "node_key" {
-  description = "this node's name in the record writer's user name"
+  description = "a short name for this signer node, such as node-1 or mt-a (not a key or a secret). It names the record writer user (IAM, global to the account) and the operator key pair. Each node in one account needs its own"
   default     = "node-1"
 }
 variable "entry_cidrs" {
@@ -67,7 +67,7 @@ variable "entry_port" {
   default     = 7100
 }
 variable "ssh_public_key" {
-  description = "OpenSSH public key to import as an EC2 key pair, to copy the files to the parent and run parent-run.sh. Empty: no key pair. A key pair can only be set when the instance is created."
+  description = "OpenSSH public key to import as an EC2 key pair, to copy the files to the parent and run parent-run.sh. Empty: no key pair. The instance takes its key pair only when it is created: Terraform ignores a later change of it, so setting this on a running node makes the key pair but does not install it on the parent."
   default     = ""
 }
 variable "ssh_cidrs" {
@@ -477,9 +477,13 @@ resource "aws_security_group" "node" {
 
 data "aws_subnet" "sel" { id = var.subnet_id }
 
+# Named per node_key, so a second node in the account gets its
+# own. A key pair named signer-node-operator, made by an older main.tf, is
+# replaced by one under the new name; the instance keeps its key (see
+# ignore_changes below).
 resource "aws_key_pair" "operator" {
   count      = var.ssh_public_key == "" ? 0 : 1
-  key_name   = "signer-node-operator"
+  key_name   = "signer-node-operator-${var.node_key}"
   public_key = var.ssh_public_key
 }
 
@@ -495,6 +499,12 @@ resource "aws_instance" "node" {
     http_tokens = "required" # IMDSv2, used by the host agent
   }
   tags = { Name = var.instance_name }
+  # A new key_name replaces the instance, and the parent's host store with
+  # it. EC2 reads the key pair only at launch, so a renamed or replaced key
+  # pair changes nothing on a running parent.
+  lifecycle {
+    ignore_changes = [key_name]
+  }
 }
 
 output "kms_key_arn" { value = local.kms_key.arn }
@@ -503,3 +513,4 @@ output "parent_role_arn" { value = aws_iam_role.parent.arn }
 output "instance_id" { value = aws_instance.node.id }
 output "public_ip" { value = aws_instance.node.public_ip }
 output "record_writer_user" { value = aws_iam_user.record_writer.name }
+output "key_pair_name" { value = one(aws_key_pair.operator[*].key_name) }

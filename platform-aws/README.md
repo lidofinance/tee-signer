@@ -24,6 +24,25 @@ The forwarder and the host agent can serve Prometheus metrics at `/metrics`. Bot
 
 The deploy scripts do not set these flags. To use them, add them to the `forwarder` and `hostagent` lines of `deploy/parent-run.sh`, for example `-metrics-listen 127.0.0.1:9101` and `-metrics-listen 127.0.0.1:9102 -metrics-nitro-cli nitro-cli`.
 
+The security group has no inbound rule for metrics, and none is needed. Run a collector on the parent that scrapes the loopback endpoints and pushes the samples out, for example Prometheus in agent mode (`prometheus --agent --config.file=agent.yml`):
+
+```yaml
+global:
+  scrape_interval: 30s
+  external_labels: { node: node-1 }
+scrape_configs:
+  - job_name: signer-parent
+    static_configs:
+      - targets: ["127.0.0.1:9101", "127.0.0.1:9102"]
+remote_write:
+  - url: https://metrics.example.org/api/v1/write
+    basic_auth:
+      username: node-1
+      password_file: /etc/prometheus/remote-write.pass
+```
+
+The parent's egress already allows TCP 443 to anywhere, so a receiver on 443 needs no change. A receiver on another port needs one `extra_egress` rule (`deploy/main.tf`), for example `{ description = "metrics remote write", protocol = "tcp", from_port = 9090, to_port = 9090, cidr_blocks = ["203.0.113.10/32"] }`.
+
 Forwarder:
 
 - `signer_forwarder_start_time_seconds`
