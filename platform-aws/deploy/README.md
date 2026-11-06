@@ -150,8 +150,9 @@ SETUP=signer-2.bin platform-aws/deploy/parent-run.sh               # on the pare
   `purpose=record-creds`, and every `PutKeyPolicy` reviewed. CloudTrail
   must have logged KMS management events in the key's region for the
   whole mutable phase, or the history proves nothing. With a locked
-  creation, the history to check is one `CreateKey` whose policy hashes
-  to the `key_release_sha256` the verifiers pin.
+  creation, the history to check is one `CreateKey` whose policy, in
+  canonical form (attestation-statement.md, section 5), hashes to the
+  `key_release_sha256` the verifiers pin.
 - KMS grants are eventually consistent: a grant can take some minutes to
   show in `ListGrants`, and AWS gives no upper bound. The runner reads the
   grants once at start and cannot tell a grant that is not listed yet
@@ -228,8 +229,9 @@ SETUP=signer-2.bin platform-aws/deploy/parent-run.sh               # on the pare
      the `CreateKey` event whose `responseElements.keyMetadata.arn` is the
      key has `requestParameters.bypassPolicyLockoutSafetyCheck` set to
      `true` and a `requestParameters.policy` that is the locked policy:
-     it passes the lock check and hashes to the `key_release_sha256` the
-     verifiers pin.
+     it passes the lock check and, in canonical form
+     (attestation-verify/docs/attestation-statement.md, section 5), hashes
+     to the `key_release_sha256` the verifiers pin.
   2. No `PutKeyPolicy` event for the key without an `errorCode` follows
      it.
   3. `aws kms describe-key --key-id ARN` gives a `CreationDate` at the

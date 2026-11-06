@@ -250,8 +250,11 @@ func (k Keys) setupHex() string { return hex.EncodeToString(k.Setup[:]) }
 // whether the key material came from outside KMS (Origin) and whether
 // replicas in other regions exist (MultiRegion). key_release_hash is over,
 // in order: Arn, Origin, KeyManager, MultiRegion (one byte) and the policy
-// text as KMS returns it. The lock is policyLock of the same answers, and
-// then grantLock of the key's grants (ListGrants, every page): a key with
+// in canonical form (backend.CanonicalJSON): KMS returns the members of an
+// object in varying order, so the text it returns differs between reads of
+// one policy. A policy that does not parse is an error. The lock is
+// policyLock of the same answers, and then grantLock of the key's grants
+// (ListGrants, every page): a key with
 // a listed grant is not locked, so the hash of a locked key, which leaves
 // the grants out, describes everything that releases it as far as
 // ListGrants shows (grantLock: a grant made shortly before the read may
@@ -308,12 +311,16 @@ func (k Keys) KeyRule(ctx context.Context) (platform.KeyRule, string, error) {
 	if p.Policy == nil || *p.Policy == "" {
 		return platform.KeyRule{}, arn, errors.New("nitro: GetKeyPolicy answer has no policy")
 	}
+	canon, err := backend.CanonicalJSON([]byte(*p.Policy))
+	if err != nil {
+		return platform.KeyRule{}, arn, fmt.Errorf("nitro: GetKeyPolicy answer: %w", err)
+	}
 	multi := byte(0)
 	if *m.MultiRegion {
 		multi = 1
 	}
 	r := platform.KeyRule{Hash: backend.KeyReleaseHash(backend.KeyReleaseNitro, []byte(arn), []byte(m.Origin), []byte(m.KeyManager),
-		[]byte{multi}, []byte(*p.Policy))}
+		[]byte{multi}, canon)}
 	r.Lock, r.Why = policyLock(*p.Policy, string(m.Origin), *m.MultiRegion)
 	if r.Lock != backend.KeyLockLocked {
 		return r, arn, nil

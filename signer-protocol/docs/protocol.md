@@ -339,7 +339,8 @@ key_origin: reserved[4] imported_keys:u32 reserved[32]
   log. This image does not start on a log whose state holds an order, so
   it always reports zeros. A reader refuses any other kind.
 - `key_release_hash` (context `signer-key-release-v1`): the AWS runner's
-  KMS key metadata and key policy, or the Azure runner's Key Vault release
+  KMS key metadata and key policy (in canonical JSON, since KMS returns
+  object members in varying order), or the Azure runner's Key Vault release
   policy and flags, read once at start. Zero on GCP and dev, and when the
   read failed (the runner logs why).
 - The key origin: `imported_keys`, the number of loaded keys. Every key
