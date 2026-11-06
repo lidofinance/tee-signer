@@ -4,10 +4,16 @@
 #
 #   defaults   the names of one node per account (role signer-parent, group
 #              and instance signer-node), the key's description, no key
-#              tags, four egress rules
+#              tags, four egress rules, no key pair
+#   key_pair   ssh_public_key makes signer-node-operator-node-1, the
+#              instance's key pair (a state of its own: a new instance)
+#   key_pair_later
+#              ssh_public_key on the running node of "defaults" makes the
+#              key pair and leaves the instance's key_name (no replacement)
 #   names      parent_role_name, security_group_name and _description,
 #              instance_name, key_description and key_tags reach their
-#              resources; extra_egress adds its rule after the four
+#              resources; node_key names the record writer and the key
+#              pair; extra_egress adds its rule after the four
 #   prev_pcrs  the key policy takes both images' PCR0 and PCR2 as lists and
 #              one PCR1 as a string when the two are equal
 #   locked     key_policy_locked = true makes the key at enclave_locked with
@@ -94,6 +100,33 @@ run "defaults" {
     condition     = jsondecode(aws_kms_key.enclave[0].policy).Statement[2].Condition.StringEqualsIgnoreCase["kms:RecipientAttestation:PCR0"] == "$(h 1)"
     error_message = "PCR0 is not the one value"
   }
+  assert {
+    condition     = length(aws_key_pair.operator) == 0 && output.key_pair_name == null
+    error_message = "a key pair without ssh_public_key"
+  }
+}
+
+run "key_pair" {
+  command   = apply
+  state_key = "key_pair"
+  variables {
+    ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK0000000000000000000000000000000000000000000 op"
+  }
+  assert {
+    condition     = aws_key_pair.operator[0].key_name == "signer-node-operator-node-1" && aws_instance.node.key_name == "signer-node-operator-node-1" && output.key_pair_name == "signer-node-operator-node-1"
+    error_message = "the key pair is not signer-node-operator-node-1, or not the instance's"
+  }
+}
+
+run "key_pair_later" {
+  command = plan
+  variables {
+    ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK0000000000000000000000000000000000000000000 op"
+  }
+  assert {
+    condition     = aws_key_pair.operator[0].key_name == "signer-node-operator-node-1" && aws_instance.node.key_name != "signer-node-operator-node-1"
+    error_message = "a key pair set on a running node changes the instance's key_name (which replaces it)"
+  }
 }
 
 run "names" {
@@ -106,6 +139,8 @@ run "names" {
     instance_name              = "node-a"
     key_description            = "node a sealing key"
     key_tags                   = { node = "a" }
+    node_key                   = "node-a"
+    ssh_public_key             = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK0000000000000000000000000000000000000000000 op"
     extra_egress = [{
       description = "entry"
       protocol    = "udp"
@@ -125,6 +160,10 @@ run "names" {
   assert {
     condition     = aws_kms_key.enclave[0].description == "node a sealing key" && aws_kms_key.enclave[0].tags["node"] == "a"
     error_message = "key_description or key_tags not used"
+  }
+  assert {
+    condition     = aws_key_pair.operator[0].key_name == "signer-node-operator-node-a" && aws_iam_user.record_writer.name == "signer-record-writer-node-a"
+    error_message = "node_key does not name the key pair and the record writer"
   }
   assert {
     condition     = length(aws_security_group.node.egress) == 5 && anytrue([for r in aws_security_group.node.egress : r.description == "entry" && r.protocol == "udp" && r.to_port == 65535])
