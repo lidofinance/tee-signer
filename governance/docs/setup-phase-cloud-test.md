@@ -273,7 +273,12 @@ AWS (Terraform in `<terraform-dir>`):
 1. Copy this repo's `platform-aws/deploy/main.tf` over the folder's (keep a backup).
    `generic.auto.tfvars`: `pcr0`, `pcr1`, `pcr2` from the build,
    `prev_pcrs` the PCRs of the image before it, if any (so a rollback needs
-   no policy change), `mark_bucket = "<S3_BUCKET>"`, and
+   no key policy change; a rollback to an image whose runner does not add a
+   day and an hour to its retention first needs `mark_min_lock_days`
+   lowered by 1, or the older bucket policy when it is 1, see
+   `platform-aws/deploy/README.md`), `mark_bucket = "<S3_BUCKET>"`,
+   `mark_min_lock_days` the setup's `slashing_log_min_lock_days` (the lowest
+   one if several setups write to the bucket, never higher), and
    `key_policy_locked = false`: this test's key exists and stays mutable,
    and `true` would replace it with a new locked key. A mainnet key
    is created with `true` (`platform-aws/deploy/README.md`, AWS-KMS-02).

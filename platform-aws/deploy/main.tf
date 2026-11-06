@@ -16,7 +16,9 @@
 # log is the clone protection.
 
 terraform {
-  required_version = ">= 1.1" # moves a key made before count to [0]
+  # 1.9: a validation that names another variable. 1.1 already moves a key
+  # made before count to [0].
+  required_version = ">= 1.9"
   required_providers {
     aws = { source = "hashicorp/aws" }
   }
@@ -133,6 +135,20 @@ variable "mark_bucket" {
   description = "S3 bucket of the mark log (the setups' mark_store.bucket), made outside Terraform with Object Lock and a default retention in compliance mode. When set, this file writes its bucket policy: the record writer (the enclave's credentials) may create and read records and update bodies under marks/ and config/ of any setup, give each new object its own compliance retention, list versions and read the Object Lock configuration (the runner's lock check); the parent role writes nothing; plain HTTP is refused. One policy for every setup of this image, so a new setup needs no change here. null: no bucket policy."
   type        = string
   default     = null
+}
+
+variable "mark_min_lock_days" {
+  description = "Required with mark_bucket: the smallest slashing_log_min_lock_days of the setups that write to mark_bucket. The bucket policy refuses a put under marks/ or config/ that names less retention than this, or none. Never set it higher than the lowest slashing_log_min_lock_days of any setup writing to the bucket, or S3 refuses that runner's writes."
+  type        = number
+  default     = null
+  validation {
+    condition     = var.mark_bucket == null || var.mark_min_lock_days != null
+    error_message = "mark_min_lock_days is required when mark_bucket is set: the lowest slashing_log_min_lock_days of the setups that write to the bucket, no higher, or S3 refuses the runner's writes."
+  }
+  validation {
+    condition     = var.mark_min_lock_days == null || try(var.mark_min_lock_days >= 1 && floor(var.mark_min_lock_days) == var.mark_min_lock_days, false)
+    error_message = "mark_min_lock_days must be a whole number of days, at least 1."
+  }
 }
 
 provider "aws" { region = var.region }
@@ -307,6 +323,17 @@ resource "aws_iam_user" "record_writer" {
 # runner's conditional create through (issue #5 R3). An admin who can
 # change this policy can still lift it; the runner's check after each
 # create (s3log checkHidden) catches a marker either way.
+# ShortRetention and NoRetention (EDS-FRESH-04) refuse a put that would
+# leave a record with less retention than the setups ask for. The runner
+# dates each put max(slashing_log_min_lock_days, bucket default) days plus
+# a day and an hour (s3log retainSlack) from the time it signs with, and S3
+# refuses a signature more than 15 minutes off its own clock, so a put of a
+# runner has at least mark_min_lock_days + 1 days and 45 minutes left.
+# AWS does not document how it rounds a part day in
+# s3:object-lock-remaining-retention-days, so the deny is at
+# mark_min_lock_days + 1: a runner's put passes whether S3 rounds down or
+# up, and a put with less than mark_min_lock_days days left is refused
+# either way (with rounding down, anything under mark_min_lock_days + 1).
 resource "aws_s3_bucket_policy" "marks" {
   count  = var.mark_bucket == null ? 0 : 1
   bucket = var.mark_bucket
@@ -340,6 +367,22 @@ resource "aws_s3_bucket_policy" "marks" {
         Principal = "*"
         Action    = ["s3:DeleteObject", "s3:DeleteObjectVersion"]
         Resource  = "arn:aws:s3:::${var.mark_bucket}/*"
+      },
+      {
+        Sid       = "ShortRetention"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:PutObject"
+        Resource  = ["arn:aws:s3:::${var.mark_bucket}/marks/*", "arn:aws:s3:::${var.mark_bucket}/config/*"]
+        Condition = { NumericLessThan = { "s3:object-lock-remaining-retention-days" = var.mark_min_lock_days + 1 } }
+      },
+      {
+        Sid       = "NoRetention"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:PutObject"
+        Resource  = ["arn:aws:s3:::${var.mark_bucket}/marks/*", "arn:aws:s3:::${var.mark_bucket}/config/*"]
+        Condition = { Null = { "s3:object-lock-remaining-retention-days" = "true" } }
       },
       {
         Sid       = "TLSOnly"
