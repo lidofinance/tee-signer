@@ -971,6 +971,8 @@ func (m *MarkLog) RecordShareSet(ctx context.Context, s *ShareSet) error {
 	old := m.shares
 	m.shares = s.Clone()
 	if err := m.appendLocked(ctx, m.mark); err != nil {
+		// Also after a lost reply, unlike SetState: no caller stores a share
+		// after this error, so the next record restores the set the store holds.
 		m.shares = old
 		return err
 	}
