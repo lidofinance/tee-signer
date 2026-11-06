@@ -259,6 +259,9 @@ func (s *Server) storeBatch(reqs []backend.SealedImportRequest, secrets [][32]by
 		}
 		blobs[r.Pubkey] = blob
 	}
+	if err := s.imageRefusal(); err != nil {
+		return err
+	}
 	if err := s.putShares(blobs, tag); err != nil {
 		return backend.Refused(backend.StatusPlatform, "store shares: %v", err)
 	}

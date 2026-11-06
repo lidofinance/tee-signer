@@ -907,6 +907,17 @@ func (s *Server) loadRefusal() error {
 	return nil
 }
 
+// imageRefusal is the image check (imagegate.go) now, nil without a
+// gate. A request that signs or stores a share runs it again after its
+// waits, as dispatch's check may predate an update that drops this image
+// (SETUP-IMAGE-01).
+func (s *Server) imageRefusal() error {
+	if s.Image == nil {
+		return nil
+	}
+	return s.Image.Check(s.Updates)
+}
+
 // loadWhy is the latched reason of loadRefusal, nil without one.
 func (s *Server) loadWhy() *string {
 	why := s.loadFailed.Load()
@@ -1047,6 +1058,11 @@ func (s *Server) sign(req backend.SignRequest) (backend.Signature, error) {
 		if gerr != nil {
 			s.Log.Warn("refused", "kind", kind, "pubkey", req.Pubkey.String()[:18], "err", gerr)
 			return backend.Signature{}, gerr
+		}
+		// The request may have waited past an update that drops this
+		// image since dispatch checked it; g covers the time from here.
+		if err := s.imageRefusal(); err != nil {
+			return backend.Signature{}, err
 		}
 		sig, repeat, err = s.Signer.SignGuarded(req, g)
 		if !errors.Is(err, core.ErrConfigMoved) {
@@ -1192,6 +1208,9 @@ func (s *Server) addShare(pk backend.Pubkey, secret *[32]byte, index uint64, int
 	}
 	blob, err := s.sealRecord(rec)
 	if err != nil {
+		return backend.ValidatorKey{}, err
+	}
+	if err := s.imageRefusal(); err != nil {
 		return backend.ValidatorKey{}, err
 	}
 	if err := s.putShare(pk, blob); err != nil {
