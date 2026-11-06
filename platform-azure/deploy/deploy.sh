@@ -388,7 +388,12 @@ cmd_key_create() {
   local args=(--vault-name "$VAULT" -n "$(key_name "$n")" --kty RSA-HSM --size "$KEY_SIZE"
     --ops wrapKey unwrapKey encrypt decrypt --exportable true --policy "@$dir/skr-policy.json")
   if [ "$KEY_IMMUTABLE" = true ]; then args+=(--immutable true); fi
-  az keyvault key create "${args[@]}" -o none
+  # Record the version made here: group-deploy takes only a setup that names
+  # it, so a later version under this name cannot replace the signer's key.
+  local kid
+  kid="$(az keyvault key create "${args[@]}" --query key.kid -o tsv)"
+  [[ "$kid" =~ /([0-9a-f]{32})$ ]] || die "key create returned no key version: $kid"
+  echo "${BASH_REMATCH[1]}" >"$dir/key.version"
   echo "$hash" >"$dir/key.policy.sha256"
 }
 
@@ -495,9 +500,15 @@ cmd_group_deploy() {
   # Once on its own: inside $(...) a failed check would not stop the step.
   need_setup "$n" >/dev/null
   setup_hash="$(need_setup "$n")"
+  dir="$(signer_dir "$n")"
+  if [ -s "$dir/key.version" ]; then
+    local kid
+    kid="$(setup_value "$(setup_file "$n")" sealing_key_release.kid)"
+    [ "$kid" = "$(key_name "$n")/$(cat "$dir/key.version")" ] ||
+      die "SETUP_FILE_$n names key $kid, not $(key_name "$n")/$(cat "$dir/key.version") that key-create made"
+  fi
   gate "deploy confidential container group $(group_name "$n") in $(signer_location "$n"), group $RG, $(network_describe "$n"), logs $([ -n "${LOG_WORKSPACE_ID:-}" ] && echo "to workspace $LOG_WORKSPACE_ID" || echo "not sent to a workspace"), setup $(setup_file "$n") (setup_sha256 $setup_hash); it bills per second while it runs"
   network_check_secrets
-  dir="$(signer_dir "$n")"
   # The deployed policy must be the one the key's release policy names.
   hash="$(policy_for "$n")"
   expected="$(cat "$dir/key.policy.sha256" 2>/dev/null || echo "${EXPECT_POLICY_SHA256:-}")"

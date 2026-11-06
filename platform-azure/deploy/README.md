@@ -640,7 +640,9 @@ place (`docs/upgrade.md`).
 - Key names are `signer-kek-N` (`KEY_NAME_PREFIX`, `KEY_NAME_N`).
   `key-create` refuses a key name that exists and never makes a new version:
   the runner releases the newest version of its key, so a new version would
-  take the key away from the running image.
+  take the key away from the running image. `key-create` writes the version
+  it made to `key.version`, and `group-deploy` then takes only a setup whose
+  `sealing_key_release.kid` is `<name>/<version>`.
 
 The image must be pullable by ACI. This setup uses Azure Container Registry
 Basic with a managed identity and `AcrPull`, so no password is in the
