@@ -763,6 +763,7 @@ func (s *Server) handleConn(ctx context.Context, c net.Conn) {
 			}
 			s.Log.Warn("refused and closed: client certificate", "remote", c.RemoteAddr().String(), "type", f.Type.String(),
 				"cert_sha256", hex.EncodeToString(cl.cert[:8]), "err", err)
+			_ = c.SetWriteDeadline(time.Now().Add(frameTimeout))
 			_ = wire.WriteFrame(c, wire.Frame{Type: f.Type | wire.ResponseFlag, ID: f.ID, Payload: wire.EncodeError(err)})
 			return
 		}
@@ -770,6 +771,10 @@ func (s *Server) handleConn(ctx context.Context, c net.Conn) {
 		if !ok {
 			return
 		}
+		// A peer that stops reading loses the connection after
+		// frameTimeout, not holds the frame's bytes and its slot
+		// (TEE-BUDGET-02).
+		_ = c.SetWriteDeadline(time.Now().Add(frameTimeout))
 		if err := wire.WriteFrame(c, wire.Frame{Type: f.Type | wire.ResponseFlag, ID: f.ID, Payload: payload}); err != nil {
 			s.Log.Warn("write", "err", err)
 			return
