@@ -50,7 +50,7 @@ That runs, in order:
 | `scripts/test.sh` | `make`, then the four test suites, the symbol check and 5 s per fuzz target (`scripts/fuzz.sh ci`, `FUZZ=0` skips it). Exits non-zero on any failure. |
 | `scripts/cross-aarch64.sh` | On x86_64: cross-builds blst, the core and the tests for aarch64 (static) and runs all suites under `qemu-aarch64`. On aarch64 it does nothing, since `test.sh` already runs natively there. |
 | `scripts/xcheck-go.sh` | Regenerates `tests/data/registration_go.txt` with attestantio go-builder-client and diffs it with the committed copy. Skipped if Go is missing. |
-| `scripts/negative-controls.sh` | Builds 20 copies of the core, each with one deliberate bug, and checks that a test suite fails for each. |
+| `scripts/negative-controls.sh` | Builds 24 copies of the core, each with one deliberate bug, and checks that a test suite fails for each (for one, that the `config` fuzz target crashes within 60 s from an empty corpus). |
 
 `make core-test` in the repo root runs the same script.
 `SKIP_DEPS=1 scripts/run-all.sh` skips apt. Every script is idempotent and
@@ -356,8 +356,9 @@ the exact-repeat roots. A merged config that fails the checks of
 
 `sc_signer_set_schedule` replaces the fork schedule of a running signer
 (`sc_schedule`: `forks`, `gloas_scheduled`, `gloas_fork_epoch`; the `open`
-config group of a cloud setup). With T the later
-of `activate_at` and the trusted clock, it takes the new schedule only if it
+config group of a cloud setup). With sign_now the latest clock reading of
+a signing call since init and T the latest of `activate_at`, the trusted
+clock and sign_now, it takes the new schedule only if it
 gives every epoch up to epoch(T) + `max_epochs_ahead` + 1 the same fork
 version and Gloas state as the old one (sums saturate), and refuses it with
 `SC_ERR_SCHEDULE` otherwise. Before T the signer signs at most
@@ -365,8 +366,11 @@ version and Gloas state as the old one (sums saturate), and refuses it with
 both schedules, and a fork that has started never changes. An update must
 therefore arrive at least `max_epochs_ahead` + 2 epochs before its first
 changed epoch. Until T both schedules give the same result, so the host may
-apply it as soon as it arrives. The chain identity, the clock horizon, the
-slashing settings and the policy are not part of `sc_schedule`.
+apply it as soon as it arrives. A set with a non-zero `activate_at` leaves
+the trusted clock out of T, so an update checked before `activate_at` and
+set late still goes in when nothing signed past it. The chain identity, the
+clock horizon, the slashing settings and the policy are not part of
+`sc_schedule`.
 `sc_signer_check_schedule` makes the same checks without the change. The
 cloud runner reaches both through its cgo binding (`signer-core/core`,
 `Signer.CheckSchedule` and `Signer.SetSchedule`); the TA gets the same calls
@@ -390,6 +394,43 @@ slot time change while a fork update is pending checks a return to the
 schedule before that update with the new changes as the pending list; the
 rule is symmetric, so this refuses a change that would bring the pending
 fork within reach before its effective time.
+
+Both rules keep one invariant: no slot time or fork schedule change affects
+any epoch at or below epoch(sign_now) + `max_epochs_ahead`. The argument:
+
+1. Every signing call reads the clock first and raises sign_now to that
+   reading (sign_now never falls). The call then signs no epoch past
+   epoch(reading) + `max_epochs_ahead`, which is at most epoch(sign_now) +
+   `max_epochs_ahead`.
+2. Every set and every check counts T >= sign_now: T is the latest of
+   `activate_at`, the trusted clock and sign_now, or of `activate_at` and
+   sign_now for a set with a non-zero `activate_at`. It refuses any change
+   at or below epoch(T) + `max_epochs_ahead` + 1.
+3. epoch() grows with time, and an accepted slot time change keeps every
+   epoch up to that limit, so epoch(sign_now) is the same under the old and
+   the new list.
+
+So the invariant holds for any clock behaviour: a clock that steps back
+below a reading a signing call made reopens no epoch that call may have
+signed. While the clock only moves forward sign_now is at most the clock,
+and the rule gives the same results as when only a set with `activate_at`
+counted sign_now.
+
+sign_now lives in RAM and is 0 after init, so it covers this signer's own
+calls since then. After a restart the host builds the signer from the
+values in force (the cloud runner builds the core from its mark log), so
+changes taken before the restart are in. A change taken after the restart,
+while the clock reads earlier than a reading before it, can still reach an
+epoch the earlier run signed. For blocks, attestations, PTC votes and
+envelopes the restart floor and the stored marks refuse those epochs again
+(see Restart floor), so this cannot lead to a slashing. A message with no
+mark (a RANDAO reveal, a selection proof, a sync committee message) signed
+before the restart may differ from the same message signed after it.
+This gap is harmless. A slot time change never changes message content.
+With two fork schedules, one of the two signatures is under a domain the
+canonical chain does not use, so it does not verify there. The marks and
+the restart floor rule out a slashing, and in practice no equivocation
+follows.
 
 Marks count slots and epochs, never the domain, so a fork change cannot lead
 to a slashing: a host that restarts the signer with another fork version for
@@ -475,7 +516,7 @@ URLs are in `scripts/common.sh`.
 | `test_unit` Gloas part | `tests/data/gloas_go.txt` from `tools/xcheck-gloas` (go-eth2-client v0.30.3, `scripts/xcheck-gloas.sh` regenerates and compares) | PayloadAttestationData, ProposerPreferences and full ExecutionPayloadEnvelope roots; progressive merkleization by hand; fork gate, equivocation, exact repeats, envelope block binding, preference policy, restart from the block bound with both mark scopes. |
 | `test_bls_sign` | consensus-spec-tests general/phase0/bls/sign | Signature bytes equal, verify passes, cached hash path gives the same bytes; zero key refused. |
 | `test_eip3076` | slashing-protection-interchange-tests | All 38 tests, using `should_succeed` (the minimal-strategy field), in four modes against `sc_slashing_*`: no window, window, restart before every op, window plus restart. The same four modes again through `sc_sign_block` and `sc_sign_attestation` with the vectors' signing roots carried in the message, so the exact-repeat shortcut runs: every signed op is sent once more and must sign again with the same signature and no write; in the restart modes it is then sent after a restart and the marks must refuse it, as the roots live in RAM only; the resign tests' imported roots stay refused. |
-| `test_unit` | this repo | Builder domain known answer, ValidatorRegistrationV1 against go-builder-client, policy refusals, policy replacement with `sc_signer_set_policy`, fork schedule updates with `sc_signer_set_schedule` (the epoch limit, `activate_at`, started forks, Gloas state, saturation), slot time changes (`sc_slot_at` piece by piece, the value rules, the clock horizon of `sc_signer_init_ext`, the rule of `sc_signer_set_slot_times`), marks that refuse a vote and a block signed again under another fork version, commit-ahead write counts, restart behaviour, import, cache hits, validator table errors, fork version selection, exact repeats in one run and refused after a restart or an import (both mark scopes), per-device marks, `sc_signer_cover_epoch`, marks at the top of the u64 range (a window past `UINT64_MAX` saturates and a restart from it refuses everything, per validator, per device and for an import of `UINT64_MAX` values; the signer's clock horizon refuses such epochs first unless `max_epochs_ahead` reaches them), mark write counts for 1, 16 and 1,000 keys, and randomized restart-safety property tests for per-validator and per-device marks. |
+| `test_unit` | this repo | Builder domain known answer, ValidatorRegistrationV1 against go-builder-client, policy refusals, policy replacement with `sc_signer_set_policy`, fork schedule updates with `sc_signer_set_schedule` (the epoch limit, `activate_at`, started forks, Gloas state, saturation), slot time changes (`sc_slot_at` piece by piece, the value rules, the clock horizon of `sc_signer_init_ext`, the rule of `sc_signer_set_slot_times`), both rules after the clock steps back below a reading a signing call made, the same results as the rule before it while the clock only moves forward (random sequences), an exhaustive model of signing calls, sets and clock steps up to depth `SC_MODEL_DEPTH` (default 3), marks that refuse a vote and a block signed again under another fork version, commit-ahead write counts, restart behaviour, import, cache hits, validator table errors, fork version selection, exact repeats in one run and refused after a restart or an import (both mark scopes), per-device marks, `sc_signer_cover_epoch`, marks at the top of the u64 range (a window past `UINT64_MAX` saturates and a restart from it refuses everything, per validator, per device and for an import of `UINT64_MAX` values; the signer's clock horizon refuses such epochs first unless `max_epochs_ahead` reaches them), mark write counts for 1, 16 and 1,000 keys, and randomized restart-safety property tests for per-validator and per-device marks. |
 | fuzz targets | `fuzz/`, seeds from the vectors above | One target per decoder entry point with ASan and UBSan: SSZ decoders, stored mark records, AggregateAndProof (all forms) and ContributionAndProof against a second merkleization, BuilderRequestAuth, BLS inputs, config and update readers, and the signer driven through every request kind with a slashing-safety oracle. `scripts/test.sh` runs 5 s per target; `scripts/fuzz.sh long` runs 30 min (fuzz/README.md). |
 
 ValidatorRegistrationV1 is a builder-specs container, so consensus-spec-tests
