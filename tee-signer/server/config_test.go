@@ -83,6 +83,8 @@ func u64(v uint64) *uint64 { return &v }
 type flakyLog struct {
 	*markstore.MarkLog
 	failPut, failSet bool
+	// loseSet: SetState writes, then answers as if the reply was lost.
+	loseSet bool
 	// tamper, if set, replaces the body copy the log hands out, as an
 	// untrusted store can (config_recovery_test.go).
 	tamper func(g setupwire.Group, v uint64, raw []byte) []byte
@@ -101,7 +103,11 @@ func (f *flakyLog) SetState(ctx context.Context, st markstore.ConfigState) error
 	if f.failSet {
 		return errDropped
 	}
-	return f.MarkLog.SetState(ctx, st)
+	err := f.MarkLog.SetState(ctx, st)
+	if err == nil && f.loseSet {
+		return errDropped
+	}
+	return err
 }
 
 // env is a runner with a setup: its mark log in a directory, its config
@@ -1001,6 +1007,30 @@ func TestConfigUpdateWithoutTheRecord(t *testing.T) {
 	}
 	if ls := e.log.State().Locked; ls.Version != 1 || ls.Pending != nil {
 		t.Fatalf("after Sync the record holds %+v", ls)
+	}
+}
+
+// SETUP-STATE-01: the record of an update lands but its reply is lost.
+// The update is pending anyway: it comes into force at its time, also
+// after a restart.
+func TestConfigUpdateRecordReplyLost(t *testing.T) {
+	e := newEnv(t, u64(3600))
+	b := e.body(locked, 1, e.groupHash(locked), e.now())
+	b.Locked.AllowedFeeRecipients = append(b.Locked.AllowedFeeRecipients, x)
+	e.log.loseSet = true
+	_, _, err := e.send(signed(t, b, first2, nil))
+	wantCode(t, err, backend.StatusStorage, "record not written")
+	e.log.loseSet = false
+	if logPending(t, e, locked) == nil {
+		t.Fatal("the record that landed is not in the log's state")
+	}
+	e.clock.add(3600)
+	if err := e.register(x); err != nil {
+		t.Fatalf("not in force at its time: %v", err)
+	}
+	e.restart()
+	if err := e.register(x); err != nil {
+		t.Fatalf("after the restart: %v", err)
 	}
 }
 

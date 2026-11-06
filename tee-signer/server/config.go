@@ -797,6 +797,10 @@ func (u *Updates) Accept(ctx context.Context, raw []byte) (uint8, backend.SetupS
 		return 0, none, backend.Refused(backend.StatusStorage, "config update: body not written to the mark log: %v", err)
 	}
 	if err := u.opt.Log.SetState(wctx, next); err != nil {
+		// The record may have landed: follow the log's state (SETUP-STATE-01).
+		u.mu.Lock()
+		u.reconcileLocked(now)
+		u.mu.Unlock()
 		return 0, none, backend.Refused(backend.StatusStorage, "config update: record not written to the mark log: %v", err)
 	}
 	u.mu.Lock()
