@@ -469,7 +469,8 @@ key policy change.
 ## PCRs of the image
 
 `scripts/nitro-eif.sh` builds the EIF twice from scratch, compares the
-PCRs, and prints PCR0, PCR1 and PCR2. Record the PCRs of the commit you
+PCRs, and prints PCR0, PCR1 and PCR2. If any of them differs between the
+two builds, the script stops with an error. Record the PCRs of the commit you
 deploy. Any change to the runner binary or a flag changes PCR2 and PCR0, and
 so does a comment added to a Go file, because it moves the line numbers in
 the binary. PCR1 covers the kernel and ramdisk. The image holds no chain

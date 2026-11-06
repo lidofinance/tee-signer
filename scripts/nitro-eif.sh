@@ -196,11 +196,15 @@ docker run --rm --user "$(id -u):$(id -g)" -v "$OUT:/out" "$NITRO_IMAGE" \
   describe-eif --eif-path "/out/runner-$arch.eif" >"$OUT/describe-eif-$arch.json"
 
 pcr() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["Measurements"][sys.argv[2]])' "$1" "$2"; }
+differs=""
 for p in PCR0 PCR1 PCR2; do
   a="$(pcr "$OUT/build-enclave-$arch.json" "$p")"
   b="$(pcr "$OUT/build-enclave-$arch-rebuild.json" "$p")"
-  if [ "$a" = "$b" ]; then log "$p repeats: $a"; else log "$p DIFFERS between builds: $a vs $b"; fi
+  if [ "$a" = "$b" ]; then log "$p repeats: $a"; else log "$p DIFFERS between builds: $a vs $b"; differs="$differs $p"; fi
 done
+# Two builds of the same inputs must give the same PCRs, or no one can
+# reproduce the image the key policy names.
+[ -z "$differs" ] || die "build is not reproducible: PCRs differ between the two builds of $arch (${differs# })"
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("[cloud] describe-eif: EifVersion=%s Arch=%s Kernel=%s IsSigned=%s" % (d.get("EifVersion"), d["Metadata"]["DockerInfo"]["Architecture"], d["Metadata"]["KernelVersion"], d.get("IsSigned")))' "$OUT/describe-eif-$arch.json"
 
 # PCR0/1/2 from this build, PCR3 from the parent role ARN (placeholder
