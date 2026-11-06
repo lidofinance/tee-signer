@@ -334,6 +334,8 @@ cmd_sa_bindings() {
 
 cmd_wif_create() {
   local cond
+  # Once on its own: inside $(...) a failed check would not stop the step.
+  image_digest >/dev/null
   cond="$(attribute_condition)"
   gate wif-create "workload identity pool $WIF_POOL and OIDC provider $WIF_PROVIDER. It takes tokens from $CS_ISSUER with audience $STS_AUDIENCE only, and only for $(digests_text) on hardware $GCP_HWMODELS (production image, not debug, STABLE). The pool's principal set, and nothing else, may encrypt and decrypt with $KMS_KEY. Keep the pool to this one provider: any provider added to it gets the key"
   run gcloud iam workload-identity-pools create "$WIF_POOL" --location=global \
@@ -374,6 +376,8 @@ cmd_bucket_bind() {
 
 cmd_provider_update() {
   local cond
+  # Once on its own: inside $(...) a failed check would not stop the step.
+  image_digest >/dev/null
   cond="$(attribute_condition)"
   gate provider-update "after a rebuild: provider $WIF_PROVIDER takes $(digests_text)"
   run gcloud iam workload-identity-pools providers update-oidc "$WIF_PROVIDER" --location=global \
