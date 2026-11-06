@@ -810,14 +810,25 @@ func (u *Updates) Accept(ctx context.Context, raw []byte) (uint8, backend.SetupS
 	if _, _, _, err := u.opt.Log.PutBody(wctx, raw); err != nil {
 		return 0, none, backend.Refused(backend.StatusStorage, "config update: body not written to the mark log: %v", err)
 	}
+	// SETUP-AUTH-01: next is built on the view checked above. Under mu,
+	// which every reconcile takes, refuse if an update came into force since,
+	// and hold mu until the record is written, so none can come into force
+	// in between and be undone by it.
+	if now, err = u.trustedNow(); err != nil {
+		return 0, none, err
+	}
+	u.mu.Lock()
+	u.reconcileLocked(now)
+	if !u.view.state.Equal(v.state) {
+		u.mu.Unlock()
+		return 0, none, backend.Refused(backend.StatusBadRequest, "config update: an update came into force while it was checked; send it again")
+	}
 	if err := u.opt.Log.SetState(wctx, next); err != nil {
 		// The record may have landed: follow the log's state (SETUP-STATE-01).
-		u.mu.Lock()
 		u.reconcileLocked(now)
 		u.mu.Unlock()
 		return 0, none, backend.Refused(backend.StatusStorage, "config update: record not written to the mark log: %v", err)
 	}
-	u.mu.Lock()
 	u.bodies[bodyID{b.Group, ref}] = upd
 	u.reconcileLocked(now)
 	st := u.stateLocked()

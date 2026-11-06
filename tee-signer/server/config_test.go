@@ -90,11 +90,16 @@ type flakyLog struct {
 	// tamper, if set, replaces the body copy the log hands out, as an
 	// untrusted store can (config_recovery_test.go).
 	tamper func(g setupwire.Group, v uint64, raw []byte) []byte
+	// onPut, if set, runs before each PutBody.
+	onPut func()
 }
 
 var errDropped = errors.New("the host dropped the write")
 
 func (f *flakyLog) PutBody(ctx context.Context, raw []byte) (setupwire.Group, uint64, [32]byte, error) {
+	if f.onPut != nil {
+		f.onPut()
+	}
 	if f.failPut {
 		return 0, 0, [32]byte{}, errDropped
 	}
