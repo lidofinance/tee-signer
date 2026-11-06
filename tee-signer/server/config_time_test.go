@@ -107,3 +107,27 @@ func TestAcceptReadsTimeUnderWriteMu(t *testing.T) {
 		t.Fatalf("after the supersede: %+v, want the rotation in force", st.Locked)
 	}
 }
+
+// SETUP-AUTH-01: a supersede checked before a rotation's effective time
+// must not undo the rotation when another request brought it into force
+// before the supersede's record was written.
+func TestAcceptDoesNotUndoAnActivation(t *testing.T) {
+	e, at := rotationPending(t)
+	cancel := e.body(locked, 2, e.groupHash(locked), e.now())
+	e.log.onPut = func() {
+		e.log.onPut = nil
+		e.clock.add(at - e.now() + 1)
+		e.srv.SetupState()
+	}
+	if _, _, err := e.send(signed(t, cancel, first2, nil)); err == nil {
+		t.Fatal("the supersede was taken after the rotation came into force")
+	}
+	newSet := approverSet(2, 4, 5, 6)
+	if st := e.srv.SetupState(); st.Locked.Version != 1 || st.ApproverSetHash != newSet.Hash() {
+		t.Fatalf("after the supersede: %+v, want the rotation in force", st.Locked)
+	}
+	e.restart()
+	if st := e.srv.SetupState(); st.Locked.Version != 1 || st.ApproverSetHash != newSet.Hash() {
+		t.Fatalf("after a restart: %+v, want the rotation in force", st.Locked)
+	}
+}
