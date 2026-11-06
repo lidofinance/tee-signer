@@ -16,6 +16,7 @@
 # log is the clone protection.
 
 terraform {
+  required_version = ">= 1.1" # moves a key made before count to [0]
   required_providers {
     aws = { source = "hashicorp/aws" }
   }
@@ -47,7 +48,7 @@ variable "pcr3" {
 }
 variable "admin_role_arn" { description = "role that administers the key; with key_policy_locked = false it can also change the key policy" }
 variable "key_policy_locked" {
-  description = "true: create the KMS key with its final policy, which no principal may change (no kms:PutKeyPolicy), so the key never has a mutable phase and its CloudTrail history is one CreateKey. Required on mainnet: the runner refuses a key policy someone can change, and a key that was mutable needs its CloudTrail history checked (README, AWS-KMS-02). The policy can then never change: a new image needs a new key (target/main.tf), so set prev_pcrs now if a rollback image should keep the key. Once locked, the admin can never tag or untag the key, change its description or turn off its rotation (no kms:TagResource, kms:UntagResource, kms:UpdateKeyDescription or kms:DisableKeyRotation, and no way to grant them), so any later Terraform change to aws_kms_key.enclave fails. Nobody can schedule its deletion either (the runner reads kms:ScheduleKeyDeletion as not locked): the shares sealed under it cannot be lost that way, and the key stays until the account closes. Terraform must run as admin_role_arn, the only principal left that can read the key. false: the admin keeps kms:PutKeyPolicy (tests, devnets). No default: on an existing key, setting true makes Terraform lock its policy for good."
+  description = "true: create the KMS key with its final policy, which no principal may change (no kms:PutKeyPolicy), so the key never has a mutable phase and its CloudTrail history is one CreateKey. Required on mainnet: the runner refuses a key policy someone can change, and a key that was mutable needs its CloudTrail history checked (README, AWS-KMS-02). The policy can then never change: a new image needs a new key (target/main.tf), so set prev_pcrs now if a rollback image should keep the key. Once locked, the admin can never tag or untag the key, change its description or turn off its rotation (no kms:TagResource, kms:UntagResource, kms:UpdateKeyDescription or kms:DisableKeyRotation, and no way to grant them), so any later Terraform change to aws_kms_key.enclave_locked fails. Nobody can schedule its deletion either (the runner reads kms:ScheduleKeyDeletion as not locked): the shares sealed under it cannot be lost that way, and the key stays until the account closes. Terraform must run as admin_role_arn, the only principal left that can read the key. false: the admin keeps kms:PutKeyPolicy (tests, devnets). No default. Each value has its own key resource (aws_kms_key.enclave, aws_kms_key.enclave_locked), so changing it on an existing key replaces the key rather than changing its policy in place: a key locked after a mutable phase keeps what was done in that phase (README, AWS-KMS-02)."
   type        = bool
 }
 variable "node_key" {
@@ -159,14 +160,8 @@ resource "aws_iam_instance_profile" "parent" {
 # Keep the statements in step with kms-key-policy.json.tmpl and
 # target/main.tf: the Go tests run the template through the lock check,
 # not this file.
-resource "aws_kms_key" "enclave" {
-  description         = var.key_description
-  enable_key_rotation = true
-  tags                = var.key_tags
-  # KMS refuses a policy that does not let the caller change it later
-  # unless this is set. A mistake in a locked policy is permanent.
-  bypass_policy_lockout_safety_check = var.key_policy_locked
-  policy = jsonencode({
+locals {
+  key_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
@@ -234,6 +229,48 @@ resource "aws_kms_key" "enclave" {
       }
     ]
   })
+}
+
+# One key resource per value of key_policy_locked, so a change of the flag
+# destroys one key and creates the other, from the first apply on:
+# Terraform never locks a key in place after a mutable phase (AWS-KMS-02).
+# aws_kms_key.enclave keeps the address of the keys made before this split
+# (Terraform moves it to enclave[0] by itself), so an unlocked key plans
+# no change. A key created locked by an older version of this file is at
+# that address too: move it by hand before the first plan (README).
+resource "aws_kms_key" "enclave" {
+  count               = var.key_policy_locked ? 0 : 1
+  description         = var.key_description
+  enable_key_rotation = true
+  tags                = var.key_tags
+  policy              = local.key_policy
+}
+
+resource "aws_kms_key" "enclave_locked" {
+  count               = var.key_policy_locked ? 1 : 0
+  description         = var.key_description
+  enable_key_rotation = true
+  tags                = var.key_tags
+  # KMS refuses a policy that does not let the caller change it later
+  # unless this is set. A mistake in a locked policy is permanent.
+  bypass_policy_lockout_safety_check = var.key_policy_locked
+  policy                             = local.key_policy
+  # Terraform never writes the policy of this address after creation: a
+  # locked policy cannot change anyway, and a key moved here by mistake
+  # stays as it is in AWS (unlocked), which the runner's lock check refuses
+  # on a prod chain, instead of being locked in place (AWS-KMS-02).
+  lifecycle {
+    ignore_changes = [policy, bypass_policy_lockout_safety_check]
+  }
+}
+
+locals {
+  kms_key = one(concat(aws_kms_key.enclave, aws_kms_key.enclave_locked))
+}
+
+# The key's CreationDate, for sealing_key_release.kms_key_creation_date.
+data "aws_kms_key" "enclave" {
+  key_id = local.kms_key.arn
 }
 
 # The record writer: the IAM user the mark log writes S3 with. Its access
@@ -417,7 +454,8 @@ resource "aws_instance" "node" {
   tags = { Name = var.instance_name }
 }
 
-output "kms_key_arn" { value = aws_kms_key.enclave.arn }
+output "kms_key_arn" { value = local.kms_key.arn }
+output "kms_key_creation_date" { value = data.aws_kms_key.enclave.creation_date }
 output "parent_role_arn" { value = aws_iam_role.parent.arn }
 output "instance_id" { value = aws_instance.node.id }
 output "public_ip" { value = aws_instance.node.public_ip }

@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/lidofinance/tee-signer/governance/setupwire"
@@ -137,7 +138,7 @@ func (s *Setup) Options() map[string]string {
 	k := &s.Wire.Platform.SealingKeyRelease
 	switch s.Wire.Platform.Platform {
 	case setupwire.PlatformNitro:
-		return map[string]string{
+		o := map[string]string{
 			"agent":        NitroAgent,
 			"region":       k.Region,
 			"kms_key_id":   k.KMSKeyID,
@@ -145,6 +146,10 @@ func (s *Setup) Options() map[string]string {
 			"ntp_relay":    NitroNTPRelay,
 			"record_creds": NitroRecordCreds,
 		}
+		if k.KMSKeyCreationDate != 0 {
+			o["kms_key_creation_date"] = strconv.FormatUint(k.KMSKeyCreationDate, 10)
+		}
+		return o
 	case setupwire.PlatformAzure:
 		return map[string]string{"maa_endpoint": k.MAAEndpoint, "akv_endpoint": k.AKVEndpoint, "kid": k.KID}
 	case setupwire.PlatformGCP:

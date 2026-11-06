@@ -573,3 +573,61 @@ func TestPolicyLockMalformedDeny(t *testing.T) {
 		}
 	}
 }
+
+// AWS-KMS-02: a setup that pins kms_key_creation_date starts only on the
+// key DescribeKey shows with that CreationDate (whole seconds), on every
+// chain. A setup off prod without it starts as before.
+func TestKeyRuleCreationDate(t *testing.T) {
+	const keyARN = "arn:aws:kms:eu-west-1:111122223333:key/k1"
+	f := &keyPolicyKMS{arn: keyARN, origin: "AWS_KMS", policy: lockedPolicy, created: 1793895285.678}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	keys := Keys{Client: kms.New(kms.Options{Region: "eu-west-1", BaseEndpoint: aws.String(srv.URL), Credentials: staticCreds,
+		HTTPClient: srv.Client(), RetryMaxAttempts: 1}), KeyID: "arn:aws:kms:eu-west-1:111122223333:alias/signer"}
+	ctx := context.Background()
+	prod := platform.Options{SetupHash: [32]byte{7}, Prod: true}
+	devnet := platform.Options{SetupHash: [32]byte{7}}
+
+	k := keys
+	k.CreationDate = 1793895285
+	if rule, id, err := readKeyRule(ctx, prod, k); err != nil || rule.Lock != backend.KeyLockLocked || id != keyARN {
+		t.Fatalf("matching date on prod: %+v %q %v", rule, id, err)
+	}
+	for _, o := range []platform.Options{prod, devnet} {
+		k.CreationDate = 1793895286
+		if _, _, err := readKeyRule(ctx, o, k); !errors.Is(err, errWrongKey) || !strings.Contains(err.Error(), "CreationDate 2026-11-05T16:14:45Z") {
+			t.Errorf("prod %v, another date: %v", o.Prod, err)
+		}
+	}
+	f.created = 0
+	k.CreationDate = 1793895285
+	if _, _, err := readKeyRule(ctx, prod, k); !errors.Is(err, errWrongKey) {
+		t.Errorf("no CreationDate in the answer: %v", err)
+	}
+	if rule, _, err := readKeyRule(ctx, devnet, keys); err != nil || rule.Lock != backend.KeyLockLocked {
+		t.Fatalf("no date in the setup off prod: %+v %v", rule, err)
+	}
+
+	// A pinned date that DescribeKey gives nothing to compare with stops
+	// the start on every chain. Without a pinned date it reads as unread
+	// off prod.
+	f.created = 1793895285.678
+	for _, c := range []struct {
+		name string
+		set  func(bool)
+	}{
+		{"DescribeKey 500", func(v bool) { f.describeFail = v }},
+		{"no Arn", func(v bool) { f.noARN = v }},
+	} {
+		c.set(true)
+		for _, o := range []platform.Options{prod, devnet} {
+			if _, _, err := readKeyRule(ctx, o, k); !errors.Is(err, errWrongKey) {
+				t.Errorf("%s, prod %v, date pinned: %v", c.name, o.Prod, err)
+			}
+		}
+		if rule, _, err := readKeyRule(ctx, devnet, keys); err != nil || rule.Lock != backend.KeyLockUnread {
+			t.Errorf("%s, devnet, no date: %+v %v", c.name, rule, err)
+		}
+		c.set(false)
+	}
+}

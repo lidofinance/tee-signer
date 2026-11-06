@@ -29,6 +29,7 @@ func nitroSetupOn(t *testing.T, fork, root string) []byte {
 	}
 	s.Chain.GenesisTime, s.Chain.SecondsPerSlot, s.Chain.SlotsPerEpoch = setupwire.MainnetGenesisTime, setupwire.MainnetSecondsPerSlot, setupwire.MainnetSlotsPerEpoch
 	s.Chain.Preset = setupwire.PresetMainnet
+	s.Platform.SealingKeyRelease.KMSKeyCreationDate = 1793895285 // required on a prod chain
 	out, err := s.Encode()
 	if err != nil {
 		t.Fatal(err)

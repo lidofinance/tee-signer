@@ -90,7 +90,7 @@ allowed_image_measurements = gcp 0x999999999999999999999999999999999999999999999
 // signer's runner would refuse every import. The refusal names the signer
 // and the missing kind; with every kind listed the setup is made.
 func TestSetupRefusesClusterWithoutOwnImage(t *testing.T) {
-	full := cloudSetupText(t, 4, "threshold", "", "")
+	full := cloudSetupText(t, 5, "threshold", "", "")
 	for kind, signer := range map[string]string{"azure": "gsigner-1", "nitro": "gsigner-2", "gcp": "gsigner-3"} {
 		var keep []string
 		for _, l := range strings.Split(full, "\n") {
@@ -121,7 +121,7 @@ func TestSetupRefusesClusterWithoutOwnImage(t *testing.T) {
 // section, the setup is made with the acceptance and the run prints the
 // warning. One dev signer on a test chain still makes a setup.
 func TestSetupSingleSignerOnEveryPlatform(t *testing.T) {
-	full := cloudSetupText(t, 4, "single", "", "")
+	full := cloudSetupText(t, 5, "single", "", "")
 	for _, name := range []string{"gsigner-1", "gsigner-2", "gsigner-3"} {
 		shared, section := signerSection(t, full, name)
 		dir := t.TempDir()
@@ -162,11 +162,11 @@ func TestSetupSingleSignerOnEveryPlatform(t *testing.T) {
 // says which rule and how to fix it.
 func TestSetupAllowGCPSingleFlagScope(t *testing.T) {
 	dir := t.TempDir()
-	three := writeFile(t, filepath.Join(dir, "three.conf"), cloudSetupText(t, 4, "threshold", "", ""))
+	three := writeFile(t, filepath.Join(dir, "three.conf"), cloudSetupText(t, 5, "threshold", "", ""))
 	wantIn(t, failTool(t, "setup", "-allow-gcp-unsafe-single-key", "-out", filepath.Join(dir, "three"), three),
 		"-allow-gcp-unsafe-single-key: the file says signing_mode = threshold", "signing_mode = single")
 	wantIn(t, mustTool(t, "setup", "-out", filepath.Join(dir, "three"), three), "signing_mode threshold")
-	full := cloudSetupText(t, 4, "single", "", "")
+	full := cloudSetupText(t, 5, "single", "", "")
 	threeSingle := writeFile(t, filepath.Join(dir, "three-single.conf"), full)
 	for _, extra := range [][]string{nil, {"-allow-gcp-unsafe-single-key"}} {
 		wantIn(t, failTool(t, append(append([]string{"setup"}, extra...), "-out", filepath.Join(dir, "three-single"), threeSingle)...),
@@ -181,7 +181,7 @@ func TestSetupAllowGCPSingleFlagScope(t *testing.T) {
 	}
 	// The key in a threshold file is refused too: the acceptance belongs
 	// to a single-mode setup.
-	shared, section := signerSection(t, cloudSetupText(t, 4, "threshold", "", ""), "gsigner-3")
+	shared, section := signerSection(t, cloudSetupText(t, 5, "threshold", "", ""), "gsigner-3")
 	keyed := writeFile(t, filepath.Join(dir, "keyed.conf"), shared+"\n[signer gsigner-3]"+section+"sealing_key_release.unsafe_single_key_accepted = true\n")
 	wantIn(t, failTool(t, "setup", "-out", filepath.Join(dir, "keyed"), keyed), "unsafe_single_key_accepted needs signing_mode = single")
 }
@@ -194,7 +194,7 @@ func TestSetupAllowGCPSingleFlagScope(t *testing.T) {
 // and both WARNING lines; the flag itself never sets no_lock_accepted.
 func TestSetupMainnetGCPSingleNeedsNoLockAccepted(t *testing.T) {
 	const name = "gsigner-3"
-	shared, section := signerSection(t, cloudSetupText(t, 4, "single", "", ""), name)
+	shared, section := signerSection(t, cloudSetupText(t, 5, "single", "", ""), name)
 	mainnet := onMainnet(t, shared)
 	if mainnet == shared {
 		t.Fatal("cloudSetupText changed its genesis_fork_version line")
@@ -216,8 +216,15 @@ func TestSetupMainnetGCPSingleNeedsNoLockAccepted(t *testing.T) {
 	// A real split (3 of 4) on a mainnet cluster with a GCP signer that
 	// accepts neither still makes its setups: the acceptances are only
 	// for a key held alone.
-	threeFile := writeFile(t, filepath.Join(dir, "three.conf"), onMainnet(t, cloudSetupText(t, 4, "threshold", "", "")))
+	// The Nitro signer of a prod chain pins its KMS key's creation date.
+	pinned := "sealing_key_release.kms_key_creation_date = 2026-11-05T16:14:45Z"
+	noPin := writeFile(t, filepath.Join(dir, "nopin.conf"), onMainnet(t, cloudSetupText(t, 5, "threshold", "", "")))
+	wantIn(t, failTool(t, "setup", "-out", filepath.Join(dir, "nopin"), noPin), "signer gsigner-2", "needs sealing_key_release.kms_key_creation_date")
+	threeFile := writeFile(t, filepath.Join(dir, "three.conf"), onMainnet(t, cloudSetupText(t, 5, "threshold", pinned, "")))
 	mustTool(t, "setup", "-out", filepath.Join(dir, "three"), threeFile)
+	if k := keyReleaseOf(t, filepath.Join(dir, "three", "gsigner-2.setup")); k.KMSKeyCreationDate != 1793895285 {
+		t.Fatalf("kms_key_creation_date %d", k.KMSKeyCreationDate)
+	}
 }
 
 // import-draft checks the split against the target's own rule
@@ -230,7 +237,7 @@ func TestSetupMainnetGCPSingleNeedsNoLockAccepted(t *testing.T) {
 // a dev signer needs no flag.
 func TestImportDraftSingleGCP(t *testing.T) {
 	const name = "gsigner-3"
-	shared, section := signerSection(t, cloudSetupText(t, 4, "single", "", ""), name)
+	shared, section := signerSection(t, cloudSetupText(t, 5, "single", "", ""), name)
 	dir := t.TempDir()
 	file := writeFile(t, filepath.Join(dir, "setup.conf"), shared+"\n[signer "+name+"]"+section)
 	mustTool(t, "setup", "-allow-gcp-unsafe-single-key", "-out", filepath.Join(dir, "setups"), file)

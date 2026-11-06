@@ -166,9 +166,9 @@ Set these once per shell, from the deploy settings of each cloud.
    (`allowed_fee_recipients`, the builder gas limits,
    `builder_registration_max_future_seconds`,
    `allow_unverified_nonslashable_signing`) and the `open` `fork_schedule`.
-5. The cluster file `setup.conf` (setup format 4).
+5. The cluster file `setup.conf` (setup format 5).
    Before the first section, the lines all signers share:
-   `setup_format_version = 4`, `signing_mode = threshold` (three signers
+   `setup_format_version = 5`, `signing_mode = threshold` (three signers
    hold shares; a one-signer file says `single`), `handover_generation = 1`, the chain lines
    (set `allow_unverified_nonslashable_signing` as the test's signing paths need),
    `allowed_client_ca` (the client CA, base64 DER), `max_keys`,
@@ -202,6 +202,7 @@ Set these once per shell, from the deploy settings of each cloud.
    slashing_log_store.region = eu-central-1
    sealing_key_release.region = eu-central-1
    sealing_key_release.kms_key_id = <AWS_KMS_KEY_ARN>
+   sealing_key_release.kms_key_creation_date = <terraform output kms_key_creation_date>
 
    [signer signer-3]
    platform = gcp
@@ -274,9 +275,11 @@ AWS (Terraform in `<terraform-dir>`):
    `prev_pcrs` the PCRs of the image before it, if any (so a rollback needs
    no policy change), `mark_bucket = "<S3_BUCKET>"`, and
    `key_policy_locked = false`: this test's key exists and stays mutable,
-   and `true` would make Terraform lock its policy for good. A mainnet key
+   and `true` would replace it with a new locked key. A mainnet key
    is created with `true` (`platform-aws/deploy/README.md`, AWS-KMS-02).
-2. `terraform plan`. Expect two changes and no other: `aws_kms_key.enclave`
+2. `terraform plan`. Expect `aws_kms_key.enclave` to move to
+   `aws_kms_key.enclave[0]` (the first time) and two changes besides:
+   `aws_kms_key.enclave[0]`
    (the PCRs, and `kms:Encrypt` for the admin only with exactly
    `purpose=record-creds`) and `aws_s3_bucket_policy.marks[0]` (create: the
    writer may write `marks/*` and `config/*`, set the retention of the

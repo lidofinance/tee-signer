@@ -250,6 +250,16 @@ var parseU64 = parseUint(64)
 
 func parseText(s string) (string, error) { return s, nil }
 
+// parseTime reads an RFC 3339 time as Unix seconds; a fraction of a second
+// is dropped, as the runner drops it from the time KMS gives.
+func parseTime(s string) (uint64, error) {
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil || t.Unix() <= 0 {
+		return 0, fmt.Errorf("%q: want an RFC 3339 time after 1970, such as 2026-11-05T16:14:45Z", s)
+	}
+	return uint64(t.Unix()), nil
+}
+
 func parseBool(s string) (bool, error) {
 	switch s {
 	case "true":
@@ -675,6 +685,9 @@ func (p *parser) platform(c *setupwire.PlatformConfig) {
 	if a := optional(p, "sealing_key_release.unsafe_single_key_accepted", parseBool); a != nil {
 		c.SealingKeyRelease.UnsafeSingleKeyAccepted = *a
 	}
+	if t := optional(p, "sealing_key_release.kms_key_creation_date", parseTime); t != nil {
+		c.SealingKeyRelease.KMSKeyCreationDate = *t
+	}
 }
 
 func (p *parser) locked(l *setupwire.Locked) {
@@ -796,7 +809,7 @@ func FormatSetup(s *setupwire.Setup) ([]byte, error) {
 	w.kv("signing_mode", s.SigningMode)
 	w.blank()
 	w.note("platform: private, fixed")
-	formatPlatform(w, &s.Platform)
+	formatPlatform(w, &s.Platform, s.Chain.Prod())
 	w.blank()
 	formatLocked(w, &s.Locked)
 	w.blank()
@@ -816,7 +829,9 @@ func formatSalts(w *printer, names []string, salts setupwire.Salts) {
 	}
 }
 
-func formatPlatform(w *printer, p *setupwire.PlatformConfig) {
+// prod picks the note on kms_key_creation_date: the CloudTrail check of a
+// locked creation applies on a prod chain, whose key must be created locked.
+func formatPlatform(w *printer, p *setupwire.PlatformConfig, prod bool) {
 	w.kv("platform", p.Platform)
 	for _, der := range p.AllowedClientCA {
 		sum := sha256.Sum256(der)
@@ -835,6 +850,14 @@ func formatPlatform(w *printer, p *setupwire.PlatformConfig) {
 		"attest_audience": k.AttestAudience}
 	for _, name := range keyReleaseKeys[p.Platform] {
 		w.kv("sealing_key_release."+name, vals[name])
+	}
+	if k.KMSKeyCreationDate != 0 {
+		if prod {
+			w.note("the KMS key's CreationDate; check in CloudTrail that its CreateKey had the final locked policy and no PutKeyPolicy followed")
+		} else {
+			w.note("the KMS key's CreationDate; the runner starts only on the key with this date")
+		}
+		w.kv("sealing_key_release.kms_key_creation_date", unixNote(k.KMSKeyCreationDate))
 	}
 	if k.NoLockAccepted {
 		w.note("Cloud KMS has no lock on the key rule; this setup accepts that, and a mainnet runner starts anyway")

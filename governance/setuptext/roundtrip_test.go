@@ -111,3 +111,49 @@ func TestUnsafeSingleKeyAccepted(t *testing.T) {
 		t.Fatal("format writes unsafe_single_key_accepted for a setup without it")
 	}
 }
+
+// sealing_key_release.kms_key_creation_date: the human form carries it as
+// an RFC 3339 time, and only for a setup that has it.
+func TestKMSKeyCreationDate(t *testing.T) {
+	plain := setups(t)["setup-nitro"]
+	plain.Platform.SealingKeyRelease.KMSKeyCreationDate = 0
+	pinned := setups(t)["setup-nitro"]
+	pinned.Platform.SealingKeyRelease.KMSKeyCreationDate = 1793895285
+	text, err := FormatSetup(pinned)
+	if err != nil || !strings.Contains(string(text), "sealing_key_release.kms_key_creation_date = 2026-11-05T16:14:45Z\n") {
+		t.Fatalf("format: %v\n%s", err, text)
+	}
+	back, err := ParseSetup("nitro.conf", text)
+	if err != nil || back.Platform.SealingKeyRelease.KMSKeyCreationDate != 1793895285 {
+		t.Fatalf("parse: %v", err)
+	}
+	// The aws CLI form (a fraction and +00:00), another offset: the same
+	// second, the fraction dropped.
+	for _, form := range []string{"2026-11-05T16:14:45.048000+00:00", "2026-11-05T17:14:45.678+01:00"} {
+		other := strings.Replace(string(text), "= 2026-11-05T16:14:45Z", "= "+form, 1)
+		if back, err := ParseSetup("nitro.conf", []byte(other)); err != nil || back.Platform.SealingKeyRelease.KMSKeyCreationDate != 1793895285 {
+			t.Fatalf("parse %s: %v", form, err)
+		}
+	}
+	if text, _ := FormatSetup(plain); strings.Contains(string(text), "kms_key_creation_date") {
+		t.Fatal("format writes kms_key_creation_date for a setup without it")
+	}
+}
+
+// The CloudTrail note on kms_key_creation_date shows on a prod chain only:
+// off prod the key may be unlocked on purpose.
+func TestKMSKeyCreationDateNote(t *testing.T) {
+	const cloudTrail = "check in CloudTrail that its CreateKey had the final locked policy"
+	s := setups(t)["setup-nitro"]
+	text, err := FormatSetup(s)
+	if err != nil || strings.Contains(string(text), cloudTrail) || !strings.Contains(string(text), "the runner starts only on the key with this date") {
+		t.Fatalf("off prod: %v\n%s", err, text)
+	}
+	s.Chain.GenesisForkVersion = setupwire.MainnetForkVersion
+	if !s.Chain.Prod() {
+		t.Fatal("the mainnet chain is not prod")
+	}
+	if text, err := FormatSetup(s); err != nil || !strings.Contains(string(text), cloudTrail) {
+		t.Fatalf("prod: %v\n%s", err, text)
+	}
+}

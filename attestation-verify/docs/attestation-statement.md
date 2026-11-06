@@ -1,4 +1,4 @@
-# Attestation statement: setup format 4
+# Attestation statement: setup format 5
 
 This file gives the exact bytes. The golden vectors are in `attestation-verify/docs/attestation-statement-vectors.json`; `governance/setupwire` makes them (`go test -run TestStatementVectors -update`), except the human forms, which `governance/setuptext` makes (`go test -run TestStatementHuman -update`), and `TestStatementVectors` recomputes every value in the file from the formulas below without the package's helpers.
 
@@ -49,7 +49,7 @@ Each leaf has its own 32-byte salt. A salt of 32 zero bytes is refused everywher
 
 | # | Name | Value |
 | --- | --- | --- |
-| 0 | `setup_format_version` | u8, 4 |
+| 0 | `setup_format_version` | u8, 5 |
 | 1 | `cluster_id` | 32 bytes, not zero |
 | 2 | `handover_generation` | u64, 1 or more |
 | 3 | `genesis_validators_root` | 32 bytes |
@@ -126,14 +126,14 @@ store    = nitro: bucket:str region:str
          | azure: account:str container:str subscription:str resource_group:str
          | gcp:   bucket:str
          | dev:   dir:str
-sealing_key_release = nitro: region:str kms_key_id:str
+sealing_key_release = nitro: region:str kms_key_id:str has:u8 [kms_key_creation_date:u64]
          | azure: maa_endpoint:str akv_endpoint:str kid:str
          | gcp:   wif_provider:str kms_key:str attest_audience:str no_lock_accepted:u8
                  unsafe_single_key_accepted:u8
          | dev:   (nothing)
 ```
 
-`platform` is 1 nitro, 2 azure, 3 gcp, 4 dev. `ca_count` is 1 to 4 DER CA certificates (`allowed_client_ca`), sorted by their bytes. `no_lock_accepted` (`sealing_key_release.no_lock_accepted`) and `unsafe_single_key_accepted` (`sealing_key_release.unsafe_single_key_accepted`, the setup accepts that the signer holds keys alone, 1 of 1) are GCP only, 0 or 1.
+`platform` is 1 nitro, 2 azure, 3 gcp, 4 dev. `ca_count` is 1 to 4 DER CA certificates (`allowed_client_ca`), sorted by their bytes. `no_lock_accepted` (`sealing_key_release.no_lock_accepted`) and `unsafe_single_key_accepted` (`sealing_key_release.unsafe_single_key_accepted`, the setup accepts that the signer holds keys alone, 1 of 1) are GCP only, 0 or 1. `kms_key_creation_date` (`sealing_key_release.kms_key_creation_date`, Nitro only) is optional: a presence byte, then the KMS key's `CreationDate` in Unix seconds, not 0. A setup of a prod chain on Nitro must have it.
 
 The private part is at most 2560 bytes (`MaxPlatformPrivate`). The attestation circuits hash it with that fixed bound (`MAX_PRIVATE` in `circuits/lib/src/platform.nr`), so a longer one could never be proven, and `signer-admin setup` and the decoder refuse it. Four P-256 CA certificates take about 2.07 KB of it.
 
@@ -331,4 +331,4 @@ The design fixes the split and the field names. This file adds these points, and
 6. Key origin counts are u32 and are part of the setup state, so they are in IDENTITY and ATTEST alike. Every byte of the setup state is a public output; keys_hash is the one private input from the signer.
 7. The slot time rule compares the new changes with the ones in force and is checked at arrival with T the effective activation time; the core takes the new slot times at T. The fork rule counts epochs under the slot times in force and those pending, in both orders of arrival (section 4).
 8. The ranges: `max_sign_epochs_ahead_of_clock` 1 to 16, `slashing_mark_prewrite.block_slots` 0 to 64, `source_epochs` and `target_epochs` 0 to 8 (the design's proposed numbers, lower bounds this file's).
-9. `signing_mode` is a public leaf (format 2), the last of `public`, so the leaf numbers of format 1 stay. Format 3 dropped the exit approval leaves of `locked` (`exit_allowed_validators`, `exit_stake_cap_per_day`, `exit_approvals_needed`); the later `locked` leaves moved up by three. Format 4 dropped `peer_attestation_hosts`, the last field of the private part; the leaves did not change. A verifier who gets the published leaves reads whether the signer holds shares or whole keys, checked against the attested policy_root, and the mode cannot change without a new setup.
+9. `signing_mode` is a public leaf (format 2), the last of `public`, so the leaf numbers of format 1 stay. Format 3 dropped the exit approval leaves of `locked` (`exit_allowed_validators`, `exit_stake_cap_per_day`, `exit_approvals_needed`); the later `locked` leaves moved up by three. Format 4 dropped `peer_attestation_hosts`, the last field of the private part; the leaves did not change. Format 5 added `kms_key_creation_date` to the Nitro key release in the private part; the leaves did not change. A verifier who gets the published leaves reads whether the signer holds shares or whole keys, checked against the attested policy_root, and the mode cannot change without a new setup.

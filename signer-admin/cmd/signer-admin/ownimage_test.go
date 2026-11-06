@@ -34,7 +34,7 @@ func ownImageCluster(t *testing.T) *ownImageFixture {
 	t.Helper()
 	dir := t.TempDir()
 	f := &ownImageFixture{dir: dir, keys: approvers(t, dir, 3)}
-	full := cloudSetupTextKeys(t, 4, "threshold", "", "", f.keys)
+	full := cloudSetupTextKeys(t, 5, "threshold", "", "", f.keys)
 	conf := writeFile(t, filepath.Join(dir, "setup.conf"), full)
 	mustTool(t, "setup", "-out", filepath.Join(dir, "setups"), conf)
 	for _, n := range []string{"gsigner-1", "gsigner-2", "gsigner-3"} {
