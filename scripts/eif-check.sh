@@ -99,7 +99,11 @@ else:
 # cpio "newc" archives. The kernel unpacks every archive in a ramdisk, so
 # the check reads one archive to its trailer and refuses anything after it
 # but zero padding: a second archive could replace any file read here.
-def cpio(buf, which):
+# Each file has one name: the kernel would also write through a second
+# spelling of a path ("./x", "a//x", "a/./x", "/x"), a repeated name, a
+# path under a symlink, or a hard link, so all of these fail. Both
+# ramdisks unpack into one root, so seen spans both.
+def cpio(buf, which, seen):
     out, pos = {}, 0
     while True:
         if pos + 110 > len(buf) or buf[pos:pos + 6] != b"070701":
@@ -108,17 +112,32 @@ def cpio(buf, which):
         mode, fsize, nsize = f[1], f[6], f[11]
         ns = pos + 110
         name = buf[ns:ns + nsize - 1].decode()
+        if "\0" in name:
+            sys.exit("eif-check: %s ramdisk: entry name has a NUL byte" % which)
         do = (ns + nsize + 3) & ~3
         pos = (do + fsize + 3) & ~3
         if pos > len(buf):
             sys.exit("eif-check: %s ramdisk: entry %s runs past the end" % (which, name))
         if name == "TRAILER!!!":
             break
+        isdir = mode & 0o170000 == 0o040000
+        path = name[:-1] if isdir and name.endswith("/") else name
+        parts = path.split("/")
+        if any(p in ("", ".", "..") for p in parts):
+            sys.exit("eif-check: %s ramdisk: entry %s is not a plain relative path" % (which, name))
+        if path in seen and not (isdir and seen[path] & 0o170000 == 0o040000):
+            sys.exit("eif-check: %s ramdisk: entry %s repeats an earlier path" % (which, name))
+        if any(seen.get("/".join(parts[:i]), 0) & 0o170000 == 0o120000 for i in range(1, len(parts))):
+            sys.exit("eif-check: %s ramdisk: entry %s is under a symlink" % (which, name))
+        if mode & 0o170000 == 0o100000 and f[4] != 1:
+            sys.exit("eif-check: %s ramdisk: entry %s is a hard link" % (which, name))
+        seen[path] = mode
         out[name] = (mode, buf[do:do + fsize])
     if buf[pos:].strip(b"\0"):
         sys.exit("eif-check: %s ramdisk: data after the cpio trailer at offset %d" % (which, pos))
     return out
-boot, app = cpio(rd[0], "bootstrap"), cpio(rd[1], "image")
+seen = {}
+boot, app = cpio(rd[0], "bootstrap", seen), cpio(rd[1], "image", seen)
 
 want_machine = 0xB7 if a.arch == "aarch64" else 0x3E
 def elf_ok(b):
