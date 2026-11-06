@@ -302,9 +302,12 @@ func (s *Store) createCommit(ctx context.Context, plain []byte) (uint64, []byte,
 				s.opt.Log.Warn("state copy: name taken by an object that is not a commit; skipping it", "version", v)
 				continue
 			}
+			// Our own write whose reply was lost, unless another commit
+			// is there too (EDS-WRITER-01).
+			err = nil
 			for _, f := range found {
-				if bytes.Equal(f.raw, obj) {
-					err = nil // our own write; its reply was lost
+				if !bytes.Equal(f.raw, obj) {
+					err = markstore.ErrExists
 				}
 			}
 			if err != nil {
@@ -333,7 +336,8 @@ func (s *Store) createCommit(ctx context.Context, plain []byte) (uint64, []byte,
 }
 
 // landed reports whether obj is under name after a create that failed
-// without an answer. If the create lands only later, the next commit's
+// without an answer, and nothing else is (EDS-WRITER-01). If the create
+// lands only later, or another object is there too, the next commit's
 // create at that version finds it and stops this process (ErrLost); a
 // restart then restores it.
 func (s *Store) landed(ctx context.Context, name string, obj []byte) bool {
@@ -341,13 +345,15 @@ func (s *Store) landed(ctx context.Context, name string, obj []byte) bool {
 	if err != nil {
 		return false
 	}
+	ok := false
 	for _, e := range es {
 		if e.Name != name {
 			continue
 		}
-		if b, err := s.log.Get(ctx, e); err == nil && bytes.Equal(b, obj) {
-			return true
+		if b, err := s.log.Get(ctx, e); err != nil || !bytes.Equal(b, obj) {
+			return false
 		}
+		ok = true
 	}
-	return false
+	return ok
 }

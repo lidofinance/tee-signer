@@ -264,6 +264,58 @@ func TestHiddenCommitLoses(t *testing.T) {
 	}
 }
 
+// versionedLog writes a commit under a name that is taken as a second
+// version, as a versioned bucket can, and answers with err (nil: the
+// ErrExists the name gives).
+type versionedLog struct {
+	*memLog
+	err error
+}
+
+func (v versionedLog) Create(ctx context.Context, name string, data []byte) error {
+	err := v.memLog.Create(ctx, name, data)
+	if !errors.Is(err, markstore.ErrExists) || strings.Contains(name, "/c/") {
+		return err
+	}
+	v.mu.Lock()
+	v.objs[name] = append(v.objs[name], bytes.Clone(data))
+	v.mu.Unlock()
+	if v.err != nil {
+		return v.err
+	}
+	return err
+}
+
+// EDS-WRITER-01: a clone's commit and this process's own are both under
+// one version. Finding its own bytes there is no success: the commit
+// fails, after ErrExists or a lost reply alike, and changes nothing.
+func TestOwnCommitNextToAClonesFails(t *testing.T) {
+	for name, err := range map[string]error{"exists": nil, "lost reply": errors.New("injected: the reply was lost")} {
+		t.Run(name, func(t *testing.T) {
+			l := newMemLog()
+			la := newLocal(t)
+			a, _ := open(t, la, versionedLog{l, err}, keysOf("image-a"), Options{})
+			if err := a.Put("shares/aa", []byte("x")); err != nil {
+				t.Fatal(err)
+			}
+			b, err := open(t, newLocal(t), l, keysOf("image-a"), Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := b.Put("shares/bb", []byte("b's")); err != nil {
+				t.Fatal(err)
+			}
+			err = a.Put("shares/cc", []byte("a's"))
+			if err == nil || name == "exists" && !errors.Is(err, ErrLost) {
+				t.Fatalf("a commit next to a clone's at its version: %v", err)
+			}
+			if _, err := la.Get("shares/cc"); !errors.Is(err, platform.ErrNotFound) {
+				t.Fatal("a failed commit still wrote the local store")
+			}
+		})
+	}
+}
+
 // The key release down at start is an error, not "nothing to restore".
 type downKeys struct{ platform.Keys }
 
