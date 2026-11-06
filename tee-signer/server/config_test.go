@@ -742,6 +742,43 @@ func TestConfigUpdateRotation(t *testing.T) {
 	}
 }
 
+// A rotation drops a pending open update the core holds, and the runner
+// sets the old schedule back more than an epoch after the drop: the fork at
+// the earliest epoch the rule took at the update's effective time goes, and
+// the runner keeps signing. Nothing signed past the drop, so no epoch was
+// signed under the dropped schedule. Late here: nothing calls the runner
+// in between, as when its clock fails or the process stalls.
+func TestConfigUpdateRotationDropsHeldScheduleLate(t *testing.T) {
+	e := newEnv(t, u64(3600))
+	t0 := e.now()
+	at := t0 + 3600
+	eT := (at - testGenesis) / testEpoch // epoch 1075
+	rot := e.body(locked, 1, e.groupHash(locked), t0)
+	rot.Locked.Approvers = approverSet(2, 4, 5, 6)
+	e.mustSend(signed(t, rot, first2, []byte{4, 5, 6}), wireadmin.ConfigAccepted)
+	op := e.body(open, 1, e.groupHash(open), at)
+	op.Open.ForkSchedule = append(op.Open.ForkSchedule, setupwire.Fork{Epoch: eT + 4, Version: v6})
+	e.mustSend(signed(t, op, first2, nil), wireadmin.ConfigAccepted)
+	if cfg := e.signer.Config(); cfg.ForkVersionAt(eT+4) != v6 {
+		t.Fatal("the open update is not in the core on arrival")
+	}
+	fee := e.setup.Locked.AllowedFeeRecipients[0]
+	e.clock.add(at - 10 - e.now())
+	if err := e.register(fee); err != nil {
+		t.Fatalf("before the rotation: %v", err)
+	}
+	e.clock.add(10 + 2*testEpoch)
+	if err := e.register(fee); err != nil {
+		t.Fatalf("after the rotation: %v", err)
+	}
+	if cfg := e.signer.Config(); cfg.ForkVersionAt(eT+4) == v6 {
+		t.Fatal("the dropped open update stays in the core")
+	}
+	if st := e.srv.SetupState(); st.Open.Pending != (backend.PendingUpdate{}) || st.Locked.Version != 1 {
+		t.Fatalf("after the rotation: %+v", st)
+	}
+}
+
 // A locked update whose allowed list gains an image waits at least the
 // image's minimum, whatever the time lock; one that only removes an image
 // waits the time lock. activate_at may reach the minimum plus the horizon.
