@@ -697,15 +697,22 @@ typedef struct {
  * signer signs no epoch past epoch(T) + max_epochs_ahead, so no epoch is ever
  * signed under both schedules, and a fork that has started never changes. For
  * the same reason a host may apply next as soon as it arrives: until T both
- * schedules give the same result. The chain (genesis fork version, genesis
- * validators root, exit fork version, slot timing), the clock horizon, the
- * slashing settings and the policy are not part of next, so no schedule
- * update changes them. Loaded validators and their slashing state stay.
+ * schedules give the same result. With a non-zero activate_at,
+ * sc_signer_set_schedule takes for the clock the latest reading of a signing
+ * call, so a schedule set after activate_at is held to the epochs the signer
+ * signed before it. That reading covers only this signer's own calls since
+ * init: the caller must pass the real effective time of the update, and
+ * after a restart either build the signer from the values in force or rely
+ * on the restart floor. The chain (genesis fork version, genesis validators
+ * root, exit fork version, slot timing), the clock horizon, the slashing
+ * settings and the policy are not part of next, so no schedule update
+ * changes them. Loaded validators and their slashing state stay.
  *
  * SC_OK: replaced. SC_ERR_SCHEDULE: the rule refused next. SC_ERR_ARG: next
  * fails the checks sc_signer_init makes. SC_ERR_CLOCK: the clock failed. On
  * any error nothing changes. sc_signer_check_schedule makes the same checks
- * and changes nothing, for a host that checks an update before it stores it.
+ * with the trusted clock and changes nothing, for a host that checks an
+ * update before it stores it.
  */
 int sc_signer_check_schedule(const sc_signer *s, const sc_schedule *next, uint64_t activate_at);
 int sc_signer_set_schedule(sc_signer *s, const sc_schedule *next, uint64_t activate_at);
@@ -771,8 +778,9 @@ int sc_signer_init_ext(void *mem, size_t mem_len, uint32_t max_validators,
  * epoch(T) + max_epochs_ahead, and both lists give the same clock for every
  * one of those epochs. With a non-zero activate_at, sc_signer_set_slot_times
  * takes for the clock the latest reading of a signing call, so a change set
- * after activate_at is held to the epochs the signer signed before it. Loaded
- * validators and their slashing state stay.
+ * after activate_at is held to the epochs the signer signed before it, which
+ * covers only this signer's own calls since init (see
+ * sc_signer_set_schedule). Loaded validators and their slashing state stay.
  *
  * SC_OK: replaced. SC_ERR_SCHEDULE: the rule refused next. SC_ERR_ARG: next
  * fails sc_slot_times_check. SC_ERR_CLOCK: the clock failed. On any error

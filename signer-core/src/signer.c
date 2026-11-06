@@ -504,10 +504,11 @@ static int same_schedule_through(const sc_config *a, const sc_config *b, uint64_
     return 1;
 }
 
-/* The checks of sc_signer_check_schedule_under. On SC_OK, *merged is the
- * signer's config with next in place. */
+/* The checks of sc_signer_check_schedule_under; apply for a set. On SC_OK,
+ * *merged is the signer's config with next in place. */
 static int schedule_rule(const sc_signer *s, const sc_schedule *next, uint64_t activate_at,
-                         const sc_slot_times *pending, uint32_t pending_count, sc_config *merged)
+                         const sc_slot_times *pending, uint32_t pending_count, int apply,
+                         sc_config *merged)
 {
     uint64_t now, t, limit;
 
@@ -528,7 +529,12 @@ static int schedule_rule(const sc_signer *s, const sc_schedule *next, uint64_t a
     /* Before T the signer may sign up to epoch(T) + max_epochs_ahead under
      * whichever slot times are in force by then: the ones it holds, or a
      * pending list that comes into force before T. The largest epoch counts;
-     * the rule keeps one more epoch unchanged as a margin. */
+     * the rule keeps one more epoch unchanged as a margin. A set with
+     * activate_at counts the clock only as far as a signing call read it, so
+     * a schedule checked before activate_at and set late is not refused for
+     * epochs nothing signed under the old schedule. */
+    if (apply && activate_at)
+        now = s->sign_now;
     t = sc_max64(activate_at, now);
     limit = sc_epoch_at(&s->cfg, &s->slot_times, t);
     for (uint32_t i = 0; i < pending_count; i++)
@@ -551,14 +557,14 @@ int sc_signer_check_schedule_under(const sc_signer *s, const sc_schedule *next, 
                                    const sc_slot_times *pending, uint32_t pending_count)
 {
     sc_config merged;
-    return schedule_rule(s, next, activate_at, pending, pending_count, &merged);
+    return schedule_rule(s, next, activate_at, pending, pending_count, 0, &merged);
 }
 
 int sc_signer_set_schedule_under(sc_signer *s, const sc_schedule *next, uint64_t activate_at,
                                  const sc_slot_times *pending, uint32_t pending_count)
 {
     sc_config merged;
-    int rc = schedule_rule(s, next, activate_at, pending, pending_count, &merged);
+    int rc = schedule_rule(s, next, activate_at, pending, pending_count, 1, &merged);
     if (rc == SC_OK)
         s->cfg = merged;
     return rc;

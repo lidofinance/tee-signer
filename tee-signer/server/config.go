@@ -42,6 +42,9 @@ import (
 // agree on every epoch the signer may sign before the effective time, so
 // applying it at once signs the same as applying it then. A switch at the
 // effective time could instead meet the rule one epoch late and be refused.
+// An update that reaches the core late anyway (a slow log write, a body
+// back only after the effective time) goes in with its effective time, and
+// the core then counts the clock only as far as it signed.
 //
 // The fork rule counts epochs under the full slot schedule: the slot times
 // in force and those of a pending locked update, whichever gives the later
@@ -106,13 +109,17 @@ type view struct {
 	// lockedAt is the effective time of the locked update that came into
 	// force in this view, 0 when none did.
 	lockedAt uint64
+	// openAt is the effective time of the open update that came into
+	// force in this view, 0 when none did.
+	openAt uint64
 	// pendingSlots are the slot time changes of the pending locked update
 	// when its body is readable and they differ from those in force: the
 	// fork rule counts epochs under them too.
 	pendingSlots [][]core.SlotTimeChange
 	// newest is the open schedule the core holds: the pending update's when
 	// its body is readable, else the active one's. newestAt is its
-	// effective time, 0 for the active values.
+	// effective time: the pending update's, or openAt for the active
+	// values.
 	newest    *setupwire.Open
 	newestRef updateRef
 	newestAt  uint64
@@ -327,6 +334,7 @@ func (u *Updates) compute(st markstore.ConfigState, now uint64) view {
 	var errs []error
 	lp, op := v.state.Locked.Pending, v.state.Open.Pending
 	if op != nil && op.EffectiveAt <= now && (lp == nil || op.EffectiveAt < lp.EffectiveAt) {
+		v.openAt = op.EffectiveAt
 		activate(&v.state.Open)
 	}
 	if lp != nil && lp.EffectiveAt <= now {
@@ -343,6 +351,7 @@ func (u *Updates) compute(st markstore.ConfigState, now uint64) view {
 		}
 	}
 	if op := v.state.Open.Pending; op != nil && op.EffectiveAt <= now {
+		v.openAt = op.EffectiveAt
 		activate(&v.state.Open)
 	}
 	var err error
@@ -352,7 +361,7 @@ func (u *Updates) compute(st markstore.ConfigState, now uint64) view {
 	if v.open, err = u.openValues(v.state.Open); err != nil {
 		errs = append(errs, err)
 	} else {
-		v.newest, v.newestRef = v.open, refOf(v.state.Open)
+		v.newest, v.newestRef, v.newestAt = v.open, refOf(v.state.Open), v.openAt
 	}
 	if p := v.state.Open.Pending; p != nil {
 		r := updateRef{p.Version, p.Hash}

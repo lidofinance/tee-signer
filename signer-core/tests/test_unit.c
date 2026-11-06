@@ -3208,6 +3208,27 @@ static void test_set_schedule(void)
     CHECK_RC(sc_signer_set_schedule(s, &n, 0), SC_ERR_SCHEDULE);
     CHECK_RC(sc_signer_set_schedule(s, &base, UINT64_MAX), SC_OK); /* no change */
 
+    /* A fork checked for activate_at at the start of epoch E + 1 and set two
+     * epochs late still goes in when no signing call read the clock after
+     * activate_at; once one did, it does not. activate_at 0 keeps the
+     * trusted clock. */
+    set_epoch(&h, E);
+    sc_signer *late = new_signer(&h, &cfg, 4, 0);
+    at = GENESIS_TIME + (E + 1) * EPOCH_SECONDS;
+    n = base;
+    add_fork(&n, E + 5, V_NEXT);
+    CHECK_RC(sc_signer_check_schedule(late, &n, at), SC_OK);
+    set_epoch(&h, E + 3);
+    CHECK_RC(sc_signer_check_schedule(late, &n, at), SC_ERR_SCHEDULE);
+    CHECK_RC(sc_signer_set_schedule(late, &n, 0), SC_ERR_SCHEDULE);
+    CHECK_RC(sc_signer_set_schedule(late, &n, at), SC_OK);
+    CHECK(signs_with(late, &cfg, E + 4, V_FULU) && signs_with(late, &cfg, E + 5, V_NEXT));
+    sc_signer *used = new_signer(&h, &cfg, 4, 0);
+    vkeys ku = add_validator(used, 14, 1003);
+    CHECK_RC(sc_sign_randao_reveal(used, ku.pk, E + 3, sig), SC_OK);
+    CHECK_RC(sc_signer_set_schedule(used, &n, at), SC_ERR_SCHEDULE);
+    CHECK(signs_with(used, &cfg, E + 5, V_FULU));
+
     CHECK(SC_ERR_SCHEDULE == 26);
     CHECK(strcmp(sc_status_name(SC_ERR_SCHEDULE), "SC_ERR_SCHEDULE") == 0);
 }

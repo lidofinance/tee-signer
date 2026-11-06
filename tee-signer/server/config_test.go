@@ -85,6 +85,8 @@ type flakyLog struct {
 	failPut, failSet bool
 	// loseSet: SetState writes, then answers as if the reply was lost.
 	loseSet bool
+	// beforeSet, if set, runs before each state write, as a slow store.
+	beforeSet func()
 	// tamper, if set, replaces the body copy the log hands out, as an
 	// untrusted store can (config_recovery_test.go).
 	tamper func(g setupwire.Group, v uint64, raw []byte) []byte
@@ -100,6 +102,9 @@ func (f *flakyLog) PutBody(ctx context.Context, raw []byte) (setupwire.Group, ui
 }
 
 func (f *flakyLog) SetState(ctx context.Context, st markstore.ConfigState) error {
+	if f.beforeSet != nil {
+		f.beforeSet()
+	}
 	if f.failSet {
 		return errDropped
 	}
@@ -879,6 +884,55 @@ func TestConfigUpdateSlotTimesAppliedLate(t *testing.T) {
 	if got := e.signer.Config().SlotTimeChanges; !slices.Equal(got, want) {
 		t.Fatalf("slot times in the core: %+v", got)
 	}
+}
+
+// A fork at the earliest epoch the fork rule takes still goes into the
+// core when the runner applies it more than an epoch after its effective
+// time: nothing signed after that time, so the runner keeps signing. Late
+// here: the state write takes an epoch, or the body is unreadable after a
+// restart until past the effective time.
+func TestConfigUpdateForkAppliedLate(t *testing.T) {
+	t.Run("slow store", func(t *testing.T) {
+		e := newEnv(t, u64(3600))
+		t0 := e.now()
+		b := e.body(open, 1, e.groupHash(open), t0)
+		b.Open.ForkSchedule = append(b.Open.ForkSchedule, setupwire.Fork{Epoch: startEpoch + 4, Version: v6})
+		e.log.beforeSet = func() { e.clock.add(testEpoch) }
+		e.mustSend(signed(t, b, first2, nil), wireadmin.ConfigAccepted)
+		e.log.beforeSet = nil
+		if err := e.register(e.setup.Locked.AllowedFeeRecipients[0]); err != nil {
+			t.Fatalf("after a late apply: %v", err)
+		}
+		if cfg := e.signer.Config(); cfg.ForkVersionAt(startEpoch+4) != v6 {
+			t.Fatal("the schedule is not in the core")
+		}
+	})
+	t.Run("body back late", func(t *testing.T) {
+		e := newEnv(t, u64(3600))
+		at := e.now() + 10*testEpoch // epoch 1010
+		b := e.body(open, 1, e.groupHash(open), at)
+		b.Open.ForkSchedule = append(b.Open.ForkSchedule, setupwire.Fork{Epoch: startEpoch + 14, Version: v6})
+		raw := signed(t, b, first2, nil)
+		e.mustSend(raw, wireadmin.ConfigAccepted)
+		e.signer.Close()
+		if err := os.Remove(filepath.Join(e.dir, "marks", markstore.BodyName(e.hash, open, 1, 1))); err != nil {
+			t.Fatal(err)
+		}
+		e.start()
+		fee := e.setup.Locked.AllowedFeeRecipients[0]
+		if err := e.register(fee); err != nil {
+			t.Fatalf("before the effective time: %v", err)
+		}
+		e.clock.add(at - e.now() + 2*testEpoch)
+		wantCode(t, e.register(fee), backend.StatusStorage, "no readable copy")
+		e.mustSend(raw, wireadmin.ConfigKnown)
+		if err := e.register(fee); err != nil {
+			t.Fatalf("with the body back: %v", err)
+		}
+		if cfg := e.signer.Config(); cfg.ForkVersionAt(startEpoch+14) != v6 {
+			t.Fatal("the schedule is not in the core")
+		}
+	})
 }
 
 // A slot time change pending, then a fork update: the fork rule counts
