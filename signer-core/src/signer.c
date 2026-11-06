@@ -41,6 +41,7 @@ struct sc_signer {
     sc_watermark device; /* SC_MARKS_PER_DEVICE: the stored device mark */
     int device_loaded;
     sc_slot_times slot_times; /* the slot time changes in force */
+    uint64_t sign_now;        /* the latest clock reading of a signing call */
 };
 
 #define MAX_VALIDATORS_LIMIT (1u << 24)
@@ -593,7 +594,7 @@ static int same_slot_times_through(const sc_config *cfg, const sc_slot_times *a,
 }
 
 /* The checks of sc_signer_check_slot_times. */
-static int slot_time_rule(const sc_signer *s, const sc_slot_times *next, uint64_t activate_at)
+static int slot_time_rule(const sc_signer *s, const sc_slot_times *next, uint64_t activate_at, int apply)
 {
     uint64_t now, limit;
 
@@ -602,7 +603,13 @@ static int slot_time_rule(const sc_signer *s, const sc_slot_times *next, uint64_
     if (s->ops.now(s->ops.ctx, &now) != SC_OK)
         return SC_ERR_CLOCK;
     /* As schedule_rule: before T the signer signs up to epoch(T) +
-     * max_epochs_ahead, and one more epoch stays unchanged as a margin. */
+     * max_epochs_ahead, and one more epoch stays unchanged as a margin. A
+     * set with activate_at counts the clock only as far as a signing call
+     * read it, so a change checked before activate_at and set late is not
+     * refused for epochs nothing signed under the old times
+     * (SETUP-HORIZON-01). */
+    if (apply && activate_at)
+        now = s->sign_now;
     limit = sc_epoch_at(&s->cfg, &s->slot_times, sc_max64(activate_at, now));
     limit = sc_sat_add(sc_sat_add(limit, s->cfg.max_epochs_ahead), 1);
     return same_slot_times_through(&s->cfg, &s->slot_times, next, limit) ? SC_OK : SC_ERR_SCHEDULE;
@@ -610,12 +617,12 @@ static int slot_time_rule(const sc_signer *s, const sc_slot_times *next, uint64_
 
 int sc_signer_check_slot_times(const sc_signer *s, const sc_slot_times *next, uint64_t activate_at)
 {
-    return slot_time_rule(s, next, activate_at);
+    return slot_time_rule(s, next, activate_at, 0);
 }
 
 int sc_signer_set_slot_times(sc_signer *s, const sc_slot_times *next, uint64_t activate_at)
 {
-    int rc = slot_time_rule(s, next, activate_at);
+    int rc = slot_time_rule(s, next, activate_at, 1);
     if (rc == SC_OK)
         s->slot_times = *next;
     return rc;
@@ -662,7 +669,10 @@ int sc_signer_signing_root(const sc_signer *s, const uint8_t domain_type[SC_DOMA
 
 static int read_clock(sc_signer *s, uint64_t *now)
 {
-    return s->ops.now(s->ops.ctx, now) == SC_OK ? SC_OK : SC_ERR_CLOCK;
+    if (s->ops.now(s->ops.ctx, now) != SC_OK)
+        return SC_ERR_CLOCK;
+    s->sign_now = sc_max64(s->sign_now, *now);
+    return SC_OK;
 }
 
 /* Signs a 32-byte signing root through the hash_to_G2 cache. */
