@@ -205,6 +205,12 @@ func (s *Store) commitLocked(ctx context.Context, ops map[string]op, full bool) 
 		return err
 	}
 	s.stamp = now
+	// The commit before was stamped after now, by a clock that ran ahead:
+	// write the whole state, so that newer stamps on top cannot hide its
+	// objects' age from Refresh (EDS-FRESH-03). Round(0) drops the
+	// monotonic reading, so the wall clocks are compared and a step back of
+	// the system clock counts too.
+	full = full || now.Round(0).Before(s.written)
 	if err := s.ensureKey(ctx); err != nil {
 		return err
 	}

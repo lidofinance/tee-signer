@@ -389,6 +389,34 @@ func TestRefreshOnTrustedClock(t *testing.T) {
 	}
 }
 
+// EDS-FRESH-03: commits stamped ahead of the clock, then small commits at
+// the right time. The later stamps must not hide the old objects from
+// Refresh: once they are older than maxAge, Refresh writes them again.
+func TestRefreshAfterStampsAhead(t *testing.T) {
+	l := newMemLog()
+	t0 := time.Unix(1_800_000_000, 0)
+	now := t0.Add(72 * time.Hour) // the clock runs three days ahead
+	s, _ := open(t, newLocal(t), l, keysOf("image-a"), Options{Now: func() time.Time { return now }})
+	if err := s.Put("shares/aa", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Put("shares/bb", []byte("y")); err != nil {
+		t.Fatal(err)
+	}
+	now = t0 // the clock is right again
+	if err := s.Put("shares/cc", []byte("z")); err != nil {
+		t.Fatal(err)
+	}
+	now = t0.Add(9 * time.Hour)
+	if err := s.Put("shares/dd", []byte("w")); err != nil {
+		t.Fatal(err)
+	}
+	now = t0.Add(11 * time.Hour)
+	if err := s.Refresh(context.Background(), 10*time.Hour); err != nil || !strings.Contains(s.Status(), "version=5") {
+		t.Fatalf("refresh 11 hours after the first objects: %v %s", err, s.Status())
+	}
+}
+
 // The copy lives under its setup's name and its AAD binds the setup: a new
 // setup with the same signer name starts with an empty copy, and a
 // snapshot of another setup copied under its names does not open. The flag
