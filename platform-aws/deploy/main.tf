@@ -54,7 +54,7 @@ variable "key_policy_locked" {
   type        = bool
 }
 variable "node_key" {
-  description = "this node's name in the record writer's user name and the operator key pair's name. Each node in one account and region needs its own"
+  description = "a short name for this signer node, such as node-1 or mt-a (not a key or a secret). It names the record writer user and the operator key pair. Each node in one account and region needs its own"
   default     = "node-1"
 }
 variable "entry_cidrs" {

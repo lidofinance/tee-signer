@@ -893,7 +893,8 @@ For a second node in the account and region, set `node_key` (it names the
 record writer and the key pair) and `parent_role_name` and
 `security_group_name`, which would clash otherwise. Two nodes with the same
 `mark_bucket` each write the whole bucket policy, and the last apply drops
-the other node's record writer: give each node its own bucket, or set
+the other node's record writer: give each node its own bucket, named after
+the node (for example `<org>-marks-<node_key>`), or set
 `mark_bucket` on one node only and add the other writer to that policy by
 hand. To take over resources made earlier, set
 `parent_role_name`, `parent_role_description`, `security_group_name`,
