@@ -273,11 +273,29 @@ create and read objects under `marks/` and `config/`, set each new object's
 retention (`s3:PutObjectRetention`, see "Mark log"), list versions and read
 the Object Lock configuration (the runner's lock check needs
 `s3:GetBucketObjectLockConfiguration`); the parent role is denied every
-write. A bucket policy written by an older `main.tf` lacks
+write. The policy also refuses a put under `marks/` or `config/` that names
+no retention or less than `mark_min_lock_days` days. `mark_min_lock_days`
+has no default and is required with `mark_bucket`: set it to the lowest
+`slashing_log_min_lock_days` of the setups that write to the bucket, never
+higher, or S3 refuses the runner's writes. AWS does not document how it
+rounds a part day, so the policy refuses fewer than
+`mark_min_lock_days` + 1 remaining days and the runner adds a day and an
+hour to its retention.
+Apply this policy only after every signer that writes to the bucket runs
+an image whose runner adds a day and an hour to its retention (this
+change); older runners use a 1 h margin and S3 may refuse their writes.
+For the same reason, a rollback through `prev_pcrs` to an image from
+before this change needs `mark_min_lock_days` lowered by 1 first, or the
+bucket policy reapplied from the older `main.tf` when it is 1. Otherwise
+S3 may refuse that image's record writes and it stops signing. A runner
+without a setup (the debug flag path) names no retention and cannot write
+to a bucket with this policy; test it against a bucket without
+`mark_bucket` set. A bucket policy written by an older `main.tf` lacks
 `s3:PutObjectRetention`: apply this one before the runner that sets
-retention starts, or its first record write fails with AccessDenied. The paths carry setup_hash, so one policy serves every setup of the
-image. The KMS key policy and the bucket policy are set once per EIF; a new
-chain or signer is a new setup on the parent. The order of a deploy is in
+retention starts, or its first record write fails with AccessDenied. The
+paths carry setup_hash, so one policy serves every setup of the image. The
+KMS key policy and the bucket policy are set once per EIF; a new chain or
+signer is a new setup on the parent. The order of a deploy is in
 `governance/docs/setup-phase-cloud-test.md`.
 
 ## How the runner uses Nitro
@@ -423,7 +441,8 @@ the runner (records and config bodies) names its own retention:
 `x-amz-object-lock-mode: COMPLIANCE` and
 `x-amz-object-lock-retain-until-date` at least `slashing_log_min_lock_days`
 ahead (or the default the check read, if longer), plus an hour for the
-clock skew S3 allows on a signed request. That date replaces the default
+clock skew S3 allows on a signed request and a day for the bucket policy's
+rounding margin (see above). That date replaces the default
 for the object and nobody can shorten it. A later change of the default
 then has no effect on the runner's objects. The date comes from the
 enclave's clock, which the host sets; it is the same clock that dates the
@@ -856,8 +875,8 @@ The full order of a deploy, with the setup, is in
    `udprelay` for the parent's arch), then `scripts/nitro-eif.sh` (with
    `ARCH=aarch64` for Graviton). Note the PCRs it prints.
 2. `terraform apply` of `main.tf` with `pcr0`, `pcr1`, `pcr2`, the
-   `admin_role_arn`, `key_policy_locked` (true for mainnet, see "Setup"), `ami_id`, `subnet_id` and, if wanted, `mark_bucket`,
-   `entry_cidrs`, `ssh_public_key` and `ssh_cidrs`. Terraform state stays
+   `admin_role_arn`, `key_policy_locked` (true for mainnet, see "Setup"), `ami_id`, `subnet_id` and, if wanted, `mark_bucket`
+   with `mark_min_lock_days`, `entry_cidrs`, `ssh_public_key` and `ssh_cidrs`. Terraform state stays
    outside the repo.
 3. The writer credentials (see "Clone protection", steps 2 and 3).
 4. Copy the EIF, the parent binaries and the files of

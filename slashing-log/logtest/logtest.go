@@ -704,15 +704,17 @@ func Run(t *testing.T, kind wormfake.Kind, newLog NewLog) {
 		}
 		old := m.LogID()
 		blob, _ := plainSealer{}.Seal([]byte("share"), markstore.ShareAAD(s1.Hash, old, pk))
-		srv.Advance(2 * day)
+		srv.Advance(3 * day)
 		if err := sc.Put("shares/aa01", blob); err != nil {
 			t.Fatal(err)
 		}
 		// The host keeps the signer stopped until its records expired (the
 		// newer commit has not), the admin deletes what expired, and the
 		// listing hides the state copy's objects, so the shares are gone
-		// at List.
-		srv.Advance(ret - day)
+		// at List. The records' own retention on S3 runs a day and an hour
+		// past ret (s3log retainSlack), so this waits ret and two and a half
+		// days.
+		srv.Advance(ret - day/2)
 		srv.AdminDeleteExpired()
 		if _, ok := srv.Current(statestore.Name(s1.Hash, "signer-1", 1)); !ok {
 			t.Fatal("the commit expired too; the test wants it hidden")

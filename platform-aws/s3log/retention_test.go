@@ -4,6 +4,7 @@ package s3log
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -67,9 +68,9 @@ func TestS3RecordKeepsItsRetentionWhenTheDefaultIsRemoved(t *testing.T) {
 	if _, ok := srv.Current(name); !ok {
 		t.Fatal("the record is gone")
 	}
-	srv.Advance(21 * day)
+	srv.Advance(22 * day)
 	if n := srv.AdminDeleteExpired(); n != 1 {
-		t.Fatalf("%d versions expired after 31 days, want 1", n)
+		t.Fatalf("%d versions expired after 32 days, want 1", n)
 	}
 }
 
@@ -145,12 +146,53 @@ func TestS3RetentionHeaders(t *testing.T) {
 		t.Fatalf("mode %q", mode)
 	}
 	until, err := time.Parse(time.RFC3339, seen.Get("x-amz-object-lock-retain-until-date"))
-	if err != nil || until.Before(start.Add(30*day)) || until.After(start.Add(31*day)) {
+	// At least a day past the minimum: the bucket policy refuses less.
+	if err != nil || until.Before(start.Add(31*day)) || until.After(start.Add(32*day)) {
 		t.Fatalf("retain until %q: %v", seen.Get("x-amz-object-lock-retain-until-date"), err)
 	}
 	// A bucket without Object Lock refuses the headers, so the write fails.
 	srv.SetLock(wormfake.Lock{None: true})
 	if err := l.Create(ctx, "marks/s/00000000000000000002", []byte("record")); err == nil {
 		t.Fatal("a retained write to a bucket without Object Lock went through")
+	}
+}
+
+type dropFirstPut struct {
+	next    http.RoundTripper
+	dropped bool
+	onDrop  func()
+}
+
+func (d *dropFirstPut) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Method == http.MethodPut && !d.dropped {
+		d.dropped = true
+		d.onDrop()
+		return nil, errors.New("connection reset")
+	}
+	return d.next.RoundTrip(r)
+}
+
+// The host drops the first put, sent while the clock read a day behind,
+// and corrects the clock before the retry. The retry must date the
+// retention from its own clock reading, not the first one (EDS-FRESH-04).
+func TestS3RetryDatesRetentionAgain(t *testing.T) {
+	ctx := context.Background()
+	srv := wormfake.New(wormfake.S3, "signer-marks")
+	defer srv.Close()
+	srv.SetLock(wormfake.Lock{Compliance: true, Days: 1})
+	l := openRetained(t, srv, 1)
+	if err := markstore.CheckLock(ctx, l, 1); err != nil {
+		t.Fatal(err)
+	}
+	skew := -day
+	l.Now = func() time.Time { return srv.Now().Add(skew) }
+	l.HTTP = &http.Client{Transport: &dropFirstPut{next: srv.Client().Transport, onDrop: func() { skew = 0 }}}
+	name := "marks/s/00000000000000000001"
+	start := srv.Now()
+	if err := l.Create(ctx, name, []byte("record")); err != nil {
+		t.Fatal(err)
+	}
+	if until := srv.RetainUntil(name); until.Before(start.Add(day + retainSlack)) {
+		t.Fatalf("retained until %v, want at least a day and the slack after %v", until, start)
 	}
 }

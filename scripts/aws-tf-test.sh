@@ -15,6 +15,10 @@
 #              creation date reaches the kms_key_creation_date output
 #   locked_pcr_change
 #              a new pcr0 leaves the locked key's policy as it was
+#   mark_bucket the bucket policy refuses puts under fewer days of retention
+#              than mark_min_lock_days + 1, or none
+#   min_days_* mark_min_lock_days refuses 0 and a part day, and is
+#              required with mark_bucket
 #
 # The provider comes from TF_PLUGIN_DIR (a folder with
 # registry.terraform.io/hashicorp/aws/...), or terraform init downloads it
@@ -29,8 +33,11 @@ if [ -n "${TF_PLUGIN_DIR:-}" ]; then
   [ -d "$TF_PLUGIN_DIR/registry.terraform.io" ] || { echo "TF_PLUGIN_DIR=$TF_PLUGIN_DIR has no registry.terraform.io folder" >&2; exit 1; }
   plug=(-v "$TF_PLUGIN_DIR:/plugins:ro")
 fi
+# With a local provider nothing needs the network.
+net=()
+[ ${#plug[@]} -eq 0 ] || net=(--network none)
 tf() {
-  docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e TF_IN_AUTOMATION=1 ${plug[@]+"${plug[@]}"} \
+  docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e TF_IN_AUTOMATION=1 ${plug[@]+"${plug[@]}"} ${net[@]+"${net[@]}"} \
     -v "$dir:/w" -w /w "$TERRAFORM_IMAGE" "$@"
 }
 
@@ -167,6 +174,45 @@ run "locked_pcr_change" {
     condition     = jsondecode(aws_kms_key.enclave_locked[0].policy).Statement[2].Condition.StringEqualsIgnoreCase["kms:RecipientAttestation:PCR0"] == "$(h 1)"
     error_message = "a plan writes the policy of the locked key"
   }
+}
+
+run "mark_bucket" {
+  command = apply
+  variables {
+    mark_bucket        = "signer-marks"
+    mark_min_lock_days = 30
+  }
+  assert {
+    condition = (one([for st in jsondecode(aws_s3_bucket_policy.marks[0].policy).Statement : st.Condition.NumericLessThan["s3:object-lock-remaining-retention-days"] if st.Sid == "ShortRetention"]) == 31
+    && one([for st in jsondecode(aws_s3_bucket_policy.marks[0].policy).Statement : st.Condition.Null["s3:object-lock-remaining-retention-days"] if st.Sid == "NoRetention"]) == "true")
+    error_message = "the bucket policy does not refuse puts with short or no retention"
+  }
+}
+
+run "min_days_zero" {
+  command = plan
+  variables {
+    mark_bucket        = "signer-marks"
+    mark_min_lock_days = 0
+  }
+  expect_failures = [var.mark_min_lock_days]
+}
+
+run "min_days_missing" {
+  command = plan
+  variables {
+    mark_bucket = "signer-marks"
+  }
+  expect_failures = [var.mark_min_lock_days]
+}
+
+run "min_days_frac" {
+  command = plan
+  variables {
+    mark_bucket        = "signer-marks"
+    mark_min_lock_days = 1.5
+  }
+  expect_failures = [var.mark_min_lock_days]
 }
 EOF
 

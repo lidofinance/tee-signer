@@ -73,7 +73,11 @@ type Log struct {
 // short of real time, and the hour covers that. This holds only while both
 // come from the same clock: a change that signs with one clock and dates
 // the retention with another must bound the second some other way.
-const retainSlack = time.Hour
+// The extra day is for the bucket policy of platform-aws/deploy/main.tf: it
+// refuses a put with fewer than mark_min_lock_days+1 remaining retention
+// days, so it holds whether S3 rounds a part day down or up. A put of this
+// runner has at least N days, a day and 45 minutes left.
+const retainSlack = 24*time.Hour + time.Hour
 
 // Open parses "bucket=B,region=R[,endpoint=URL]".
 func Open(rest string, env markstore.Env) (markstore.Log, error) {
@@ -206,6 +210,11 @@ func (l *Log) do(ctx context.Context, method, key string, q url.Values, body []b
 	}
 	u.RawPath = uriEncode(u.Path, true)
 	t := l.now().UTC()
+	if hdr.Get("x-amz-object-lock-mode") != "" {
+		// Each attempt dates the retention from the time it signs with.
+		hdr = hdr.Clone()
+		hdr.Set("x-amz-object-lock-retain-until-date", l.retainUntil(t).Format(time.RFC3339))
+	}
 	ph := sha256.Sum256(body)
 	payload := hex.EncodeToString(ph[:])
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), strings.NewReader(string(body)))
@@ -270,9 +279,8 @@ func (l *Log) Create(ctx context.Context, name string, data []byte) error {
 			return fmt.Errorf("s3log: default retention before a retained write: %w", err)
 		}
 	}
-	if until, ok := l.retainUntil(); ok {
-		hdr.Set("x-amz-object-lock-mode", "COMPLIANCE")
-		hdr.Set("x-amz-object-lock-retain-until-date", until.Format(time.RFC3339))
+	if l.RetainDays > 0 {
+		hdr.Set("x-amz-object-lock-mode", "COMPLIANCE") // do adds the date
 	}
 	resp, err := l.send(ctx, http.MethodPut, name, nil, data, hdr)
 	if err != nil {
@@ -290,14 +298,11 @@ func (l *Log) Create(ctx context.Context, name string, data []byte) error {
 
 // retainUntil is the retention date of a new version: RetainDays or the
 // default Lock read, whichever is longer, plus retainSlack, rounded up to a
-// second. false: RetainDays is 0 and the put names no retention.
-func (l *Log) retainUntil() (time.Time, bool) {
-	if l.RetainDays == 0 {
-		return time.Time{}, false
-	}
+// second, counted from now, the time the request is signed with.
+func (l *Log) retainUntil(now time.Time) time.Time {
 	days := max(int64(l.RetainDays), l.defaultDays.Load())
-	t := l.now().UTC().Add(time.Duration(days)*24*time.Hour + retainSlack)
-	return t.Add(time.Second - 1).Truncate(time.Second), true
+	t := now.UTC().Add(time.Duration(days)*24*time.Hour + retainSlack)
+	return t.Add(time.Second - 1).Truncate(time.Second)
 }
 
 // checkMarker runs after a create that S3 refused (412): a delete marker on
