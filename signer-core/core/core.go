@@ -264,9 +264,10 @@ func (s *Signer) CheckSchedule(next Schedule, activateAt uint64, pending ...[]Sl
 
 // SetSchedule replaces the signer's fork schedule with next, which takes
 // effect at activateAt (unix seconds, 0 for now), through the core's fork
-// rule (sc_signer_set_schedule_under): every epoch up to epoch(max(activateAt,
-// now)) + MaxEpochsAhead + 1 must keep its fork version and Gloas state, now
-// being the latest clock reading of a signing call when activateAt is set, or
+// rule (sc_signer_set_schedule_under): every epoch up to epoch(T) +
+// MaxEpochsAhead + 1 must keep its fork version and Gloas state, T being the
+// latest of activateAt, the clock and the latest clock reading of a signing
+// call (the clock left out of a set with activateAt), or
 // the result is a *backend.RefusedError with StatusSchedule and nothing
 // changes. The epoch is the largest under the slot time changes in force and
 // under each list of pending: changes the host accepted that are not yet in
@@ -335,9 +336,8 @@ func (s *Signer) CheckSlotTimes(next []SlotTimeChange, activateAt uint64) error 
 
 // SetSlotTimes replaces the signer's slot time changes with next, in force
 // from activateAt (unix seconds, 0 for now), through the core's rule
-// (sc_signer_set_slot_times): every epoch up to epoch(max(activateAt, now))
-// + MaxEpochsAhead + 1 must keep its slot time, now being the latest clock
-// reading of a signing call when activateAt is set, or the result is a
+// (sc_signer_set_slot_times): every epoch up to epoch(T) + MaxEpochsAhead + 1
+// must keep its slot time, T as in SetSchedule, or the result is a
 // *backend.RefusedError with StatusSchedule and nothing changes. The clock
 // horizon follows the new slot times at once; before activateAt both give
 // the same clock for every epoch the signer may sign.

@@ -957,7 +957,10 @@ order (the status of each refusal in brackets):
     `max_sign_epochs_ahead_of_clock` + 1, the epoch the largest under the
     slot times in force and those of a pending `locked` update. A `locked`
     update with new slot times is refused when a pending `open` update would
-    not keep clear under them.
+    not keep clear under them. The effective time also counts as at least
+    the latest clock reading of a signing call, so a runner whose clock
+    stepped back refuses an update the others take; restart it before the
+    fork's lead time runs out, or send a new update with a later fork.
 11. The runner writes the body to the mark log, then a record with the
     update pending, then answers. A failed write is `SC_ERR_STORAGE` and
     leaves nothing pending.

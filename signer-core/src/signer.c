@@ -504,6 +504,22 @@ static int same_schedule_through(const sc_config *a, const sc_config *b, uint64_
     return 1;
 }
 
+/*
+ * T of the slot time and fork rules: the latest of activate_at, the trusted
+ * clock and the latest clock reading of a signing call (sign_now). A set
+ * with activate_at leaves the clock out, so a change checked before
+ * activate_at and set late is not refused for epochs nothing signed under
+ * the old values (SETUP-HORIZON-01). sign_now is always in, so a clock that
+ * steps back below a reading a signing call made reopens no epoch that call
+ * may have signed. While the clock only moves forward, sign_now <= now.
+ */
+static uint64_t rule_time(const sc_signer *s, uint64_t activate_at, uint64_t now, int apply)
+{
+    if (apply && activate_at)
+        return sc_max64(activate_at, s->sign_now);
+    return sc_max64(sc_max64(activate_at, now), s->sign_now);
+}
+
 /* The checks of sc_signer_check_schedule_under; apply for a set. On SC_OK,
  * *merged is the signer's config with next in place. */
 static int schedule_rule(const sc_signer *s, const sc_schedule *next, uint64_t activate_at,
@@ -529,13 +545,8 @@ static int schedule_rule(const sc_signer *s, const sc_schedule *next, uint64_t a
     /* Before T the signer may sign up to epoch(T) + max_epochs_ahead under
      * whichever slot times are in force by then: the ones it holds, or a
      * pending list that comes into force before T. The largest epoch counts;
-     * the rule keeps one more epoch unchanged as a margin. A set with
-     * activate_at counts the clock only as far as a signing call read it, so
-     * a schedule checked before activate_at and set late is not refused for
-     * epochs nothing signed under the old schedule. */
-    if (apply && activate_at)
-        now = s->sign_now;
-    t = sc_max64(activate_at, now);
+     * the rule keeps one more epoch unchanged as a margin. */
+    t = rule_time(s, activate_at, now, apply);
     limit = sc_epoch_at(&s->cfg, &s->slot_times, t);
     for (uint32_t i = 0; i < pending_count; i++)
         limit = sc_max64(limit, sc_epoch_at(&s->cfg, &pending[i], t));
@@ -609,14 +620,8 @@ static int slot_time_rule(const sc_signer *s, const sc_slot_times *next, uint64_
     if (s->ops.now(s->ops.ctx, &now) != SC_OK)
         return SC_ERR_CLOCK;
     /* As schedule_rule: before T the signer signs up to epoch(T) +
-     * max_epochs_ahead, and one more epoch stays unchanged as a margin. A
-     * set with activate_at counts the clock only as far as a signing call
-     * read it, so a change checked before activate_at and set late is not
-     * refused for epochs nothing signed under the old times
-     * (SETUP-HORIZON-01). */
-    if (apply && activate_at)
-        now = s->sign_now;
-    limit = sc_epoch_at(&s->cfg, &s->slot_times, sc_max64(activate_at, now));
+     * max_epochs_ahead, and one more epoch stays unchanged as a margin. */
+    limit = sc_epoch_at(&s->cfg, &s->slot_times, rule_time(s, activate_at, now, apply));
     limit = sc_sat_add(sc_sat_add(limit, s->cfg.max_epochs_ahead), 1);
     return same_slot_times_through(&s->cfg, &s->slot_times, next, limit) ? SC_OK : SC_ERR_SCHEDULE;
 }
