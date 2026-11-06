@@ -141,6 +141,24 @@ func pushOne(m *member, raw []byte, b *setupwire.UpdateBody, want ref, timeout t
 	return outcome, s, nil
 }
 
+// raiseFloor sets att[key] to v unless the file already holds v or more.
+// It reads the floor from the same read that the edit writes back, so a
+// command that saved a higher floor after memberConn is not undone.
+func raiseFloor(att map[string]json.RawMessage, key string, v uint64) (bool, error) {
+	var cur uint64
+	if raw, ok := att[key]; ok {
+		if err := json.Unmarshal(raw, &cur); err != nil {
+			return false, fmt.Errorf("%s: %w", key, err)
+		}
+	}
+	if cur >= v {
+		return false, nil
+	}
+	b, err := json.Marshal(v)
+	att[key] = b
+	return err == nil, err
+}
+
 // pushLine says where the update stands on one signer.
 func pushLine(s *cloud.SetupState, g setupwire.Group, want ref) string {
 	gs := groupOf(s, g)
@@ -187,12 +205,17 @@ func raiseMin(out io.Writer, c *cluster, states []*cloud.SetupState, b *setupwir
 			fprintf(out, "%s %s is %d already\n", m.name, key, old)
 			continue
 		}
+		var raised bool
 		err = editCloudJSON(m.cloudPath, func(att map[string]json.RawMessage) error {
-			att[key], err = json.Marshal(want.version)
+			raised, err = raiseFloor(att, key, want.version)
 			return err
 		})
 		if err != nil {
 			return err
+		}
+		if !raised {
+			fprintf(out, "%s %s is %d or more already\n", m.name, key, want.version)
+			continue
 		}
 		fprintf(out, "%s %s raised from %d to %d in %s\n", m.name, key, old, want.version, m.cloudPath)
 	}

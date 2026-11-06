@@ -248,8 +248,18 @@ func ReadState(ctx context.Context, m *Member, conn *runnerclient.Connection, ti
 
 // EditCloudJSON rewrites the attestation section of a cloud.json with
 // edit, keeps every other field as it is, and replaces the file in one
-// step with the same mode. Keys come out sorted.
+// step with the same mode. Keys come out sorted. It holds an exclusive lock
+// on path+".lock" from the read to the directory fsync after the rename, so
+// two signer-admin runs editing the same file cannot lose either edit. It
+// waits up to lockWait for the lock. Under the lock it removes temp files
+// an interrupted run left next to path.
 func EditCloudJSON(path string, edit func(att map[string]json.RawMessage) error) error {
+	unlock, err := lockPath(path)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	removeStaleTemps(path)
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -281,7 +291,47 @@ func EditCloudJSON(path string, edit func(att map[string]json.RawMessage) error)
 	return WriteAtomic(path, append(out, '\n'), fi.Mode().Perm())
 }
 
-// WriteAtomic writes a file next to path and renames it over path.
+// lockWait is how long EditCloudJSON waits for another run's lock.
+var lockWait = 30 * time.Second
+
+// lockPath takes the exclusive lock on path+".lock", creating the file if
+// needed, and returns the function that releases it. The lock file stays.
+// Go opens files close-on-exec, so a child process does not keep the lock.
+func lockPath(path string) (func(), error) {
+	lp := path + ".lock"
+	f, err := os.OpenFile(lp, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	deadline := time.Now().Add(lockWait)
+	for {
+		ok, err := tryLock(f)
+		if err != nil {
+			f.Close()
+			return nil, fmt.Errorf("%s: %w", lp, err)
+		}
+		if ok {
+			return func() { f.Close() }, nil // closing the file drops the lock
+		}
+		if time.Now().After(deadline) {
+			f.Close()
+			return nil, fmt.Errorf("another signer-admin is editing cloud.json: %s held for more than %s", lp, lockWait)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// removeStaleTemps removes the temp files WriteAtomic left next to path.
+// Callers hold path's lock, so no other run is writing one.
+func removeStaleTemps(path string) {
+	old, _ := filepath.Glob(filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*"))
+	for _, p := range old {
+		os.Remove(p)
+	}
+}
+
+// WriteAtomic writes a file next to path, fsyncs it, renames it over path
+// and fsyncs the directory, so a crash leaves the old file or the new one.
 func WriteAtomic(path string, data []byte, mode os.FileMode) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-")
 	if err != nil {
@@ -296,8 +346,18 @@ func WriteAtomic(path string, data []byte, mode os.FileMode) error {
 		tmp.Close()
 		return err
 	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return err
+	}
+	if err := syncDir(filepath.Dir(path)); err != nil {
+		return fmt.Errorf("%s is replaced, but its directory did not sync: %w", path, err)
+	}
+	return nil
 }
