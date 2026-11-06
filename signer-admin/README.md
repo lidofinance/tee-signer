@@ -21,6 +21,28 @@ Module path `github.com/lidofinance/tee-signer/signer-admin`, with its own `go.m
 
 Test it on its own from the repo root: `scripts/test-modules.sh signer-admin`.
 
+## Admin certificate
+
+An admin certificate that t signers accept can exit every key they hold, and nothing else gates an exit ([protocol.md](../signer-protocol/docs/protocol.md), "Client roles"). To protect it:
+
+- Keep the admin CA key and the admin certificates offline after the split and import. Bring them out only to send an approver-signed import or config update, or to make an exit.
+- Issue short-lived admin leaves (`issue-client-cert -role admin -valid`, 24h by default).
+- Prefer one client root per signer, each held by a different person, so one admin certificate cannot reach t signers. To exit, each holder runs this on their own machine with their own admin certificate:
+
+  ```
+  signer-admin exit -cluster cluster.json -signers NAME -split split.json -pubkey 0x... -index 123 -epoch 0 -partial-out NAME.json
+  ```
+
+  Anyone then combines t of these files, with no certificate or network:
+
+  ```
+  signer-admin exit-combine -split split.json -pubkey 0x... -index 123 -epoch 0 -out exit.json NAME1.json NAME2.json
+  ```
+
+  The partial files are not secret.
+- A signer accepts admin chains from every root in its `allowed_client_ca` list. Pin on each signer only roots whose keys its own holder controls. Keep any root that all signers share offline, like an admin key. A setup file that sets `allowed_client_ca` once, before the first `[signer NAME]` section, gives every signer the same root.
+- The runner has no revocation list. If an admin root key leaks, make a new setup and import the keys again.
+
 ## Splitting existing keys
 
 `signer-admin split` splits EIP-2335 keystores t of n for the sealed import. It is a trusted dealer: it decrypts each whole key, so run it on an offline machine.
