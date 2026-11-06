@@ -20,6 +20,8 @@ import (
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
 	"github.com/lidofinance/tee-signer/gateway/internal/servertls"
 	"github.com/lidofinance/tee-signer/governance/runnerchain"
+	"github.com/lidofinance/tee-signer/governance/setupwire"
+	proto "github.com/lidofinance/tee-signer/signer-protocol"
 )
 
 // Fork is one entry of chain.forks: the fork version from epoch on.
@@ -210,6 +212,9 @@ func Load(path string) (*Config, error) {
 	if err := c.loadSigners(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
+	if err := c.checkMainnetAccess(); err != nil {
+		return nil, err
+	}
 
 	return &c, nil
 }
@@ -356,6 +361,59 @@ func (c *Config) loadAccess(base string) error {
 	}
 
 	return nil
+}
+
+// mainnetSigner is the first signer that can sign for mainnet: its
+// attestation says mainnet, or it has no allow_chain_build and so accepts
+// mainnet builds only. It returns -1 when every signer is non-prod.
+func (c *Config) mainnetSigner() int {
+	for i, n := range c.Signers.Nodes {
+		if n.Attestation.Mainnet || n.AllowChainBuild == "" {
+			return i
+		}
+	}
+
+	return -1
+}
+
+// prodChain says whether the pinned chain is prod (setupwire.ProdChain):
+// mainnet, or a chain with no non-prod row in the chain table.
+func (c *Config) prodChain() bool {
+	gvr, sched, err := c.Schedule()
+	if err != nil {
+		return true
+	}
+
+	return setupwire.ProdChain(proto.Version(sched[0].Version), proto.Root(gvr))
+}
+
+// checkMainnetAccess refuses unsafe_open_tls and unsafe_plain_http for the
+// API listener when a signer can sign for mainnet or the chain is prod:
+// there anyone who reaches listen could request signatures. metrics_access
+// keeps them: the metrics hold counts, times and signer names, no key and
+// no signing.
+func (c *Config) checkMainnetAccess() error {
+	if c.Access != AccessUnsafeOpenTLS && c.Access != AccessUnsafePlainHTTP {
+		return nil
+	}
+	i := c.mainnetSigner()
+	if i < 0 {
+		if c.prodChain() {
+			return fmt.Errorf("access: %s is refused on a prod chain (chain.genesis_fork_version %s, "+
+				"chain.genesis_validators_root %s); set access: mtls with tls.client_ca or "+
+				"tls.client_fingerprints, or access: local", c.Access, c.Chain.GenesisForkVersion, c.Chain.GenesisValidatorsRoot)
+		}
+
+		return nil
+	}
+	n := c.Signers.Nodes[i]
+	why := "attestation.mainnet is true"
+	if !n.Attestation.Mainnet {
+		why = "it has no allow_chain_build, so it accepts mainnet builds only"
+	}
+
+	return fmt.Errorf("access: %s is refused with a mainnet signer (signers.nodes[%d] (%s): %s); set access: mtls "+
+		"with tls.client_ca or tls.client_fingerprints, or access: local", c.Access, i, n.Name, why)
 }
 
 // ServerTLS is the servertls setting of the tls section; call it only

@@ -249,7 +249,8 @@ func serve(srv *http.Server, ln net.Listener) error {
 }
 
 // warnAccess logs a warning at start for the unsafe access values of a
-// listener.
+// listener. config.Load refuses them for the API listener when a signer
+// can sign for mainnet or the chain is prod.
 func warnAccess(log *slog.Logger, field, access, addrField, addr, what string) {
 	switch access {
 	case config.AccessUnsafeOpenTLS:
