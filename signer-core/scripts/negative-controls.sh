@@ -88,4 +88,10 @@ mutant schedule-wrapping-sum src/signer.c 's/limit = sc_sat_add(sc_sat_add(limit
   test_unit "$CORE_DIR/tests/data"
 mutant schedule-ignores-gloas src/signer.c 's/return cfg->gloas_scheduled && epoch/return 0 \&\& epoch/' \
   test_unit "$CORE_DIR/tests/data"
+# A set with activate_at: the clock reading of a signing call left out, or
+# also taken for activate_at 0.
+mutant set-ignores-signing-clock src/signer.c 's/now = s->sign_now;/now = 0;/' \
+  test_unit "$CORE_DIR/tests/data"
+mutant set-signing-clock-at-zero src/signer.c 's/if (apply \&\& activate_at)/if (apply)/' \
+  test_unit "$CORE_DIR/tests/data"
 exit $status

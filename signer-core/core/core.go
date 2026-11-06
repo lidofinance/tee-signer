@@ -265,7 +265,8 @@ func (s *Signer) CheckSchedule(next Schedule, activateAt uint64, pending ...[]Sl
 // SetSchedule replaces the signer's fork schedule with next, which takes
 // effect at activateAt (unix seconds, 0 for now), through the core's fork
 // rule (sc_signer_set_schedule_under): every epoch up to epoch(max(activateAt,
-// now)) + MaxEpochsAhead + 1 must keep its fork version and Gloas state, or
+// now)) + MaxEpochsAhead + 1 must keep its fork version and Gloas state, now
+// being the latest clock reading of a signing call when activateAt is set, or
 // the result is a *backend.RefusedError with StatusSchedule and nothing
 // changes. The epoch is the largest under the slot time changes in force and
 // under each list of pending: changes the host accepted that are not yet in
