@@ -889,14 +889,14 @@ The full order of a deploy, with the setup, is in
 The names default to one node per account: role and instance profile
 `signer-parent`, security group and instance `signer-node`, record writer
 `signer-record-writer-node-1` and key pair `signer-node-operator-node-1`.
-For a second node in the account and region, set `node_key` (it names the
-record writer and the key pair) and `parent_role_name` and
-`security_group_name`, which would clash otherwise. Two nodes with the same
-`mark_bucket` each write the whole bucket policy, and the last apply drops
-the other node's record writer: give each node its own bucket, named after
-the node (for example `<org>-marks-<node_key>`), or set
-`mark_bucket` on one node only and add the other writer to that policy by
-hand. To take over resources made earlier, set
+For a second node in the account, set `node_key` (it names the record
+writer and the key pair) and `parent_role_name`. IAM names are global to
+the account, so these two must differ even for a node in another region.
+In the same region, set `security_group_name` too. Give each node its own
+mark bucket, named after the node (for example `<org>-marks-<node_key>`):
+each node's apply writes the whole bucket policy, so two nodes on one
+bucket would drop each other's record writer, and the runner whose writer
+is dropped stops signing. To take over resources made earlier, set
 `parent_role_name`, `parent_role_description`, `security_group_name`,
 `security_group_description`, `instance_name`, `key_description` and
 `key_tags`, and import the existing resources (`terraform import`, or

@@ -54,7 +54,7 @@ variable "key_policy_locked" {
   type        = bool
 }
 variable "node_key" {
-  description = "a short name for this signer node, such as node-1 or mt-a (not a key or a secret). It names the record writer user and the operator key pair. Each node in one account and region needs its own"
+  description = "a short name for this signer node, such as node-1 or mt-a (not a key or a secret). It names the record writer user (IAM, global to the account) and the operator key pair. Each node in one account needs its own"
   default     = "node-1"
 }
 variable "entry_cidrs" {
@@ -477,7 +477,7 @@ resource "aws_security_group" "node" {
 
 data "aws_subnet" "sel" { id = var.subnet_id }
 
-# Named per node_key, so a second node in the account and region gets its
+# Named per node_key, so a second node in the account gets its
 # own. A key pair named signer-node-operator, made by an older main.tf, is
 # replaced by one under the new name; the instance keeps its key (see
 # ignore_changes below).

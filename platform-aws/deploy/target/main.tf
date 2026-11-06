@@ -65,8 +65,8 @@ variable "key_policy_locked" {
 variable "parent_role_name" { default = "signer-parent" }
 variable "security_group_name" { default = "signer-node" }
 variable "key_pair_name" {
-  description = "the running parent's key pair (the key_pair_name output of ../main.tf: signer-node-operator-<node_key>, signer-node-operator before that); empty: none"
-  default     = "signer-node-operator-node-1"
+  description = "the running parent's key pair: the key_pair_name output of ../main.tf (signer-node-operator-<node_key>, signer-node-operator before that). Empty: none. No default, so a target never takes another node's key by mistake"
+  type        = string
 }
 
 provider "aws" { region = var.region }
