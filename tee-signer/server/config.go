@@ -110,7 +110,8 @@ type view struct {
 	// force in this view, 0 when none did.
 	lockedAt uint64
 	// openAt is the effective time of the open update that came into
-	// force in this view, 0 when none did.
+	// force in this view, or of the rotation that dropped a pending one; 0
+	// when neither did.
 	openAt uint64
 	// pendingSlots are the slot time changes of the pending locked update
 	// when its body is readable and they differ from those in force: the
@@ -344,10 +345,12 @@ func (u *Updates) compute(st markstore.ConfigState, now uint64) view {
 		}
 		v.lockedAt = lp.EffectiveAt
 		activate(&v.state.Locked)
-		if rotation {
+		if rotation && v.state.Open.Pending != nil {
 			// The new set replaces the old one: what the old set signed and
-			// is still pending goes (section 8, step 4).
+			// is still pending goes (section 8, step 4). The core may hold
+			// the dropped schedule; the old one is back from this time.
 			v.state.Open.Pending = nil
+			v.openAt = lp.EffectiveAt
 		}
 	}
 	if op := v.state.Open.Pending; op != nil && op.EffectiveAt <= now {

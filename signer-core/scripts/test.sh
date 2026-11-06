@@ -33,7 +33,7 @@ run() {
   echo "$res $name ($ARCH${RUNNER:+ via $RUNNER}, log: ${LOGS#"$REPO_ROOT"/}/$name.log)"
 }
 
-run unit '^(UNIT|memory|registration_go|gloas|commit-ahead|write counts|repeat after restart|non-finality restart|hash cache|restart property|device restart property|bench)' \
+run unit '^(UNIT|memory|clock |registration_go|gloas|commit-ahead|write counts|repeat after restart|non-finality restart|hash cache|restart property|device restart property|bench)' \
   "$BUILD/test_unit" "$CORE_DIR/tests/data"
 run ssz_static '^SSZ_STATIC' "$BUILD/test_ssz_static" "$CST_SSZ_DIR"
 run bls_sign '^BLS_SIGN' "$BUILD/test_bls_sign" "$CST_BLS_DIR"

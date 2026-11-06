@@ -38,6 +38,39 @@ mutant() {
   fi
 }
 
+# fuzz_mutant <name> <file> <sed expression> <target> <seconds>: the fuzz
+# target built from the mutant must crash within <seconds>, from an empty
+# corpus (fuzz/regress holds an input that catches it at once; this shows
+# the oracle finds it without one).
+fuzz_mutant() {
+  local name="$1" file="$2" expr="$3" t="$4" secs="$5" start end
+  local dir="$CORE_DIR/build/mutants/$name"
+  rm -rf "$dir"
+  mkdir -p "$dir/corpus"
+  cp -r "$CORE_DIR/src" "$CORE_DIR/include" "$CORE_DIR/tests" "$CORE_DIR/fuzz" "$CORE_DIR/Makefile" "$dir/"
+  sed -i -e "$expr" "$dir/$file"
+  if cmp -s "$dir/$file" "$CORE_DIR/$file"; then
+    echo "ERROR mutant $name: sed changed nothing in $file"
+    status=1
+    return
+  fi
+  if ! make -C "$dir" -j"$(nproc)" BUILD=out MARKFORMAT_DIR="$CORE_DIR/../markformat" BLST_SRC="$BLST_DIR" BLST_LIB="$BLST_LIB" \
+    FUZZ_DRIVER="$REPO_ROOT/devkit/cfuzz/driver.c" "out/fuzz/fuzz_$t" >"$dir/build.log" 2>&1; then
+    echo "ERROR mutant $name: does not build (build/mutants/$name/build.log)"
+    status=1
+    return
+  fi
+  start=$(date +%s)
+  if "$dir/out/fuzz/fuzz_$t" -max_total_time="$secs" -timeout=60 -artifact_prefix="$dir/" \
+    "$dir/corpus" >"$dir/run.log" 2>&1; then
+    echo "MISSED mutant $name: fuzz_$t ran ${secs}s without a crash"
+    status=1
+  else
+    end=$(date +%s)
+    echo "CAUGHT mutant $name: fuzz_$t crashed after $((end - start))s ($(grep -m1 -oE 'FUZZ ORACLE== [^ ]+' "$dir/run.log" | cut -d' ' -f3))"
+  fi
+}
+
 mutant ssz-index src/ssz.c 's/chunk_u64(c\[1\], v->index);/chunk_u64(c[1], v->index + 1);/' \
   test_ssz_static "$CST_SSZ_DIR"
 mutant ssz-pubkey-padding src/ssz.c 's/chunk_bytes(c\[1\], b + 32, 16);/memcpy(c[1], b + 16, 32);/' \
@@ -89,9 +122,18 @@ mutant schedule-wrapping-sum src/signer.c 's/limit = sc_sat_add(sc_sat_add(limit
 mutant schedule-ignores-gloas src/signer.c 's/return cfg->gloas_scheduled && epoch/return 0 \&\& epoch/' \
   test_unit "$CORE_DIR/tests/data"
 # A set with activate_at: the clock reading of a signing call left out, or
-# also taken for activate_at 0.
-mutant set-ignores-signing-clock src/signer.c 's/now = s->sign_now;/now = 0;/' \
+# the trusted clock also left out for activate_at 0.
+mutant set-ignores-signing-clock src/signer.c 's/return sc_max64(activate_at, s->sign_now);/return activate_at;/' \
   test_unit "$CORE_DIR/tests/data"
 mutant set-signing-clock-at-zero src/signer.c 's/if (apply \&\& activate_at)/if (apply)/' \
   test_unit "$CORE_DIR/tests/data"
+# Every other set and check: sign_now left out, so a clock that steps back
+# below a reading a signing call made reopens the epochs it signed. The unit
+# tests and the config fuzz target must both catch it.
+mutant rule-ignores-signing-clock src/signer.c \
+  's/return sc_max64(sc_max64(activate_at, now), s->sign_now);/return sc_max64(activate_at, now);/' \
+  test_unit "$CORE_DIR/tests/data"
+fuzz_mutant fuzz-rule-ignores-signing-clock src/signer.c \
+  's/return sc_max64(sc_max64(activate_at, now), s->sign_now);/return sc_max64(activate_at, now);/' \
+  config 60
 exit $status

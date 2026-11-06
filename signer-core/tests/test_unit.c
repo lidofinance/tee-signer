@@ -8,7 +8,9 @@
  * usage: test_unit [data dir with registration_go.txt]   (default tests/data)
  */
 #include "../tests/markformat_host.h"
+#include <sys/wait.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "testutil.h"
 
@@ -3475,6 +3477,526 @@ static void test_schedule_pending_slot_times(void)
     CHECK(signs_with(s, &cfg, E + 56, V_NEXT));
 }
 
+/* ---- a clock that steps back -------------------------------------------- */
+
+/* A change at epoch x: kind 0 6 s slots from x, kind 1 a fork to V_NEXT at
+ * x on top of cfg's schedule. Sets it if apply, else checks it. */
+static int change_at(sc_signer *s, const sc_config *cfg, int kind, uint64_t x, uint64_t at, int apply)
+{
+    if (kind == 0) {
+        sc_slot_times t = slot_times2(x, 6, 0, 0);
+        return apply ? sc_signer_set_slot_times(s, &t, at) : sc_signer_check_slot_times(s, &t, at);
+    }
+    sc_schedule n = schedule_of(cfg);
+    add_fork(&n, x, V_NEXT);
+    return apply ? sc_signer_set_schedule(s, &n, at) : sc_signer_check_schedule(s, &n, at);
+}
+
+/* Non-zero if s holds the change change_at makes at x. */
+static int holds_change(const sc_signer *s, const sc_config *cfg, int kind, uint64_t x)
+{
+    sc_slot_times got;
+    if (kind == 1)
+        return signs_with(s, cfg, x, V_NEXT);
+    sc_signer_get_slot_times(s, &got);
+    return got.count == 1 && got.changes[0].epoch == x;
+}
+
+/*
+ * A vote at epoch E, then the clock steps back to E - 10. Every set and
+ * check of a slot time or fork change, with activate_at 0 or between the two
+ * readings, still counts epoch E: a change at E - 5, E + 1 or E + 3 is
+ * refused, one at E + 4 = E + max_epochs_ahead + 2 goes in. The clock (or
+ * activate_at) alone would take E - 6 (E - 4) on, as it does on a signer
+ * that signed nothing.
+ */
+static void test_clock_back(void)
+{
+    static const uint64_t refused[3] = {E - 5, E + 1, E + 3};
+    sc_config cfg;
+    make_config(&cfg);
+    const uint64_t between = cfg.genesis_time + (E - 8) * EPOCH_SECONDS;
+    for (int kind = 0; kind < 2; kind++)
+        for (int a = 0; a < 2; a++)
+            for (int apply = 0; apply < 2; apply++) {
+                host_t h = {0};
+                uint8_t sig[96];
+                const uint64_t at = a ? between : 0;
+                set_epoch(&h, E);
+                sc_signer *s = new_signer(&h, &cfg, 1, 0), *fresh = new_signer(&h, &cfg, 1, 0);
+                vkeys k = add_validator(s, 31, 3000);
+                sc_attestation_data d = att(E - 1, E, 1);
+                CHECK_RC(sc_sign_attestation(s, k.pk, &d, sig), SC_OK);
+                set_epoch(&h, E - 10);
+                for (int i = 0; i < 3; i++) {
+                    CHECK_RC(change_at(s, &cfg, kind, refused[i], at, apply), SC_ERR_SCHEDULE);
+                    CHECK(!holds_change(s, &cfg, kind, refused[i]));
+                }
+                CHECK_RC(change_at(s, &cfg, kind, E + 4, at, apply), SC_OK);
+                CHECK(holds_change(s, &cfg, kind, E + 4) == apply);
+                const uint64_t first = (a ? E - 8 : E - 10) + 4;
+                CHECK_RC(change_at(fresh, &cfg, kind, first - 1, at, apply), SC_ERR_SCHEDULE);
+                CHECK_RC(change_at(fresh, &cfg, kind, first, at, apply), SC_OK);
+            }
+}
+
+static uint64_t sat_add64(uint64_t a, uint64_t b) { return a > UINT64_MAX - b ? UINT64_MAX : a + b; }
+static uint64_t max_u64(uint64_t a, uint64_t b) { return a > b ? a : b; }
+
+/* The slot time of epoch under t, worked out here, not by the core. */
+static uint64_t secs_in(const sc_config *cfg, const sc_slot_times *t, uint64_t epoch)
+{
+    uint64_t secs = cfg->seconds_per_slot;
+    for (uint32_t i = 0; i < t->count; i++)
+        if (t->changes[i].epoch <= epoch)
+            secs = t->changes[i].seconds_per_slot;
+    return secs;
+}
+
+/* The fork version of epoch under n. */
+static const uint8_t *version_in(const sc_config *cfg, const sc_schedule *n, uint64_t epoch)
+{
+    const uint8_t *v = cfg->genesis_fork_version;
+    for (uint32_t i = 0; i < n->fork_count; i++)
+        if (n->forks[i].epoch <= epoch)
+            v = n->forks[i].version;
+    return v;
+}
+
+/* Non-zero if a and b give every epoch up to limit the same slot time. */
+static int same_secs_upto(const sc_config *cfg, const sc_slot_times *a, const sc_slot_times *b, uint64_t limit)
+{
+    const sc_slot_times *both[2] = {a, b};
+    for (int k = 0; k < 2; k++)
+        for (uint32_t i = 0; i < both[k]->count; i++) {
+            uint64_t e = both[k]->changes[i].epoch;
+            if (e <= limit && secs_in(cfg, a, e) != secs_in(cfg, b, e))
+                return 0;
+        }
+    return 1;
+}
+
+/* Non-zero if a and b give every epoch up to limit the same fork version
+ * and Gloas state. */
+static int same_forks_upto(const sc_config *cfg, const sc_schedule *a, const sc_schedule *b, uint64_t limit)
+{
+    const sc_schedule *both[2] = {a, b};
+    if (memcmp(version_in(cfg, a, 0), version_in(cfg, b, 0), 4))
+        return 0;
+    for (int k = 0; k < 2; k++) {
+        for (uint32_t i = 0; i < both[k]->fork_count; i++) {
+            uint64_t e = both[k]->forks[i].epoch;
+            if (e <= limit && memcmp(version_in(cfg, a, e), version_in(cfg, b, e), 4))
+                return 0;
+        }
+        if (both[k]->gloas_scheduled && both[k]->gloas_fork_epoch <= limit &&
+            (a->gloas_scheduled != b->gloas_scheduled || a->gloas_fork_epoch != b->gloas_fork_epoch))
+            return 0;
+    }
+    return 1;
+}
+
+static uint64_t next_rand(uint64_t *x)
+{
+    *x ^= *x << 13;
+    *x ^= *x >> 7;
+    *x ^= *x << 17;
+    return *x;
+}
+
+/*
+ * While the clock only moves forward, sign_now is at most the clock, and
+ * the rule gives the results of the older one, which counted the clock for
+ * a check or a set with activate_at 0, and only sign_now for a set with
+ * activate_at. Random sequences of forward clock steps, signing calls, and
+ * checks and sets of slot time and fork changes; each result against that
+ * older rule, worked out here. The model shares sc_epoch_at and mirrors the
+ * comparison of the core, so it does not test sc_epoch_at itself.
+ */
+static void test_clock_forward_same_rule(void)
+{
+    sc_config cfg;
+    sc_schedule base;
+    uint64_t rng = 0x9e3779b97f4a7c15ull;
+    long n_ok = 0, n_refused = 0;
+    make_config(&cfg);
+    base = schedule_of(&cfg);
+    const size_t sz = sc_signer_mem_size(1, 0);
+    void *mem = malloc(sz);
+    CHECK(mem != NULL);
+    if (!mem)
+        return;
+    for (int run = 0; run < 400; run++) {
+        host_t h = {0};
+        sc_host_ops ops = host_ops(&h);
+        sc_signer *s = NULL;
+        sc_slot_times times = {0};
+        sc_schedule sched = base;
+        uint64_t sign_now = 0;
+        uint8_t sig[96];
+        set_epoch(&h, E);
+        CHECK_RC(sc_signer_init(mem, sz, 1, 0, &cfg, &ops, &s), SC_OK);
+        vkeys k = add_validator(s, 32, 3001);
+        for (int step = 0; step < 24; step++) {
+            const uint64_t cur = sc_epoch_at(&cfg, &times, h.now);
+            const uint64_t x = cur + next_rand(&rng) % 16 - 2;
+            const int apply = next_rand(&rng) & 1;
+            uint64_t at = 0, t, limit;
+            int rc, ok;
+            switch (next_rand(&rng) % 3) {
+            case 1: at = h.now - next_rand(&rng) % (3 * EPOCH_SECONDS); break;
+            case 2: at = h.now + next_rand(&rng) % (10 * EPOCH_SECONDS); break;
+            default: break;
+            }
+            t = apply && at ? max_u64(at, sign_now) : max_u64(at, h.now);
+            limit = sat_add64(sat_add64(sc_epoch_at(&cfg, &times, t), cfg.max_epochs_ahead), 1);
+            switch (next_rand(&rng) % 4) {
+            case 0:
+                h.now += next_rand(&rng) % (2 * EPOCH_SECONDS);
+                break;
+            case 1:
+                rc = sc_sign_randao_reveal(s, k.pk, cur + next_rand(&rng) % (cfg.max_epochs_ahead + 2), sig);
+                CHECK(rc == SC_OK || rc == SC_ERR_POLICY_FUTURE);
+                sign_now = max_u64(sign_now, h.now);
+                break;
+            case 2: {
+                sc_slot_times next = next_rand(&rng) % 4 ? slot_times2(x, next_rand(&rng) & 1 ? 6 : 4, 0, 0)
+                                                         : slot_times2(0, 0, 0, 0);
+                ok = same_secs_upto(&cfg, &times, &next, limit);
+                rc = apply ? sc_signer_set_slot_times(s, &next, at) : sc_signer_check_slot_times(s, &next, at);
+                CHECK_RC(rc, ok ? SC_OK : SC_ERR_SCHEDULE);
+                if (apply && rc == SC_OK)
+                    times = next;
+                if (ok)
+                    n_ok++;
+                else
+                    n_refused++;
+                break;
+            }
+            default: {
+                sc_schedule next = base;
+                if (next_rand(&rng) % 4)
+                    add_fork(&next, x, V_NEXT);
+                ok = same_forks_upto(&cfg, &sched, &next, limit);
+                rc = apply ? sc_signer_set_schedule(s, &next, at) : sc_signer_check_schedule(s, &next, at);
+                CHECK_RC(rc, ok ? SC_OK : SC_ERR_SCHEDULE);
+                if (apply && rc == SC_OK)
+                    sched = next;
+                if (ok)
+                    n_ok++;
+                else
+                    n_refused++;
+                break;
+            }
+            }
+        }
+        sc_signer_wipe(s);
+    }
+    free(mem);
+    printf("clock forward: %ld checks and sets as the older rule gives (%ld taken, %ld refused)\n",
+           n_ok + n_refused, n_ok, n_refused);
+    CHECK(n_ok > 100 && n_refused > 100);
+}
+
+/*
+ * Exhaustive small model. One signer with a validator and a Gloas fork at
+ * E - 30, the clock in epoch E. Every sequence up to depth D of 17 steps:
+ * a signing call of each kind that reads the clock (block, attestation,
+ * RANDAO, registration, PTC vote, sync committee message, sc_sign_root),
+ * a slot time set and a fork set at E + 1 or E + 4 with activate_at 0 or
+ * the start of E + 2 (each checked first), the clock one epoch forward, and
+ * the clock three epochs back. After each step: no fork version or slot
+ * time of an epoch at or below epoch(sign_now) + max_epochs_ahead changed,
+ * no epoch a call signed changed its version, every epoch signed is at or
+ * below that bound, and a check that passed a change kept that bound.
+ * sign_now is the model's: the latest clock reading of a signing call.
+ * SC_MODEL_DEPTH sets D (default 3); from D = 4 one process per first step.
+ */
+#define MODEL_OPS 17
+#define MODEL_MAX_DEPTH 8
+
+typedef struct {
+    sc_config cfg;
+    sc_schedule base;
+    host_t *h;
+    sc_signer *s;
+    void *mem;
+    size_t sz;
+    vkeys k;
+    uint64_t at1;
+    /* The model's state, saved and restored with the signer. held_fork is
+     * the epoch of the V_NEXT fork the signer holds, 0 for none. */
+    uint64_t sign_now, held_fork;
+    uint32_t nsigned;
+    uint64_t signed_epoch[MODEL_MAX_DEPTH];
+    uint8_t signed_root[MODEL_MAX_DEPTH][32];
+    long steps, leaves;
+} model_t;
+
+typedef struct {
+    void *mem;
+    uint64_t now, sign_now, held_fork;
+    int n, has_device, writes, has_wm;
+    uint8_t enc[SC_WATERMARK_ENCODED_LEN], device[SC_WATERMARK_ENCODED_LEN], pk[48];
+    uint32_t nsigned;
+    uint64_t signed_epoch[MODEL_MAX_DEPTH];
+    uint8_t signed_root[MODEL_MAX_DEPTH][32];
+} model_snap;
+
+static void model_save(const model_t *m, model_snap *p)
+{
+    memcpy(p->mem, m->mem, m->sz);
+    p->now = m->h->now;
+    p->n = m->h->n;
+    p->has_device = m->h->has_device;
+    p->writes = m->h->writes;
+    p->has_wm = m->h->rec[0].has_wm;
+    memcpy(p->enc, m->h->rec[0].enc, sizeof p->enc);
+    memcpy(p->pk, m->h->rec[0].pk, 48);
+    memcpy(p->device, m->h->device, sizeof p->device);
+    p->sign_now = m->sign_now;
+    p->held_fork = m->held_fork;
+    p->nsigned = m->nsigned;
+    memcpy(p->signed_epoch, m->signed_epoch, sizeof p->signed_epoch);
+    memcpy(p->signed_root, m->signed_root, sizeof p->signed_root);
+}
+
+/* The signer lives at the same address, so its own pointers stay valid. */
+static void model_restore(model_t *m, const model_snap *p)
+{
+    memcpy(m->mem, p->mem, m->sz);
+    m->h->now = p->now;
+    m->h->n = p->n;
+    m->h->has_device = p->has_device;
+    m->h->writes = p->writes;
+    m->h->rec[0].has_wm = p->has_wm;
+    memcpy(m->h->rec[0].enc, p->enc, sizeof p->enc);
+    memcpy(m->h->rec[0].pk, p->pk, 48);
+    memcpy(m->h->device, p->device, sizeof p->device);
+    m->sign_now = p->sign_now;
+    m->held_fork = p->held_fork;
+    m->nsigned = p->nsigned;
+    memcpy(m->signed_epoch, p->signed_epoch, sizeof p->signed_epoch);
+    memcpy(m->signed_root, p->signed_root, sizeof p->signed_root);
+}
+
+static void model_version(const model_t *m, uint64_t epoch, uint8_t out[32])
+{
+    static const uint8_t zero[32];
+    sc_signer_signing_root(m->s, SC_DOMAIN_BEACON_ATTESTER, epoch, zero, out);
+}
+
+static void model_signed(model_t *m, int rc, uint64_t epoch)
+{
+    if (rc != SC_OK || m->nsigned == MODEL_MAX_DEPTH)
+        return;
+    m->signed_epoch[m->nsigned] = epoch;
+    model_version(m, epoch, m->signed_root[m->nsigned++]);
+}
+
+static void model_step(model_t *m, int op)
+{
+    static const uint8_t dom_sync[4] = {7, 0, 0, 0}, root[32] = {0x33};
+    const sc_config *cfg = &m->cfg;
+    sc_slot_times times, after;
+    const uint64_t cand[5] = {0, 411392, E - 30, E + 1, E + 4};
+    uint8_t before[5 + MODEL_MAX_DEPTH][32], now_root[32], sig[96];
+    uint64_t bound, slot, cur;
+    int rc;
+
+    sc_signer_get_slot_times(m->s, &times);
+    bound = sat_add64(sc_epoch_at(cfg, &times, m->sign_now), cfg->max_epochs_ahead);
+    for (int i = 0; i < 5; i++)
+        model_version(m, cand[i], before[i]);
+    slot = sc_slot_at(cfg, &times, m->h->now);
+    cur = slot / cfg->slots_per_epoch;
+    if (op < 7)
+        m->sign_now = max_u64(m->sign_now, m->h->now);
+    switch (op) {
+    case 0: {
+        sc_beacon_block_header b = blk(slot, 1);
+        b.proposer_index = 3000;
+        rc = sc_sign_block(m->s, m->k.pk, &b, sig);
+        model_signed(m, rc, cur);
+        break;
+    }
+    case 1: {
+        sc_attestation_data d = att(cur - 1, cur, 1);
+        d.slot = slot;
+        rc = sc_sign_attestation(m->s, m->k.pk, &d, sig);
+        model_signed(m, rc, cur);
+        break;
+    }
+    case 2:
+        rc = sc_sign_randao_reveal(m->s, m->k.pk, cur + cfg->max_epochs_ahead, sig);
+        model_signed(m, rc, cur + cfg->max_epochs_ahead);
+        break;
+    case 3: {
+        sc_validator_registration r;
+        memset(r.fee_recipient, 0x11, 20);
+        r.gas_limit = 36000000;
+        r.timestamp = m->h->now;
+        memcpy(r.pubkey, m->k.pk, 48);
+        CHECK_RC(sc_sign_validator_registration(m->s, m->k.pk, &r, sig), SC_OK);
+        break;
+    }
+    case 4: {
+        sc_payload_attestation_data d = ptc(slot, 1);
+        rc = sc_sign_payload_attestation(m->s, m->k.pk, &d, sig);
+        model_signed(m, rc, cur);
+        break;
+    }
+    case 5:
+        rc = sc_sign_sync_committee_message(m->s, m->k.pk, slot, root, sig, NULL);
+        model_signed(m, rc, cur);
+        break;
+    case 6:
+        rc = sc_sign_root(m->s, m->k.pk, dom_sync, cur + cfg->max_epochs_ahead, root, sig);
+        model_signed(m, rc, cur + cfg->max_epochs_ahead);
+        break;
+    case 15:
+        m->h->now += EPOCH_SECONDS;
+        break;
+    case 16:
+        m->h->now -= 3 * EPOCH_SECONDS;
+        break;
+    default: {
+        const int kind = op >= 11, v = (op - 7) % 4;
+        const uint64_t x = v & 1 ? E + 4 : E + 1, at = v & 2 ? m->at1 : 0;
+        if (kind) {
+            sc_schedule n = m->base, held = m->base;
+            add_fork(&n, x, V_NEXT);
+            if (m->held_fork)
+                add_fork(&held, m->held_fork, V_NEXT);
+            if (sc_signer_check_schedule(m->s, &n, at) == SC_OK)
+                CHECK(same_forks_upto(cfg, &held, &n, bound));
+            rc = sc_signer_set_schedule(m->s, &n, at);
+            if (rc == SC_OK)
+                m->held_fork = x;
+        } else {
+            sc_slot_times n = slot_times2(x, 6, 0, 0);
+            if (sc_signer_check_slot_times(m->s, &n, at) == SC_OK)
+                CHECK(same_secs_upto(cfg, &times, &n, bound));
+            rc = sc_signer_set_slot_times(m->s, &n, at);
+        }
+        CHECK(rc == SC_OK || rc == SC_ERR_SCHEDULE);
+        break;
+    }
+    }
+    /* The invariant, with the bound before the step: a set leaves sign_now
+     * alone, and a signing call changes nothing it covers. */
+    sc_signer_get_slot_times(m->s, &after);
+    CHECK(same_secs_upto(cfg, &times, &after, bound));
+    for (int i = 0; i < 5; i++)
+        if (cand[i] <= bound) {
+            model_version(m, cand[i], now_root);
+            CHECK(memcmp(now_root, before[i], 32) == 0);
+        }
+    for (uint32_t i = 0; i < m->nsigned; i++) {
+        model_version(m, m->signed_epoch[i], now_root);
+        CHECK(memcmp(now_root, m->signed_root[i], 32) == 0);
+        CHECK(m->signed_epoch[i] <= sat_add64(sc_epoch_at(cfg, &after, m->sign_now), cfg->max_epochs_ahead));
+    }
+}
+
+static void model_walk(model_t *m, model_snap *snaps, int depth, int max_depth)
+{
+    model_save(m, &snaps[depth]);
+    for (int op = 0; op < MODEL_OPS; op++) {
+        model_restore(m, &snaps[depth]);
+        model_step(m, op);
+        m->steps++;
+        if (depth + 1 == max_depth)
+            m->leaves++;
+        else
+            model_walk(m, snaps, depth + 1, max_depth);
+    }
+}
+
+static void test_clock_model(void)
+{
+    static host_t h;
+    model_t m;
+    model_snap snaps[MODEL_MAX_DEPTH + 1], start;
+    const char *env = getenv("SC_MODEL_DEPTH");
+    int depth = env ? atoi(env) : 3;
+    struct timespec t0, t1;
+    sc_host_ops ops = host_ops(&h);
+    if (depth < 1 || depth > MODEL_MAX_DEPTH)
+        depth = 3;
+    memset(&m, 0, sizeof m);
+    memset(&h, 0, sizeof h);
+    make_config(&m.cfg);
+    m.cfg.forks[m.cfg.fork_count].epoch = E - 30;
+    memcpy(m.cfg.forks[m.cfg.fork_count].version, V_GLOAS, 4);
+    m.cfg.fork_count++;
+    m.cfg.gloas_scheduled = 1;
+    m.cfg.gloas_fork_epoch = E - 30;
+    m.base = schedule_of(&m.cfg);
+    m.at1 = m.cfg.genesis_time + (E + 2) * EPOCH_SECONDS;
+    m.h = &h;
+    m.sz = sc_signer_mem_size(1, 0);
+    m.mem = malloc(m.sz);
+    CHECK(m.mem != NULL);
+    for (int i = 0; i <= MODEL_MAX_DEPTH; i++)
+        CHECK((snaps[i].mem = malloc(m.sz)) != NULL);
+    CHECK((start.mem = malloc(m.sz)) != NULL);
+    set_epoch(&h, E);
+    CHECK_RC(sc_signer_init(m.mem, m.sz, 1, 0, &m.cfg, &ops, &m.s), SC_OK);
+    m.k = add_validator(m.s, 33, 3000);
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    if (depth < 4) {
+        model_walk(&m, snaps, 0, depth);
+    } else {
+        /* One child per first step, as many at once as there are CPUs. */
+        long ncpu = sysconf(_SC_NPROCESSORS_ONLN), running = 0;
+        int fds[MODEL_OPS][2];
+        model_save(&m, &start);
+        for (int op = 0; op < MODEL_OPS; op++) {
+            if (running >= (ncpu > 0 ? ncpu : 1)) {
+                wait(NULL);
+                running--;
+            }
+            CHECK(pipe(fds[op]) == 0);
+            pid_t pid = fork();
+            CHECK(pid >= 0);
+            if (pid == 0) {
+                long out[4];
+                close(fds[op][0]);
+                model_restore(&m, &start);
+                m.steps = m.leaves = 0;
+                g_checks = g_failures = 0;
+                model_step(&m, op);
+                m.steps++;
+                model_walk(&m, snaps, 1, depth);
+                out[0] = m.steps, out[1] = m.leaves, out[2] = g_checks, out[3] = g_failures;
+                _exit(write(fds[op][1], out, sizeof out) == sizeof out ? 0 : 1);
+            }
+            close(fds[op][1]);
+            running++;
+        }
+        while (wait(NULL) > 0)
+            ;
+        for (int op = 0; op < MODEL_OPS; op++) {
+            long in[4];
+            CHECK(read(fds[op][0], in, sizeof in) == sizeof in);
+            close(fds[op][0]);
+            m.steps += in[0], m.leaves += in[1], g_checks += (int)in[2], g_failures += (int)in[3];
+        }
+    }
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    printf("clock model: depth %d, %ld sequences, %ld steps, %.1f s\n", depth, m.leaves, m.steps,
+           (double)(t1.tv_sec - t0.tv_sec) + (double)(t1.tv_nsec - t0.tv_nsec) / 1e9);
+    long want = 1;
+    for (int i = 0; i < depth; i++)
+        want *= MODEL_OPS;
+    CHECK(m.leaves == want);
+    for (int i = 0; i <= MODEL_MAX_DEPTH; i++)
+        free(snaps[i].mem);
+    free(start.mem);
+    free(m.mem);
+}
+
 /* BuilderRequestAuth: vectors from tools/xcheck-gloas -bra (go-eth2-client
  * v0.30.3): SSZ, hash_tree_root of the data and of the container. */
 static void test_builder_auth_go(const char *dir)
@@ -3901,6 +4423,9 @@ int main(int argc, char **argv)
     test_fork_change_marks();
     test_slot_times();
     test_schedule_pending_slot_times();
+    test_clock_back();
+    test_clock_forward_same_rule();
+    test_clock_model();
     test_hostile_host();
     test_restart_floor();
     bench_cache();
