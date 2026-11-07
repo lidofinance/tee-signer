@@ -23,6 +23,10 @@ const (
 	// gcpShieldedVM is the hwmodel of a Confidential Space image that runs on
 	// a Shielded VM without memory encryption, so the host could read it.
 	gcpShieldedVM = "GCP_SHIELDED_VM"
+	// gcpIntelTDX is the one hwmodel a mainnet client accepts. Azure runs
+	// on AMD SEV-SNP, so an AMD model on GCP puts two shares on one chip
+	// family.
+	gcpIntelTDX = "GCP_INTEL_TDX"
 )
 
 // gcpProjectID is the form of a GCP project ID.
@@ -66,6 +70,8 @@ func (a *Attestation) gcp() (gcpSettings, error) {
 			return s, fmt.Errorf("attestation.gcp_hwmodels: %q is not a hwmodel name", m)
 		case strings.EqualFold(m, gcpShieldedVM):
 			return s, fmt.Errorf("attestation.gcp_hwmodels: %s is a VM without memory encryption; the host could read the runner", gcpShieldedVM)
+		case a.Mainnet && m != gcpIntelTDX:
+			return s, fmt.Errorf("attestation.gcp_hwmodels: mainnet: %q is refused; a mainnet gcp-cs runner runs on %s only", m, gcpIntelTDX)
 		}
 	}
 

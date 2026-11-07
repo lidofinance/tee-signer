@@ -430,7 +430,7 @@ there is no default and no way to skip the check.
 | `dev` | the unsigned document binds nonce and identity; local runners only |
 | `azure-maa` | MAA token: provider key set, issuer, hostdata (CCE policy hash), runtime data, debug flag, VMPL, compliance status |
 | `aws-nitro` | `attestation-verify/nitro.go`: NSM document, chain to the pinned AWS Nitro root, PCR0 to PCR2 (more optional), debug mode, nonce, user data |
-| `gcp-cs` | `attestation-verify/gcp.go`: Confidential Space token, issuer key set (or a pinned one), audience, image digest, hardware model, debug status, nonce. For a three-cloud cluster (Azure on AMD SEV-SNP, AWS Nitro, GCP) set `gcp_hwmodels` to `GCP_INTEL_TDX` only, so one chip family never holds two shares |
+| `gcp-cs` | `attestation-verify/gcp.go`: Confidential Space token, issuer key set (or a pinned one), audience, image digest, hardware model, debug status, nonce. For a three-cloud cluster (Azure on AMD SEV-SNP, AWS Nitro, GCP) set `gcp_hwmodels` to `GCP_INTEL_TDX` only, so one chip family never holds two shares. With `mainnet` set, any other model is refused |
 
 The settings of each verifier are in `attestation-verify/README.md`. The
 network entry of an AWS signer is a forwarder on the parent instance

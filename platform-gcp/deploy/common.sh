@@ -164,13 +164,17 @@ STS_AUDIENCE="https://sts.googleapis.com"
 CS_ISSUER="https://confidentialcomputing.googleapis.com"
 
 # ---- hardware ---------------------------------------------------------------
-# HARDWARE=amd-sev is the setting of THIS TEST ONLY: the operator chose
-# n2d-highcpu-2 with AMD SEV. The three-cloud layout (Azure on AMD SEV-SNP,
-# AWS Nitro, GCP) needs HARDWARE=intel-tdx in production, so that no chip
-# family holds two of the three shares.
-HARDWARE="${HARDWARE:-amd-sev}"
+# HARDWARE is intel-tdx by default on a prod chain. The three-cloud layout
+# (Azure on AMD SEV-SNP, AWS Nitro, GCP) needs it there, so that no chip family
+# holds two of the three shares; a mainnet client refuses any other hwmodel.
+# HARDWARE=amd-sev (n2d-highcpu-2 with AMD SEV) is for a non-prod CHAIN only,
+# and stays its default: a run without HARDWARE must not move the WIF
+# condition of a running AMD signer to another hwmodel.
+if [ "$CHAIN_PROD" = 1 ]; then HARDWARE="${HARDWARE:-intel-tdx}"; else HARDWARE="${HARDWARE:-amd-sev}"; fi
 case "$HARDWARE" in
   amd-sev)
+    [ "$CHAIN_PROD" = 0 ] ||
+      die "HARDWARE=amd-sev is for a non-prod CHAIN (hoodi, devnet, ci-test) only; CHAIN=$CHAIN needs HARDWARE=intel-tdx"
     CC_TYPE=SEV
     MACHINE="${MACHINE:-n2d-highcpu-2}"
     MIN_CPU_PLATFORM="AMD Milan"
@@ -186,7 +190,7 @@ case "$HARDWARE" in
     MAINTENANCE=TERMINATE
     GCP_HWMODELS=GCP_INTEL_TDX
     ;;
-  *) die "HARDWARE must be amd-sev (this test only) or intel-tdx (production), got '$HARDWARE'" ;;
+  *) die "HARDWARE must be intel-tdx or amd-sev (non-prod CHAIN only), got '$HARDWARE'" ;;
 esac
 
 # The production Confidential Space image family, never the debug family.

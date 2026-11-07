@@ -135,9 +135,9 @@ type Attestation struct {
 	// "GCP_AMD_SEV", "GCP_AMD_SEV_ES" or "GCP_INTEL_TDX". GCP_SHIELDED_VM,
 	// a VM without memory encryption, is refused. gcp-cs only, required.
 	//
-	// In the three-cloud layout (Azure on AMD SEV-SNP, AWS Nitro, GCP) list
-	// GCP_INTEL_TDX only, so one chip family never holds two shares: a flaw
-	// in one chip family then reaches one share, not two.
+	// With Mainnet set, GCP_INTEL_TDX is the only one accepted: Azure runs
+	// on AMD SEV-SNP, so one chip family never holds two shares, and a flaw
+	// in one chip family reaches one share, not two. Test chains take any.
 	GCPHWModels []string `json:"gcp_hwmodels,omitempty"`
 	// GCPIssuer is the token issuer, an https URL without path. Default
 	// https://confidentialcomputing.googleapis.com. The key set comes from

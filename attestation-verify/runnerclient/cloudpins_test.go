@@ -34,6 +34,7 @@ func TestGCPMainnetNeedsProjectAndServiceAccount(t *testing.T) {
 	good := gcpGood("")
 	good.SetupSHA256 = pinOf(testSetupHash)
 	good.Mainnet = true
+	good.GCPHWModels = []string{"GCP_INTEL_TDX"}
 	good.GCPProjectID = "signer-project"
 	good.GCPServiceAccount = gcpAccount
 	if err := good.Validate(); err != nil {
