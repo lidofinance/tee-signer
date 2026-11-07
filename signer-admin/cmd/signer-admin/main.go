@@ -87,7 +87,7 @@
 //	    the order: in IMPORT_SHARES_SEALED batches, each stored all or
 //	    none, or, to a runner that does not know that message, one
 //	    IMPORT_SHARE_SEALED per share.
-//	signer-admin exit -cluster cluster.json [-signers NAME,...] [-split FILE] -pubkey 0x... -index N -epoch E -out exit.json
+//	signer-admin exit -cluster cluster.json [-signers NAME,...] [-split FILE] -pubkey 0x... -index N -epoch E -out exit.json|-partial-out FILE
 //	    Sign a voluntary exit: send SIGN of the exit to the signers in turn
 //	    until t partial signatures verify under their share keys (t and the
 //	    share indices from the split file of import-draft; a cluster of one
@@ -96,6 +96,20 @@
 //	    admin role may sign an exit. The tool posts nothing; to broadcast:
 //	      curl -X POST -H 'Content-Type: application/json' --data @exit.json \
 //	        http://BEACON:5052/eth/v1/beacon/pool/voluntary_exits
+//	    With -partial-out FILE instead of -out (needs -split), ask every
+//	    selected signer, normally one (-signers NAME), and write the
+//	    partials that verify, with their share indices, for exit-combine,
+//	    even when fewer than t. If a selected signer fails, it still
+//	    writes the file but exits non-zero. Each admin certificate holder
+//	    runs it with their own certificate. The file is not secret.
+//	signer-admin exit-combine -split FILE [-pubkey 0x...] [-index N] [-epoch E] -out exit.json PARTIALS...
+//	    Offline: read the files of exit -partial-out, check that they name
+//	    the same exit and chain (and -pubkey, -index, -epoch if given),
+//	    check each partial under the share key that the split's
+//	    commitments give for its share index, count a repeated partial
+//	    once and refuse two signatures for one share index, combine t of
+//	    them, check the result under the validator key and write the
+//	    beacon API body as exit does.
 //	signer-admin split -keystores DIR -password-file FILE -t T -n N -signers NAME,... [-chain mainnet|hoodi|devnet|ci-test] [-expect FILE] [-allow-swap] -out DIR
 //	    Offline, as a trusted dealer: decrypt EIP-2335 keystores, split
 //	    each key t of n with Feldman commitments, check each share against
@@ -185,7 +199,8 @@ const usage = `usage:
   signer-admin probe -cluster cluster.json [-signers NAME,...]
   signer-admin import-draft -cluster cluster.json -signer NAME -split FILE [-not-after 12h] [-allow-gcp-unsafe-single-key] [-out import.bin]
   signer-admin import -cluster cluster.json -signer NAME -order import.signed -shares FILE -commitments FILE
-  signer-admin exit -cluster cluster.json [-signers NAME,...] [-split FILE] -pubkey 0x... -index N -epoch E -out exit.json
+  signer-admin exit -cluster cluster.json [-signers NAME,...] [-split FILE] -pubkey 0x... -index N -epoch E -out exit.json|-partial-out FILE
+  signer-admin exit-combine -split FILE [-pubkey 0x...] [-index N] [-epoch E] -out exit.json PARTIALS...
   signer-admin split -keystores DIR -password-file FILE -t T -n N -signers NAME,... [-chain mainnet|hoodi|devnet|ci-test] [-expect FILE] [-allow-swap] -out DIR
   signer-admin issue-client-cert -ca-cert FILE -ca-key FILE -role admin|attest|signing|-make-intermediate ROLE -name CN -out DIR`
 
@@ -196,7 +211,7 @@ func run(args []string, out io.Writer) error {
 	cmds := map[string]func([]string, io.Writer) error{
 		"setup": cmdSetup, "pin": cmdPin, "status": cmdStatus, "draft": cmdDraft,
 		"show": cmdShow, "sign": cmdSign, "assemble": cmdAssemble, "push": cmdPush,
-		"probe": cmdProbe, "import-draft": cmdImportDraft, "import": cmdImport, "exit": cmdExit, "split": cmdSplit,
+		"probe": cmdProbe, "import-draft": cmdImportDraft, "import": cmdImport, "exit": cmdExit, "exit-combine": cmdExitCombine, "split": cmdSplit,
 		"issue-client-cert": cmdIssueClientCert, "approver-key": cmdApproverKey,
 	}
 	cmd, ok := cmds[args[0]]

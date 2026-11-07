@@ -1093,6 +1093,11 @@ has mutual TLS.
 A voluntary exit is the admin role's only SIGN: a signing certificate gets
 `FORBIDDEN` for kind 3, and an admin certificate gets `FORBIDDEN` for every
 other kind. A stolen admin certificate makes exits and no other signature.
+Nothing else gates an exit: no approvals, no daily cap, no rate limit. So
+whoever holds admin certificates that t signers accept can exit every
+loaded key, and when all signers pin one client root, one admin
+certificate is enough. This is an accepted risk; the admin keys must stay
+offline (`signer-admin/README.md`, "Admin certificate").
 PUBLIC_KEYS is open to attest-only clients because a verifier of an ATTEST
 answer needs the keys for `keys_hash`.
 
