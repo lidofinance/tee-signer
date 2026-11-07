@@ -22,7 +22,8 @@
 #   locked_pcr_change
 #              a new pcr0 leaves the locked key's policy as it was
 #   mark_bucket the bucket policy refuses puts under fewer days of retention
-#              than mark_min_lock_days + 1, or none
+#              than mark_min_lock_days + 1, or none, and writes under marks/
+#              and config/ by anyone but the writer user
 #   min_days_* mark_min_lock_days refuses 0 and a part day, and is
 #              required with mark_bucket
 #
@@ -225,6 +226,17 @@ run "mark_bucket" {
     condition = (one([for st in jsondecode(aws_s3_bucket_policy.marks[0].policy).Statement : st.Condition.NumericLessThan["s3:object-lock-remaining-retention-days"] if st.Sid == "ShortRetention"]) == 31
     && one([for st in jsondecode(aws_s3_bucket_policy.marks[0].policy).Statement : st.Condition.Null["s3:object-lock-remaining-retention-days"] if st.Sid == "NoRetention"]) == "true")
     error_message = "the bucket policy does not refuse puts with short or no retention"
+  }
+  assert {
+    condition = (one([for st in jsondecode(aws_s3_bucket_policy.marks[0].policy).Statement : st if st.Sid == "OnlyWriterWrites"]) == {
+      Sid       = "OnlyWriterWrites"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = ["s3:PutObject", "s3:PutObjectRetention", "s3:ReplicateObject", "s3:ReplicateDelete"]
+      Resource  = ["arn:aws:s3:::signer-marks/marks/*", "arn:aws:s3:::signer-marks/config/*"]
+      Condition = { StringNotEquals = { "aws:PrincipalArn" = "arn:aws:iam::111122223333:user/writer" } }
+    })
+    error_message = "the bucket policy does not deny writes under marks/ and config/ to every principal but the writer"
   }
 }
 

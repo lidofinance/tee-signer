@@ -334,6 +334,13 @@ resource "aws_iam_user" "record_writer" {
 # mark_min_lock_days + 1: a runner's put passes whether S3 rounds down or
 # up, and a put with less than mark_min_lock_days days left is refused
 # either way (with rounding down, anything under mark_min_lock_days + 1).
+# OnlyWriterWrites denies every principal but the writer user (the root
+# user, the account's roles and users, AWS services) any new object,
+# retention or replica under marks/ and config/. Without it a principal
+# with s3:PutObject from its own IAM policy could plant objects there, and
+# enough of them under a signer's path stop its mark writes for
+# slashing_log_min_lock_days. The writer signs with the user's own access
+# key, so aws:PrincipalArn is the user's ARN.
 resource "aws_s3_bucket_policy" "marks" {
   count  = var.mark_bucket == null ? 0 : 1
   bucket = var.mark_bucket
@@ -353,6 +360,14 @@ resource "aws_s3_bucket_policy" "marks" {
         Principal = { AWS = aws_iam_user.record_writer.arn }
         Action    = ["s3:ListBucketVersions", "s3:GetBucketObjectLockConfiguration"]
         Resource  = "arn:aws:s3:::${var.mark_bucket}"
+      },
+      {
+        Sid       = "OnlyWriterWrites"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = ["s3:PutObject", "s3:PutObjectRetention", "s3:ReplicateObject", "s3:ReplicateDelete"]
+        Resource  = ["arn:aws:s3:::${var.mark_bucket}/marks/*", "arn:aws:s3:::${var.mark_bucket}/config/*"]
+        Condition = { StringNotEquals = { "aws:PrincipalArn" = aws_iam_user.record_writer.arn } }
       },
       {
         Sid       = "ParentWritesNothing"

@@ -289,7 +289,8 @@ AWS (Terraform in `<terraform-dir>`):
    `purpose=record-creds`) and `aws_s3_bucket_policy.marks[0]` (create: the
    writer may write `marks/*` and `config/*`, set the retention of the
    objects it writes (`s3:PutObjectRetention`) and read the Object Lock
-   configuration). Then apply.
+   configuration; every other principal is refused puts under `marks/` and
+   `config/`). Then apply.
 3. Record credentials. The generic runner decrypts them with
    `purpose=record-creds`, so make a blob with that context:
    `aws iam create-access-key --user-name signer-record-writer-node-1` into a
