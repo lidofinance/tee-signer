@@ -85,6 +85,8 @@ CTX="$OUT/ctx-$arch"
 mkdir -p "$OUT" "$CTX"
 # The chain record of the per-chain images: a generic image has none.
 rm -f "$OUT/runner-$arch.chain"
+# A failed run must not leave an earlier run's key policy next to its image.
+rm -f "$OUT/kms-key-policy-$arch.json" "$OUT/inputs-$arch.txt"
 
 if [ "${NITRO_CLI_REUSE:-}" = 1 ]; then
   docker image inspect "$NITRO_IMAGE" >/dev/null 2>&1 ||
