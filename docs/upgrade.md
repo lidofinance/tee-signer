@@ -86,6 +86,11 @@ cannot start again. Clouds announce such moves months ahead. Add the
 root's PEM, its SHA-256 and its source to `platform/cloudroots`, and roll
 out the new image as below before the move.
 
+For Azure the list is the roots Microsoft's "Azure Certificate Authority
+details" page names, except DigiCert Global Root CA (G1): no chain the
+runner sees ends there, and the Mozilla list no longer has it. If an Azure
+endpoint the runner calls moves to G1, add it.
+
 ## Rules
 
 - Keep k of n signers up. Switch one signer at a time, and finish it

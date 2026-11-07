@@ -33,8 +33,11 @@ The images have no CA bundle, and the runner does not use one. Each cloud
 client trusts its provider's roots only (`platform/cloudroots`): Amazon
 Root CA 1 to 4 and Starfield Services Root G2 for KMS, STS and S3; GTS
 Root R1, R3 and R4 for STS, IAM credentials, Cloud KMS and GCS; DigiCert
-Global Root G2 and G3 and Microsoft's RSA and ECC roots of 2017 for MAA,
-Key Vault (and its release JWS) and Blob storage. The coarse clock adds
+Global Root G2 and G3, DigiCert TLS ECC P384 Root G5 and TLS RSA4096 Root
+G5, and Microsoft's RSA and ECC roots of 2017 for MAA, Key Vault (and its
+release JWS) and Blob storage. The Azure set leaves out DigiCert Global
+Root CA (G1), which no chain the runner sees ends at and the Mozilla list
+no longer has. The coarse clock adds
 the NTS operators' roots, for its one host outside the cloud. A cloud
 moving to a root outside its list needs a new image
 ([upgrade](../../docs/upgrade.md#a-cloud-moves-to-a-new-tls-root)).

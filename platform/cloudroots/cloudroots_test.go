@@ -12,12 +12,16 @@ import (
 )
 
 // TestRootsMatchPins loads every root: one PEM certificate, self-signed,
-// a CA, and the pinned SHA-256.
+// a CA, and the pinned SHA-256. It also counts the roots of each provider.
 func TestRootsMatchPins(t *testing.T) {
 	seen := map[string]bool{}
+	want := map[Provider]int{AWS: 5, Google: 3, Azure: 6}
+	if len(roots) != len(want) {
+		t.Errorf("%d providers, want %d", len(roots), len(want))
+	}
 	for p, rs := range roots {
-		if len(rs) < 2 {
-			t.Errorf("provider %d has %d roots, want 2 or more", p, len(rs))
+		if len(rs) != want[p] {
+			t.Errorf("provider %d has %d roots, want %d", p, len(rs), want[p])
 		}
 		for _, r := range rs {
 			c, err := load(r)
