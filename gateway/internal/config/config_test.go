@@ -308,7 +308,7 @@ func TestAccess(t *testing.T) {
 		{"metrics unsafe_plain_http, API local", mNet + "metrics_access: unsafe_plain_http\n", AccessLocal, AccessUnsafePlainHTTP},
 		{"metrics unsafe_plain_http, API mtls", net + tlsCA + mNet + "metrics_access: unsafe_plain_http\n", AccessMTLS, AccessUnsafePlainHTTP},
 	} {
-		c, err := load(t, pin+tc.body)
+		c, err := loadRaw(t, devnetPin+tc.body+devnetBase)
 		if err != nil {
 			t.Errorf("%s: %v", tc.name, err)
 			continue
@@ -344,6 +344,59 @@ func TestAccess(t *testing.T) {
 	} {
 		if _, err := load(t, pin+tc.body); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: %v, want %q", tc.name, err, tc.want)
+		}
+	}
+}
+
+// devnetPin pins a devnet chain: the devnet row's fork version and a root
+// of no public network.
+const devnetPin = "chain:\n  genesis_fork_version: \"0x10000038\"\n  genesis_validators_root: \"0x" +
+	"1111111111111111111111111111111111111111111111111111111111111111" + "\"\n"
+
+// devnetBase is base with non-prod signers only.
+const devnetBase = `signers:
+  client_cert: c.crt
+  client_key: c.key
+  nodes:
+    - {address: "tcp:127.0.0.1:1", allow_chain_build: devnet, attestation: {verifier: dev}}
+    - {address: "tcp:127.0.0.1:2", allow_chain_build: devnet, attestation: {verifier: dev}}
+`
+
+// With a signer that can sign for mainnet, or on a prod chain, access
+// refuses the unsafe values; metrics_access keeps them.
+func TestUnsafeAccessOnMainnet(t *testing.T) {
+	const (
+		openTLS   = "listen: 0.0.0.0:19000\naccess: unsafe_open_tls\ntls:\n  cert: s.pem\n  key: k.pem\n"
+		plainHTTP = "listen: 0.0.0.0:19000\naccess: unsafe_plain_http\n"
+		plainLoop = "access: unsafe_plain_http\n"
+		head      = "signers:\n  client_cert: c.crt\n  client_key: c.key\n  nodes:\n" +
+			"    - {address: \"tcp:127.0.0.1:1\", allow_chain_build: devnet, attestation: {verifier: dev}}\n"
+		noAllow     = head + "    - {name: prod, address: \"tcp:127.0.0.1:2\", attestation: {verifier: dev}}\n"
+		mainnetFlag = head + "    - {name: prod, address: \"tcp:127.0.0.1:2\", allow_chain_build: hoodi, " +
+			"attestation: {verifier: dev, mainnet: true}}\n"
+	)
+	for _, listener := range []string{openTLS, plainHTTP, plainLoop} {
+		if _, err := loadRaw(t, devnetPin+listener+devnetBase); err != nil {
+			t.Errorf("non-prod signers, %q: %v", listener, err)
+		}
+		if _, err := loadRaw(t, pin+listener+devnetBase); err == nil || !strings.Contains(err.Error(), "is refused on a prod chain") {
+			t.Errorf("non-prod signers on mainnet, %q: %v", listener, err)
+		}
+		for want, signers := range map[string]string{
+			"signers.nodes[1] (prod): it has no allow_chain_build":     noAllow,
+			"signers.nodes[1] (prod): attestation.mainnet is true":     mainnetFlag,
+			"signers.nodes[0] (signer-1): it has no allow_chain_build": base,
+		} {
+			_, err := loadRaw(t, pin+listener+signers)
+			if err == nil || !strings.Contains(err.Error(), "is refused with a mainnet signer") || !strings.Contains(err.Error(), want) {
+				t.Errorf("%q with %q: %v", listener, want, err)
+			}
+		}
+	}
+	mtls := "listen: 0.0.0.0:19000\ntls:\n  cert: s.pem\n  key: k.pem\n  client_ca: ca.pem\nmetrics: 0.0.0.0:19001\n"
+	for _, m := range []string{AccessUnsafeOpenTLS, AccessUnsafePlainHTTP} {
+		if c, err := loadRaw(t, pin+mtls+"metrics_access: "+m+"\n"+noAllow); err != nil || c.MetricsAccess != m {
+			t.Errorf("metrics_access %s with a mainnet signer: %v", m, err)
 		}
 	}
 }

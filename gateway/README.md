@@ -50,6 +50,8 @@ The signers hold the slashing protection. A validator client's own slashing prot
 
 A value that does not fit the rest of the config stops the start: `local` on an address other than loopback, `local` or `unsafe_plain_http` for `access` with a `tls` section, `mtls` without the server certificate or without accepted clients, `unsafe_open_tls` without the server certificate or, for `access`, with `client_ca` or `client_fingerprints`, an unknown value, and `metrics_access` without `metrics`. The two `unsafe_` values log a warning at start.
 
+`access` refuses `unsafe_open_tls` and `unsafe_plain_http` when a signer can sign for mainnet: a signer with `attestation.mainnet: true`, or one without `allow_chain_build` (mainnet builds only). It refuses them too when `chain` is a prod chain: mainnet, or a chain with no non-prod row in `governance/setupwire/chains.go`. `metrics_access` still takes them; the metrics hold counts, times and signer names, no keys.
+
 For a validator client on another host or in another container, use `mtls`. Keep `unsafe_open_tls` and `unsafe_plain_http` for a network that only the validator client, or only the monitoring, can reach.
 
 ## TLS
