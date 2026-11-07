@@ -4,12 +4,14 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"time"
 
+	"github.com/lidofinance/tee-signer/platform/cloudroots"
 	"github.com/lidofinance/tee-signer/trusted-time/nts"
 )
 
@@ -49,7 +51,11 @@ func init() {
 
 func ntsClockCheck() int {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	n, coarse, err := newNTSClock(http.DefaultClient, nil, os.Getenv("RUNNER_NTS_REGION"), log)
+	// The coarse check trusts what a cloud runner's does: the clouds' roots
+	// and the NTS operators' (coarseClient).
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.TLSClientConfig = &tls.Config{RootCAs: cloudroots.Pool(cloudroots.AWS, cloudroots.Google, cloudroots.Azure)}
+	n, coarse, err := newNTSClock(&http.Client{Transport: t}, nil, os.Getenv("RUNNER_NTS_REGION"), log)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "runner:", err)
 		return 2

@@ -2,11 +2,14 @@ package azure
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/lidofinance/tee-signer/platform/cloudroots"
 )
 
 // retryDelay is the wait before the first retry; it doubles each time.
@@ -22,10 +25,12 @@ const (
 
 // newClient is an HTTP client for the Azure endpoints. It ignores proxy
 // variables: the instance metadata service is link-local, and nothing here
-// should go through a proxy the group's environment names.
+// should go through a proxy the group's environment names. TLS trusts
+// Azure's roots only (cloudroots).
 func newClient(timeout time.Duration) *http.Client {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.Proxy = nil
+	t.TLSClientConfig = &tls.Config{RootCAs: cloudroots.Pool(cloudroots.Azure)}
 	return &http.Client{Timeout: timeout, Transport: t}
 }
 

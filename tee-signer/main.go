@@ -31,11 +31,6 @@ import (
 	"syscall"
 	"time"
 
-	// Embedded Mozilla roots, used when the image has no CA bundle: enclave
-	// and container images here are FROM scratch, and a host-supplied
-	// bundle would be untrusted.
-	_ "golang.org/x/crypto/x509roots/fallback"
-
 	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/platform/setup"
 	"github.com/lidofinance/tee-signer/signer-core/core"

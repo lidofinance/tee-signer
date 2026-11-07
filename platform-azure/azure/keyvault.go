@@ -75,6 +75,7 @@ import (
 
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/platform"
+	"github.com/lidofinance/tee-signer/platform/cloudroots"
 	"github.com/lidofinance/tee-signer/platform/jwtclaims"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
@@ -84,13 +85,21 @@ const (
 	wrapKeyBits   = 2048
 )
 
+// roots is Roots, or Azure's roots if it is nil.
+func (kv *KeyVault) roots() *x509.CertPool {
+	if kv.Roots != nil {
+		return kv.Roots
+	}
+	return cloudroots.Pool(cloudroots.Azure)
+}
+
 // KeyVault calls the release operation of one vault.
 type KeyVault struct {
 	Endpoint string // vault host, e.g. signer-poc-kv.vault.azure.net
 	Tokens   TokenSource
 	HTTP     *http.Client
-	// Roots is the trust for the JWS certificate chain. nil means the
-	// system roots, which the runner extends with embedded ones.
+	// Roots is the trust for the JWS certificate chain. nil means Azure's
+	// roots (cloudroots), never the system ones.
 	Roots *x509.CertPool
 	// Now is the time for certificate checks. nil means time.Now.
 	Now func() time.Time
@@ -360,7 +369,7 @@ func (kv *KeyVault) verifyJWS(compact string) ([]byte, error) {
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
 	}
-	if _, err := certs[0].Verify(x509.VerifyOptions{DNSName: host, Roots: kv.Roots, Intermediates: inter, CurrentTime: now}); err != nil {
+	if _, err := certs[0].Verify(x509.VerifyOptions{DNSName: host, Roots: kv.roots(), Intermediates: inter, CurrentTime: now}); err != nil {
 		return nil, fmt.Errorf("azure: JWS certificate chain: %w", err)
 	}
 	pub, ok := certs[0].PublicKey.(*rsa.PublicKey)
