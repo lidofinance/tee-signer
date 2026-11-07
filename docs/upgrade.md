@@ -78,8 +78,12 @@ required for Nitro on a prod chain. A new image refuses format 4 setups.
 
 ## Rules
 
-- Keep k of n signers up. Switch one signer at a time, and finish it
+- Keep t of n signers up. Switch one signer at a time, and finish it
   (signing again) before the next one goes down.
+- Size splits with n - t >= 2, so one signer can be mid-upgrade while
+  another fails and t still sign. With n - t = 1 (3 of 4, 4 of 5) a fault
+  during an upgrade stops the keys until one of the two is back. On a prod
+  chain the smallest split with both rules is 4 of 6.
 - Never run the old and the new image of one signer at the same time.
   They share one mark log; the second writer finds a record it did not
   write and stops.
@@ -102,6 +106,10 @@ Azure and GCP the runner logs `restart from the mark log` once, with
 dropped` at a start where its source has reached the gate's floor. An AWS
 enclave outside debug mode has no console, so there count it from the
 start time.
+
+A single-node signer (1 of 1) has no other signer to cover this time:
+it misses its duties for the whole downtime of every restart, upgrades
+included.
 
 ## Order
 
