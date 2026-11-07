@@ -522,13 +522,18 @@ func buildVectors(t *testing.T) []byte {
 	v.Measurement.GCP = measurementVector(uint8(ImageGCP), s.Locked.AllowedImageMeasurements[0].Measurement)
 
 	// key_release_hash: a locked AWS key policy (no kms:PutKeyPolicy for
-	// anyone) and an immutable Azure release policy.
+	// anyone), in canonical form (backend.CanonicalJSON), and an immutable
+	// Azure release policy.
+	awsPolicy, err := backend.CanonicalJSON([]byte(`{"Version":"2012-10-17","Id":"signer-runner-enclave","Statement":[{"Sid":"EnclaveOnlyDataKeys","Effect":"Allow",` +
+		`"Principal":{"AWS":"arn:aws:iam::111122223333:role/signer-parent"},"Action":["kms:Decrypt","kms:GenerateDataKey"],"Resource":"*",` +
+		`"Condition":{"StringEqualsIgnoreCase":{"kms:RecipientAttestation:PCR0":"` + strings.Repeat("ab", 48) + `"}}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	v.KeyRelease.Nitro = keyReleaseVector(backend.KeyReleaseNitro,
 		"arn", "arn:aws:kms:eu-west-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab",
 		"origin", "AWS_KMS", "key_manager", "CUSTOMER", "multi_region", "\x00",
-		"policy", `{"Version":"2012-10-17","Id":"signer-runner-enclave","Statement":[{"Sid":"EnclaveOnlyDataKeys","Effect":"Allow",`+
-			`"Principal":{"AWS":"arn:aws:iam::111122223333:role/signer-parent"},"Action":["kms:Decrypt","kms:GenerateDataKey"],"Resource":"*",`+
-			`"Condition":{"StringEqualsIgnoreCase":{"kms:RecipientAttestation:PCR0":"`+strings.Repeat("ab", 48)+`"}}}]}`)
+		"policy", string(awsPolicy))
 	v.KeyRelease.Azure = keyReleaseVector(backend.KeyReleaseAzure,
 		"kid", "https://signer-poc-kv.vault.azure.net/keys/signer-1/0123456789abcdef0123456789abcdef",
 		"exportable", "\x01", "immutable", "\x01", "content_type", "application/json; charset=utf-8",

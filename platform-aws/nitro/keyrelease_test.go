@@ -105,11 +105,14 @@ func (f *keyPolicyKMS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// key_release_hash is over the key's metadata and policy as KMS answers
-// them; another policy, origin or replica setting gives another hash, and
-// a read the key policy refuses is an error, not a hash.
+// key_release_hash is over the key's metadata and its policy in canonical
+// form. The same policy with members in another order or other whitespace
+// gives the same hash (KMS answers it so). Another policy, origin or
+// replica setting gives another hash. A read the key policy refuses, or a
+// policy that does not parse, is an error, not a hash.
 func TestKeyRuleHash(t *testing.T) {
-	f := &keyPolicyKMS{arn: "arn:aws:kms:eu-west-1:111122223333:key/k1", origin: "AWS_KMS", policy: `{"Version":"2012-10-17"}`}
+	f := &keyPolicyKMS{arn: "arn:aws:kms:eu-west-1:111122223333:key/k1", origin: "AWS_KMS",
+		policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Condition":{"StringEqualsIgnoreCase":{"kms:RecipientAttestation:PCR0":"a","kms:RecipientAttestation:PCR1":"b"}}}]}`}
 	srv := httptest.NewServer(f)
 	defer srv.Close()
 	keys := Keys{Client: kms.New(kms.Options{Region: "eu-west-1", BaseEndpoint: aws.String(srv.URL), Credentials: staticCreds,
@@ -119,12 +122,28 @@ func TestKeyRuleHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := backend.KeyReleaseHash(backend.KeyReleaseNitro, []byte(f.arn), []byte("AWS_KMS"), []byte("CUSTOMER"), []byte{0}, []byte(f.policy))
+	canon := `{"Statement":[{"Condition":{"StringEqualsIgnoreCase":{"kms:RecipientAttestation:PCR0":"a","kms:RecipientAttestation:PCR1":"b"}},"Effect":"Allow"}],"Version":"2012-10-17"}`
+	want := backend.KeyReleaseHash(backend.KeyReleaseNitro, []byte(f.arn), []byte("AWS_KMS"), []byte("CUSTOMER"), []byte{0}, []byte(canon))
 	if h := r.Hash; h != want {
 		t.Fatalf("key_release_hash %x, want %x", h, want)
 	}
+	saved := f.policy
+	f.policy = `{ "Statement": [ { "Condition": { "StringEqualsIgnoreCase": {
+		"kms:RecipientAttestation:PCR1": "b",
+		"kms:RecipientAttestation:PCR0": "a" } },
+	  "Effect": "Allow" } ],
+"Version": "2012-10-17" }`
+	if got, _, err := keys.KeyRule(ctx); err != nil || got.Hash != want {
+		t.Errorf("reordered policy: %x %v, want %x", got.Hash, err, want)
+	}
+	f.policy = `{"Version":"2012-10-17",`
+	if _, _, err := keys.KeyRule(ctx); err == nil || !strings.Contains(err.Error(), "GetKeyPolicy answer") {
+		t.Errorf("policy that does not parse: %v, want an error", err)
+	}
+	f.policy = saved
 	for name, change := range map[string]func(){
 		"another policy":   func() { f.policy = `{"Version":"2012-10-17","Statement":[]}` },
+		"another PCR0":     func() { f.policy = strings.Replace(f.policy, `PCR0":"a"`, `PCR0":"c"`, 1) },
 		"imported key":     func() { f.origin = "EXTERNAL" },
 		"multi-region key": func() { f.multiRegion = true },
 	} {
