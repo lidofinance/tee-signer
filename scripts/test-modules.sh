@@ -87,9 +87,40 @@ checks() {
       done
       # The tags a release runner is built with (scripts/common.sh runner_tags).
       go test $RACE -count=1 -tags "$(runner_tags runner-dev)" ./server . || return 1 ;;
-    platform|slashing-log|platform-aws|platform-azure|platform-gcp|trusted-time)
-      # The clock builds without the runner tags.
-      [ "$1" = trusted-time ] || vet_builds || return 1
+    trusted-time)
+      # The clock builds without the runner tags; the NTS client has code
+      # with the tag nts only (the cloud runners' build). Its C core is
+      # the archive ntscore/c/Makefile builds freestanding and checks for
+      # outside symbols; the Go binding links it. The core's tests run
+      # once more under the sanitizers (an archive built with them), which
+      # exclude the race detector, and, where the cross compiler and
+      # qemu-user are installed (scripts/deps.sh on x86_64), once on the
+      # other architecture: the AES is hand-written and the arithmetic
+      # 128-bit, so one architecture's pass does not vouch for the other.
+      go test $RACE -count=1 -v ./... || return 1
+      make -C ntscore/c check || return 1
+      go vet -tags nts ./... && go test $RACE -count=1 -v -tags nts ./... || return 1
+      make -C ntscore/c asan || return 1
+      go test -asan -count=1 -tags nts ./ntscore/go ./nts || return 1
+      # COV=1: the C core's line coverage by its Go tests (gcov).
+      if [ "${COV:-0}" = 1 ]; then
+        make -C ntscore/c cov || return 1
+        go test -count=1 -tags nts,ntscov ./ntscore/go ./nts || return 1
+        make -C ntscore/c cov-report || return 1
+      fi
+      local other qemu
+      case "$HOST_ARCH" in x86_64) other=aarch64; qemu=qemu-aarch64 ;; *) other=x86_64; qemu=qemu-x86_64 ;; esac
+      if command -v "$(cc_for "$other")" >/dev/null 2>&1 && command -v "$qemu" >/dev/null 2>&1; then
+        make -C ntscore/c lib ARCH="$other" CC="$(cc_for "$other")" || return 1
+        CGO_ENABLED=1 GOOS=linux GOARCH="$(goarch_of "$other")" CC="$(cc_for "$other")" \
+          go test -c -tags nts -ldflags '-linkmode external -extldflags -static' -o "$LOGS/ntscore-$other.test" ./ntscore/go || return 1
+        (cd ntscore/go && "$qemu" "$LOGS/ntscore-$other.test" -test.short -test.count=1) || return 1
+        log "trusted-time: ntscore tests passed on $other under $qemu"
+      else
+        log "trusted-time: no cross compiler or $qemu for $other, the ntscore tests ran on $HOST_ARCH only"
+      fi ;;
+    platform|slashing-log|platform-aws|platform-azure|platform-gcp)
+      vet_builds || return 1
       go test $RACE -count=1 -v -tags "$ALL_TAGS" ./... || return 1 ;;
     signer-admin)
       # The operator tools build without the runner tags. Some tests drive

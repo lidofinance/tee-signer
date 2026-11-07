@@ -26,7 +26,7 @@ state bucket. See
 
 ## Modules
 
-Each folder is one module with its own `go.mod` (or C or Rust build), tests
+Each folder is one module with its own `go.mod` (or C build), tests
 and README. A module uses another one only through its public packages, and
 every module builds and tests on its own.
 
@@ -43,7 +43,7 @@ every module builds and tests on its own.
 | [platform-azure](platform-azure) | Azure confidential containers: SNP and MAA, Key Vault key release, Blob mark log, deploy files |
 | [platform-gcp](platform-gcp) | GCP Confidential Space: token, Cloud KMS, Cloud Storage mark log, deploy files |
 | [attestation-verify](attestation-verify) | Verifiers of the runner's attestation (Nitro, MAA, Confidential Space) and the attested client |
-| [trusted-time](trusted-time) | The runner clock and the NTS client (Rust, Go binding) |
+| [trusted-time](trusted-time) | The runner clock and the NTS client: a C core under a Go wrapper |
 | [signer-admin](signer-admin) | Operator tools: setup updates and orders, share import |
 | [web3signer-api](web3signer-api) | Parsing and checks of Web3Signer signing requests |
 | [gateway](gateway) | The Web3Signer gateway: sends each request to the TEE signers over mutual TLS and combines their partial signatures |
@@ -58,8 +58,7 @@ Inside an Ubuntu 22.04 or 24.04 workbench (native, WSL2 or a VM), with Go
 and qemu-user. `make deps` installs the apt packages.
 
 ```sh
-make core     # C core and blst, build/<arch>/lib
-make nts      # Rust NTS library: crates from crates.io, then an offline build in its toolchain image
+make core     # C signer core and blst, build/<arch>/lib; the NTS core, trusted-time/ntscore/c/build/<arch>
 make build    # the runners, one per cloud, and the host tools; each passes the release gate
 ```
 

@@ -130,6 +130,7 @@ fi
 
 if fuzz_everything; then
   make -C "$ROOT/markformat" fuzz FUZZ_SECONDS="${FUZZ_SECONDS:-3}" >"$LOGS/fuzz-markformat.log" 2>&1 || { tail -40 "$LOGS/fuzz-markformat.log"; exit 1; }
+  FUZZ_SECONDS="${FUZZ_SECONDS:-3}" bash "$ROOT/trusted-time/ntscore/c/fuzz/fuzz.sh" ci >"$LOGS/fuzz-nts.log" 2>&1 || { tail -40 "$LOGS/fuzz-nts.log"; exit 1; }
 else
   log "C fuzz: skipped, FUZZ_MODULES=$FUZZ_MODULES leaves out signer-core and markformat"
   export FUZZ=0

@@ -1,402 +1,352 @@
-# nts: Rust library for the signer's NTS time client
+# nts: the signer's NTS time client
 
-The signer gets a trusted clock from NTS (RFC 8915). In the clouds Go
-runs the TLS session of the key exchange (`crypto/tls`, `ExportKeyingMaterial`)
-and owns every socket. The Rust code does the NTS-KE records, the NTPv4
-packets with NTS, AES-SIV-CMAC-256, the error bound and the quorum, with no
-I/O of its own. It is a static library with a C ABI that the Go runner
-links through cgo, like `libsigner_core.a`. On the boards the same protocol
-code is meant to run in an OP-TEE trusted app, with TLS inside it. This file
-is the design note.
+The runner's trusted time comes from Network Time Security (RFC 8915) over
+NTPv4 (RFC 5905), from several operators at once, and from nothing else.
+The client is a C core, `trusted-time/ntscore` (the C in `ntscore/c`,
+its cgo binding in `ntscore/go`), under a Go wrapper, `trusted-time/nts`;
+the clock built on them is `trusted-time/clock.NTS`.
+This note says where the line between the two runs and why, what the core
+is made of, what it guarantees and how it is tested.
 
-The parts:
+## The boundary
 
-- The Rust toolchain, with static linking into the runner on x86_64 and
-  aarch64 and the same bytes on every build.
-- The protocol logic, the error bound and the quorum in the `no_std` crate
-  `signer-nts-core`, with Rust tests, and the C ABI over all of it
-  (`include/signer_nts.h`).
-- The Go side, behind the build tag `nts`: NTS-KE over `crypto/tls` and NTP
-  over UDP in `trusted-time/nts`, the clock `trusted-time/clock.NTS`, the switch
-  `RUNNER_NTS_CLOCK=1` in tagged runners (`tee-signer/platforms_nts.go`),
-  and the interop test against four public operators
-  (`scripts/nts-interop.sh`).
-- The clouds. The cloud runners (azure, aws, gcp, their debug and key
-  generation builds) have the tag, and their images run `-nts-clock`
-  (section "In the clouds"). On AWS, NTS-KE goes through vsock-proxy and
-  NTP through a UDP relay on the parent (`platform-aws/udprelay`,
-  `platform-aws/cmd/udprelay`).
+The split is made for a trusted application: an OP-TEE TA, where Go cannot
+run and where the wrapper would be the untrusted world. The rule that
+places the line is that **the wrapper is the network**: whatever it hands
+the core must be something an attacker on the wire could hand it too, that
+is ciphertext and datagrams. Everything the time rests on lives in the
+core, and the core gets what it needs through host operations of two kinds
+(`ntscore/c/nts_core.h`, `nts_host_ops`):
 
-## Workspace
+| Operation | Trust | On the cloud runners | In an OP-TEE TA |
+| --- | --- | --- | --- |
+| Random bytes for the request | trusted | `crypto/rand` | `TEE_GenerateRandom` |
+| The monotonic clock (T1, T4, the ageing of bounds) | trusted | `CLOCK_MONOTONIC_RAW` | the secure counter |
+| The TLS 1.3 session of NTS-KE: ALPN `ntske/1`, the chain to the operator's pinned roots, the certificate dated by the core's time, the keys from the exporter | trusted | `crypto/tls` | mbedTLS inside the TA |
+| The TCP connection under it; the UDP socket of the NTP exchange | untrusted | `net`, through the platform's dialer | the GP TEE sockets, served by the normal world |
 
-`trusted-time/rust/Cargo.toml` is a cargo workspace with one lock file:
+What the core holds: the NTS-KE records and their check, the keys and the
+cookie jar, the request with its random transmit timestamp, Unique
+Identifier and nonce, the check of every response, the measurement, the
+samples of every server, the quorum, the drift and coarse checks, the
+anchored result and its ageing, and the time it serves. The whole runner
+is inside the TEE on AWS, Azure and GCP, so there the wrapper implements
+every operation and nothing changes in behaviour; in a TA the three
+trusted ones move inside and the sockets stay out.
 
-| Crate | Folder | What it is |
+If the sockets lie, delay or drop, the client gets no time, never a wrong
+one: NTS authenticates every answer, the Unique Identifier and the random
+origin refuse replays, delay widens the bound, and a bound past the limit
+refuses the time. What stays outside is harmless there: when to poll (if
+the wrapper stops polling, the bound ages past the limit and the core
+refuses), logging and status. The server list and the pinned roots are
+configuration of the core and reach it by a trusted path (the image, the
+sealed setup), never from the wrapper at run time.
+
+Two host inputs are trusted a little, until the first quorum: the coarse
+time (the HTTPS-date quorum) dates the certificates of the first key
+exchanges and is a gross check on every quorum after; the NTP era of
+server timestamps is fixed by a build-time floor (`nts.FloorTime`), never
+by it. The core dates certificates with its own time whenever it would
+serve it, under the rules of the time served below; otherwise the coarse
+time does: before the first quorum, after the drift check refused one, and
+once the quorum in force has aged past its bound or age limit (a stale
+quorum on a counter run ahead would otherwise date certificates ahead of
+real time). A coarse time that is not after the floor (no reading, a zero time,
+a host clock reset to 2000) is no time: the core refuses the key exchange
+before it asks the host, so no certificate is checked at it, and Go's
+`crypto/x509`, which reads a zero time as `time.Now()`, never sees one
+(the host operation refuses a time at or before 1970 as well).
+
+Residual: the HTTPS-date sources' own TLS checks their certificates
+against the system clock, because the platform HTTP clients set no `Time`
+(`clock/httpsdate.go`). A host that sets the system clock and holds leaked
+certificates for a majority of the coarse hosts can answer their `Date`
+headers itself, move the coarse clock, and with it the time NTS-KE checks
+certificates at before the first quorum. Without such certificates,
+setting the system clock moves neither. HTTPS-date is no longer a signing
+clock, but it is still the coarse check, so this residual stays.
+
+## What the core is made of
+
+Freestanding C11 (`ntscore/c/*.c`, about 1,900 lines), no allocation, no
+floating point, no outside symbol but `memcpy`, `memmove`, `memchr`,
+`memset` and `memcmp`. `make -C ntscore/c` builds the archive the Go
+binding links, so a runner carries the core as checked, and `make check`
+there lists the archive's undefined symbols with the compiler of the
+build: what the compiler emits on its own counts too (a 128-bit division
+becomes a call into its runtime), so the 128-bit arithmetic, used where
+the Go code it replaced used `big.Int`, has its own division and none by
+a variable. Secrets are wiped through a volatile pointer (`nts_wipe`), not
+by a `memset` the compiler may drop. The checks and their order are those
+of the Go code, error code for error value. The core is sized by its
+servers (`nts_core_size_for`): about 110 KB each, mostly the buffers of
+one key exchange and one query, so the four public operators take about
+450 KB.
+
+| Part | Where | What |
 | --- | --- | --- |
-| `signer-nts` | `nts/` | The staticlib `libsigner_nts.a` with the C header `include/signer_nts.h`. `std`. 17 C functions over the core: handles, buffers, error codes (see "C ABI"). |
-| `signer-nts-core` | `trusted-time/rust/core/` | All protocol logic. `#![no_std]` with `alloc`, `#![forbid(unsafe_code)]`. No clock reads, no sockets, no random number generator: the caller passes in timestamps, nonces and unique IDs. |
-| `signer-nts-nostd-check` | `trusted-time/rust/nostd-check/` | A `no_std` staticlib with its own panic handler that calls the core. Built only to show the core links without `std`; never linked into anything or run. |
+| AES-SIV-CMAC-256 (RFC 5297), the one AEAD offered | `siv.c` | an AES-128 of its own on the CPU's instructions (AES-NI, the ARMv8 Cryptography Extension; found at start), else constant-time software with the S-box computed per byte as the field inverse, never a table: the host shares the cache and sees every request and tag, so a table lookup by a key byte would leak the keys; branch-free `dbl`, constant-time tag compare; the vectors (RFC 5297 appendix A.1 and A.2 in `nts.AESSIVSelfTest`, Wycheproof) and the fuzzer against `ntstest`'s independent AES-SIV run on both paths |
+| NTS-KE records: the request, the framing of a response as it arrives, the check of a whole response | `ke.c` | the caps below; an Error or Warning record, an unknown critical record, a missing or duplicate record, a wrong protocol or AEAD refused |
+| The NTP time formats with era-safe conversion (RFC 5905 section 6) | `sample.c` | the era of T2 and T3 is the one nearest the floor |
+| The NTPv4 request: the header with the random transmit timestamp, the Unique Identifier, the cookie, the placeholders, the authenticator with the C2S key | `ntp.c` | each cookie goes out once (one whose send failed is not used again: it may have left); the request asks for enough placeholders to refill the jar of 8 within 1280 octets; every extension field is at least 16 octets (RFC 7822 section 7.5.1.4), so a cookie under 12 octets is padded with zeros, which the Rust client did not do |
+| The check of the response, in this order: length, version 4, mode 4, the origin timestamp equal to our transmit timestamp, the extension fields (RFC 7822: a multiple of 4, at least 16 octets), our Unique Identifier before the authenticator (exactly ours, constant time), the authenticator with the S2C key over everything before it (nonce of 1 octet or more, zero padding), the new cookies from the encrypted part (1 to 1024 octets each, at most one more than the placeholders), leap indicator and stratum | `ntp.c` | a refused response leaves the request open for the real one; an accepted one closes it, so a replay is refused |
+| Sample: offset, delay, error bound and the RFC 5905 checks | `sample.c` | below; every precision value a server can state is taken (-128 is a 1 ns term, not a shift by 128) |
+| Quorum of 3 to 16 operators, one of which may be wrong | `quorum.c` | below |
+| The client: the cookie jar, one poll (NTS-KE if needed, one query with T1 and T4 from the monotonic clock, the answers that fail the check dropped until the real one comes or the time runs out, Kiss-o'-Death and its policy, the backoff), the quorum of the fresh samples, the coarse and drift checks, the anchored result, the time served | `client.c` | the rules of the clock, below |
+| The cgo binding: `Core` for the clock, the host operations routed to Go, the core's functions one by one for the tests | `ntscore/go/` | links the archive of `ntscore/c`; the only place a Go pointer meets the C |
+| The Go wrapper: the host operations, the pinned roots per operator, the public servers | `nts/` | |
+| The clock: when to poll, logs, status | `clock/nts.go` | |
+| Loopback NTS-KE and NTP servers for tests, with their own AES-SIV | `nts/ntstest/` | checked against RFC 5297 appendix A.1 |
 
-The core's dependencies come from crates.io (see "Crates and where they live"), all with default features
-off: `aes-siv` (`alloc`), `aes` and `cmac` (only to turn on `zeroize`, so the
-expanded AES keys and the CMAC state are wiped on drop), `subtle`, `zeroize`.
+Caps on untrusted bytes: an NTS-KE response of at most 65536 octets, 64
+records, a record body of 1024, cookies of 1 to 1024 octets, 8 cookies kept,
+a server name of 255; an NTP answer of at most 2048 octets, at most 8
+cookies in one answer.
 
-## What the core does
+Kiss-o'-Death: stratum 0 with our Unique Identifier and origin timestamp,
+as RFC 8915 section 5.7 asks; it does not end the query, which reads on
+for half a second for a real answer, since those fields travel in the
+clear and anyone on the path can forge a KoD. The core notes whether the
+KoD carried an authenticator that verifies, obeys an authenticated RATE
+(the poll doubles, up to 1024 s), DENY or RSTR (1024 s of silence and a
+new key exchange, never the rest of the process) and counts an
+unauthenticated one without acting on it; after NTSN, which is never
+authenticated, it keeps polling with the cookies it holds and runs NTS-KE
+when they run out (section 5.7). So a real NTSN (the server lost the keys
+behind the cookie) costs its operator up to 8 polls, about 128 s, before
+the key exchange, on purpose: a key exchange at once is what a forged
+NTSN per poll, which anyone on the path can send, would turn into a TLS
+session every 16 s; the other three operators keep the quorum meanwhile.
 
-`ke` (RFC 8915 section 4, 5.1):
+The packages have code only with the build tag `nts`: the cloud runners
+carry them, the dev runners do not (`scripts/common.sh`, `runner_tags`;
+`scripts/check-deps.sh` checks both). The module has no dependency outside
+the standard library; the core is compiled by cgo with the C compiler of
+the runner build.
 
-- `build_request()`: 16 octets, Next Protocol NTPv4, AEAD 15
-  (AEAD_AES_SIV_CMAC_256), End of Message, all with the critical bit.
-- `response_length(buf)`: how many octets the response has once End of
-  Message arrived, so the reader knows when to stop.
-- `parse_response(buf)`: the cookies (first 8 kept), the NTP server and port.
-  Refuses an Error or Warning record, an unknown critical record, a missing
-  Next Protocol, AEAD or cookie record, another protocol or AEAD, duplicates,
-  bad bodies, and anything over the caps.
-- `EXPORTER_LABEL`, `exporter_context(direction)`: the TLS exporter values for
-  the C2S and S2C keys, so Go and Rust use the same bytes.
+## Sample (RFC 5905 sections 7.3, 8, 11.2)
 
-`ntp` (RFC 8915 section 5, RFC 7822, RFC 5905):
+T1 and T4 come from the local monotonic clock, T2 and T3 from the server, so
+the offset is real Unix time minus the local clock. Delay = (T4 - T1) - (T3 -
+T2); offset = ((T2 - T1) + (T3 - T4)) / 2; bound = delay/2 + rootdelay/2 +
+rootdisp + 2^precision + rho (T4 - T1) + 3 ns of rounding, rho = 500 ppm
+(RFC 5905 MAXFREQ). Refused: T4 before T1, T3 before T2, a negative delay,
+stratum outside 1 to 15, leap indicator 3, a zero reference, receive or
+transmit timestamp, a reference after T3, and a bound over 1 s (MAXDIST).
 
-- `build_request(c2s, input)`: mode 3, version 4, the caller's random transmit
-  timestamp, Unique Identifier, NTS Cookie, 0 to 7 Cookie Placeholders, and
-  the NTS Authenticator over all of it. Returns the packet and a
-  `PendingRequest`.
-- `PendingRequest::verify_response(s2c, packet)`: mode 4, origin timestamp
-  equal to our transmit timestamp, our Unique Identifier, the RFC 7822 field
-  rules, the authenticator with the S2C key, the new cookies from the
-  encrypted part. Refuses leap indicator 3 and stratum above 15. Stratum 0
-  gives `Response::KissOfDeath(code)` (RATE, NTSN, DENY, RSTR, other) and no
-  time. Otherwise `Response::Time` with the four timestamps, root delay, root
-  dispersion, precision, stratum, leap indicator and the cookies. One
-  accepted response per request; a second is refused as a replay.
+## Quorum and the clock's rules
 
-`keys`: `C2sKey`, `S2cKey`, wiped on drop, not printed by `Debug`.
-`cookie`: `Cookie`, 1 to 1024 octets, wiped on drop. `time`: `NtpTimestamp`,
-`NtpShort`, `NtpDuration` and the era-safe conversion to and from Unix
-nanoseconds.
+`nts_quorum`: 3 to 16 intervals from distinct operators, F = 1. Each bound
+first grows by rho times its age at `now`. [lo, hi] spans the points that
+at least n - 1 intervals cover (the intersection of RFC 5905 section
+11.2.1, without clustering); no such point is an error. The result is the
+midpoint, bound (hi - lo) / 2.
 
-`sample` (RFC 5905 sections 7.3, 8, 11.2): `measure(sample, t1, t4, pivot)`.
-T1 and T4 come from the caller's monotonic clock, T2 and T3 from the server,
-so the offset is real Unix time minus the caller's monotonic clock. Delay =
-(T4 - T1) - (T3 - T2); offset = ((T2 - T1) + (T3 - T4)) / 2; bound = delay/2
-+ rootdelay/2 + rootdisp + 2^precision + rho (T4 - T1) + 3 ns of rounding,
-rho = 500 ppm (RFC 5905 MAXFREQ). Refused: T4 before T1, T3 before T2, a
-negative delay, stratum outside 1 to 15, a zero reference timestamp or one
-after T3, and a bound over 1 s (MAXDIST).
+Each server is asked every 16 s (RFC 5905 MINPOLL, the shortest allowed),
+with a query timeout of 5 s or half the interval. The latest sample of
+each server, at most 60 s old, goes to the quorum. Between quorums the
+bound grows by rho of the elapsed monotonic time; the time is refused once
+the bound is over 100 ms, and once the oldest sample of the quorum in
+force is over 60 s old on the local clock.
 
-`quorum`: `combine(intervals, now)`. 3 to 16 intervals from distinct
-operators (labels from the caller, duplicates refused), F = 1. Each bound
-first grows by rho times its age at `now`. [lo, hi] spans the points that at
-least n - 1 intervals cover (the intersection of RFC 5905 section 11.2.1,
-without clustering); no such point is an error. Result: the midpoint, bound
-(hi - lo) / 2. The plan's rule ("(F+1)-th smallest lower end, (F+1)-th
-largest upper end, fail if lo > hi") never fails for three servers; the
-module comment has the reason. The result here is always inside that rule's
-interval.
+The host sets that clock's rate. If it blocks the servers and runs the
+clock fast, the bound ages too slowly, and only the age limit keeps the
+time served within 60 s of real time (`TestNTSClockFastCounterLeadIsBounded`).
+With the servers answering, a counter run fast moves the offset: the
+drift check refuses the first quorum that shows it and re-admits the lead
+once a quorum of new samples agrees with the refused one, so the bound on
+the lead is then the coarse check's, 30 s plus the coarse reading's 1 s
+resolution, and about 106 s if the host also leads the coarse clock by
+the 75 s its `MaxAdvance` allows (the HTTPS-date sources blocked). That
+is the lead the restart floor of signer-core must cover (its README,
+"Restart floor"); a mainnet epoch is 384 s.
+The other direction has no such limit: a host that runs the clock slow
+makes the samples look young and the polls rare, so the time served falls
+behind real time without a bound until the drift check sees new samples.
+On a platform without a host-proof counter (SEV-SNP without Secure TSC)
+the host can do this. The runner's own signatures stay safe, because its
+time never goes back and a restart waits for a fresh quorum. What lags: a
+client certificate that expired during the lag is still accepted, and a
+key imported during it gets a restart floor that is too low for history
+it built elsewhere.
 
-## C ABI
+A healthy server answers every 16 s, so one lost answer still leaves its
+sample under 60 s; a quorum needs 3 of the 4 operators. If every server
+is out of reach, signing stops within 60 s and resumes with the next
+quorum: within about one interval after a short outage, later after a
+long one, when the cookies ran out and NTS-KE backs off (up to 1024 s;
+before the first quorum of a run NTS-KE is tried again every 16 s, so a
+relay that comes up late does not push the first quorum past the
+runner's start wait).
+HEALTH reports `sample_age_ms`, `max_sample_age_ms` and, while the clock
+refuses, the reason in `refused`.
 
-`include/signer_nts.h` documents each function. In short: KE request bytes,
-response framing, ALPN, exporter label and contexts; an opaque `snts_assoc`
-(keys and up to 8 cookies, wiped on free) made from a KE response and the two
-exported keys; `snts_ntp_request` (takes the oldest cookie, asks for enough
-placeholders to hold 8 again, gives an `snts_request` handle) and
-`snts_ntp_verify` (checks, keeps the new cookies, measures); `snts_quorum`
-over a pointer-free array of intervals. The caller passes buffers with their
-lengths, the random octets (56 per request) and every time. Return codes are
-`SNTS_*`; refusals carry a `reason` (kind << 16 | value) and
-`snts_reason_text` names it. No panic crosses the boundary: `panic =
-"abort"` in the release profile (and Rust aborts on unwind out of an
-`extern "C"` function since 1.81), so there is no `catch_unwind`. A test in
-`src/tests.rs` checks that the header declares every export with the same
-numbers and struct sizes; a Go test checks cgo's struct sizes against it.
+Each quorum is checked against the last one and against a baseline quorum
+about 64 intervals (17 minutes) older: if the offset moved more than the
+two bounds and rho allow, the local clock broke rho (or more servers are
+wrong), the quorum is refused and so is the time until a quorum of new
+samples agrees with it; the refused quorum's samples do not enter a quorum
+again. The status line's `drift_ppm` is the rate over that baseline,
+`drift_err_ppm` what the bounds leave open; a quorum is refused exactly
+when |drift_ppm| > 500 + drift_err_ppm. The core keeps at most 64 quorums
+for this: the baseline, the newest, and between them candidates for the
+next baseline at least 1/60 of the baseline apart (a refresh forms a
+quorum, four per interval, and one closer than that replaces the newest),
+so how often the wrapper combines does not matter and the baseline is at
+most 1/60 older than it should be. Each
+quorum is checked against the coarse time: more than 30 s off, after the
+coarse reading's one-second resolution, is refused, and the time with it
+until a quorum passes, as after a drift refusal. The time never goes
+back.
 
-## Go side (build tag `nts`)
+## Tests
 
-- `trusted-time/nts`: the cgo binding; `KeyExchange` (TLS 1.3 only, ALPN
-  `ntske/1`, the ALPN check Go leaves to the caller, `ExportKeyingMaterial`
-  with the label and contexts from Rust, certificate validity checked against
-  a clock the caller passes, not the system clock: a zero time from that
-  clock stops the exchange before the dial, and during the handshake
-  becomes `nts.NoTrustedTime` (1970), which no certificate covers. Go's
-  `crypto/x509` would read a zero time as `time.Now()`); `Association.Query` over a connected UDP socket
-  (refused packets do not end the wait: they may be forgeries); pinned roots
-  per operator in `roots/` with their source in `roots.go`.
-- `trusted-time/clock.NTS`: polls each server every 16 s (RFC 5905 MINPOLL),
-  doubles a server's interval on RATE up to 1024 s, stops asking a server
-  for 1024 s on DENY or RSTR (a Kiss-o'-Death is not authenticated, so a
-  forged one must not stop it for good), runs NTS-KE again on NTSN, feeds
-  the latest sample of each server (at most 60 s old) to the Rust quorum, ages
-  the bound by rho, and fails `Now` over 100 ms. `Now` also fails once the
-  oldest sample of the quorum in force is over 60 s old on the local
-  clock. The host sets that clock's rate: if it blocks the servers and runs
-  the clock fast, the bound ages too slowly, and only this limit keeps the
-  time a quorum in force serves within 60 s of real time. A new quorum can
-  get further ahead on a counter the host can set: a drift refusal starts a
-  new history, so the next quorum is checked against the refused one only,
-  and against the coarse clock, which ages on the same counter and can
-  itself run up to 75 s ahead (`Anchored.MaxAdvance`). After one refusal a
-  time 75 + 30 + 1 s, about 106 s, ahead of real time can be served. Nitro
-  is not affected: the host cannot set `CLOCK_MONOTONIC_RAW` there. The
-  restart floor's one epoch (384 s on mainnet) covers 106 s
-  (signer-core/README.md, "Restart floor"). The other direction has no such limit: a
-  host that runs the clock slow makes the samples look young and the polls
-  rare, so the time served falls behind real time without a bound until
-  the drift check sees new samples. On a platform without a host-proof
-  counter (SEV-SNP without Secure TSC) the host can do this. The runner's
-  own signatures stay safe, because its time never goes back and a
-  restart waits for a fresh quorum. What lags: a client certificate that
-  expired during the lag is still accepted, and a key imported during it
-  gets a restart floor that is too low for history it built elsewhere. A healthy server answers every 16 s,
-  so one lost answer still leaves its sample under 60 s; a quorum needs 3
-  of the 4 operators. If every server is out of reach, signing stops within
-  60 s and resumes with the next quorum: within about one interval after a
-  short outage, later after a long one, when the cookies ran out and NTS-KE
-  backs off (up to 1024 s; before the first quorum of a run NTS-KE is tried
-  again every 16 s, so a relay that comes up late does not push the first
-  quorum past the runner's start wait). HEALTH reports `sample_age_ms`, `max_sample_age_ms` and, while the
-  clock refuses, the reason in `refused`. Local time is
-  `CLOCK_MONOTONIC_RAW` (`nts.Monotonic`), not Go's `CLOCK_MONOTONIC`, which
-  an NTP daemon in the kernel slews. Each
-  quorum is checked against the last one and against a baseline quorum
-  about 17 minutes (64 intervals) older: if the offset moved more than the two bounds and
-  rho allow, the local clock broke rho and `Now` fails until the next
-  quorum agrees. The status line's `drift_ppm` is the rate over that
-  baseline, `drift_err_ppm` what the bounds leave open; a quorum is refused
-  exactly when |drift_ppm| > 500 + drift_err_ppm. The HTTPS-date quorum is
-  the coarse check (NTS time outside -30 s to +31 s of it is refused: 30 s
-  plus the Date header's 1 s resolution; a refusal stops `Now` until a
-  quorum passes, as a drift refusal does), the certificate clock of NTS-KE
-  (no reading: NTS-KE is refused) and the NTP era. Its `Anchored` clock ages on `CLOCK_MONOTONIC_RAW` too.
-  There is no fallback to it.
+- `ntscore/go`: the tests of the Rust core, ported twice now, run against the
+  C through the binding. `ntp_test.go` builds the server side from the RFC
+  on `ntstest`'s independent AES-SIV and checks the request layout and
+  limits, a round trip, every single-octet change of a valid response
+  (refused, except stratum 0, which is a KoD), the Unique Identifier and
+  origin checks, replays, truncated and oversized packets, malformed plain
+  and encrypted fields, fields after the authenticator, cookies in the
+  clear, the KoD codes, leap and stratum, version and mode, the
+  authenticator's nonce and padding rules. `sample_test.go`: the bound on a
+  symmetric path, the root values, the true time inside the bound for any
+  path asymmetry, the refusals, extreme inputs, every precision value.
+  `time_test.go`: the era boundary of 2036, round trips with a pivot up to
+  68 years away, overflow. `ke_test.go`: the record rules of NTS-KE, record
+  by record. `random_test.go`: 20,000 garbage and 20,000 mutated packets
+  into each parser from a fixed seed (2,000 with `-short`). `siv_test.go`:
+  Wycheproof's AES-SIV-CMAC vectors of the 32-octet key (`testdata/`),
+  and the refusals the vectors do not show (RFC 5297 A.2 with its strings
+  reordered, another key, ciphertexts shorter than the tag).
+  `quorum_test.go`: the quorum against its definition on random intervals.
+  `client_test.go`: the client's rules through an honest host: the drift
+  baseline stays about 64 intervals old however often combine runs, the
+  refused samples do not come back, samples over the age limit, keys or a
+  response of the wrong length from the key exchange, the jar refilled
+  through placeholders after lost requests, a failed send that spends its
+  cookie, authenticated DENY, RSTR and RATE, the NTP address without
+  Server and Port records and for an IPv6 server, cores on many
+  goroutines, one error and text per code (the numbers are the header's,
+  checked at compile time in `lowlevel.go`).
+- `ntscore/go/hostile_test.go`: **the hostile host**. A host whose untrusted
+  operations do whatever the fuzzer picks: key exchange responses mutated,
+  garbage, another operator's cookies, refused; datagrams that are the
+  honest answer, the answer with octets appended, mutated, garbage, a
+  replay of any earlier answer, a forged or an authentic Kiss-o'-Death of
+  any code, a forgery before the real answer, another server's answer
+  under its keys, nothing at all; sockets that fail to open, reset, time
+  out; a virtual clock that jumps by microseconds or by days; a coarse
+  time a little or wildly off; one of the servers lying by up to a
+  thousand seconds. The trusted operations stay honest. On every run: a
+  sample is taken only when the honest answer to the core's own live
+  request was delivered, and it measures that server within its bound;
+  every request verifies under the C2S key and carries a Unique
+  Identifier and a cookie never sent before; the jar never holds more than 8 cookies;
+  a time is served only from a quorum of 3 or more operators and, with
+  at most one liar, within its bound of the true time, from samples within
+  the age limit; it never goes back; the key exchange request and the NTP
+  address are the right ones; the certificate is dated by the core's own
+  time while it would serve it and by the coarse reading otherwise;
+  cookies of 4 to 1024 octets (the padding of short ones, the request
+  without placeholders for long ones).
+  `TestHostileHostRounds` runs 300 fixed seeds (40 with `-short`);
+  `FuzzHostileHost` runs the harness under the fuzzing engine. The same
+  host with every choice honest drives `client_test.go`: the NTS-KE
+  backoff (interval, doubling to MaxPoll, reset by a success), a CSPRNG
+  that fails (no cookie, no socket), the Server and Port records each
+  alone and an IPv6 KE host, an authentic KoD followed by the answer
+  within the grace (the answer wins) and one of an unknown code (only
+  counted), the certificate dated by the core's time with the coarse
+  clock 20 s off, the counter that went back, the time that never goes
+  back when every server's clock moves back, Close.
+- The fuzz targets, for `go test -fuzz` and `scripts/fuzz.sh`:
+  `FuzzVerifyResponse`, `FuzzKEResponse`, `FuzzMeasure` (answers built
+  from a known truth, the true time inside the bound), `FuzzSIV` (the
+  core's AES-SIV against `ntstest`'s copy), `FuzzQuorum` (the one-liar
+  property), `FuzzEncryptedPart` (plaintexts sealed under the test key,
+  so every input reaches the parser behind the authenticator),
+  `FuzzHostileHost`; in `nts`, `FuzzReadKEResponse` (the incremental
+  reader against the core's framing walk, however the bytes are chunked).
+  The nightly run keeps the inputs found so far (an actions cache of
+  `GOCACHE/fuzz`), and runs the trusted-time targets with `-asan`, so the
+  C under them is instrumented.
+- The C core's own fuzz targets (`ntscore/c/fuzz/`, `make fuzz`,
+  `fuzz/fuzz.sh ci|long|replay`; `make fuzz-core` at the root runs them
+  with signer-core's and markformat's, in CI and nightly): the NTS-KE
+  parsers, the response check against a fixed request, AES-SIV (a sealed
+  message opens, a changed bit does not, the two AES paths agree), the
+  measurement, and the hostile host in C: the whole client with its
+  untrusted operations fed from the input (honest, mutated, garbage,
+  Kiss-o'-Death, another server's keys, nothing; sockets that fail; a
+  counter that jumps). They run the C under AddressSanitizer and
+  UndefinedBehaviorSanitizer with coverage guidance, which the Go engine
+  cannot give the C; the Go targets keep the protocol oracles.
+- `scripts/test-modules.sh trusted-time` also builds the core's archive
+  and checks its symbols (`make -C ntscore/c check`), runs the `ntscore`
+  and `nts` tests once more against an archive built with AddressSanitizer
+  and UndefinedBehaviorSanitizer (`make -C ntscore/c asan`, `go test
+  -asan`), and, where the cross compiler and qemu-user are installed (the
+  x86_64 CI runner), the `ntscore` tests once more on aarch64: the AES is
+  hand-written and the arithmetic 128-bit, so one architecture's pass
+  does not vouch for the other. `COV=1` adds a gcov run of the C
+  (`make -C ntscore/c cov`, the tests with the tag `ntscov`, `make
+  cov-report`): the line coverage of the core by its Go tests.
+- `nts`, against the loopback servers: key exchange and queries through
+  the client; the certificate dated by the given coarse time, and no key
+  exchange without one (a zero time, 1970, 2000, just before the floor:
+  refused before the dial); TLS 1.2, a
+  missing ALPN, an Error record, octets after End of Message, foreign
+  roots, a wrong host name and no roots refused; RATE, a forged
+  authenticator (dropped, the query times out and says why), NTSN with the
+  cookies kept, a decoy sent before the real answer (dropped, the real
+  answer taken), a forged DENY before the answer and alone, the server's
+  own DENY; precision -128 and 127; eight lost requests, then NTS-KE again;
+  a failed dial that costs no cookie; a dial that never returns, ended by
+  the query's own timeout under a caller's context without one; a KE
+  server that accepts and never speaks (the exchange timeout, no cookie);
+  a caller's context that ends the poll; Close during a poll (waits for
+  it, refuses after); the polls of three servers on one core at once
+  while the time is read, then their quorum; the incremental KE reader
+  with every chunking, a stream that ends early, a response over the
+  buffer, a reader without progress; the pinned roots; the AES-SIV
+  self-test.
+- `clock`: the quorum of three, one server wrong, two wrong, the bound that
+  grows until `Now` fails, the coarse check, the Kiss-o'-Death codes, NTSN,
+  a forged KoD, the drift check (a jump, a steady rate over rho caught by
+  the baseline; the refused samples do not form a quorum again), duplicate
+  operators, time that never goes back, DENY lifted after the longest poll,
+  RATE capped at it, the query timeout of half the interval, samples over
+  the age limit (no time, no quorum, HEALTH says why), a fast counter
+  while the servers are blocked (the lead stays under a minute), no
+  certificate check without a coarse time, status snapshots that own
+  their counts.
+- `clock/nts_interop_test.go` (network, `NTS_INTEROP=1`): the four public
+  operators.
+- `tests/e2e/nts_relay_test.go`: the Nitro runner's clock through the UDP
+  relay and the proxy routes.
 
-  Residual: the HTTPS-date sources' own TLS checks their certificates
-  against the system clock, because the platform HTTP clients set no
-  `Time` (`httpsdate.go`). A host that sets the system clock and holds
-  leaked certificates for a majority of the coarse hosts can answer their
-  `Date` headers itself, move the coarse clock, and with it the time NTS-KE
-  checks certificates at. Without such certificates, setting the system
-  clock moves neither. HTTPS-date is no longer a signing clock, but it
-  is still the coarse check, so this residual stays.
-- `tee-signer/platforms_nts.go`: `-nts-clock` (or `RUNNER_NTS_CLOCK=1`) gives a
-  tagged runner the NTS clock, with `-nts-coarse-urls`, `-nts-wait` and
-  `-nts-max-bound` (or their variables; a set flag wins). The runner
-  refuses a max bound over 250 ms: a sample's bound is about half its round
-  trip, so that leaves room for servers about 400 ms away. With no quorum
-  within `-nts-wait` (90 s by default) the start fails and the runner exits
-  with the peers' status in its error line, which goes to the host on
-  Nitro. The supervisor starts it again: `restartPolicy` `OnFailure` on
-  ACI, `tee-restart-policy=OnFailure` on Confidential Space, the operator
-  or the parent's service manager on Nitro. A runner that went on without
-  a quorum would load no share (each share's restart floor reads the
-  clock) and would not load them once the quorum formed.
-  The clock dials through the platform (`platform.Platform.Dial`; nil is
-  the default dialer). `runner -nts-clock-check`
-  queries the servers once and prints the result. A debug build (tag debugimport) can name
-  test servers instead of the public ones (`RUNNER_NTS_TEST_SERVERS`,
-  `RUNNER_NTS_TEST_ROOTS`, `nts_servers_debug.go`); a release build cannot.
-- `trusted-time/nts/ntstest`: a loopback NTS-KE and NTP server for the tests,
-  with its own AES-SIV from RFC 5297 (checked against appendix A.1).
+## In the runner and the clouds
 
-Untrusted bytes are read only through checked reads (`core/src/bytes.rs`),
-with no indexing, `unwrap` or `expect` on parsed data, and every allocation
-has a fixed upper bound:
-
-| Cap | Value | Source |
-| --- | ---: | --- |
-| NTS-KE response | 65536 octets | RFC 8915 section 4: clients SHOULD accept at least 65536 |
-| NTS-KE records per response | 64 | ours (a normal response has about 12) |
-| NTS-KE record body | 1024 octets | ours |
-| Cookies kept from NTS-KE | 8 | RFC 8915 section 4.1.6: servers SHOULD send 8 |
-| Cookie | 1 to 1024 octets | ours |
-| Server name | 255 octets | RFC 1035 section 2.3.4 |
-| NTP request we build | 1280 octets | RFC 8915 section 5.7 (fragmentation), IPv6 minimum MTU |
-| NTP response | 2048 octets | ours |
-| Cookies in an NTP response | placeholders + 1 | RFC 8915 section 5.7: MUST NOT exceed |
-
-## Files
-
-```
-trusted-time/rust/Cargo.toml, Cargo.lock    the workspace; the lock pins the 20 crates.io crates
-trusted-time/rust/crates.allow              the crates Cargo.lock may hold, name and version
-trusted-time/rust/src/                      signer-nts: the C exports (lib.rs), the association
-                              (assoc.rs), reason codes (reason.rs), tests (tests.rs)
-trusted-time/rust/include/signer_nts.h      the C header, written by hand
-trusted-time/rust/core/src/                 signer-nts-core: ke, ntp, sample, quorum, keys, cookie, time, selftest
-trusted-time/rust/core/tests/               requests, answers and refusals against a test server,
-                              randomized garbage and mutations (fixed seeds)
-trusted-time/rust/nostd-check/src/lib.rs    the no_std build check
-trusted-time/toolchain/toolchain.Dockerfile     the toolchain image
-scripts/fetch-nts.sh          checks the lock, fetches the crates into build/nts/cargo-home,
-                              checks the archives
-scripts/nts-verify-crates.sh  checks the crate archives against the sha256 in Cargo.lock
-scripts/nts-verify-crates-test.sh  its self-test on a fixture cache (make check)
-scripts/build-nts.sh          builds libsigner_nts.a for both architectures, runs
-                              the Rust tests and the no_std checks of the core
-scripts/nts-container.sh      the part of build-nts.sh that runs in the container
-scripts/build-runner-nts.sh   builds the runners with the build tag nts
-scripts/test-nts.sh           all of it, then the Go test on each architecture
-scripts/nts-interop.sh        the interop test against the four public operators (network)
-trusted-time/nts/                   the cgo binding, NTS-KE, NTP, pinned roots, tests (tag nts)
-trusted-time/clock/nts*.go          the NTS clock and its tests (tag nts)
-tee-signer/nts_on.go              -nts-selftest and -nts-clock-check (tag nts)
-tee-signer/platforms_nts.go       -nts-clock and RUNNER_NTS_CLOCK=1 (tag nts)
-tee-signer/nts_servers_*.go       the servers: public in release builds, test servers in debug builds
-platform-aws/udprelay/              the UDP relay: protocol, allowlist, rate limits, client (Nitro)
-platform-aws/cmd/udprelay/          the relay program on the Nitro parent
-tests/e2e/nts_relay_test.go  the Nitro runner's NTS clock through the relay (test servers; NTS_INTEROP=1: public)
-```
-
-## The no_std checks
-
-The pinned toolchain has the standard library for the two Linux targets only.
-A bare-metal target (for example `aarch64-unknown-none`) or `-Zbuild-std`
-would be a download, so no real `no_std` target is built. Three checks
-stand in for it, in `scripts/nts-container.sh` and `build-nts.sh`, on both
-architectures:
-
-1. `cargo tree -p signer-nts-core -e features` has no `feature "std"`
-   line (output in `build/nts/<arch>/nostd-check/core-features.txt`).
-2. `signer-nts-nostd-check` builds: a `#![no_std]` staticlib with its own
-   `#[panic_handler]`. If anything in the graph linked `std`, the build would
-   fail with a duplicate `panic_impl` lang item.
-3. The symbols that archive needs from outside are listed: for the core's
-   own object after LTO (`nostd-check/undefined-core.txt`: `malloc`, `free`,
-   `memcpy`, `memmove`, `memset`, and `__udivti3` for the 128-bit division
-   in `time.rs`, which `compiler_builtins` has) and for the whole archive
-   with the target's precompiled `compiler_builtins`
-   (`nostd-check/undefined.txt`). That is what a trusted app would have to
-   provide.
-
-## Commands
-
-```sh
-make nts                       # fetch the crates, build for x86_64 and aarch64, Rust tests on x86_64
-bash scripts/test-nts.sh       # also the runners with the tag nts and the Go tests, aarch64 under qemu
-bash scripts/nts-interop.sh    # network: NTS-KE and 3 queries per public operator
-```
-
-Run the Rust tests through `make nts` or `make test-rust`, not bare `cargo`
-in `trusted-time/rust`: bare cargo uses `~/.cargo` and the network, and it
-does not check archives already in that cache.
-
-`make nts` and the scripts write to `build/nts/`. They do not touch
-`build/<arch>/bin`. The image builds take their runners from there, built by
-`scripts/build-runner.sh`, which builds the library into `build/nts/`
-first.
-
-## Toolchain
-
-The toolchain is a Docker image, `trusted-time/toolchain/toolchain.Dockerfile`. It starts from
-`rust:1.94.1-slim-bookworm`, pinned by digest, and adds the aarch64 standard
-library with `rustup target add` (rustup checks the sha256 from the release
-manifest). A Rust static library needs no linker, so the image has no aarch64
-compiler. The final link is the Go build's, with the host's
-`aarch64-linux-gnu-gcc`, as for the C core.
-
-`build-nts.sh` runs the compiler in a new container for each architecture,
-as the calling user, with `--network none`. It stops if the compiler is not
-the commit named in `scripts/common.sh`. The image is built locally and its
-layer holds files with the date of the build, so a rebuild is not expected to
-have the same digest. The pins that count are the base image digest, the
-commit of rustc and the sums of each target's standard library
-(`NTS_STD_SHA256_x86_64` and `NTS_STD_SHA256_aarch64` in
-`scripts/common.sh`: the sha256 of the sorted file sums under
-`lib/rustlib/<target>`). rustup checks the aarch64 rust-std only against
-the release manifest it downloads from the same server, so the pin is what
-keeps a changed download out of the build. A Rust update changes all
-three.
-
-The reference build platform is linux/amd64. The image is built and run with
-`--platform linux/amd64` (`NTS_PLATFORM` in `scripts/common.sh`), also on an
-arm64 host, where it runs under emulation. A native arm64 toolchain builds a
-different aarch64 library, and that library is in the Nitro EIF, so PCR0 and
-PCR2 would depend on the build host. The x86_64 library is the same either way.
-
-## Crates and where they live
-
-The 20 crates (aes-siv and its dependencies) come from crates.io. None is in
-git. The pin is `trusted-time/rust/Cargo.lock`, which holds the version and
-sha256 of each crate archive. `scripts/fetch-nts.sh` first checks that the
-lock holds exactly the crates of `trusted-time/rust/crates.allow`, all from
-crates.io (`make check` runs this part too). The archives live in
-`build/nts/cargo-home` (git ignores `build/`); `cargo fetch --locked`
-downloads the ones that are missing.
-
-cargo checks an archive's sha256 against the lock only when it downloads it,
-and it takes dependency features from the registry index files, which the
-lock does not cover. So nothing in the cache is trusted:
-
-- `fetch-nts.sh` runs `scripts/nts-verify-crates.sh` first: each archive in
-  the cache against its sha256 in the lock. Each archive must be in at least
-  one registry folder of the cache, and every copy of it must match. All
-  there and matching: no fetch. Some missing: `cargo fetch`, then the same check again. One that
-  differs (changed, cut short): the script stops and says to remove the
-  cache. It also deletes the extracted sources (`registry/src`).
-- `build-nts.sh` mounts the cache read-only at `/crates` in each build
-  container. `nts-container.sh` copies only the lock's archives out of it,
-  checks the copies with `nts-verify-crates.sh`, and unpacks them into
-  `/tmp/vendor`, a cargo directory source whose `.cargo-checksum.json` per
-  crate names the lock's sha256 and the sha256 of each unpacked file, which
-  cargo checks before it builds. cargo builds with crates.io replaced by
-  that directory. The registry index, the extracted sources and every other
-  file of the cache are never read in the build, so features come from the
-  crates' own `Cargo.toml`. A changed archive stops the build.
-
-The first build needs a network once, for the fetch. `make clean` removes
-`build/` and the cache with it; an offline machine can take a copy of
-`build/nts/cargo-home` from another one, since every archive is checked
-anyway.
-
-`build-nts.sh` runs `fetch-nts.sh` first. Apart from building the toolchain
-image, that is the only step with a network. The build containers start
-with `--network none` and run cargo with `--locked --offline --frozen`. A new crate in the lock, for example after
-a version bump, stops the build until someone reviews it and edits
-`crates.allow`. The three workspace crates are in the lock too, without a
-source or checksum; the checks count only the crates.io ones.
-
-## Same bytes on every build
-
-- Fixed compiler, crate archives checked against the sha256 in Cargo.lock
-  before every build, `--locked --offline --frozen`.
-- The archive holds a few crate source paths (panic locations), remapped
-  to `/vendor/<crate>-<version>/...`, the same for every cargo version.
-- `--remap-path-prefix` for the mount point of the sources, the crates and
-  the cargo, rustup and target folders. The standard library keeps the `/rustc/<commit>/`
-  paths it was built with, which are the same for this compiler.
-- `panic = "abort"`, `codegen-units = 1`, fat LTO, `opt-level = "s"`,
-  `debug = 0`, no build script of our own. Fat LTO drops the standard library
-  code that nothing reaches. Without it the runner grows more and the static
-  link prints glibc warnings about `getaddrinfo`.
-- A new container for each build and the script's own umask. After the build
-  the script checks the exports, the architecture of every object and that
-  the archive names no path of this machine.
-
-The archive still holds the debug sections of the precompiled standard
-library. The runner link strips them (`-s -w`), and the runner binaries have
-none.
-
-## In the runner
-
-`trusted-time/nts` is the cgo binding. It has code only with the build tag `nts`, so
-a build without the tag neither links Rust nor needs the library. With the
-tag, a runner also answers `runner -nts-selftest` (prints the library
-version, runs the self-test, exits) and has the NTS clock.
-
-`scripts/build-runner.sh` builds the library first (`build-nts.sh --no-test`:
-the crates from crates.io, then offline in the toolchain image) and gives the tag to the cloud runners:
-`runner-azure`, `runner-aws`, `runner-gcp`, their `-debugimport` builds and
-their debug builds (`scripts/common.sh`, `runner_tags`). The dev
-runners (`runner-dev`, `runner-dev-debugimport`) stay
-without it; `scripts/build-runner-nts.sh` still makes tagged copies of every
-build for `test-nts.sh`. The link flags are
-`-linkmode external -extldflags -static`. `check-deps.sh` checks that the
-cloud builds link `trusted-time/nts` and the dev builds do not, and
-`build-runner.sh` that only the cloud builds hold the library and the
-`-nts-*` flags, and only their debug builds the test server variables.
-
-## In the clouds
+`tee-signer/platforms_nts.go`: `-nts-clock` (or `RUNNER_NTS_CLOCK=1`) gives a
+tagged runner the NTS clock, with `-nts-coarse-urls`, `-nts-wait` and
+`-nts-max-bound` (or their variables; a set flag wins). The runner refuses
+a max bound over 250 ms: a sample's bound is about half its round trip, so
+that leaves room for servers about 400 ms away. With no quorum within
+`-nts-wait` (90 s by default) the start fails and the runner exits with
+the peers' status in its error line, which goes to the host on Nitro. The
+supervisor starts it again: `restartPolicy` `OnFailure` on ACI,
+`tee-restart-policy=OnFailure` on Confidential Space, the operator or the
+parent's service manager on Nitro. A runner that went on without a quorum
+would load no share (each share's restart floor reads the clock) and
+would not load them once the quorum formed. The clock dials through the
+platform (`platform.Platform.Dial`; nil is the default dialer).
+`runner -nts-clock-check` queries the servers once and prints the result;
+`runner -nts-selftest` prints the library version and runs the AES-SIV
+self-test. A debug build (tag `debugimport`) can name test servers instead
+of the public ones (`RUNNER_NTS_TEST_SERVERS`, `RUNNER_NTS_TEST_ROOTS`); a
+release build cannot.
 
 Each cloud image runs the NTS clock from its measured command, so the host
 cannot turn it off or point it elsewhere:
@@ -417,14 +367,18 @@ change them. The build scripts check the flags (`nitro-eif.sh`,
 clock the host can set (`checkClock` in `tee-signer/main.go`). Only the
 dev platform and debug builds may run on the system clock.
 
-The UDP relay (`platform-aws/udprelay`, `platform-aws/deploy/README.md`, "NTS clock in the
-enclave"): one vsock connection per NTP query; frames of a u16 length and
-1 to 2048 octets; the destination first, then a status, then datagrams. It
-sends only to ports 123 and 4123, and only to one of the four NTS-KE host
-names (resolved by the relay), an address those names resolve to, or
-Netnod's NTP block `194.58.200.0/21`. Rate limits per session, per address
-and in all. It cannot forge an answer (NTS authenticates every one), only
-delay or drop it.
+The UDP relay (`platform-aws/udprelay`, `platform-aws/deploy/README.md`, "NTS
+clock in the enclave"): one vsock connection per NTP query; frames of a u16
+length and 1 to 2048 octets. It sends only to ports 123 and 4123, and only to
+one of the four NTS-KE host names, an address those names resolve to, or
+Netnod's NTP block. It cannot forge an answer (NTS authenticates every one),
+only delay or drop it.
 
-Not checked on a cloud: the delays and bounds there, UDP 123 and 4123 out of
-ACI and Confidential Space, and the relay and proxies on EC2.
+## Toward a trusted application
+
+Not done here, and not decided: the OP-TEE build. The core is ready for
+it (freestanding, the symbol check, the host operations split as above);
+what a TA needs besides is the three trusted operations inside it, TLS
+1.3 with the exporter among them (mbedTLS), the GP TEE sockets for the
+untrusted two, the configuration by a trusted path, and a signer core in
+the same application to take the time from `nts_bounded`.

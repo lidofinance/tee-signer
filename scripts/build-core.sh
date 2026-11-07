@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# Builds the C signer core and blst as static libraries for cgo.
+# Builds the C signer core and blst, and the C core of the NTS clock, as
+# static libraries for cgo.
 #
 #   build/core-src/              include/ and src/ of signer-core, and
 #                                SOURCE.txt (where they came from, sha256)
 #   build/<arch>/lib/libsigner_core.a
 #   build/<arch>/lib/libblst.a
+#   trusted-time/ntscore/c/build/<arch>/libnts_core.a
+#                                by that folder's Makefile, which also holds
+#                                the symbol check (scripts/test-modules.sh)
 #
 # signer-core is the signer-core folder of this repo (common.sh).
 #
@@ -83,4 +87,8 @@ for arch in "${archs[@]}"; do
   rm -f "$out/lib/libsigner_core.a"
   "$ar" rcs "$out/lib/libsigner_core.a" "${objs[@]}"
   log "libsigner_core.a built for $arch"
+
+  # The NTS core: its Makefile derives ar from the compiler's name.
+  make -s -C "$ROOT/trusted-time/ntscore/c" lib ARCH="$arch" CC="$cc"
+  log "libnts_core.a built for $arch"
 done

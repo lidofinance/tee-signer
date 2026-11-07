@@ -38,7 +38,7 @@ Every commit is signed (GPG or SSH, with a key on your GitHub account).
   that goes into a runner changes, or `tests/`; the gateway e2e test
   when `gateway/` or `web3signer-api/` changes; the signer-core suites
   when `signer-core/` or `markformat/` changes. A change to a shared
-  input (`Makefile`, `scripts/`, `.github/`, `devkit/`, C or Rust code)
+  input (`Makefile`, `scripts/`, `.github/`, `devkit/`, C code)
   tests everything. So do a push to main and a manual run.
   On a pull request the `aws-terraform` job runs `scripts/tf-validate.sh`
   and `scripts/aws-tf-test.sh` (a mock provider, no AWS account) only when

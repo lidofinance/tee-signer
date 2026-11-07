@@ -154,8 +154,7 @@ make release-gate  # the release gate: self-test, tree check, every runner build
 | --- | --- |
 | `deps.sh` | apt: build tools, cross gcc for the other arch, qemu-user, qemu-user-static (for the arm64 EIF), openssl, jq. Checks Go and Docker. |
 | `fetch.sh` | blst (and aws-nitro-enclaves-cli for the EIF) into `third_party/`, pinned by commit |
-| `build-core.sh` | copies signer-core's `include/` and `src/` into `build/core-src/`, builds `libsigner_core.a` and `libblst.a` per arch |
-| `build-nts.sh` | the Rust NTS library `libsigner_nts.a` per arch (`trusted-time`) |
+| `build-core.sh` | copies signer-core's `include/` and `src/` into `build/core-src/`, builds `libsigner_core.a` and `libblst.a` per arch, and the NTS core's `libnts_core.a` (`trusted-time/ntscore/c/build/<arch>/`, by its Makefile) |
 | `build-runner.sh` | the static runners above and the Nitro parent-side programs, checked with `file`, the dependency check and the release gate |
 | `check-deps.sh` | the dependency check (above) |
 | `check-imports.sh` | module boundaries: a module uses another only through its public packages |

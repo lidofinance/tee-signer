@@ -105,7 +105,7 @@ check markformat ALL markformat/markformat.go
 check scripts ALL scripts/fuzz.sh
 check devkit ALL devkit/fuzzcheck/fuzzcheck.go
 check workflow ALL .github/workflows/ci.yml
-check nts-rust ALL trusted-time/rust/src/lib.rs
+check nts-core ALL trusted-time/ntscore/c/client.c
 check c-file ALL platform/x.c
 check no-module ALL .gitignore
 # A base that does not exist, and FUZZ_ALL=1 on a docs-only change.
