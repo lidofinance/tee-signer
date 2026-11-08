@@ -142,6 +142,9 @@ func newNTSClock(client *http.Client, dial nts.DialFunc, region string, log *slo
 	if err != nil {
 		return nil, nil, err
 	}
+	if client, err = coarseClient(client); err != nil {
+		return nil, nil, err
+	}
 	q := &clock.Quorum{Min: len(urls)/2 + 1}
 	for _, u := range urls {
 		q.Sources = append(q.Sources, &clock.HTTPSDate{URL: u, Client: client})
@@ -164,6 +167,32 @@ func newNTSClock(client *http.Client, dial nts.DialFunc, region string, log *slo
 		return nil, nil, err
 	}
 	return n, coarse, nil
+}
+
+// coarseClient is client for the coarse check: its pinned cloud roots plus
+// the NTS operators' roots. The coarse URLs name two cloud hosts and
+// www.cloudflare.com, whose CA is outside the cloud's set; the clock trusts
+// the NTS roots already. A client without pinned roots (the dev platform)
+// is returned as it is.
+func coarseClient(c *http.Client) (*http.Client, error) {
+	if c == nil {
+		return nil, nil
+	}
+	t, ok := c.Transport.(*http.Transport)
+	if !ok || t.TLSClientConfig == nil || t.TLSClientConfig.RootCAs == nil {
+		return c, nil
+	}
+	t = t.Clone()
+	pool := t.TLSClientConfig.RootCAs.Clone()
+	for _, s := range nts.PublicServers {
+		if err := nts.AddRoots(pool, s.Roots); err != nil {
+			return nil, err
+		}
+	}
+	t.TLSClientConfig.RootCAs = pool
+	cc := *c
+	cc.Transport = t
+	return &cc, nil
 }
 
 // ntsCoarseURLs reads -nts-coarse-urls (or RUNNER_NTS_COARSE_URLS) and puts

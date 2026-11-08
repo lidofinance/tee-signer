@@ -42,6 +42,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -55,6 +56,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/platform"
+	"github.com/lidofinance/tee-signer/platform/cloudroots"
 	"github.com/lidofinance/tee-signer/platform/filestore"
 	"github.com/lidofinance/tee-signer/platform/jwtclaims"
 	"github.com/lidofinance/tee-signer/trusted-time/clock"
@@ -98,6 +100,14 @@ func CheckIdentityAudience(aud string) error {
 func identityAudience(o platform.Options) (string, error) {
 	aud := o.Param("attest_audience", DefaultIdentityAudience)
 	return aud, CheckIdentityAudience(aud)
+}
+
+// googleClient is the client for Google's APIs (STS, IAM credentials,
+// Cloud KMS, and GCS for the mark log): it trusts Google's roots only.
+func googleClient() *http.Client {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.TLSClientConfig = &tls.Config{RootCAs: cloudroots.Pool(cloudroots.Google)}
+	return &http.Client{Transport: t, Timeout: 30 * time.Second}
 }
 
 // Launcher asks the Confidential Space launcher for tokens.
@@ -411,7 +421,7 @@ func New(o platform.Options) (*platform.Platform, error) {
 	if err != nil {
 		return nil, err
 	}
-	k := &KMS{L: l, HTTP: &http.Client{Timeout: 30 * time.Second}, Provider: o.Param("wif_provider", ""),
+	k := &KMS{L: l, HTTP: googleClient(), Provider: o.Param("wif_provider", ""),
 		ServiceAccount: o.Param("service_account", ""), Key: o.Param("kms_key", ""), Seen: &platform.ImageSeen{}}
 	if k.Provider == "" || k.Key == "" {
 		return nil, errors.New("gcp: wif_provider and kms_key are required")

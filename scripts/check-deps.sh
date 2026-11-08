@@ -13,8 +13,7 @@
 #      hf/nsm, mdlayher/vsock and socket and golang.org/x/{net,sync,sys} are
 #      for the AWS build only, fxamacker/cbor and x448/float16 too (the
 #      Nitro attestation document's CBOR). The Azure, GCP and dev builds hold
-#      nothing third-party but the embedded root certificates
-#      (x509roots/fallback).
+#      nothing third-party.
 #   2. No package of another cloud: the nitro platform and the host agent's
 #      client and messages (hostagent/agentclient, hostagent/agentwire) only
 #      in AWS builds, azure and gcp only in theirs. No other package below
@@ -60,7 +59,7 @@ cloud_in() {
 # module_ok <clouds> <module path>
 module_ok() {
   case "$2" in
-    github.com/lidofinance/tee-signer/*|golang.org/x/crypto/x509roots/fallback) return 0 ;;
+    github.com/lidofinance/tee-signer/*) return 0 ;;
     # The Nitro attestation document's CBOR: the AWS platform.
     github.com/fxamacker/cbor/*|github.com/x448/float16)
       cloud_in "$1" aws && return 0 ;;

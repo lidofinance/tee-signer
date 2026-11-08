@@ -159,8 +159,10 @@ type Attestation struct {
 type Option = optset.Option
 
 // WithHTTPClient sets the HTTP client that fetches the MAA or Confidential
-// Space key set (default: a client with a 15 s timeout and the system
-// roots).
+// Space key set (default: a client with a 15 s timeout). A fetch from
+// *.attest.azure.net or *.googleapis.com trusts that cloud's roots only
+// (platform/cloudroots). The pin is skipped for a client whose Transport is
+// not *http.Transport.
 func WithHTTPClient(c *http.Client) Option { return func(o *optset.Options) { o.HTTP = c } }
 
 // VerifyFunc checks an identity's attestation document. It is the type of
