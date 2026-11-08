@@ -1,8 +1,8 @@
 # platform
 
-> **Early proof of concept.** Provided as is, without any warranty or guarantee.
-> Not audited. Not for production or mainnet funds. Interfaces and formats will
-> change without notice.
+> **Pre-release.** Running on test networks; not yet for mainnet funds.
+> Provided as is, without warranty. Interfaces and formats may change before
+> the first release.
 
 The hooks a runner needs from the secure environment (package `platform` at the module root: sealing, key release, store, attestation, clock), the shared AES-GCM sealer (`seal.go`), the setup loading at start (`setup`), the file store (`filestore`), JWT claim parsing shared by Azure and GCP (`jwtclaims`) and the dev platform (`dev`), which protects nothing and exists for tests and local runs.
 

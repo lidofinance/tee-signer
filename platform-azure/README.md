@@ -1,8 +1,8 @@
 # platform-azure
 
-> **Early proof of concept.** Provided as is, without any warranty or guarantee.
-> Not audited. Not for production or mainnet funds. Interfaces and formats will
-> change without notice.
+> **Pre-release.** Running on test networks; not yet for mainnet funds.
+> Provided as is, without warranty. Interfaces and formats may change before
+> the first release.
 
 Azure confidential containers (SEV-SNP): the platform (`azure`: SNP report, MAA token, Key Vault secure key release) and the mark log in a Blob Storage container under a locked time-based retention policy (`azlog`).
 

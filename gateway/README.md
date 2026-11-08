@@ -1,8 +1,8 @@
 # gateway
 
-> **Early proof of concept.** Provided as is, without any warranty or guarantee.
-> Not for production or mainnet funds. Interfaces and formats will change
-> without notice.
+> **Pre-release.** Running on test networks; not yet for mainnet funds.
+> Provided as is, without warranty. Interfaces and formats may change before
+> the first release.
 
 The gateway lets a standard validator client sign through the TEE signers of this repo. It serves the Web3Signer eth2 signing API (EIP-3030) over HTTPS with client certificates, or plain HTTP on loopback, sends each request to every signer over mutual TLS, and combines their partial signatures into the validator signature. It holds no key and keeps no slashing state: each signer checks every message and applies its own slashing protection and policy.
 

@@ -1,8 +1,8 @@
 # devkit
 
-> **Early proof of concept.** Provided as is, without any warranty or guarantee.
-> Not audited. Not for production or mainnet funds. Interfaces and formats will
-> change without notice.
+> **Pre-release.** Running on test networks; not yet for mainnet funds.
+> Provided as is, without warranty. Interfaces and formats may change before
+> the first release.
 
 Test helpers: `fuzzcheck` (no-panic, allocation and per-input time oracles of
 the fuzz targets; every target calls `fuzzcheck.Watch(t)` first),

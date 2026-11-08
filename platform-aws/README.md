@@ -1,8 +1,8 @@
 # platform-aws
 
-> **Early proof of concept.** Provided as is, without any warranty or guarantee.
-> Not audited. Not for production or mainnet funds. Interfaces and formats will
-> change without notice.
+> **Pre-release.** Running on test networks; not yet for mainnet funds.
+> Provided as is, without warranty. Interfaces and formats may change before
+> the first release.
 
 AWS Nitro Enclaves: the platform (`nitro`: NSM attestation, KMS key release bound to PCRs, vsock), the mark log on S3 with Object Lock (`s3log`), and the parent instance side, which is not trusted: the host agent (`hostagent`, `cmd/hostagent`), the TCP to vsock forwarder (`forward`, `cmd/forwarder`) and the NTP relay (`udprelay`, `cmd/udprelay`).
 

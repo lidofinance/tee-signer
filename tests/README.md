@@ -1,8 +1,8 @@
 # tests
 
-> **Early proof of concept.** Provided as is, without any warranty or guarantee.
-> Not audited. Not for production or mainnet funds. Interfaces and formats will
-> change without notice.
+> **Pre-release.** Running on test networks; not yet for mainnet funds.
+> Provided as is, without warranty. Interfaces and formats may change before
+> the first release.
 
 Tests across modules: `e2e` starts the built runner binaries (`scripts/build-runner.sh`) and the tools of `signer-admin` and `platform-aws` and runs the end-to-end flows. `scripts/test.sh` runs it with the binaries it needs.
 

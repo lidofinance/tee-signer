@@ -25,7 +25,7 @@ Please refer to the [Lido Bug Bounty page on Immunefi](https://immunefi.com/boun
 Issues affecting key custody, slashing safety or approval checks are especially
 important in this repository.
 
-This code is not audited and not for production use yet. Test keys and test networks only.
+This code is pre-release and not for production use yet. Test keys and test networks only.
 
 ## Process
 

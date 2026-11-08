@@ -1,8 +1,8 @@
 # slashing-log
 
-> **Early proof of concept.** Provided as is, without any warranty or guarantee.
-> Not audited. Not for production or mainnet funds. Interfaces and formats will
-> change without notice.
+> **Pre-release.** Running on test networks; not yet for mainnet funds.
+> Provided as is, without warranty. Interfaces and formats may change before
+> the first release.
 
 The mark log (package `markstore` at the module root): the external, append-only record of the signing marks that lets a runner refuse to sign below what any copy of it signed before. Also the encrypted state copy on host storage (`statestore`), the shared store test suite (`logtest`) and the object store fake with fault injection (`wormfake`).
 
