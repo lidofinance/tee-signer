@@ -1,10 +1,8 @@
 # tee-signer
 
-> **Early proof of concept. Do not use it with real funds.**
->
-> Provided as is, without any warranty or guarantee. Not audited. Not for
-> production or mainnet funds. Interfaces and formats will change without
-> notice.
+> **Pre-release.** Running on test networks; not yet for mainnet funds.
+> Provided as is, without warranty. Interfaces and formats may change before
+> the first release.
 
 A BLS signer for Ethereum validators that runs inside a trusted execution
 environment: AWS Nitro Enclaves, Azure confidential containers (SEV-SNP) or

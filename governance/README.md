@@ -1,8 +1,8 @@
 # governance
 
-> **Early proof of concept.** Provided as is, without any warranty or guarantee.
-> Not audited. Not for production or mainnet funds. Interfaces and formats will
-> change without notice.
+> **Pre-release.** Running on test networks; not yet for mainnet funds.
+> Provided as is, without warranty. Interfaces and formats may change before
+> the first release.
 
 The setup and the approver rules: the setup format, approver sets, signed updates, time locks and signature contexts (`setupwire`), the chain of a runner's build (`runnerchain`), and the approved orders for share import (`importorder`). The runner checks every one of these inside the TEE. The human form of setups and updates (`setuptext`), the text that operators write and approvers read, is for the operator tools only: no runner links it (`scripts/check-deps.sh`, `scripts/check-imports.sh`).
 

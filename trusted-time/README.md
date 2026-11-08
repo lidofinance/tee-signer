@@ -1,8 +1,8 @@
 # trusted-time
 
-> **Early proof of concept.** Provided as is, without any warranty or guarantee.
-> Not audited. Not for production or mainnet funds. Interfaces and formats will
-> change without notice.
+> **Pre-release.** Running on test networks; not yet for mainnet funds.
+> Provided as is, without warranty. Interfaces and formats may change before
+> the first release.
 
 The runner clock (`clock`: system, HTTPS Date quorum, NTS) and the NTS client: a Rust crate (`rust/`, `signer-nts` with its `no_std` core `signer-nts-core`) behind a C ABI, and its Go binding (`nts`, build tag `nts`). `nts/ntstest` holds loopback NTS servers for tests.
 

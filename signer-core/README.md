@@ -1,8 +1,8 @@
 # signer-core
 
-> **Early proof of concept.** Provided as is, without any warranty or guarantee.
-> Not audited. Not for production or mainnet funds. Interfaces and formats will
-> change without notice.
+> **Pre-release.** Running on test networks; not yet for mainnet funds.
+> Provided as is, without warranty. Interfaces and formats may change before
+> the first release.
 
 In this repo, signer-core is the C module of the TEE signer. The runner links it through its Go binding (`core`; module path `github.com/lidofinance/tee-signer/signer-core`). blst is vendored in `third_party/blst` at the pin in `scripts/common.sh`, checked against `third_party/blst.sha256`. The OP-TEE trusted app and the other folders this README names outside signer-core are not part of this repo.
 

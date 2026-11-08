@@ -1,8 +1,8 @@
 # platform-gcp
 
-> **Early proof of concept.** Provided as is, without any warranty or guarantee.
-> Not audited. Not for production or mainnet funds. Interfaces and formats will
-> change without notice.
+> **Pre-release.** Running on test networks; not yet for mainnet funds.
+> Provided as is, without warranty. Interfaces and formats may change before
+> the first release.
 
 GCP Confidential Space: the platform (`gcp`: attestation token, workload identity federation, Cloud KMS) and the mark log on a Cloud Storage bucket with Bucket Lock and object versioning (`gcslog`). It ran in Confidential Space VMs on AMD SEV and on Intel TDX (`c3-standard-4`).
 

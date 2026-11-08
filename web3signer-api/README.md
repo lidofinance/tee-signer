@@ -1,8 +1,8 @@
 # web3signer-api
 
-> **Early proof of concept.** Provided as is, without any warranty or guarantee.
-> Not audited. Not for production or mainnet funds. Interfaces and formats will
-> change without notice.
+> **Pre-release.** Running on test networks; not yet for mainnet funds.
+> Provided as is, without warranty. Interfaces and formats may change before
+> the first release.
 
 Parsing and checking of Web3Signer signing requests (EIP-3030): `signing` turns a request into a typed message and its signing root, checks `fork_info` against the pinned chain, and covers the Gloas types; `eth2` computes domains and roots. It came from the gateway and is the start of the module of the Web3Signer design: today it parses with go-eth2-client.
 

@@ -1,8 +1,8 @@
 # attestation-verify: attestation document verifiers
 
-> **Early proof of concept.** Provided as is, without any warranty or guarantee.
-> Not audited. Not for production or mainnet funds. Interfaces and formats will
-> change without notice.
+> **Pre-release.** Running on test networks; not yet for mainnet funds.
+> Provided as is, without warranty. Interfaces and formats may change before
+> the first release.
 
 Package `github.com/lidofinance/tee-signer/attestation-verify` checks the documents the cloud runner returns
 from `ATTEST` and `IDENTITY`, on the client side (the signing client, the dealer,

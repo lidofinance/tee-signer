@@ -1,8 +1,8 @@
 # tee-signer
 
-> **Early proof of concept.** Provided as is, without any warranty or guarantee.
-> Not audited. Not for production or mainnet funds. Interfaces and formats will
-> change without notice.
+> **Pre-release.** Running on test networks; not yet for mainnet funds.
+> Provided as is, without warranty. Interfaces and formats may change before
+> the first release.
 
 The runner: the program that runs inside the TEE. Package main at the module root wires a platform (chosen at build time by the tags `platform_aws`, `platform_azure`, `platform_gcp`, `platform_dev`), the setup, the clock, the mark log and the server. `server` handles the protocol (signing, imports, updates), `state` implements the storage and clock hooks of the C core with its restart protections, and `attls` the attested mutual TLS.
 
