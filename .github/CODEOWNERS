@@ -17,8 +17,11 @@
 /trusted-time/        @PLACEHOLDER-trusted-time-owners
 /signer-admin/        @PLACEHOLDER-admin-tools-owners
 /web3signer-api/      @PLACEHOLDER-web3signer-owners
+/gateway/             @PLACEHOLDER-web3signer-owners
+/tooling/             @PLACEHOLDER-maintainers
 /devkit/              @PLACEHOLDER-maintainers
 /tests/               @PLACEHOLDER-maintainers
+/docs/                @PLACEHOLDER-maintainers
 
 # Build, release gate and guards
 /scripts/             @PLACEHOLDER-release-owners
