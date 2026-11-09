@@ -510,6 +510,7 @@ func (s *Signer) refusal(rc C.int, what string) error {
 // (SSI-HISTORY-02): its RAM bounds are from before its history.
 func (s *Signer) AddValidator(pubkey backend.Pubkey, secret [32]byte, index uint64,
 	interchange *backend.Watermark) (backend.ValidatorKey, error) {
+	defer clear(secret[:])
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.s == nil {
