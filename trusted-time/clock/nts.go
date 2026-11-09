@@ -97,7 +97,8 @@ type NTSServer struct {
 //     (n - 1) / 2 of n may be wrong) if it will stay under MaxAge until
 //     the next quorum:
 //     at most MaxAge minus a tick of Run and the longest Refresh, 46 s
-//     with the defaults (and at most 4 x Interval). Refresh refuses a
+//     with the defaults (and at most 4 x Interval), 76 s under the shift
+//     schedule (no 4 x Interval cap). Refresh refuses a
 //     MaxAge that leaves no room for that. The result is an offset from
 //     the local monotonic clock and an error bound.
 //   - Between quorums the bound grows by nts.RhoPPM of the elapsed
@@ -132,12 +133,12 @@ type NTS struct {
 	Coarse        interface{ Now() (time.Time, error) }
 	Interval      time.Duration // 0: NTSInterval
 	MaxBound      time.Duration // 0: NTSMaxBound
-	MaxAge        time.Duration // 0: NTSMaxAge
+	MaxAge        time.Duration // 0: NTSMaxAge, or NTSShiftMaxAge with Shifts
 	MaxCoarseDiff time.Duration // 0: NTSMaxCoarseDiff
 	Dial          nts.DialFunc  // nil: the default dialer
 	// StartDelay bounds the random wait of the first Refresh before it
-	// contacts anyone. 0: NTSStartDelay; negative: none (a one-shot check
-	// that calls Refresh once).
+	// contacts anyone. 0: NTSStartDelay (NTSShiftStartDelay with Shifts);
+	// negative: none (a one-shot check that calls Refresh once).
 	StartDelay time.Duration
 	// Local is the monotonic clock in ns. Nil: nts.Monotonic, which the
 	// samples use too. A test moves it ahead to age the bound.
@@ -168,7 +169,7 @@ type NTS struct {
 	shifts *ntsShifts // set by init when ScheduleSeed is set
 	// testQuery, if set, stands in for NTS-KE and the NTP query (tests).
 	// at is the local time the query goes out.
-	testQuery    func(operator string, at int64) (nts.Sample, error)
+	testQuery    func(ctx context.Context, operator string, at int64) (nts.Sample, error)
 	noStartDelay bool // tests: no NTSShiftStartDelay before the first tick
 	// resolveAnyDial: resolve the NTP host at NTS-KE with a Dial set too
 	// (the live test records dials through its own Dial).
@@ -444,12 +445,21 @@ func (n *NTS) Refresh(ctx context.Context) error {
 // fallback for each lost answer of an active, a burst if fewer than
 // NTSShiftBurstBelow samples are fresh, then the quorum.
 func (n *NTS) refreshShifts(ctx context.Context) error {
-	if !n.shifts.started && !n.noStartDelay {
-		// Spreads the first contacts of signers that start together.
-		select {
-		case <-time.After(n.shifts.startDelay):
-		case <-ctx.Done():
-			return ctx.Err()
+	if !n.started {
+		// Spreads the first contacts of signers that start together. Once
+		// per clock, also when the coarse clock has no time yet; none for
+		// a negative StartDelay.
+		n.started = true
+		if !n.noStartDelay && n.StartDelay >= 0 {
+			if n.sleep != nil {
+				n.sleep(n.shifts.startDelay)
+			} else {
+				select {
+				case <-time.After(n.shifts.startDelay):
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
 		}
 	}
 	coarse, err := n.Coarse.Now()
@@ -473,6 +483,11 @@ func (n *NTS) refreshShifts(ctx context.Context) error {
 	tick := int64(n.interval() / 4)
 	after := func(at int64) int { return max(1, int((at-coarseLocal+tick-1)/tick)) }
 	lost := n.askAll(ctx, coarse, n.shifts.plan(coarseLocal), coarseLocal)
+	// Past the deadline the later rounds would mark contacts, use the
+	// fallback cap and back off NTS-KE without sending anything.
+	if ctx.Err() != nil {
+		return n.combine(coarse, coarseLocal)
+	}
 	var fallbacks []ntsAsk
 	at := n.local()
 	for _, a := range lost {
@@ -484,7 +499,7 @@ func (n *NTS) refreshShifts(ctx context.Context) error {
 		}
 	}
 	n.askAll(ctx, coarse, fallbacks, at)
-	if n.fresh() < NTSShiftBurstBelow {
+	if ctx.Err() == nil && n.fresh() < NTSShiftBurstBelow {
 		at := n.local()
 		n.askAll(ctx, coarse, n.shifts.burst(after(at)), at)
 	}
@@ -579,7 +594,7 @@ func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time, at int64) 
 	var s nts.Sample
 	var err error
 	if n.testQuery != nil {
-		s, err = n.testQuery(p.srv.Operator, at)
+		s, err = n.testQuery(ctx, p.srv.Operator, at)
 		p.stats.Queries++
 	} else {
 		if !n.keyExchange(ctx, p) {
@@ -607,7 +622,7 @@ func (n *NTS) keyExchange(ctx context.Context, p *ntsPeer) bool {
 			p.assoc.Close()
 			p.assoc = nil
 		}
-		if now < p.nextKE {
+		if now < p.nextKE || ctx.Err() != nil {
 			return false
 		}
 		kctx, cancel := context.WithTimeout(ctx, ntsExchangeTimeout)
@@ -616,6 +631,11 @@ func (n *NTS) keyExchange(ctx context.Context, p *ntsPeer) bool {
 			Time: n.certTime,
 		})
 		cancel()
+		if err != nil && ctx.Err() != nil {
+			// The caller's deadline ran out, not the server: no backoff.
+			p.lastErr = err
+			return false
+		}
 		if err != nil {
 			p.stats.KEFail++
 			p.lastErr = err

@@ -196,8 +196,10 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   - Time is counted in ticks of 4 s since the start round. The start round
     asks every operator once, after a random wait under 10 s.
   - 5 operators are active, each asked on its own slot of a 60 s grid
-    (slots 12 s apart, the phase from the seed). No operator is asked
-    twice within 60 s; a RATE doubles that operator's gap up to 1024 s.
+    (slots 12 s apart, the phase from the seed). Two contacts with one
+    operator start at least 60 s apart (a contact that runs NTS-KE first
+    sends its query a few seconds later); a RATE doubles that operator's
+    gap up to 1024 s.
     Without a seed every operator is active.
   - Every 15 minutes the window of actives moves one place along an order
     drawn from the seed. The outgoing leaves on time; its last sample stays

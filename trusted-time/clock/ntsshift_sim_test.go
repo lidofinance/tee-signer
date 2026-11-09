@@ -148,7 +148,7 @@ func runShiftScenario(t testing.TB, sc shiftScenario) shiftResult {
 	t.Helper()
 	w := &shiftWorld{off: 1_800_000_000 * int64(time.Second), seed: sc.seed, loss: map[string]float64{}, down: map[string]bool{},
 		wrong: map[string]time.Duration{}, contacts: map[string][]int64{}}
-	n := &NTS{Coarse: w, Local: w.local, ScheduleSeed: fmt.Appendf(nil, "signer-%d", sc.seed), testQuery: w.query, noStartDelay: true}
+	n := &NTS{Coarse: w, Local: w.local, ScheduleSeed: fmt.Appendf(nil, "signer-%d", sc.seed), testQuery: w.queryCtx, noStartDelay: true}
 	for i := range sc.catalog {
 		n.Servers = append(n.Servers, NTSServer{Host: fmt.Sprintf("op%d.test", i), Operator: fmt.Sprintf("op%d", i)})
 	}
@@ -438,6 +438,42 @@ func TestNTSShiftCounterJump(t *testing.T) {
 		}
 		if r.maxLead > sc.jump || r.leadFor > NTSShiftMaxAge {
 			t.Errorf("seed %d: led by %v for %v", seed, r.maxLead, r.leadFor)
+		}
+	}
+}
+
+// queryCtx is query as the clock's testQuery hook; the fake world answers
+// at once, so it does not wait on ctx.
+func (w *shiftWorld) queryCtx(_ context.Context, op string, t int64) (nts.Sample, error) {
+	return w.query(op, t)
+}
+
+// A tick ends at its deadline (ntsRefreshLimit) even when every server
+// hangs, and the rounds after the deadline mark no contact: no fallback,
+// no burst, no use of the fallback cap. Takes ntsRefreshLimit of real time.
+func TestNTSShiftTickDeadline(t *testing.T) {
+	if testing.Short() {
+		t.Skip("waits ntsRefreshLimit")
+	}
+	n := &NTS{Coarse: &coarseClock{}, Shifts: true, ScheduleSeed: []byte("deadline"), noStartDelay: true,
+		testQuery: func(ctx context.Context, _ string, _ int64) (nts.Sample, error) {
+			<-ctx.Done()
+			return nts.Sample{}, ctx.Err()
+		}}
+	for i := range 8 {
+		n.Servers = append(n.Servers, NTSServer{Host: fmt.Sprintf("op%d.test", i), Operator: fmt.Sprintf("op%d", i)})
+	}
+	start := time.Now()
+	if err := n.Refresh(context.Background()); err == nil {
+		t.Fatal("a quorum from servers that never answer")
+	}
+	if d := time.Since(start); d < ntsRefreshLimit || d > ntsRefreshLimit+2*time.Second {
+		t.Fatalf("tick took %v, deadline %v", d, ntsRefreshLimit)
+	}
+	s := n.NTSSummary()
+	for op, c := range s.Operators {
+		if c.Fallbacks != 0 || c.Bursts != 0 {
+			t.Fatalf("%s: %+v after the deadline", op, c)
 		}
 	}
 }

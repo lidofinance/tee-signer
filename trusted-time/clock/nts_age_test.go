@@ -48,6 +48,11 @@ func TestNTSClockJoinAgeBoundary(t *testing.T) {
 	if got, want := (&NTS{}).joinAge(), 46*time.Second; got != want {
 		t.Fatalf("join age %v, want %v (60 s - 4 s tick - 2 x 5 s exchange)", got, want)
 	}
+	shifts := &NTS{Shifts: true}
+	if got, want := shifts.joinAge(), 76*time.Second; got != want || shifts.sampleMaxAge() != int64(want) {
+		t.Fatalf("shift join age %v, sample max age %v, want %v (90 s - 4 s tick - 10 s tick deadline)",
+			got, time.Duration(shifts.sampleMaxAge()), want)
+	}
 	for _, c := range []struct {
 		age  time.Duration
 		join bool

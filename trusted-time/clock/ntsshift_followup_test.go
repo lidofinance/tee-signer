@@ -21,7 +21,7 @@ func newFollowWorld(seed uint64) *shiftWorld {
 }
 
 func newFollowNTS(w *shiftWorld, catalog int, seed []byte) *NTS {
-	n := &NTS{Coarse: w, Local: w.local, Shifts: true, ScheduleSeed: seed, testQuery: w.query, noStartDelay: true}
+	n := &NTS{Coarse: w, Local: w.local, Shifts: true, ScheduleSeed: seed, testQuery: w.queryCtx, noStartDelay: true}
 	for i := range catalog {
 		n.Servers = append(n.Servers, NTSServer{Host: fmt.Sprintf("op%d.test", i), Operator: fmt.Sprintf("op%d", i)})
 	}

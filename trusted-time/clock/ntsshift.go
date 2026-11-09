@@ -32,8 +32,10 @@ import (
 //     queries, every operator past its minimum gap is asked.
 //   - Each operator's minimum gap is NTSShiftMinGap; a Kiss-o'-Death RATE
 //     doubles it (up to 1024 s), each answer halves it back.
-//   - No operator is contacted twice within its gap (see mark, and
-//     NTS.waitGap for the strict 60 s in local time).
+//   - Two contacts with one operator start at least its gap apart (see
+//     mark, and NTS.waitGap for the strict 60 s in local time). A contact
+//     that runs NTS-KE first sends its NTP query up to a few seconds after
+//     its start.
 const (
 	NTSShiftActives      = 5
 	NTSShiftMinGap       = 60 * time.Second
