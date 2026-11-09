@@ -134,6 +134,28 @@ func TestNTSClockTwoWrongGiveNoTime(t *testing.T) {
 	}
 }
 
+// The clock combines by the majority of its fresh samples: 2 wrong of 5
+// still give the time of the other 3, and 2 wrong of 4 give none.
+func TestNTSClockMajority(t *testing.T) {
+	liars := map[string]ntstest.NTPOptions{"d": {Offset: 5 * time.Second}, "e": {Offset: -5 * time.Second}}
+	fs := newServers(t, liars, "a", "b", "c", "d", "e")
+	n := newNTS(fs, &coarseClock{})
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	got, bound, err := n.Bounded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := testClock().Sub(got); d.Abs() > bound+5*time.Millisecond || bound > NTSMaxBound {
+		t.Fatalf("two of five servers 5 s off moved the time by %v (bound %v)", d, bound)
+	}
+	n = newNTS(fs[1:], &coarseClock{})
+	if err := refresh(t, n); err == nil || !strings.Contains(err.Error(), "disagree") {
+		t.Fatalf("two of four wrong: %v", err)
+	}
+}
+
 func TestNTSClockBoundGrowsUntilNowFails(t *testing.T) {
 	fs := newServers(t, nil, "a", "b", "c")
 	n := newNTS(fs, &coarseClock{})

@@ -92,11 +92,11 @@ clock passes the majority rule, F = (n - 1) / 2 rounded down: 3 of 3, 3 of 4,
 3 of 5, 4 of 6 and 4 of 7 must agree. With 3 or 4 intervals this is F = 1.
 Each bound first grows by rho times its age at `now`. [lo, hi] spans the
 points that at least n - F intervals cover (the intersection of RFC 5905
-section 11.2.1, without clustering); no such point is an error. Result: the midpoint, bound
-(hi - lo) / 2. The plan's rule ("(F+1)-th smallest lower end, (F+1)-th
-largest upper end, fail if lo > hi") never fails for three servers; the
-module comment has the reason. The result here is always inside that rule's
-interval.
+section 11.2.1, without clustering); no such point is an error. Result:
+the midpoint, bound (hi - lo) / 2. The plan's rule ("(F+1)-th smallest
+lower end, (F+1)-th largest upper end, fail if lo > hi") never fails for
+three servers; the module comment has the reason. The result here is
+always inside that rule's interval.
 
 ## C ABI
 

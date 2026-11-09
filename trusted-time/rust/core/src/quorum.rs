@@ -121,11 +121,11 @@ pub const fn majority_wrong(n: usize) -> usize {
 /// `n >= 2 * max_wrong + 1`, so fewer samples than that are refused as
 /// [`QuorumError::TooFew`], as are fewer than [`MIN_SERVERS`].
 pub fn combine_with(samples: &[Interval<'_>], now_local_ns: i64, max_wrong: usize) -> Result<QuorumResult, QuorumError> {
-    if samples.len() < MIN_SERVERS || max_wrong > majority_wrong(samples.len()) {
-        return Err(QuorumError::TooFew);
-    }
     if samples.len() > MAX_SERVERS {
         return Err(QuorumError::TooMany);
+    }
+    if samples.len() < MIN_SERVERS || max_wrong > majority_wrong(samples.len()) {
+        return Err(QuorumError::TooFew);
     }
     // Ends of the intervals as (point, 0 for a lower end or 1 for an upper
     // end). Sorted, a lower end comes before an upper end at the same point,

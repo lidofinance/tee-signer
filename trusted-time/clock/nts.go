@@ -89,8 +89,9 @@ type NTSServer struct {
 //     3/4 to 5/4 Interval (12 to 20 s), so a relay that comes up late does
 //     not push the first quorum past the runner's start wait, and signers
 //     that failed together do not try again together.
-//   - The latest sample of each server goes to the Rust quorum (one server
-//     may be wrong) if it will stay under MaxAge until the next quorum:
+//   - The latest sample of each server goes to the Rust quorum (up to
+//     (n - 1) / 2 of n may be wrong) if it will stay under MaxAge until
+//     the next quorum:
 //     at most MaxAge minus a tick of Run and the longest Refresh, 46 s
 //     with the defaults (and at most 4 x Interval). Refresh refuses a
 //     MaxAge that leaves no room for that. The result is an offset from
@@ -528,8 +529,8 @@ func (n *NTS) combine(coarse time.Time, coarseLocal int64) error {
 	n.mu.Lock()
 	// The bound grows by rho only if the local clock keeps within rho of
 	// real time. Check that against the last quorum and the baseline: both
-	// intervals of a pair hold the real offset (one server at most wrong in
-	// each), and it can move by at most rho times the time between them. If
+	// intervals of a pair hold the real offset (at most a minority of
+	// servers wrong in each), and it can move by at most rho times the time between them. If
 	// a pair does not fit, the local clock broke rho (or more servers are
 	// wrong): this quorum is not served, a new history starts with it, and
 	// the next quorum, of new samples only, must agree with it first.

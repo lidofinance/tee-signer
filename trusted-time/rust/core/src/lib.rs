@@ -15,8 +15,8 @@
 //!   (RFC 5905 section 6).
 //! - [`sample`]: offset, delay and error bound of one response, with the
 //!   RFC 5905 checks that need no earlier state (sections 7.3, 8, 11.2).
-//! - [`quorum`]: one time from several operators' servers, one of which may
-//!   be wrong.
+//! - [`quorum`]: one time from several operators' servers, some of which
+//!   may be wrong.
 //! - [`selftest`]: the AES-SIV-CMAC-256 vector of RFC 5297 appendix A.1.
 //!
 //! Untrusted bytes are read only through checked reads (`bytes::Reader`), and
