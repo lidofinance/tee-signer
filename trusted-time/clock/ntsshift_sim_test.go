@@ -477,3 +477,58 @@ func TestNTSShiftTickDeadline(t *testing.T) {
 		}
 	}
 }
+
+// NTSSummary answers while a Refresh hangs on a server (under -race it
+// also checks that it reads no field the polls write), and under shifts
+// exactly NTSShiftActives servers report Active.
+func TestNTSSummaryDuringRefresh(t *testing.T) {
+	release := make(chan struct{})
+	n := &NTS{Coarse: &coarseClock{}, Shifts: true, ScheduleSeed: []byte("summary"), noStartDelay: true}
+	n.testQuery = func(ctx context.Context, op string, _ int64) (nts.Sample, error) {
+		if op == "op0" {
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+			return nts.Sample{}, errors.New("timeout")
+		}
+		return nts.Sample{Offset: time.Now().UnixNano() - n.local(), Bound: 5 * time.Millisecond, T4: n.local()}, nil
+	}
+	for i := range 8 {
+		n.Servers = append(n.Servers, NTSServer{Host: fmt.Sprintf("op%d.test", i), Operator: fmt.Sprintf("op%d", i)})
+	}
+	done := make(chan error, 1)
+	go func() { done <- n.Refresh(context.Background()) }()
+	got := make(chan NTSSummary, 1)
+	go func() {
+		for {
+			s := n.NTSSummary()
+			if s.Peers[1].Answers == 1 {
+				got <- s
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	select {
+	case s := <-got:
+		if len(s.Peers) != 8 || s.Peers[0].Queries != 0 {
+			t.Fatalf("summary during the refresh: %+v", s.Peers)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("NTSSummary waited for the refresh")
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	active := 0
+	for _, p := range n.NTSSummary().Peers {
+		if p.Active {
+			active++
+		}
+	}
+	if active != NTSShiftActives {
+		t.Fatalf("%d active, want %d", active, NTSShiftActives)
+	}
+}

@@ -171,7 +171,8 @@ type Platform struct {
 	// key, so it is fixed per signer, the same after a restart, and unknown
 	// to the host, which then cannot plan which time servers are active
 	// when. Whoever knows the sealing key knows it (see SealingKeyStored);
-	// it only orders the schedule. nil: the clock draws a random one (dev).
+	// it only orders the schedule. nil (dev): every server is active on the
+	// 60 s grid, with a random phase.
 	NTSScheduleSeed []byte
 }
 

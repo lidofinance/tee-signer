@@ -230,6 +230,15 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
     cap refused. Fallbacks to an operator that often need NTS-KE mean its
     cookies expire while it idles; an operator can idle for about (catalog
     size - 5) x 15 minutes.
+- HEALTH `clock_nts.operators` has one entry per server the clock dials,
+  with or without shifts, servers that never answered included:
+  `operator`, `host`, `active`, `queries`, `answers`, `losses`, `ke_ok`,
+  `ke_fail`, `last_answer_age_ms` (-1: no answer yet), `off` (a DENY or
+  RSTR stop), `last_error`, and under shifts `fallbacks`, `bursts`,
+  `rates`, `handovers`, `failed_handovers` and `fallback_ke`.
+  `clock_nts.fallbacks_capped` counts the fallbacks the hourly cap refused.
+  A server with queries and no answers is dead from this signer's network
+  before it costs a refusal.
 - `tee-signer/platforms_nts.go`: `-nts-clock` (or `RUNNER_NTS_CLOCK=1`) gives a
   tagged runner the NTS clock, with `-nts-coarse-urls`, `-nts-wait` and
   `-nts-max-bound` (or their variables; a set flag wins). The runner

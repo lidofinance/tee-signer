@@ -258,7 +258,8 @@ func ntsSchedule(n *clock.NTS, seed []byte) {
 // -nts-wait), then keeps both running and logs a status line. No quorum in
 // the wait is an error: the runner does not start without the clock. With
 // ntsShiftMinServers servers or more the clock runs the shift schedule,
-// with seed (platform.Platform.NTSScheduleSeed; nil: a random one).
+// with seed (platform.Platform.NTSScheduleSeed; nil: every server active
+// on the 60 s grid, with a random phase).
 func startNTSClock(ctx context.Context, client *http.Client, dial nts.DialFunc, region string, seed []byte, log *slog.Logger) (*clock.NTS, error) {
 	wait, err := ntsDuration(*ntsWaitFlag, "RUNNER_NTS_WAIT", 90*time.Second)
 	if err != nil {

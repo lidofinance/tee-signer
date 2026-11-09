@@ -656,6 +656,7 @@ func (n *NTS) keyExchange(ctx context.Context, p *ntsPeer) bool {
 		if err != nil && ctx.Err() != nil {
 			// The caller's deadline ran out, not the server: no backoff.
 			p.lastErr = err
+			n.noteHealth(p, func(h *ntsPeerHealth) { h.lastErr = err.Error() })
 			return false
 		}
 		if err != nil {

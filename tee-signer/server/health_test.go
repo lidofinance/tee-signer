@@ -53,10 +53,11 @@ func TestHealthNTS(t *testing.T) {
 			{Operator: "a", Host: "a.test", Active: true, Queries: 10, Answers: 9, Losses: 1, KEOK: 1, LastAnswerAge: 1500 * time.Millisecond},
 			{Operator: "b", Host: "b.test", Queries: 3, Losses: 3, KEFail: 2, LastAnswerAge: -1, Off: "DENY", LastError: "kiss DENY"},
 		},
-		Operators: map[string]clock.NTSOperatorCounts{"a": {Fallbacks: 4, Handovers: 1, FallbackKE: 1}},
+		Operators: map[string]clock.NTSOperatorCounts{"a": {Fallbacks: 4, Bursts: 5, Rates: 6, Handovers: 7, FailedHandovers: 8, FallbackKE: 9}},
 	})
 	wantOps := []backend.ClockNTSOperator{
-		{Operator: "a", Host: "a.test", Active: true, Queries: 10, Answers: 9, Losses: 1, KEOK: 1, LastAnswerAgeMS: 1500, Fallbacks: 4, Handovers: 1, FallbackKE: 1},
+		{Operator: "a", Host: "a.test", Active: true, Queries: 10, Answers: 9, Losses: 1, KEOK: 1, LastAnswerAgeMS: 1500,
+			Fallbacks: 4, Bursts: 5, Rates: 6, Handovers: 7, FailedHandovers: 8, FallbackKE: 9},
 		{Operator: "b", Host: "b.test", Queries: 3, Losses: 3, KEFail: 2, LastAnswerAgeMS: -1, Off: "DENY", LastError: "kiss DENY"},
 	}
 	if !reflect.DeepEqual(got.Operators, wantOps) || got.FallbacksCapped != 2 {
