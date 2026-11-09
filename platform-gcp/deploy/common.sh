@@ -100,6 +100,12 @@ ADDRESS_NAME="${ADDRESS_NAME:-signer-node-1-ip}"
 [[ "$WIF_PROVIDER" =~ ^[a-z0-9-]{4,32}$ ]] || die "WIF_PROVIDER=$WIF_PROVIDER: 4 to 32 lowercase letters, digits and dashes"
 [[ "$VM" =~ ^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$ ]] || die "VM=$VM is not a Compute Engine name"
 [[ "$ADDRESS_NAME" =~ ^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$ ]] || die "ADDRESS_NAME=$ADDRESS_NAME is not a Compute Engine name"
+# Confidential Space puts the VM's self-link in the token's sub, and the
+# provider maps sub to google.subject, which takes at most 127 bytes. A
+# longer self-link fails every token exchange of the VM.
+self_link="https://www.googleapis.com/compute/v1/projects/$PROJECT_ID/zones/$ZONE/instances/$VM"
+[ "${#self_link}" -le 127 ] ||
+  die "VM=$VM: its self-link $self_link is ${#self_link} bytes, over the WIF subject limit of 127; choose a shorter VM name"
 # side_by_side: the names are another signer's than the defaults, so the
 # shared resources belong to a running signer too.
 side_by_side() {

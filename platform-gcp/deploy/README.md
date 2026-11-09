@@ -180,7 +180,11 @@ The setup's `sealing_key_release` names the GCP resources, all from
 `PROJECT_ID`, `PROJECT_NUMBER`, `REGION` and `ZONE` (default
 `europe-west4-a`) set the project and location. The mark log and the state
 copy (`slashing-log/docs/durable-state.md`) are the setup's
-`slashing_log_store` and `encrypted_state_store`.
+`slashing_log_store` and `encrypted_state_store`. The VM's self-link
+(`https://www.googleapis.com/compute/v1/projects/PROJECT_ID/zones/ZONE/instances/VM`)
+becomes the WIF `google.subject`, which takes at most 127 bytes, so
+`PROJECT_ID`, `ZONE` and `VM` together must keep it within that; the scripts
+refuse a longer one.
 
 ## The image digest
 
