@@ -107,8 +107,9 @@ CHAIN=<chain> CHAIN_JSON=chain.json SETUP_FILE=signer-3.bin CONFIRM=yes platform
   earlier mark log, a foreign object) now stops the start, where before it
   was logged and skipped. The store is the container's file system and
   the state copy is encrypted and restored as a whole commit, so nobody
-  can remove such an object. The way out is a new setup, or
-  `-state-create` on an empty store, and a new import of the shares.
+  can remove such an object. The way out is a new setup (a new
+  setup_hash, so a new state copy path and sealing AAD) and a new import
+  of the shares.
 - `CHAIN` picks the runner build of `build-image.sh` (the mainnet runner
   when unset); the chain config is checked, not put into the image. The
   script refuses `CLIENT_CA`, and `render_dockerfile` refuses `STATE_STORE`
