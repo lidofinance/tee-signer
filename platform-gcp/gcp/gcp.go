@@ -42,6 +42,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
@@ -49,6 +50,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -75,6 +77,9 @@ const (
 	// exchange asks for it.
 	stsAudience = "https://sts.googleapis.com"
 	dekBlob     = "sealing/dek.gcpkms"
+	// sharePrefix is where tee-signer keeps the sealed shares
+	// (server.ListShares).
+	sharePrefix = "shares/"
 )
 
 // CheckIdentityAudience refuses an identity audience that Workload Identity
@@ -321,43 +326,76 @@ func sealingAAD(setup [32]byte) []byte { return setupwire.CtxGCPSealing.Message(
 // one on the first start, under sealingAAD(setup). A stored blob of another
 // setup or KMS key does not decrypt, and the start stops.
 //
-// Who can plant one: encrypt needs cryptoKeyVersions.useToEncrypt on the
-// key. platform-gcp/deploy/deploy.sh grants it (cryptoKeyEncrypterDecrypter) to the
-// WIF principal set alone, whose attribute condition pins the image, and
-// deploy_test.go checks that. The AAD is not secret, so a principal that
-// holds the role anyway (an admin who grants it to itself, or a binding
-// inherited from the project or the organization, which the runner cannot
-// see) can still plant a data key. GCP stays outside the admin-proof goal.
-func (k *KMS) dataKey(ctx context.Context, store platform.Store, setup [32]byte) ([]byte, error) {
+// The AAD is not secret, so any holder of cryptoKeyVersions.useToEncrypt
+// on the key can wrap a data key it knows under it and plant the blob.
+// platform-gcp/deploy/deploy.sh grants the role (cryptoKeyEncrypterDecrypter)
+// to the WIF principal set alone, but an admin can grant it to itself, and
+// a binding inherited from the project or the organization is invisible
+// to the runner. So the stored blob counts only when the store holds a
+// sealed share (sharePrefix), that is when an earlier start sealed
+// something under it. Otherwise dataKey sets the blob aside and makes a
+// new key in the VM; a new key costs nothing while no share is sealed.
+//
+// Any object under sharePrefix passes that check, and the host writes the
+// store. So stored reports whether the key came from the stored blob: the
+// runner then uses it only once every stored share opens under it, and
+// seals no new share before (platform.Platform.SealingKeyStored).
+func (k *KMS) dataKey(ctx context.Context, store platform.Store, setup [32]byte) (key []byte, stored bool, err error) {
 	aad := sealingAAD(setup)
+	shares, err := store.List(sharePrefix)
+	if err != nil {
+		return nil, false, err
+	}
 	blob, err := store.Get(dekBlob)
+	if err == nil && len(shares) == 0 {
+		if err := setAside(store, blob); err != nil {
+			return nil, false, err
+		}
+		err = platform.ErrNotFound
+	}
 	if errors.Is(err, platform.ErrNotFound) {
 		dek := make([]byte, 32)
 		if _, err := rand.Read(dek); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		wrapped, err := k.call(ctx, "encrypt", "plaintext", dek, aad)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
-		return dek, store.Put(dekBlob, wrapped)
+		return dek, false, store.Put(dekBlob, wrapped)
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	dek, err := k.call(ctx, "decrypt", "ciphertext", blob, aad)
 	var se *statusError
 	if errors.As(err, &se) && se.notAuthentic() {
-		return nil, fmt.Errorf("gcp: the stored sealing key %s does not decrypt under this KMS key and setup_hash %x: "+
+		return nil, false, fmt.Errorf("gcp: the stored sealing key %s does not decrypt under this KMS key and setup_hash %x: "+
 			"it belongs to another setup or key, or someone else put it there; a new setup starts on an empty store (%w)", dekBlob, setup, err)
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if len(dek) != 32 {
-		return nil, fmt.Errorf("gcp: the stored sealing key %s holds %d bytes, not 32", dekBlob, len(dek))
+		return nil, false, fmt.Errorf("gcp: the stored sealing key %s holds %d bytes, not 32", dekBlob, len(dek))
 	}
-	return dek, nil
+	return dek, true, nil
+}
+
+// setAside copies a sealing blob that dataKey ignores to
+// sealing/dek.gcpkms.ignored-<first 8 bytes of its SHA-256, hex> before the
+// new key overwrites it. If the shares were only missing from the listing
+// (a partial restore, a late mount), the operator can put the copy back by
+// hand (platform-gcp/deploy/README.md).
+func setAside(store platform.Store, blob []byte) error {
+	sum := sha256.Sum256(blob)
+	aside := fmt.Sprintf("%s.ignored-%x", dekBlob, sum[:8])
+	if err := store.Put(aside, blob); err != nil {
+		return fmt.Errorf("gcp: keep the ignored sealing key blob as %s: %w", aside, err)
+	}
+	slog.Warn("gcp: no stored share, so the stored sealing key blob is not used; a new key replaces it",
+		"blob", dekBlob, "copy", aside)
+	return nil
 }
 
 // Keys is platform.Keys on Cloud KMS: a random key encrypted by KMS with
@@ -464,10 +502,12 @@ func New(o platform.Options) (*platform.Platform, error) {
 	if p.Store, err = o.UseDurable(ctx, p); err != nil {
 		return nil, err
 	}
-	dek, err := k.dataKey(ctx, p.Store, o.SetupHash)
+	dek, stored, err := k.dataKey(ctx, p.Store, o.SetupHash)
 	if err != nil {
 		return nil, err
 	}
+	// A stored blob may be one a holder of the encrypter role planted.
+	p.SealingKeyStored = stored
 	p.Sealer, err = platform.NewGCMSealer(dek)
 	p.NTSScheduleSeed = platform.ScheduleSeed(dek)
 	clear(dek)

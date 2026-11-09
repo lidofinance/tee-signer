@@ -16,8 +16,9 @@ import (
 // service account the VM runs as gets none. This test reads the script and
 // checks that. Bindings made outside the script (an admin who grants itself
 // the role, roles inherited from the project or the organization) are not
-// visible here or to the runner: GCP stays outside the admin-proof goal
-// (review N).
+// visible here or to the runner. The runner sets aside a blob found
+// without shares and proves one found with shares (dataKey,
+// planting_test.go).
 func TestDeployGrantsKeyUseToThePrincipalSetOnly(t *testing.T) {
 	dir := filepath.Join("..", "deploy")
 	script, err := os.ReadFile(filepath.Join(dir, "deploy.sh"))

@@ -82,8 +82,27 @@ CHAIN=<chain> CHAIN_JSON=chain.json SETUP_FILE=signer-3.bin CONFIRM=yes platform
   role (`platform-gcp/gcp/deploy_test.go` checks the script). The AAD is
   not secret, so a principal that holds the role anyway (an admin who
   grants it to itself, a binding inherited from the project or the
-  organization) can still plant one, and the runner cannot see such
-  bindings. GCP is outside the admin-proof goal.
+  organization) can still wrap a key it knows and leave the blob at
+  `sealing/dek.gcpkms`. The runner cannot see such bindings.
+- The runner uses a stored `sealing/dek.gcpkms` only when the store also
+  lists an object under `shares/`. On a store without one it copies the
+  blob to `sealing/dek.gcpkms.ignored-<hash>` (the first 8 bytes of its
+  SHA-256), logs a warning and makes a new key in the VM. So the first
+  start always seals under a key of its own. If shares were only missing
+  at such a start (a partial restore), put the copy back as
+  `sealing/dek.gcpkms` with the shares and start again.
+- A key from a stored blob is unproven: before the runner loads a share
+  or seals a new one, every share listed at that start must unseal under
+  it (`server.ProveSealingKey`, the same check as on AWS,
+  `platform-aws/deploy/README.md`). Otherwise the start stops and names
+  the shares that did not open. A planted blob next to junk under
+  `shares/` fails this; a runner's own blob and shares pass, so signers
+  already in service keep their key on upgrade.
+- The check has the AWS limit: a holder of the role knows its planted key
+  and can seal a share under it (the share's AAD is public), and can wrap
+  a mark log key too. Keep the role on the key to the WIF principal set,
+  and check the key's IAM policy and the inherited bindings before the
+  first start.
 - `CHAIN` picks the runner build of `build-image.sh` (the mainnet runner
   when unset); the chain config is checked, not put into the image. The
   script refuses `CLIENT_CA`, and `render_dockerfile` refuses `STATE_STORE`

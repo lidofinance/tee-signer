@@ -243,7 +243,8 @@ func (s *Server) LoadShares() (int, error) {
 }
 
 // ProveSealingKey checks a sealing key that came from a stored blob
-// (platform.Platform.SealingKeyStored, AWS-KMS-02) against the stored
+// (platform.Platform.SealingKeyStored: AWS-KMS-02 on Nitro, a planted
+// data key on GCP) against the stored
 // shares of names (from ListShares): it needs at least one, and every one
 // must unseal under the key. The host can put any object under shares/
 // next to the blob, and a share that does not open means the blob or the
@@ -262,7 +263,10 @@ func (s *Server) LoadShares() (int, error) {
 // the lock, a mark log record too: such a blob passes, and every later
 // share is sealed under a key the admin holds. Only the deploy rule
 // prevents that (create the key with its final, locked policy,
-// platform-aws/deploy/README.md); the runner cannot check it.
+// platform-aws/deploy/README.md); the runner cannot check it. On GCP a
+// holder of the encrypter role can do the same at any time; only keeping
+// the role to the WIF principal set prevents it
+// (platform-gcp/deploy/README.md).
 func (s *Server) ProveSealingKey(keys []string) error {
 	if err := s.checkLogID(); err != nil {
 		return err
@@ -290,7 +294,8 @@ func (s *Server) ProveSealingKey(keys []string) error {
 	}
 	if len(bad) > 0 {
 		return fmt.Errorf("the stored sealing key opens %d of %d stored shares; %s did not open. "+
-			"A sealing key that does not open every stored share may be one the key admin made before the key policy was locked (AWS-KMS-02), "+
+			"A sealing key that does not open every stored share may be one that someone outside the TEE planted "+
+			"(AWS-KMS-02: the key admin before the key policy was locked; GCP: a holder of the encrypter role on the KMS key), "+
 			"so this runner seals nothing under it. Remove what does not belong under shares/ on the host, or, if no share opens, "+
 			"move the sealing blob aside too, and restart", len(keys)-len(bad), len(keys), strings.Join(bad, ", "))
 	}
