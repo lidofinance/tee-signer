@@ -986,12 +986,14 @@ it arrives: the fork rule makes that sign the same as a switch at the
 effective time.
 
 If the body of an update in force is unreadable (after a restart), SIGN
-answers `SC_ERR_STORAGE` and HEALTH says not ready. While the approver set
-in force is unknown, every update is refused; while the open values in
-force are unknown, every open update. Sending the same update again writes
-its body back and the runner signs again. For the update in force the
-runner then checks only that the body has the hash the record names: its
-signers may have rotated away since.
+answers `SC_ERR_STORAGE` and HEALTH says not ready. While a body the
+values in force need is unreadable, every new update is refused: without
+it the runner cannot tell whether a due locked update is a rotation that
+drops the pending open one. Sending the same update again writes its body
+back and the runner signs again. That includes the update the record names
+as in force when a due pending update has taken its place. For the update
+in force the runner then checks only that the body has the hash the record
+names: its signers may have rotated away since.
 
 ### Client roles
 

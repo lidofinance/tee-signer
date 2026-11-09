@@ -223,3 +223,29 @@ func TestSigningIdentityLimit(t *testing.T) {
 		t.Fatalf("after a minute: %v", err)
 	}
 }
+
+// Pruning releases the expired answers: the entries it drops from the front
+// of a certificate's list must not stay reachable through the backing array.
+func TestAttestLimitPruneReleasesExpired(t *testing.T) {
+	var l attestLimit
+	now := time.Unix(1_800_000_000, 0)
+	cert := [32]byte{7}
+	for n := byte(1); n <= 3; n++ {
+		_, e, err := l.begin(cert, "signing", 8, 8, wire.TypeIdentity, []byte{n}, nil, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		l.finish(e, make([]byte, 1024))
+		now = now.Add(attestWindow / 4)
+	}
+	before := l.certs[cert]
+	l.pruneLocked(now.Add(attestWindow / 2))
+	if got := len(l.certs[cert]); got != 1 {
+		t.Fatalf("live entries: %d, want 1", got)
+	}
+	for i, f := range before[:2] {
+		if f != nil {
+			t.Fatalf("expired entry %d still held by the backing array", i)
+		}
+	}
+}

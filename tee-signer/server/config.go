@@ -153,6 +153,9 @@ type Updates struct {
 	// stuck: the core refused values of the log; nothing is signed until a
 	// restart builds the core from the log.
 	stuck error
+	// retry: the core could not read the clock while taking values of the
+	// log; nothing is signed until a later reconcile takes them.
+	retry error
 }
 
 // NewUpdates returns the config updates of a runner with a setup. Call
@@ -412,19 +415,18 @@ func (u *Updates) reconcileLocked(now uint64) {
 	if u.signer == nil || u.stuck != nil {
 		return
 	}
+	u.retry = nil
 	v := &u.view
 	if r := refOf(v.state.Locked); v.locked != nil && r != u.coreLocked {
 		if st := slotTimesOf(v.locked); !slices.Equal(st, u.signer.Config().SlotTimeChanges) {
 			if err := u.signer.SetSlotTimes(st, v.lockedAt); err != nil {
-				u.stuck = fmt.Errorf("the core refused the slot time changes of locked version %d: %w", r.version, err)
-				u.opt.Logger.Error("config: "+u.stuck.Error()+"; nothing is signed until a restart", "version", r.version)
+				u.refusedLocked(now, fmt.Errorf("the core refused the slot time changes of locked version %d: %w", r.version, err), r.version)
 				return
 			}
 			u.opt.Logger.Info("config: slot time changes in force", "version", r.version, "changes", len(st))
 		}
 		if err := u.signer.SetPolicy(policyOf(v.locked)); err != nil {
-			u.stuck = fmt.Errorf("the core refused the values of locked version %d: %w", r.version, err)
-			u.opt.Logger.Error("config: "+u.stuck.Error()+"; nothing is signed until a restart", "version", r.version)
+			u.refusedLocked(now, fmt.Errorf("the core refused the values of locked version %d: %w", r.version, err), r.version)
 			return
 		}
 		u.coreLocked = r
@@ -433,13 +435,26 @@ func (u *Updates) reconcileLocked(now uint64) {
 	}
 	if v.newest != nil && v.newestRef != u.coreOpen {
 		if err := u.signer.SetSchedule(scheduleOf(v.newest), v.newestAt, v.pendingSlots...); err != nil {
-			u.stuck = fmt.Errorf("the core refused the fork schedule of open version %d: %w", v.newestRef.version, err)
-			u.opt.Logger.Error("config: "+u.stuck.Error()+"; nothing is signed until a restart", "version", v.newestRef.version)
+			u.refusedLocked(now, fmt.Errorf("the core refused the fork schedule of open version %d: %w", v.newestRef.version, err), v.newestRef.version)
 			return
 		}
 		u.coreOpen = v.newestRef
 		u.opt.Logger.Info("config: fork schedule in the core", "open_version", v.newestRef.version, "effective_at", v.newestAt)
 	}
+}
+
+// refusedLocked records that the core refused values of the log. A clock
+// error is passing: the next reconcile, at the next sign, tries again.
+// Any other refusal stops signing until a restart.
+func (u *Updates) refusedLocked(now uint64, err error, version uint64) {
+	var r *backend.RefusedError
+	if errors.As(err, &r) && r.Code == backend.StatusClock {
+		u.retry, u.next = err, now
+		u.opt.Logger.Warn("config: "+err.Error()+"; the next request tries again", "version", version)
+		return
+	}
+	u.stuck = err
+	u.opt.Logger.Error("config: "+err.Error()+"; nothing is signed until a restart", "version", version)
 }
 
 // pruneLocked drops decoded bodies that neither the log's state nor the
@@ -466,6 +481,9 @@ func (u *Updates) pruneLocked() {
 func (u *Updates) blockedLocked() error {
 	if u.stuck != nil {
 		return backend.Refused(backend.StatusStorage, "config: %v; restart the runner, it builds the core from the log", u.stuck)
+	}
+	if u.retry != nil {
+		return backend.Refused(backend.StatusClock, "config: %v", u.retry)
 	}
 	if u.view.missing != nil {
 		return backend.Refused(backend.StatusStorage, "config: the values in force are unknown, so nothing is signed: %v (send that update again to restore its body)", u.view.missing)
@@ -717,7 +735,7 @@ func (u *Updates) Accept(ctx context.Context, raw []byte) (uint8, backend.SetupS
 	u.mu.Lock()
 	u.reconcileLocked(now)
 	now = u.lastNow
-	v, stuck, signer := u.view, u.stuck, u.signer
+	v, stuck, retry, signer, logSt := u.view, u.stuck, u.retry, u.signer, u.logSt
 	u.mu.Unlock()
 	if signer == nil {
 		return 0, none, backend.Refused(backend.StatusNotReady, "config update: the runner is not serving yet")
@@ -738,6 +756,12 @@ func (u *Updates) Accept(ctx context.Context, raw []byte) (uint8, backend.SetupS
 	if ref == refOf(*gs) {
 		// The update in force again. The record that named it was written
 		// after every check, so its hash is enough.
+		return u.again(ctx, raw, upd, ref, now)
+	}
+	if lg, _ := logSt.Group(b.Group); ref == refOf(*lg) {
+		// The update the record names as in force, which a pending update
+		// has replaced in the view: the view still needs its body to tell
+		// whether that one is a rotation.
 		return u.again(ctx, raw, upd, ref, now)
 	}
 	// A new locked update takes no change delay below the chain's floor.
@@ -761,6 +785,11 @@ func (u *Updates) Accept(ctx context.Context, raw []byte) (uint8, backend.SetupS
 	if b.Group == setupwire.GroupOpen && v.open == nil {
 		return 0, none, backend.Refused(backend.StatusStorage, "config update: the open values in force are unknown, so the fork rule has nothing to check against: %v", v.missing)
 	}
+	if v.missing != nil {
+		// As Sync: a view built without a body may have dropped a pending
+		// update, and a record written on it would drop that update too.
+		return 0, none, backend.Refused(backend.StatusStorage, "config update: the values in force are unknown, so no record is written: %v (send that update again first)", v.missing)
+	}
 	if err := upd.Verify(&v.locked.Approvers); err != nil {
 		return 0, none, backend.Refused(backend.StatusBadRequest, "config update: %v", err)
 	}
@@ -769,6 +798,14 @@ func (u *Updates) Accept(ctx context.Context, raw []byte) (uint8, backend.SetupS
 		return 0, none, backend.Refused(backend.StatusBadRequest, "config update: %v", err)
 	}
 	at := setupwire.EffectiveActivation(b.ActivateAt, now, wait)
+	// The core checks below run against the values the core holds, which
+	// lag the view while the core refused them.
+	if stuck != nil {
+		return 0, none, backend.Refused(backend.StatusStorage, "config update: %v; restart the runner first", stuck)
+	}
+	if retry != nil {
+		return 0, none, backend.Refused(backend.StatusClock, "config update: the clock was not readable: %v; send it again", retry)
+	}
 	switch b.Group {
 	case setupwire.GroupLocked:
 		if err := signer.CheckPolicy(policyOf(b.Locked)); err != nil {
@@ -786,17 +823,15 @@ func (u *Updates) Accept(ctx context.Context, raw []byte) (uint8, backend.SetupS
 			if v.open == nil {
 				return 0, none, backend.Refused(backend.StatusStorage, "config update: the open values in force are unknown, so the pending fork has nothing to be checked against: %v", v.missing)
 			}
-			if v.newestRef == (updateRef{p.Version, p.Hash}) {
-				if err := signer.CheckSchedule(scheduleOf(v.open), v.newestAt, st); err != nil {
-					return 0, none, refusedAs(err, fmt.Sprintf("config update: the fork rule under the new slot times of locked version %d refuses the pending open version %d in force at %d",
-						b.Version, p.Version, v.newestAt))
-				}
+			if v.newestRef != (updateRef{p.Version, p.Hash}) {
+				return 0, none, backend.Refused(backend.StatusStorage, "config update: the pending open version %d has no readable body, so the fork rule cannot check it under the new slot times; send that update again first", p.Version)
+			}
+			if err := signer.CheckSchedule(scheduleOf(v.open), v.newestAt, st); err != nil {
+				return 0, none, refusedAs(err, fmt.Sprintf("config update: the fork rule under the new slot times of locked version %d refuses the pending open version %d in force at %d",
+					b.Version, p.Version, v.newestAt))
 			}
 		}
 	case setupwire.GroupOpen:
-		if stuck != nil {
-			return 0, none, backend.Refused(backend.StatusStorage, "config update: %v; restart the runner first", stuck)
-		}
 		// The epochs count under the slot times in force and under those of a
 		// pending locked update.
 		if err := signer.CheckSchedule(scheduleOf(b.Open), at, v.pendingSlots...); err != nil {

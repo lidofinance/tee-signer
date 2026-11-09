@@ -52,11 +52,22 @@ type fakeClock struct {
 	t       time.Time
 	trusted bool
 	err     error
+	// failNext: the next reads that many fail with errClockDown.
+	failNext int
 }
 
-func (c *fakeClock) Now() (time.Time, error) { c.mu.Lock(); defer c.mu.Unlock(); return c.t, c.err }
-func (c *fakeClock) Source() string          { return "fake" }
-func (c *fakeClock) Trusted() bool           { c.mu.Lock(); defer c.mu.Unlock(); return c.trusted }
+func (c *fakeClock) Now() (time.Time, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.failNext > 0 {
+		c.failNext--
+		return time.Time{}, errClockDown
+	}
+	return c.t, c.err
+}
+
+func (c *fakeClock) Source() string { return "fake" }
+func (c *fakeClock) Trusted() bool  { c.mu.Lock(); defer c.mu.Unlock(); return c.trusted }
 func (c *fakeClock) add(s uint64) {
 	c.mu.Lock()
 	c.t = c.t.Add(time.Duration(s) * time.Second)
@@ -1385,5 +1396,106 @@ func TestConfigUpdateStoredZeroDelayAgain(t *testing.T) {
 				t.Fatalf("with the body back: %v", err)
 			}
 		})
+	}
+}
+
+// A fork update pending with no readable body, then a slot time change: the
+// change is refused, since the fork rule has nothing to check it against.
+// With the body sent again the runner keeps signing.
+func TestConfigUpdateSlotTimesPendingForkUnreadable(t *testing.T) {
+	e := newEnv(t, u64(3600))
+	t0 := e.now()
+	ob := e.body(open, 1, e.groupHash(open), t0+7200)
+	ob.Open.ForkSchedule = append(ob.Open.ForkSchedule, setupwire.Fork{Epoch: 1160, Version: v6})
+	raw := signed(t, ob, first2, nil)
+	e.mustSend(raw, wireadmin.ConfigAccepted)
+	e.signer.Close()
+	if err := os.Remove(filepath.Join(e.dir, "marks", markstore.BodyName(e.hash, open, 1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	e.start()
+	lb := e.body(locked, 1, e.groupHash(locked), t0)
+	lb.Locked.SlotTimeChanges = []setupwire.SlotTimeChange{{Epoch: 1079, SecondsPerSlot: 1}}
+	_, _, err := e.send(signed(t, lb, first2, nil))
+	wantCode(t, err, backend.StatusStorage, "pending open version 1 has no readable body")
+	if e.log.State().Locked.Pending != nil {
+		t.Fatal("refused, but pending")
+	}
+	e.mustSend(raw, wireadmin.ConfigKnown)
+	if err := e.register(e.setup.Locked.AllowedFeeRecipients[0]); err != nil {
+		t.Fatalf("with the body back: %v", err)
+	}
+	if cfg := e.signer.Config(); cfg.ForkVersionAt(1160) != v6 {
+		t.Fatal("the pending fork is not in the core")
+	}
+}
+
+// The record names locked version 1 as in force and version 2 pending and
+// due, and version 1 has no readable copy: whether 2 is a rotation is
+// unknown, so nothing is signed. Sending version 1 again restores its body
+// and the runner signs under version 2.
+func TestConfigUpdatePredecessorBodyAgain(t *testing.T) {
+	e := newEnv(t, u64(3600))
+	b1 := e.body(locked, 1, e.groupHash(locked), e.now())
+	raw1 := signed(t, b1, first2, nil)
+	e.mustSend(raw1, wireadmin.ConfigAccepted)
+	e.clock.add(3600)
+	if err := e.upd.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	b2 := e.body(locked, 2, hashOf(t, b1), e.now())
+	b2.Locked.AllowedFeeRecipients = append(b2.Locked.AllowedFeeRecipients, x)
+	e.mustSend(signed(t, b2, first2, nil), wireadmin.ConfigAccepted)
+	e.signer.Close()
+	if err := os.Remove(filepath.Join(e.dir, "marks", markstore.BodyName(e.hash, locked, 1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	e.start()
+	e.clock.add(3600)
+	wantCode(t, e.register(x), backend.StatusStorage, "no readable copy")
+	e.mustSend(raw1, wireadmin.ConfigKnown)
+	if err := e.register(x); err != nil {
+		t.Fatalf("with the body back: %v", err)
+	}
+}
+
+// As above with a fork update pending past version 2's effective time. While
+// version 1's body is unreadable, version 2 counts as a rotation and the
+// view drops the fork, so a new locked update is refused rather than
+// written on that view. With the body back the fork stays pending and the
+// new update keeps it.
+func TestConfigUpdateRefusedWhileBodyMissing(t *testing.T) {
+	e := newEnv(t, u64(3600))
+	b1 := e.body(locked, 1, e.groupHash(locked), e.now())
+	raw1 := signed(t, b1, first2, nil)
+	e.mustSend(raw1, wireadmin.ConfigAccepted)
+	e.clock.add(3600)
+	if err := e.upd.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	b2 := e.body(locked, 2, hashOf(t, b1), e.now())
+	b2.Locked.AllowedFeeRecipients = append(b2.Locked.AllowedFeeRecipients, x)
+	e.mustSend(signed(t, b2, first2, nil), wireadmin.ConfigAccepted)
+	at := e.now() + 3600 + 10*testEpoch
+	f := e.body(open, 1, e.groupHash(open), at)
+	f.Open.ForkSchedule = append(f.Open.ForkSchedule, setupwire.Fork{Epoch: (at-testGenesis)/testEpoch + 4, Version: v6})
+	e.mustSend(signed(t, f, first2, nil), wireadmin.ConfigAccepted)
+	fp := *logPending(t, e, open)
+	e.signer.Close()
+	if err := os.Remove(filepath.Join(e.dir, "marks", markstore.BodyName(e.hash, locked, 1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	e.start()
+	e.clock.add(3600)
+	b3 := e.body(locked, 3, hashOf(t, b2), e.now())
+	_, _, err := e.send(signed(t, b3, first2, nil))
+	wantCode(t, err, backend.StatusStorage, "no readable copy")
+	if p := logPending(t, e, open); p == nil || *p != fp {
+		t.Fatalf("pending open update %+v, want %+v", p, fp)
+	}
+	e.mustSend(raw1, wireadmin.ConfigKnown)
+	e.mustSend(signed(t, b3, first2, nil), wireadmin.ConfigAccepted)
+	if p := logPending(t, e, open); p == nil || *p != fp {
+		t.Fatalf("after the new locked update: pending open update %+v, want %+v", p, fp)
 	}
 }
