@@ -63,7 +63,7 @@ func newServers(t *testing.T, opts map[string]ntstest.NTPOptions, order ...strin
 }
 
 func newNTS(fs []*fakeServer, coarse *coarseClock) *NTS {
-	n := &NTS{Coarse: coarse, Interval: 50 * time.Millisecond, minPoll: 10 * time.Millisecond}
+	n := &NTS{Coarse: coarse, Interval: 50 * time.Millisecond, minPoll: 10 * time.Millisecond, StartDelay: -1}
 	for _, f := range fs {
 		n.Servers = append(n.Servers, f.srv)
 	}
@@ -277,7 +277,7 @@ func TestNTSClockCoarseSlewedAndTruncated(t *testing.T) {
 				t.Fatal(err)
 			}
 			local = local.Add(time.Duration(float64(age) * c.rate))
-			n := &NTS{Coarse: coarse, Interval: 50 * time.Millisecond, minPoll: 10 * time.Millisecond}
+			n := &NTS{Coarse: coarse, Interval: 50 * time.Millisecond, minPoll: 10 * time.Millisecond, StartDelay: -1}
 			for _, f := range fs {
 				n.Servers = append(n.Servers, f.srv)
 			}

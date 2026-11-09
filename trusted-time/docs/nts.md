@@ -127,7 +127,11 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   doubles a server's interval on RATE up to 1024 s, stops asking a server
   for 1024 s on DENY or RSTR (a Kiss-o'-Death is not authenticated, so a
   forged one must not stop it for good), runs NTS-KE again on NTSN, feeds
-  the latest sample of each server (at most 60 s old) to the Rust quorum, ages
+  the latest sample of each server to the Rust quorum if it is at most 46 s
+  old with the defaults (60 s minus the 4 s tick of `Run` with the
+  defaults and the 10 s a refresh can take for one NTS-KE and one query,
+  so it stays under 60 s until the next quorum can replace the one it
+  joins; the clock refuses a `MaxAge` that leaves no room for that), ages
   the bound by rho, and fails `Now` over 100 ms. `Now` also fails once the
   oldest sample of the quorum in force is over 60 s old on the local
   clock. The host sets that clock's rate: if it blocks the servers and runs
@@ -148,14 +152,18 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   own signatures stay safe, because its time never goes back and a
   restart waits for a fresh quorum. What lags: a client certificate that
   expired during the lag is still accepted, and a key imported during it
-  gets a restart floor that is too low for history it built elsewhere. A healthy server answers every 16 s,
-  so one lost answer still leaves its sample under 60 s; a quorum needs 3
-  of the 4 operators. If every server is out of reach, signing stops within
+  gets a restart floor that is too low for history it built elsewhere.
+  A healthy server answers every 16 s, so after one lost answer its
+  sample is usually still under 46 s when the next answer comes; a
+  quorum needs 3 of the 4 operators. If every server is out of reach, signing stops within
   60 s and resumes with the next quorum: within about one interval after a
   short outage, later after a long one, when the cookies ran out and NTS-KE
   backs off (up to 1024 s; before the first quorum of a run NTS-KE is tried
-  again every 16 s, so a relay that comes up late does not push the first
-  quorum past the runner's start wait). HEALTH reports `sample_age_ms`, `max_sample_age_ms` and, while the
+  again after a random 12 to 20 s, so a relay that comes up late does not
+  push the first quorum past the runner's start wait). The first refresh
+  of a run waits a random time under 5 s before it contacts anyone, so
+  signers that restart together (a release, a region outage) do not reach
+  every server in the same second; the retries keep the spread. HEALTH reports `sample_age_ms`, `max_sample_age_ms` and, while the
   clock refuses, the reason in `refused`. Local time is
   `CLOCK_MONOTONIC_RAW` (`nts.Monotonic`), not Go's `CLOCK_MONOTONIC`, which
   an NTP daemon in the kernel slews. Each
@@ -191,9 +199,16 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   or the parent's service manager on Nitro. A runner that went on without
   a quorum would load no share (each share's restart floor reads the
   clock) and would not load them once the quorum formed.
+  The start loop refreshes every 5 s until 5 s are left, so its last
+  refresh is at the end of the wait. Before the random start wait and
+  retry, a server that did not answer got a try at 0, 20, 40, 60 and
+  80 s (16 s rounded up to the loop): 5 in 90 s, 2 in the 30 s of the
+  e2e tests. Now the loop starts up to 5 s later and a retry comes 15 or
+  20 s after a try: at the latest 5, 25, 45, 65 and 85 s, so as many tries
+  as before.
   The clock dials through the platform (`platform.Platform.Dial`; nil is
   the default dialer). `runner -nts-clock-check`
-  queries the servers once and prints the result. A debug build (tag debugimport) can name
+  queries the servers once, with no start wait, and prints the result. A debug build (tag debugimport) can name
   test servers instead of the public ones (`RUNNER_NTS_TEST_SERVERS`,
   `RUNNER_NTS_TEST_ROOTS`, `nts_servers_debug.go`); a release build cannot.
 - `trusted-time/nts/ntstest`: a loopback NTS-KE and NTP server for the tests,

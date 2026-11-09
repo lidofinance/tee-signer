@@ -27,7 +27,7 @@ func TestNTSInteropPublicServers(t *testing.T) {
 	if os.Getenv("NTS_INTEROP") != "1" {
 		t.Skip("NTS_INTEROP is not 1")
 	}
-	n := &NTS{Coarse: &coarseClock{}, Interval: 33 * time.Second}
+	n := &NTS{Coarse: &coarseClock{}, Interval: 33 * time.Second, StartDelay: -1}
 	for _, s := range nts.PublicServers {
 		pool, err := nts.RootPool(s.Roots)
 		if err != nil {

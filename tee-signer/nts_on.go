@@ -55,11 +55,20 @@ func ntsClockCheck() int {
 	// and the NTS operators' (coarseClient).
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.TLSClientConfig = &tls.Config{RootCAs: cloudroots.Pool(cloudroots.AWS, cloudroots.Google, cloudroots.Azure)}
-	n, coarse, err := newNTSClock(&http.Client{Transport: t}, nil, os.Getenv("RUNNER_NTS_REGION"), log)
+	return ntsClockCheckWith(&http.Client{Transport: t}, nil, log)
+}
+
+// ntsClockCheckWith is ntsClockCheck with the coarse client and the dialer
+// as parameters, for the test.
+func ntsClockCheckWith(client *http.Client, dial nts.DialFunc, log *slog.Logger) int {
+	n, coarse, err := newNTSClock(client, dial, os.Getenv("RUNNER_NTS_REGION"), log)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "runner:", err)
 		return 2
 	}
+	// One Refresh: it must contact the servers at once, without the random
+	// start wait of a signer that keeps running.
+	n.StartDelay = -1
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	if err := coarse.Refresh(ctx); err != nil {

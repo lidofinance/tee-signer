@@ -59,14 +59,15 @@ func closedAddr(t *testing.T) string {
 	return addr
 }
 
-// Until the first quorum, a failed NTS-KE is tried again after Interval,
-// not after a doubling wait: a relay that comes up late must not push the
-// next try past the runner's start wait. From the first quorum on the wait
-// doubles up to maxPoll.
+// Until the first quorum, a failed NTS-KE is tried again after 3/4 to 5/4
+// Interval, not after a doubling wait: a relay that comes up late must not
+// push the next try past the runner's start wait. From the first quorum on
+// the wait doubles up to maxPoll.
 func TestNTSClockKeyExchangeWaitsIntervalUntilFirstQuorum(t *testing.T) {
 	fs := newServers(t, nil, "a", "b", "c")
 	down := closedAddr(t)
-	n := &NTS{Coarse: &coarseClock{}, Interval: 50 * time.Millisecond, minPoll: 10 * time.Millisecond, maxPoll: 400 * time.Millisecond}
+	n := &NTS{Coarse: &coarseClock{}, Interval: 50 * time.Millisecond, minPoll: 10 * time.Millisecond, maxPoll: 400 * time.Millisecond,
+		StartDelay: -1}
 	for _, f := range fs {
 		s := f.srv
 		s.KEAddr, s.Roots = down, x509.NewCertPool()
@@ -81,14 +82,15 @@ func TestNTSClockKeyExchangeWaitsIntervalUntilFirstQuorum(t *testing.T) {
 	}
 	for try := 1; try <= 3; try++ {
 		if try > 1 {
-			time.Sleep(60 * time.Millisecond)
+			time.Sleep(70 * time.Millisecond)
 		}
 		if err := refresh(t, n); err == nil {
 			t.Fatalf("try %d: a quorum without a key exchange", try)
 		}
 		for i, w := range keWaits() {
-			if w != n.Interval {
-				t.Fatalf("try %d, peer %d: key exchange wait %v before the first quorum, want Interval %v (waits %v)", try, i, w, n.Interval, keWaits())
+			if w < n.Interval*3/4 || w >= n.Interval*5/4 {
+				t.Fatalf("try %d, peer %d: key exchange wait %v before the first quorum, want %v to %v (waits %v)",
+					try, i, w, n.Interval*3/4, n.Interval*5/4, keWaits())
 			}
 		}
 	}
@@ -99,7 +101,7 @@ func TestNTSClockKeyExchangeWaitsIntervalUntilFirstQuorum(t *testing.T) {
 	for i, f := range fs {
 		n.peers[i].srv.KEAddr, n.peers[i].srv.Roots = f.ke.Addr, f.srv.Roots
 	}
-	time.Sleep(60 * time.Millisecond)
+	time.Sleep(70 * time.Millisecond)
 	if err := refresh(t, n); err != nil {
 		t.Fatal(err)
 	}
