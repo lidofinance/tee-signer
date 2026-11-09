@@ -127,7 +127,11 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   doubles a server's interval on RATE up to 1024 s, stops asking a server
   for 1024 s on DENY or RSTR (a Kiss-o'-Death is not authenticated, so a
   forged one must not stop it for good), runs NTS-KE again on NTSN, feeds
-  the latest sample of each server (at most 60 s old) to the Rust quorum, ages
+  the latest sample of each server to the Rust quorum if it is at most 46 s
+  old with the defaults (60 s minus the 4 s tick of `Run` with the
+  defaults and the 10 s a refresh can take for one NTS-KE and one query,
+  so it stays under 60 s until the next quorum can replace the one it
+  joins; the clock refuses a `MaxAge` that leaves no room for that), ages
   the bound by rho, and fails `Now` over 100 ms. `Now` also fails once the
   oldest sample of the quorum in force is over 60 s old on the local
   clock. The host sets that clock's rate: if it blocks the servers and runs
@@ -148,9 +152,10 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   own signatures stay safe, because its time never goes back and a
   restart waits for a fresh quorum. What lags: a client certificate that
   expired during the lag is still accepted, and a key imported during it
-  gets a restart floor that is too low for history it built elsewhere. A healthy server answers every 16 s,
-  so one lost answer still leaves its sample under 60 s; a quorum needs 3
-  of the 4 operators. If every server is out of reach, signing stops within
+  gets a restart floor that is too low for history it built elsewhere.
+  A healthy server answers every 16 s, so after one lost answer its
+  sample is usually still under 46 s when the next answer comes; a
+  quorum needs 3 of the 4 operators. If every server is out of reach, signing stops within
   60 s and resumes with the next quorum: within about one interval after a
   short outage, later after a long one, when the cookies ran out and NTS-KE
   backs off (up to 1024 s; before the first quorum of a run NTS-KE is tried

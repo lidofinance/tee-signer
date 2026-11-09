@@ -20,8 +20,9 @@ import (
 // Defaults of the NTS clock.
 const (
 	// NTSInterval is the time between two queries to one server. It is
-	// well under NTSMaxAge: a server that misses one answer still has a
-	// sample under NTSMaxAge old when the next one comes.
+	// well under NTSMaxAge: a server that misses one answer usually still
+	// has a sample young enough to join a quorum (joinAge) when the next
+	// one comes.
 	NTSInterval = 16 * time.Second
 	// NTSMinPoll is the shortest time between two queries to one server:
 	// RFC 5905 MINPOLL = 4, 2^4 s (section 7.2, appendix A.1.1).
@@ -32,13 +33,14 @@ const (
 	// NTSMaxBound: Now fails when the error bound is larger.
 	NTSMaxBound = 100 * time.Millisecond
 	// NTSMaxAge: Now fails when the oldest sample of the quorum in force
-	// is older, on the local clock, and older samples do not enter a
-	// quorum. The bound ages by rho of the local clock, which the host may
-	// run fast while it blocks the servers; this limit keeps the time
-	// served then at most NTSMaxAge ahead of real time. It does not cover
-	// the slow direction: a host that slows or stops the local clock while
-	// it blocks the servers also slows the age, so the time served can lag
-	// real time without limit (it never goes back).
+	// is older, on the local clock. A sample joins a quorum only while it
+	// will stay under it until the next quorum (joinAge). The bound ages
+	// by rho of the local clock, which the host may run fast while it
+	// blocks the servers; this limit keeps the time served then at most
+	// NTSMaxAge ahead of real time. It does not cover the slow direction:
+	// a host that slows or stops the local clock while it blocks the
+	// servers also slows the age, so the time served can lag real time
+	// without limit (it never goes back).
 	NTSMaxAge = 60 * time.Second
 	// NTSMaxCoarseDiff: NTS time further than this from the coarse clock
 	// (the HTTPS-date quorum) is refused. The check only catches gross NTS
@@ -78,9 +80,12 @@ type NTSServer struct {
 //     once a quorum has been served; until then NTS-KE is tried again every
 //     Interval, so a relay that comes up late does not push the first
 //     quorum past the runner's start wait.
-//   - The latest sample of each server, at most MaxAge (and 4 x Interval)
-//     old, goes to the Rust quorum (one server may be wrong). The result
-//     is an offset from the local monotonic clock and an error bound.
+//   - The latest sample of each server goes to the Rust quorum (one server
+//     may be wrong) if it will stay under MaxAge until the next quorum:
+//     at most MaxAge minus a tick of Run and the longest Refresh, 46 s
+//     with the defaults (and at most 4 x Interval). Refresh refuses a
+//     MaxAge that leaves no room for that. The result is an offset from
+//     the local monotonic clock and an error bound.
 //   - Between quorums the bound grows by nts.RhoPPM of the elapsed
 //     monotonic time. Now fails once it is over MaxBound, so the signer
 //     refuses rather than signs on a time it cannot vouch for.
@@ -217,6 +222,16 @@ func (n *NTS) minPollD() time.Duration { return cmpOr(n.minPoll, NTSMinPoll) }
 func (n *NTS) maxPollD() time.Duration { return cmpOr(n.maxPoll, NTSMaxPoll) }
 func (n *NTS) baseline() int64         { return int64(ntsDriftBaselinePolls * n.interval()) }
 
+// joinAge is the oldest a sample may be to join a quorum: it must stay
+// under MaxAge until the next quorum can replace that quorum, or Now fails
+// in between. Run starts the next Refresh at most a tick (Interval/4) after
+// one ends, and a Refresh takes at most one NTS-KE and one query (the polls
+// run in parallel). 46 s with the defaults. Refresh refuses a MaxAge that
+// leaves it at 0 or below.
+func (n *NTS) joinAge() time.Duration {
+	return n.maxAge() - n.interval()/4 - 2*ntsExchangeTimeout
+}
+
 // coarseRefused says whether the NTS time is too far from the coarse
 // reading: diff is the NTS time minus the coarse time, both at the same
 // local instant. The coarse reading truncates real time to whole seconds,
@@ -271,6 +286,12 @@ func (n *NTS) Refresh(ctx context.Context) error {
 	n.init()
 	n.rmu.Lock()
 	defer n.rmu.Unlock()
+	if n.joinAge() <= 0 {
+		err := fmt.Errorf("clock: nts: MaxAge %v is too short: no sample could join a quorum; it must be over %v (a tick of Run and the longest Refresh)",
+			n.maxAge(), n.maxAge()-n.joinAge())
+		n.setErr(err)
+		return err
+	}
 	coarse, err := n.Coarse.Now()
 	coarseLocal := n.local()
 	if err != nil {
@@ -392,7 +413,7 @@ func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time) {
 // coarse time.
 func (n *NTS) combine(coarse time.Time, coarseLocal int64) error {
 	now := n.local()
-	maxAge := int64(min(4*n.interval(), n.maxAge()))
+	maxAge := int64(min(4*n.interval(), n.joinAge()))
 	var in []nts.Interval
 	var errs []error
 	for _, p := range n.peers {
