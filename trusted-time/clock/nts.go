@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -51,6 +52,10 @@ const (
 	// HTTP Date header names the second the server was in, so real time at
 	// the server was that second up to one second later.
 	NTSCoarseResolution = time.Second
+	// NTSStartDelay: the first Refresh waits a random time under this
+	// before it contacts anyone, so signers that restart together do not
+	// reach the servers in the same second.
+	NTSStartDelay = 5 * time.Second
 	// ntsDriftBaselinePolls times Interval is the baseline of the drift
 	// reading: the check also compares each quorum with the oldest quorum
 	// kept, at least this old.
@@ -76,10 +81,14 @@ type NTSServer struct {
 //     stops using the server for NTSMaxPoll (RFC 5905 section 7.4 says for
 //     good, but a Kiss-o'-Death is not authenticated, so anyone on the path
 //     could send it); NTSN drops the keys and runs NTS-KE again (RFC 8915
-//     section 5.7). NTS-KE failures back off from Interval to NTSMaxPoll
-//     once a quorum has been served; until then NTS-KE is tried again every
-//     Interval, so a relay that comes up late does not push the first
-//     quorum past the runner's start wait.
+//     section 5.7). The first Refresh waits a random time under StartDelay
+//     before it contacts anyone, so signers that restart together spread
+//     their contacts.
+//     NTS-KE failures back off from Interval to NTSMaxPoll once a quorum
+//     has been served; until then NTS-KE is tried again after a random
+//     3/4 to 5/4 Interval (12 to 20 s), so a relay that comes up late does
+//     not push the first quorum past the runner's start wait, and signers
+//     that failed together do not try again together.
 //   - The latest sample of each server goes to the Rust quorum (one server
 //     may be wrong) if it will stay under MaxAge until the next quorum:
 //     at most MaxAge minus a tick of Run and the longest Refresh, 46 s
@@ -121,6 +130,10 @@ type NTS struct {
 	MaxAge        time.Duration // 0: NTSMaxAge
 	MaxCoarseDiff time.Duration // 0: NTSMaxCoarseDiff
 	Dial          nts.DialFunc  // nil: the default dialer
+	// StartDelay bounds the random wait of the first Refresh before it
+	// contacts anyone. 0: NTSStartDelay; negative: none (a one-shot check
+	// that calls Refresh once).
+	StartDelay time.Duration
 	// Local is the monotonic clock in ns. Nil: nts.Monotonic, which the
 	// samples use too. A test moves it ahead to age the bound.
 	Local func() int64
@@ -128,6 +141,13 @@ type NTS struct {
 
 	minPoll time.Duration // 0: NTSMinPoll; tests set it lower
 	maxPoll time.Duration // 0: NTSMaxPoll; tests set it lower
+	// randN returns a random number in [0, n). Nil: math/rand/v2 Int64N;
+	// tests set a seeded one. Polls call it in parallel.
+	randN func(n int64) int64
+	// sleep waits d. Nil: a timer; tests move a fake clock.
+	sleep func(d time.Duration)
+	// started is set by the first Refresh, after its start wait. Under rmu.
+	started bool
 
 	once   sync.Once
 	rmu    sync.Mutex // one Refresh at a time; Status waits for it
@@ -135,7 +155,7 @@ type NTS struct {
 	peers  []*ntsPeer
 	result *ntsResult // served by Now; nil until a quorum passes all checks
 	// served is set once a quorum has passed; before that NTS-KE is tried
-	// again every Interval, without backoff.
+	// again after about Interval (3/4 to 5/4 of it), without backoff.
 	served atomic.Bool
 	// hist holds the quorums of the drift check, oldest first: the last one
 	// (served or refused) at the end, the baseline at index 0. A refused
@@ -265,6 +285,41 @@ func (n *NTS) init() {
 	})
 }
 
+// startWait is the wait of the first Refresh before it contacts anyone: a
+// random time under StartDelay. It moves the whole schedule of this signer,
+// so a caller that refreshes on a fixed grid (the runner's start loop) moves
+// with it. A wait in nextKE alone would round up to the caller's next call.
+func (n *NTS) startWait(ctx context.Context) error {
+	d := n.StartDelay
+	if d == 0 {
+		d = NTSStartDelay
+	}
+	if d < 0 {
+		return nil
+	}
+	w := time.Duration(n.random(int64(d)))
+	if n.sleep != nil {
+		n.sleep(w)
+		return ctx.Err()
+	}
+	t := time.NewTimer(w)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+// random returns a random number in [0, limit).
+func (n *NTS) random(limit int64) int64 {
+	if n.randN != nil {
+		return n.randN(limit)
+	}
+	return rand.Int64N(limit)
+}
+
 func (n *NTS) Source() string {
 	ops := make([]string, len(n.Servers))
 	for i, s := range n.Servers {
@@ -291,6 +346,12 @@ func (n *NTS) Refresh(ctx context.Context) error {
 			n.maxAge(), n.maxAge()-n.joinAge())
 		n.setErr(err)
 		return err
+	}
+	if !n.started {
+		n.started = true
+		if err := n.startWait(ctx); err != nil {
+			return err
+		}
 	}
 	coarse, err := n.Coarse.Now()
 	coarseLocal := n.local()
@@ -355,7 +416,9 @@ func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time) {
 			if n.served.Load() {
 				p.keWait = min(max(2*p.keWait, n.interval()), n.maxPollD())
 			} else {
-				p.keWait = n.interval()
+				// No backoff before the first quorum, but random, so signers
+				// that failed together do not try again together.
+				p.keWait = n.interval()*3/4 + time.Duration(n.random(int64(n.interval()/2)))
 			}
 			p.nextKE = now + int64(p.keWait)
 			n.logf(slog.LevelWarn, "nts: key exchange failed", "operator", p.srv.Operator, "host", p.srv.Host, "retry_in", p.keWait, "err", err)
