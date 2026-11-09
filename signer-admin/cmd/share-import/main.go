@@ -1,7 +1,8 @@
 // Command share-import is the dealer side of the sealed share import: it
 // asks a runner for its attested identity, checks it, encrypts one share to
 // the runner's import key (HPKE, ML-KEM-768-X25519) and sends it. The share
-// is read from a file or stdin, never from the command line.
+// is read from a file of mode 0600 or stricter or from stdin, never from the
+// command line, after core dumps are turned off.
 //
 //	share-import -addr tcp:127.0.0.1:7100 -pubkey 0x... -index 9 -share-file share.hex -verifier dev
 //
@@ -49,6 +50,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -62,7 +64,9 @@ import (
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
 	"github.com/lidofinance/tee-signer/governance/importorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
+	adminapprover "github.com/lidofinance/tee-signer/signer-admin/approver"
 	admincluster "github.com/lidofinance/tee-signer/signer-admin/cluster"
+	"github.com/lidofinance/tee-signer/signer-admin/internal/lockdown"
 	remoteadmin "github.com/lidofinance/tee-signer/signer-admin/remote/admin"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-protocol"
@@ -76,10 +80,18 @@ func main() {
 	}
 }
 
+// readSecret turns core dumps off and locks memory first, then reads the
+// share. A share file must be readable by its owner only.
 func readSecret(path string) ([32]byte, error) {
 	var sk [32]byte
+	if err := lockdown.Secrets(os.Stderr); err != nil {
+		return sk, err
+	}
 	var r io.Reader = os.Stdin
 	if path != "-" {
+		if err := adminapprover.CheckPrivateFile(path); err != nil {
+			return sk, err
+		}
 		f, err := os.Open(path)
 		if err != nil {
 			return sk, err
@@ -92,11 +104,13 @@ func readSecret(path string) ([32]byte, error) {
 		return sk, err
 	}
 	defer clear(b)
-	s := strings.TrimPrefix(strings.TrimSpace(string(b)), "0x")
+	// Trimmed in place: no string copy of the secret.
+	s := bytes.TrimPrefix(bytes.TrimSpace(b), []byte("0x"))
 	if len(s) != 64 {
 		return sk, errors.New("share file: want 32 bytes as hex")
 	}
-	if _, err := hex.Decode(sk[:], []byte(s)); err != nil {
+	if _, err := hex.Decode(sk[:], s); err != nil {
+		clear(sk[:])
 		return sk, errors.New("share file: not hex")
 	}
 	return sk, nil
