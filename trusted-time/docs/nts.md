@@ -203,6 +203,12 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   coarse time has passed its `activate_at` plus its wait
   (`tee-signer/starttime.go`). Signing never reads it.
 
+  Each HTTPS-date source reads the Date of the first TLS answer of its
+  URL, whatever the status, and never follows a redirect: the target is a
+  host nobody measured into the image, may be plain HTTP
+  (TIME-SOURCE-01), and may have no egress route (TIME-SOURCE-02,
+  `sts.{region}.amazonaws.com` answers 302 to `aws.amazon.com`).
+
   Residual: the HTTPS-date sources' own TLS checks their certificates
   against the system clock, because the platform HTTP clients set no
   `Time` (`httpsdate.go`). A host that sets the system clock and holds
@@ -866,7 +872,12 @@ sample). A setup that raises the sample cap above `max_bound_ms` gives
 part of that back. A far deployment raises both, and that error grows
 with them (about 2 x (250 + 38) ms, 576 ms, at 250 ms).
 
-The coarse URLs are hosts the platform's egress already allows. Each is
+The coarse URLs are hosts the platform's egress already allows. Their
+status does not matter, only the Date header of their own answer: on
+2026-11-09 KMS, `cloudkms` and `sts.googleapis.com` answered 404,
+`sts.{region}.amazonaws.com` 302, `management.azure.com` 400, and
+`login.microsoftonline.com` and `www.cloudflare.com` 200, all with a
+Date. Each is
 an entry of the `coarse` list in `trusted-time/ntscatalog/catalog.json`,
 with the roots it may chain to: a cloud's pinned set
 (`platform/cloudroots`: `aws`, `google`, `azure`) and root files of
