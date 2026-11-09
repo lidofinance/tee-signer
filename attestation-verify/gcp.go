@@ -137,6 +137,13 @@ func VerifyConfidentialSpace(token string, o ConfidentialSpaceOptions) (*Confide
 	if sb, ok := c.boolean("secboot"); !ok || !sb {
 		return nil, fmt.Errorf("%w: secboot is not true", ErrClaim)
 	}
+	// An operator override changes the command, arguments or environment
+	// of the measured image. Absent, null or empty only.
+	for _, name := range []string{"env_override", "cmd_override", "args_override"} {
+		if v, ok := c.path("submods.container." + name); ok && !emptyClaim(v) {
+			return nil, fmt.Errorf("%w: submods.container.%s is set", ErrClaim, name)
+		}
+	}
 	want := o.SupportAttributes
 	if want == nil && !o.AllowDebug {
 		want = []string{csDefaultSupport}
@@ -164,4 +171,17 @@ func VerifyConfidentialSpace(token string, o ConfidentialSpaceOptions) (*Confide
 		}
 	}
 	return t, nil
+}
+
+// emptyClaim reports whether a claim value is null, {} or [].
+func emptyClaim(v any) bool {
+	switch v := v.(type) {
+	case nil:
+		return true
+	case map[string]any:
+		return len(v) == 0
+	case []any:
+		return len(v) == 0
+	}
+	return false
 }

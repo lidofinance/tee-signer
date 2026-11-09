@@ -208,6 +208,9 @@ and the
   the configured list), `submods.container.image_digest` in the allowed
   list, every expected nonce in `eat_nonce` (string or array), optional
   `hwmodel` and service account.
+- `submods.container.env_override`, `cmd_override` and `args_override`
+  absent or empty: an operator override changes what the measured image
+  runs.
 
 Azure (`VerifyMAA`), claims from
 [Microsoft: claim sets](https://learn.microsoft.com/en-us/azure/attestation/claim-sets),
@@ -250,7 +253,7 @@ end-to-end test.
 | Nitro document parsing, chain to the real AWS root, ES384 signature | yes: 5 public sample documents (2 normal, 3 debug mode) verify against the pinned root at their own timestamps | yes: same format from a local P-384 test CA |
 | Nitro refusals | on the real documents: flipped signature bit, flipped PCR1 bit, today's date (leaf expired), local CA as root, stale timestamp, wrong nonce, wrong PCR0, debug mode | also: wrong root, chain that names the root but does not reach it, expired leaf, wrong/missing PCR, stale and future timestamps, wrong user data, missing nonce, debug mode, ES256 header, missing PCR8, 32-byte PCR, duplicate CBOR key, trailing bytes, tagged form |
 | GCP key set | Google's real key set (`testdata/jwks/`) parses; a locally signed token under a real Google kid fails with `ErrSignature` | yes |
-| GCP token claims | no real token (none found in a public repository with a usable license) | layout from Google's claims reference; good token and tampered signature, tampered payload, wrong key, unknown kid, alg none/HS256/PS256, wrong issuer, wrong audience, expired, not yet valid, old iat, wrong digest, stale nonce, debug image, missing dbgstat, no STABLE, swname GCE, secboot false, hwmodel, service account, duplicate JSON member |
+| GCP token claims | no real token (none found in a public repository with a usable license) | layout from Google's claims reference; good token and tampered signature, tampered payload, wrong key, unknown kid, alg none/HS256/PS256, wrong issuer, wrong audience, expired, not yet valid, old iat, wrong digest, stale nonce, debug image, missing dbgstat, no STABLE, swname GCE, secboot false, env/cmd/args override, hwmodel, service account, duplicate JSON member |
 | MAA key set | the shared West Europe provider's real set (`testdata/jwks/`, 4 keys) parses, `n`/`e` match `x5c`; a locally signed token under a real kid fails with `ErrSignature` | yes |
 | MAA token claims | no real token | layouts from Microsoft's SEV-SNP sample and SKR examples: ACI with our rendered SKR template, CVM guest attestation with SKR example 2 (VM id), HCL shape; refusals: tampered signature and payload, other provider's key, wrong issuer, expired, debuggable (top level and nested, also caught by the policy), missing is-debuggable, CVM token where ACI expected, wrong host data, stale runtime data, VMPL 2, non-SNP type, wrong VM id, policy for another authority, unsupported policy operators |
 | identity adapter | no | Nitro, GCP and Azure identities bound like the runner does; replay with another nonce, changed HPKE key, STS audience, unconfigured platform refused |

@@ -1220,8 +1220,9 @@ the client's nonce.
 The `gcp-cs` verifier checks, in `attest.VerifyConfidentialSpace`: the RS256
 signature against the issuer's key set (or a pinned set), the issuer, the
 configured audience (never the STS audience), `swname`, `secboot`, `dbgstat`,
-STABLE support, the hardware model, the image digest, optionally the service
-account, and `eat_nonce`, which carries the hex of `user_data`.
+STABLE support, no env, cmd or args override, the hardware model, the image
+digest, optionally the service account, and `eat_nonce`, which carries the hex
+of `user_data`.
 
 On AWS the runner listens on vsock inside the enclave. The parent instance
 forwards traffic into the enclave and is not trusted, so the vsock listener
