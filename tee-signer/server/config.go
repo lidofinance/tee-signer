@@ -785,6 +785,11 @@ func (u *Updates) Accept(ctx context.Context, raw []byte) (uint8, backend.SetupS
 	if b.Group == setupwire.GroupOpen && v.open == nil {
 		return 0, none, backend.Refused(backend.StatusStorage, "config update: the open values in force are unknown, so the fork rule has nothing to check against: %v", v.missing)
 	}
+	if v.missing != nil {
+		// As Sync: a view built without a body may have dropped a pending
+		// update, and a record written on it would drop that update too.
+		return 0, none, backend.Refused(backend.StatusStorage, "config update: the values in force are unknown, so no record is written: %v (send that update again first)", v.missing)
+	}
 	if err := upd.Verify(&v.locked.Approvers); err != nil {
 		return 0, none, backend.Refused(backend.StatusBadRequest, "config update: %v", err)
 	}
