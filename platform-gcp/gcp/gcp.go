@@ -326,18 +326,22 @@ func sealingAAD(setup [32]byte) []byte { return setupwire.CtxGCPSealing.Message(
 // one on the first start, under sealingAAD(setup). A stored blob of another
 // setup or KMS key does not decrypt, and the start stops.
 //
-// The AAD is not secret, so any holder of cryptoKeyVersions.useToEncrypt
-// on the key can wrap a data key it knows under it and plant the blob.
-// platform-gcp/deploy/deploy.sh grants the role (cryptoKeyEncrypterDecrypter)
-// to the WIF principal set alone, but an admin can grant it to itself, and
-// a binding inherited from the project or the organization is invisible
-// to the runner. So the stored blob counts only when the store holds a
-// sealed share (sharePrefix), that is when an earlier start sealed
-// something under it. Otherwise dataKey sets the blob aside and makes a
-// new key in the VM; a new key costs nothing while no share is sealed.
+// platform-gcp/deploy/deploy.sh grants cryptoKeyEncrypterDecrypter on the
+// key to the WIF principal set alone, but an admin can grant itself a role
+// on the key, and a binding inherited from the project or the organization
+// is invisible to the runner. The AADs are not secret. A holder of
+// cryptoKeyVersions.useToDecrypt opens this blob, and the wrapped keys of
+// the state copy, directly and reads every share: GCP is outside the
+// admin-proof goal, and the KMS role must stay with the WIF principal set.
+// What the runner can stop is a holder of useToEncrypt alone (the
+// cryptoKeyEncrypter role or a custom role) planting a key it knows. So
+// the stored blob counts only when the store holds a sealed share
+// (sharePrefix), that is when an earlier start sealed something under it.
+// Otherwise dataKey sets the blob aside and makes a new key in the VM; a
+// new key costs nothing while no share is sealed.
 //
-// Any object under sharePrefix passes that check, and the host writes the
-// store. So stored reports whether the key came from the stored blob: the
+// Any object under sharePrefix passes that check, and whoever plants the
+// blob may plant a share next to it. So stored reports whether the key came from the stored blob: the
 // runner then uses it only once every stored share opens under it, and
 // seals no new share before (platform.Platform.SealingKeyStored).
 func (k *KMS) dataKey(ctx context.Context, store platform.Store, setup [32]byte) (key []byte, stored bool, err error) {
@@ -384,9 +388,10 @@ func (k *KMS) dataKey(ctx context.Context, store platform.Store, setup [32]byte)
 
 // setAside copies a sealing blob that dataKey ignores to
 // sealing/dek.gcpkms.ignored-<first 8 bytes of its SHA-256, hex> before the
-// new key overwrites it. If the shares were only missing from the listing
-// (a partial restore, a late mount), the operator can put the copy back by
-// hand (platform-gcp/deploy/README.md).
+// new key overwrites it. The copy is a trace only: it stays in the
+// runner's store and goes into the state copy with sealing/, and nobody
+// outside the VM can put it back. Each start before the first import
+// leaves one more.
 func setAside(store platform.Store, blob []byte) error {
 	sum := sha256.Sum256(blob)
 	aside := fmt.Sprintf("%s.ignored-%x", dekBlob, sum[:8])

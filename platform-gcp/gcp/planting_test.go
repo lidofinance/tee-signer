@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/lidofinance/tee-signer/platform"
@@ -131,5 +133,62 @@ func TestOwnDataKeyWithOwnSharesAfterUpgrade(t *testing.T) {
 	again, _ := platform.NewGCMSealer(dek)
 	if p, err := again.Unseal(sealed, aad); err != nil || string(p) != "share secret" {
 		t.Fatalf("the own share does not open: %v", err)
+	}
+}
+
+// failStore fails List, or Put of a set-aside copy, as a broken store
+// would.
+type failStore struct {
+	platform.Store
+	listErr, asideErr error
+}
+
+func (f failStore) List(prefix string) ([]string, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return f.Store.List(prefix)
+}
+
+func (f failStore) Put(key string, val []byte) error {
+	if f.asideErr != nil && strings.HasPrefix(key, dekBlob+".ignored-") {
+		return f.asideErr
+	}
+	return f.Store.Put(key, val)
+}
+
+// A store that cannot list its shares, or cannot keep the ignored blob,
+// stops the start: no new sealing key replaces the stored one, which
+// still opens once the store works again.
+func TestDataKeyStoreFailureKeepsBlob(t *testing.T) {
+	k := fakeKMS(t)
+	ctx := context.Background()
+	setup := [32]byte{7}
+	store, _ := filestore.New(t.TempDir())
+	k1, _, err := k.dataKey(ctx, store, setup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, _ := store.Get(dekBlob)
+	for name, c := range map[string]struct {
+		store platform.Store
+		want  string
+	}{
+		"List fails":          {failStore{Store: store, listErr: errors.New("list: store down")}, "store down"},
+		"set-aside Put fails": {failStore{Store: store, asideErr: errors.New("put: disk full")}, "keep the ignored sealing key blob"},
+	} {
+		if dek, _, err := k.dataKey(ctx, c.store, setup); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Fatalf("%s: %x %v, want an error with %q", name, dek, err, c.want)
+		}
+		if b, _ := store.Get(dekBlob); !bytes.Equal(b, original) {
+			t.Fatalf("%s: the stored sealing key blob changed", name)
+		}
+		if names, _ := store.List("sealing/"); len(names) != 1 {
+			t.Fatalf("%s: the store holds %q, want the blob only", name, names)
+		}
+	}
+	store.Put(sharePrefix+"aa01", []byte("sealed share"))
+	if again, _, err := k.dataKey(ctx, store, setup); err != nil || !bytes.Equal(again, k1) {
+		t.Fatalf("after the failures: %v", err)
 	}
 }
