@@ -35,9 +35,15 @@ doc, err := attest.VerifyNitro(raw, attest.NitroOptions{
 // doc.PCR(0..8), doc.UserData, doc.Nonce, doc.PublicKey
 ```
 
-`identity.Config.Verify` has the signature of `remote.VerifyFunc`, so a
-client can pass it where it passes `remote.DevVerifier` today. It fills
-in the per-call binding the runner uses (code in `platform`):
+A client that connects to a runner uses `runnerclient` (next section).
+It checks the setup pin (`setup_sha256`), the GCP `hwmodel` rule and the
+chain the runner's certificate names on top of the platform document.
+
+`identity.Config.Verify` is a lower-level part: it checks the platform
+document and its binding to the identity, and nothing else. It does not
+check the runner's setup, so on its own it accepts the right image run
+with any setup. No code outside the tests uses it. It fills in the
+per-call binding the runner uses (code in `platform`):
 
 - nitro: document `nonce` = client nonce, `user_data` =
   `backend.IdentityUserData(nonce, id)`.

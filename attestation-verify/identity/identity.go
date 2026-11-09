@@ -1,7 +1,10 @@
 // Package identity checks a runner's attested identity
-// (backend.Identity) with the verifiers in package attest. Config.Verify
-// has the signature of remote.VerifyFunc, so a client passes it where it
-// passes remote.DevVerifier today.
+// (backend.Identity) with the verifiers in package attest. It is a
+// lower-level part, not a client verifier: Config.Verify checks the
+// platform document and its binding to the identity only. It does not
+// check the runner's setup (setup_hash) or the chain its certificate
+// names, and the GCP hwmodel rule is whatever Config.GCP sets. A client
+// that connects to a runner uses package runnerclient, which checks those.
 //
 // How each platform binds the identity, from the runner's platform code:
 //
@@ -36,7 +39,8 @@ type Config struct {
 }
 
 // Verify checks id.Attestation for nonce. It repeats the user data check
-// remote.Client does, then verifies the platform document.
+// remote.Client does, then verifies the platform document. It does not
+// check setup pins; see the package comment.
 func (c Config) Verify(_ context.Context, nonce []byte, id *backend.Identity) error {
 	if id == nil || id.Attestation == nil {
 		return errors.New("identity: no attestation")
