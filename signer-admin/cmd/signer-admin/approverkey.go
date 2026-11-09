@@ -22,7 +22,7 @@ func cmdApproverKey(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("approver-key", flag.ContinueOnError)
 	keyURI := fs.String("key", "", "the approver's key: a seed file or openpgp:KEYGRIP (reads the public key only)")
 	pgpPath := fs.String("openpgp", "", "an exported OpenPGP public key, armored or binary (gpg --export FINGERPRINT)")
-	fpr := fs.String("fingerprint", "", "with -openpgp: the fingerprint or key ID (16 hex digits or more) of the Ed25519 key; default: the one Ed25519 signing subkey")
+	fpr := fs.String("fingerprint", "", "with -openpgp: the full fingerprint (40 hex digits) of the Ed25519 key; default: the one Ed25519 signing subkey")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
