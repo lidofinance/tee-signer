@@ -219,10 +219,11 @@ func TestSealingKeyErrorSaysWhatKMSSaid(t *testing.T) {
 	k := testKMS(t, ke.wrap(t, g))
 	store, _ := filestore.New(t.TempDir())
 	ctx := context.Background()
-	if _, err := k.dataKey(ctx, store, [32]byte{1}); err != nil {
+	if _, _, err := k.dataKey(ctx, store, [32]byte{1}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := k.dataKey(ctx, store, [32]byte{2}); err == nil || !strings.Contains(err.Error(), "another setup") {
+	store.Put(sharePrefix+"aa01", []byte("sealed share"))
+	if _, _, err := k.dataKey(ctx, store, [32]byte{2}); err == nil || !strings.Contains(err.Error(), "another setup") {
 		t.Fatalf("another setup: got %v", err)
 	}
 	blob, err := store.Get(dekBlob)
@@ -230,7 +231,7 @@ func TestSealingKeyErrorSaysWhatKMSSaid(t *testing.T) {
 		t.Fatal(err)
 	}
 	ke.fail[b64(blob)] = kmsAnswer{400, gcpError(400, "FAILED_PRECONDITION", "cryptoKeyVersions/1 is not enabled, current state is: DISABLED.")}
-	_, err = k.dataKey(ctx, store, [32]byte{1})
+	_, _, err = k.dataKey(ctx, store, [32]byte{1})
 	if err == nil || strings.Contains(err.Error(), "another setup") || !strings.Contains(err.Error(), "DISABLED") {
 		t.Fatalf("disabled key version: got %v", err)
 	}

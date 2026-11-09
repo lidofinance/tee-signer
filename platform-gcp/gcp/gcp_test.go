@@ -166,11 +166,12 @@ func TestFlowsAgainstFakes(t *testing.T) {
 		STSURL: g.URL, IAMURL: g.URL, KMSURL: g.URL}
 	store, _ := filestore.New(t.TempDir())
 	ctx := context.Background()
-	d1, err := k.dataKey(ctx, store, [32]byte{1})
+	d1, _, err := k.dataKey(ctx, store, [32]byte{1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	d2, err := k.dataKey(ctx, store, [32]byte{1})
+	store.Put(sharePrefix+"aa01", []byte("sealed share"))
+	d2, _, err := k.dataKey(ctx, store, [32]byte{1})
 	if err != nil || !bytes.Equal(d1, d2) || len(d1) != 32 {
 		t.Fatalf("data key not stable: %v", err)
 	}

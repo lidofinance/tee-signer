@@ -61,10 +61,11 @@ func TestAnotherSetupOpensNothing(t *testing.T) {
 	ctx := context.Background()
 	store, _ := filestore.New(t.TempDir())
 	one, other := [32]byte{1}, [32]byte{2}
-	if _, err := k.dataKey(ctx, store, one); err != nil {
+	if _, _, err := k.dataKey(ctx, store, one); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := k.dataKey(ctx, store, other); err == nil || !strings.Contains(err.Error(), "does not decrypt") {
+	store.Put(sharePrefix+"aa01", []byte("sealed share"))
+	if _, _, err := k.dataKey(ctx, store, other); err == nil || !strings.Contains(err.Error(), "does not decrypt") {
 		t.Fatalf("the second setup's start on the first setup's store: %v", err)
 	}
 	_, blob, err := Keys{K: k, Setup: one}.NewKey(ctx, []byte("mark key aad"))
@@ -82,18 +83,20 @@ func TestAnotherSetupOpensNothing(t *testing.T) {
 	if err := store.Put(dekBlob, blob); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := k.dataKey(ctx, store, one); err == nil {
+	if _, _, err := k.dataKey(ctx, store, one); err == nil {
 		t.Fatal("a key of platform.Keys passed for the sealing key")
 	}
 }
 
-// Planting a data key (review A). Only the WIF principal set holds the
-// encrypter role (deploy_test.go checks deploy.sh), so the key admin's
-// encrypt is refused. A blob that a holder of the role made for another
-// setup, or without the AAD as the runner made it before setup_hash, does
-// not decrypt. The AAD is not secret: a principal that holds the role anyway
-// (an admin who grants it to itself, an inherited binding) can make a blob
-// that does. That is the limit review N accepts for GCP.
+// Planting a data key. Only the WIF principal set holds the encrypter role
+// (deploy_test.go checks deploy.sh), so the key admin's encrypt is refused.
+// A blob that a holder of the role made for another setup, or without the
+// AAD as the runner made it before setup_hash, does not decrypt. The AAD
+// is not secret: a principal that holds the role anyway (an admin who
+// grants it to itself, an inherited binding) can make a blob that does.
+// Next to a share the platform takes it but reports it as stored, so the
+// runner needs every stored share to open under it (planting_test.go);
+// without a share it is set aside.
 func TestPlantedDataKey(t *testing.T) {
 	g := fakeGoogle(t)
 	defer g.Close()
@@ -113,15 +116,16 @@ func TestPlantedDataKey(t *testing.T) {
 		}
 		store, _ := filestore.New(t.TempDir())
 		store.Put(dekBlob, blob)
-		if dek, err := k.dataKey(ctx, store, setup); err == nil {
+		store.Put(sharePrefix+"aa01", []byte("sealed share"))
+		if dek, _, err := k.dataKey(ctx, store, setup); err == nil {
 			t.Fatalf("%s: planted key accepted (%x)", name, dek)
 		}
 	}
 	blob, _ := encryptAs(t, g, "federated", known, sealingAAD(setup))
 	store, _ := filestore.New(t.TempDir())
 	store.Put(dekBlob, blob)
-	if dek, err := k.dataKey(ctx, store, setup); err != nil || !bytes.Equal(dek, known) {
-		t.Fatalf("a holder of the role with the right AAD: %v", err)
+	store.Put(sharePrefix+"aa01", []byte("sealed share"))
+	if dek, stored, err := k.dataKey(ctx, store, setup); err != nil || !bytes.Equal(dek, known) || !stored {
+		t.Fatalf("a holder of the role with the right AAD, next to a share: stored %v, %v", stored, err)
 	}
-	t.Log("a holder of the encrypter role can still plant a data key with the public AAD: GCP stays outside the admin-proof goal (review N)")
 }
