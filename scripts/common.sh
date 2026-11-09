@@ -30,8 +30,8 @@ fuzz_everything() { [ -z "${FUZZ_MODULES+x}" ] || [ "$FUZZ_MODULES" = ALL ]; }
 # supranational/blst, vendored in signer-core/third_party/blst at this pin
 # (signer-core/third_party/blst.sha256 lists its files).
 BLST_REPO="https://github.com/supranational/blst.git"
-BLST_TAG="v0.3.16"
-BLST_COMMIT="e7f90de551e8df682f3cc99067d204d8b90d27ad"
+BLST_TAG="v0.3.17"
+BLST_COMMIT="54e6e55674722fc2797ebb4bbb71b26d881eb4b8"
 BLST_DIR="$THIRD_PARTY/blst"
 
 # aws/aws-nitro-enclaves-cli, pinned tag.
