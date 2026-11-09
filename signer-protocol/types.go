@@ -19,10 +19,12 @@ type (
 
 func hexText(b []byte) ([]byte, error) { return []byte("0x" + hex.EncodeToString(b)), nil }
 
+// parseHex leaves the text out of its errors: a field parsed here can sit in
+// a file next to a secret, and a damaged line can put the secret in it.
 func parseHex(dst []byte, text []byte) error {
 	s := strings.TrimPrefix(string(text), "0x")
 	if len(s) != 2*len(dst) {
-		return fmt.Errorf("want %d hex bytes, got %q", len(dst), text)
+		return fmt.Errorf("want %d hex bytes, got %d characters", len(dst), len(s))
 	}
 	_, err := hex.Decode(dst, []byte(s))
 	return err

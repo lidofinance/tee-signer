@@ -423,7 +423,9 @@ type share struct {
 // must be a regular file of mode 0600 or stricter, like an approver key.
 // The secrets are decoded from the file's bytes straight into the shares,
 // with no string in between, and the shares slice is sized up front: an
-// append that grew it would leave secrets in the old array.
+// append that grew it would leave secrets in the old array. Errors name
+// the line and the field but never show a field: a damaged line can put
+// the secret in any of them.
 func readShares(path string) ([]share, error) {
 	if err := adminapprover.CheckPrivateFile(path); err != nil {
 		return nil, err
@@ -466,7 +468,7 @@ func readShares(path string) ([]share, error) {
 		if string(indexField) != "-" {
 			i, err := strconv.ParseUint(string(indexField), 10, 64)
 			if err != nil {
-				return fail(n, "index: %w", err)
+				return fail(n, "index: want a decimal number or -")
 			}
 			s.index = i
 		}

@@ -387,11 +387,13 @@ func readExpect(path string) ([]cloud.Pubkey, error) {
 	return out, nil
 }
 
+// parseKeyHex leaves s out of its error: readExpect passes it a whole line,
+// and a shares file given by mistake has a secret on each line.
 func parseKeyHex(s string) (cloud.Pubkey, error) {
 	var pk cloud.Pubkey
 	b, err := hex.DecodeString(strings.TrimPrefix(strings.ToLower(s), "0x"))
 	if err != nil || len(b) != len(pk) {
-		return pk, fmt.Errorf("pubkey %q: want 48 bytes of hex", s)
+		return pk, errors.New("pubkey: want 48 bytes of hex")
 	}
 	copy(pk[:], b)
 	return pk, nil
