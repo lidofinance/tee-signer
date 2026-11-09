@@ -410,14 +410,13 @@ the writer is an IAM user whose access key only the enclave can read:
    policy as the data key), so the parent never sees the plaintext.
 
 While the bucket policy stands, the account admins cannot put objects or
-retention under `marks/` and `config/`, and no request adds a delete
-marker (see "Mark log"). They can still mint new access keys or a console
-password for the user and write records with them, have S3 add delete
-markers through a lifecycle expiration rule, and, if they can change the
-bucket policy, lift the deny. They already control the KMS key policy, so
-this adds no new trusted party. SigV4 signing uses the enclave's clock; a
-host that moves it can only make AWS refuse the request (the runner then
-refuses to sign).
+retention under `marks/` and `config/`, and neither a request nor a new
+lifecycle rule adds a delete marker (see "Mark log"). They can still mint
+new access keys or a console password for the user and write records with
+them, and, if they can change the bucket policy, lift the denies. They
+already control the KMS key policy, so this adds no new trusted party.
+SigV4 signing uses the enclave's clock; a host that moves it can only make
+AWS refuse the request (the runner then refuses to sign).
 
 The runner had a second clone guard, a DynamoDB record per node
 (`-record dynamodb:...`). The mark log replaced it and the runner no longer
@@ -443,8 +442,17 @@ is required. The client signs with the enclave-held record credentials
 write records. While the bucket policy stands, no principal but the record
 writer may put objects or retention under `marks/` and `config/`, and no
 principal, the account's admins included, may delete an object or a
-version, so no request adds a delete marker. A lifecycle expiration rule
-still can: S3 runs it, not a principal the policy matches. Compliance mode
+version, so no request adds a delete marker. S3 runs a lifecycle rule
+whatever the bucket policy says, and an expiration rule adds delete
+markers, so the policy also denies `s3:PutLifecycleConfiguration` (setting
+or deleting rules, transitions to archive classes included) to every
+principal. Before applying this policy, on a new or an existing
+deployment, check that the bucket has no lifecycle rule (`aws s3api
+get-bucket-lifecycle-configuration` returns `NoSuchLifecycleConfiguration`);
+after it, removing one takes a policy change. A lifecycle rule, such as
+cleanup of old versions after the lock ends, takes a policy change that
+drops NoLifecycleRules. That raises the PutBucketPolicy alert, and the
+runner's checks still catch a marker it lets through. Compliance mode
 keeps everyone from deleting or overwriting a locked version. An admin who
 can change the bucket policy can lift these denies, and one who mints an
 access key or a console password for the record writer user writes as it
