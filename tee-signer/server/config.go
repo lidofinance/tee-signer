@@ -804,11 +804,12 @@ func (u *Updates) Accept(ctx context.Context, raw []byte) (uint8, backend.SetupS
 			if v.open == nil {
 				return 0, none, backend.Refused(backend.StatusStorage, "config update: the open values in force are unknown, so the pending fork has nothing to be checked against: %v", v.missing)
 			}
-			if v.newestRef == (updateRef{p.Version, p.Hash}) {
-				if err := signer.CheckSchedule(scheduleOf(v.open), v.newestAt, st); err != nil {
-					return 0, none, refusedAs(err, fmt.Sprintf("config update: the fork rule under the new slot times of locked version %d refuses the pending open version %d in force at %d",
-						b.Version, p.Version, v.newestAt))
-				}
+			if v.newestRef != (updateRef{p.Version, p.Hash}) {
+				return 0, none, backend.Refused(backend.StatusStorage, "config update: the pending open version %d has no readable body, so the fork rule cannot check it under the new slot times; send that update again first", p.Version)
+			}
+			if err := signer.CheckSchedule(scheduleOf(v.open), v.newestAt, st); err != nil {
+				return 0, none, refusedAs(err, fmt.Sprintf("config update: the fork rule under the new slot times of locked version %d refuses the pending open version %d in force at %d",
+					b.Version, p.Version, v.newestAt))
 			}
 		}
 	case setupwire.GroupOpen:

@@ -1387,3 +1387,34 @@ func TestConfigUpdateStoredZeroDelayAgain(t *testing.T) {
 		})
 	}
 }
+
+// A fork update pending with no readable body, then a slot time change: the
+// change is refused, since the fork rule has nothing to check it against.
+// With the body sent again the runner keeps signing.
+func TestConfigUpdateSlotTimesPendingForkUnreadable(t *testing.T) {
+	e := newEnv(t, u64(3600))
+	t0 := e.now()
+	ob := e.body(open, 1, e.groupHash(open), t0+7200)
+	ob.Open.ForkSchedule = append(ob.Open.ForkSchedule, setupwire.Fork{Epoch: 1160, Version: v6})
+	raw := signed(t, ob, first2, nil)
+	e.mustSend(raw, wireadmin.ConfigAccepted)
+	e.signer.Close()
+	if err := os.Remove(filepath.Join(e.dir, "marks", markstore.BodyName(e.hash, open, 1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	e.start()
+	lb := e.body(locked, 1, e.groupHash(locked), t0)
+	lb.Locked.SlotTimeChanges = []setupwire.SlotTimeChange{{Epoch: 1079, SecondsPerSlot: 1}}
+	_, _, err := e.send(signed(t, lb, first2, nil))
+	wantCode(t, err, backend.StatusStorage, "pending open version 1 has no readable body")
+	if e.log.State().Locked.Pending != nil {
+		t.Fatal("refused, but pending")
+	}
+	e.mustSend(raw, wireadmin.ConfigKnown)
+	if err := e.register(e.setup.Locked.AllowedFeeRecipients[0]); err != nil {
+		t.Fatalf("with the body back: %v", err)
+	}
+	if cfg := e.signer.Config(); cfg.ForkVersionAt(1160) != v6 {
+		t.Fatal("the pending fork is not in the core")
+	}
+}
