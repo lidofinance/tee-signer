@@ -190,6 +190,41 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   checks certificates at. Without such certificates, setting the system
   clock moves neither. HTTPS-date is no longer a signing clock, but it
   is still the coarse check, so this residual stays.
+- Shift schedule (`clock.NTS.Shifts` or `ScheduleSeed`, `ntsshift.go`; off
+  by default, and the runner does not turn it on yet). It asks public
+  servers less often and keeps the quorum alive when operators fail:
+  - Time is counted in ticks of 4 s since the start round. The start round
+    asks every operator once, after a random wait under 10 s.
+  - 5 operators are active, each asked on its own slot of a 60 s grid
+    (slots 12 s apart, the phase from the seed). No operator is asked
+    twice within 60 s; a RATE doubles that operator's gap up to 1024 s.
+    Without a seed every operator is active.
+  - Every 15 minutes the window of actives moves one place along an order
+    drawn from the seed. The outgoing leaves on time; its last sample stays
+    until it ages out. An incoming that does not answer is not replaced.
+  - A lost answer of an active gets one fallback at once to a random
+    operator not asked in 60 s, at most 120 per hour. With fewer than 3
+    fresh samples, every operator not asked in 60 s is asked (a burst).
+  - NTP queries time out after 1 s; the NTP host is resolved once at
+    NTS-KE (default dialer only). NTS-KE keeps 5 s.
+  - `MaxAge` is 90 s. Each tick ends within 10 s, as a refresh without
+    shifts does, so a sample joins a quorum while it is at most 76 s old
+    (90 s minus the 4 s tick and the 10 s) and stays under 90 s until the
+    next quorum. On a counter the host can set, the fast-counter lead is
+    up to 90 s instead of 60 s; the 106 s case above does not depend on
+    it, and the restart floor's 384 s epoch covers both.
+  - The quorum is the majority rule over the fresh samples, so 5 actives
+    give a time with 2 of them wrong or missing.
+  - Consecutive quorums share most members, so a jump of the local
+    counter first shows as outvoted samples. In the simulation a 2 s jump
+    was served for 24 to 32 s before the drift check refused it, inside
+    the lead the age limit allows anyway.
+  - `NTSSummary` adds the active operators, per-operator counts (queries,
+    answers, losses, fallbacks, bursts, RATE answers, handovers, failed
+    handovers, fallbacks that needed NTS-KE first) and the fallbacks the
+    cap refused. Fallbacks to an operator that often need NTS-KE mean its
+    cookies expire while it idles; an operator can idle for about (catalog
+    size - 5) x 15 minutes.
 - `tee-signer/platforms_nts.go`: `-nts-clock` (or `RUNNER_NTS_CLOCK=1`) gives a
   tagged runner the NTS clock, with `-nts-coarse-urls`, `-nts-wait` and
   `-nts-max-bound` (or their variables; a set flag wins). The runner

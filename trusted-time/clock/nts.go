@@ -150,8 +150,9 @@ type NTS struct {
 	// Off: every server is asked every Interval.
 	Shifts bool
 	// ScheduleSeed is the seed of the shift schedule from the start, and
-	// turns Shifts on. SetScheduleSeed sets it later. In production it
-	// would be HMAC(released key, "nts-schedule").
+	// turns Shifts on. SetScheduleSeed sets it later. It should be fixed
+	// per signer and unknown to the host, so the host cannot plan which
+	// operators are active when.
 	ScheduleSeed []byte
 
 	minPoll time.Duration // 0: NTSMinPoll; tests set it lower
@@ -266,9 +267,9 @@ func (n *NTS) maxBound() time.Duration { return cmpOr(n.MaxBound, NTSMaxBound) }
 func (n *NTS) shiftMode() bool         { return n.Shifts || n.ScheduleSeed != nil }
 
 // SetScheduleSeed switches the shift schedule from every operator to
-// NTSShiftActives in the order seed gives. The runner would call it once
-// the key is released, with HMAC(released key, "nts-schedule"). Contacts
-// made so far keep their minimum gap. No effect without Shifts.
+// NTSShiftActives in the order seed gives, for a clock that starts before
+// its seed is known. Contacts made so far keep their minimum gap. No effect
+// without Shifts.
 func (n *NTS) SetScheduleSeed(seed []byte) {
 	n.init()
 	if n.shifts != nil {
@@ -504,7 +505,11 @@ func (n *NTS) askAll(ctx context.Context, coarse time.Time, asks []ntsAsk, at in
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			ke := p.stats.KEOK + p.stats.KEFail
 			ok := p.disabled == "" && n.waitGap(ctx, p, at) && n.poll(ctx, p, coarse, at)
+			if a.role == roleFallback && p.stats.KEOK+p.stats.KEFail != ke {
+				n.shifts.fallbackKE(a.op)
+			}
 			var kiss *nts.KissError
 			rate := !ok && errors.As(p.lastErr, &kiss) && kiss.Code == "RATE"
 			n.shifts.result(a, ok, rate)
@@ -957,7 +962,7 @@ func (n *NTS) NTSSummary() NTSSummary {
 		for i, p := range n.peers {
 			names[i] = p.srv.Operator
 		}
-		s.Actives, s.Operators = n.shifts.snapshot(names)
+		s.Actives, s.Operators, s.FallbacksCapped = n.shifts.snapshot(names)
 	}
 	return s
 }

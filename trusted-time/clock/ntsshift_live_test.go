@@ -18,9 +18,9 @@ import (
 	"github.com/lidofinance/tee-signer/trusted-time/nts"
 )
 
-// TestNTSShiftLive runs the shift schedule against the public catalog of
-// the #185 shortlist for NTS_SHIFT_LIVE (a duration, for example 15m). It
-// needs the network. Spike only:
+// TestNTSShiftLive runs the shift schedule against public NTS servers,
+// the catalog's and candidates for it, for NTS_SHIFT_LIVE (a duration, for
+// example 15m). It needs the network, and it is a test only:
 //   - the coarse clock is the host clock, as in TestNTSInteropPublicServers;
 //   - operators whose roots trusted-time/nts does not pin (BEV, FER, Meta,
 //     Paris Observatory) use the system roots of the machine;

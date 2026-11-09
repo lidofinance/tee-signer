@@ -9,9 +9,8 @@ import (
 	"time"
 )
 
-// Spike for issue #185 (research/nts-shift-spike.md): operator shifts.
-// The NTS clock runs this schedule when NTS.Shifts or NTS.ScheduleSeed is
-// set.
+// Operator shifts (#185). The NTS clock runs this schedule when NTS.Shifts
+// or NTS.ScheduleSeed is set; trusted-time/docs/nts.md has the design.
 //
 //   - Time is in ticks of Interval / 4 (4 s) since the start round: at
 //     least one tick per Refresh, more when calls are further apart (the
@@ -27,7 +26,8 @@ import (
 //     order takes its slot. An incoming that does not answer stays (it is
 //     not replaced) and counts as a failed handover.
 //   - A lost answer of an active is followed at once by one query to a
-//     random non-active operator not asked within its minimum gap.
+//     random non-active operator not asked within its minimum gap, up to
+//     NTSShiftFallbackCap per hour.
 //   - With fewer than NTSShiftBurstBelow fresh samples after the tick's
 //     queries, every operator past its minimum gap is asked.
 //   - Each operator's minimum gap is NTSShiftMinGap; a Kiss-o'-Death RATE
@@ -42,6 +42,11 @@ const (
 	NTSShiftQueryTimeout = time.Second
 	NTSShiftStartDelay   = 10 * time.Second
 	NTSShiftBurstBelow   = 3
+	// NTSShiftFallbackCap caps the fallbacks per hour. A host that drops
+	// answers of actives can force fallbacks; past the cap a lost answer
+	// waits for the operator's next slot. In a simulation, 30 % loss
+	// everywhere needed about 65 per hour.
+	NTSShiftFallbackCap = 120
 	// ntsShiftMaxGap caps the gap a RATE raises an operator to (NTSMaxPoll).
 	ntsShiftMaxGap = 1024 * time.Second
 )
@@ -70,6 +75,7 @@ type ntsShifts struct {
 	gap        int // base ticks between two contacts with one operator
 	maxGap     int // the most a RATE raises an operator's gap to
 	shiftLen   int // ticks per shift
+	hour       int // ticks per hour, the window of NTSShiftFallbackCap
 	order      []int
 	phase      int // tick of slot 0 on the grid, 0 to gap-1
 	shift0     int // ticks added before dividing into shifts
@@ -86,13 +92,16 @@ type ntsShifts struct {
 	gaps     []int  // minimum gap per operator, in ticks
 	incoming []bool // came in at a handover, no answer since
 	counts   []NTSOperatorCounts
+	// fallbackAt holds the ticks of the fallbacks of the last hour; capped
+	// counts the fallbacks the cap refused.
+	fallbackAt []int
+	capped     int64
 }
 
 // newNTSShifts: n operators, a tick of tick. seed nil: a random seed for
 // the phase and the start delay, and every operator active until
-// reseed. In production the seed would be HMAC(released key,
-// "nts-schedule"): fixed per signer, not visible to the host before the key
-// release, the same after a restart.
+// reseed. The seed should be fixed per signer, the same after a restart,
+// and unknown to the host (the runner derives it from the released key).
 func newNTSShifts(n int, seed []byte, tick time.Duration) *ntsShifts {
 	ceilTicks := func(d time.Duration) int { return int((d + tick - 1) / tick) }
 	s := &ntsShifts{
@@ -100,6 +109,7 @@ func newNTSShifts(n int, seed []byte, tick time.Duration) *ntsShifts {
 		gap:      ceilTicks(NTSShiftMinGap),
 		maxGap:   ceilTicks(ntsShiftMaxGap),
 		shiftLen: ceilTicks(NTSShiftLength),
+		hour:     ceilTicks(time.Hour),
 		last:     make([]int, n),
 		gaps:     make([]int, n),
 		incoming: make([]bool, n),
@@ -265,10 +275,20 @@ func (s *ntsShifts) result(a ntsAsk, ok, rate bool) {
 }
 
 // fallback picks a random non-active operator past its gap, for a contact
-// after ticks after the start of this tick (at least 1).
+// after ticks after the start of this tick (at least 1). None once
+// NTSShiftFallbackCap fallbacks went out in the last hour.
 func (s *ntsShifts) fallback(after int) (int, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	i := 0
+	for i < len(s.fallbackAt) && s.q-s.fallbackAt[i] >= s.hour {
+		i++
+	}
+	s.fallbackAt = s.fallbackAt[i:]
+	if len(s.fallbackAt) >= NTSShiftFallbackCap {
+		s.capped++
+		return 0, false
+	}
 	var cand []int
 	for op := range s.last {
 		if !slices.Contains(s.slots, op) && s.eligible(op) {
@@ -281,7 +301,15 @@ func (s *ntsShifts) fallback(after int) (int, bool) {
 	op := cand[s.rnd.IntN(len(cand))]
 	s.mark(op, s.q+after)
 	s.counts[op].Fallbacks++
+	s.fallbackAt = append(s.fallbackAt, s.q)
 	return op, true
+}
+
+// fallbackKE counts a fallback to op that had to run NTS-KE first.
+func (s *ntsShifts) fallbackKE(op int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.counts[op].FallbackKE++
 }
 
 // burst returns every operator past its gap, for a contact after ticks
@@ -300,8 +328,9 @@ func (s *ntsShifts) burst(after int) []ntsAsk {
 	return out
 }
 
-// snapshot returns the active operators and the counts by operator name.
-func (s *ntsShifts) snapshot(names []string) ([]string, map[string]NTSOperatorCounts) {
+// snapshot returns the active operators, the counts by operator name and
+// the fallbacks the cap refused.
+func (s *ntsShifts) snapshot(names []string) ([]string, map[string]NTSOperatorCounts, int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	act := make([]string, len(s.slots))
@@ -312,5 +341,5 @@ func (s *ntsShifts) snapshot(names []string) ([]string, map[string]NTSOperatorCo
 	for op, c := range s.counts {
 		m[names[op]] = c
 	}
-	return act, m
+	return act, m, s.capped
 }

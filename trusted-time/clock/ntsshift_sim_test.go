@@ -106,6 +106,9 @@ type shiftScenario struct {
 	blipAt  time.Duration
 	blipLen time.Duration
 	ntsOnly bool
+	// At jumpAt the local counter steps ahead by jump (a host that sets
+	// it): real time minus local time drops by jump.
+	jumpAt, jump time.Duration
 }
 
 type shiftResult struct {
@@ -123,6 +126,11 @@ type shiftResult struct {
 	// start samples age out (joinAge) before every active reaches its first
 	// slot, which can be up to 2 x NTSShiftMinGap after the start round.
 	startBursts int64
+	// maxLead is the most the served time led real time beyond its bound;
+	// leadFor the seconds it led beyond its bound.
+	maxLead time.Duration
+	leadFor time.Duration
+	rho     int64 // drift refusals
 }
 
 const shiftStartWindow = 2*NTSShiftMinGap + testTick
@@ -172,6 +180,9 @@ func runShiftScenario(t testing.TB, sc shiftScenario) shiftResult {
 	for sec := time.Duration(0); sec < sc.dur; sec += time.Second {
 		w.mu.Lock()
 		w.now = max(w.now, int64(shiftBase+sec))
+		if sc.jump != 0 && sec == sc.jumpAt {
+			w.off -= int64(sc.jump)
+		}
 		tick := sec%testTick == 0
 		if tick {
 			w.tickAt = w.now
@@ -183,7 +194,16 @@ func runShiftScenario(t testing.TB, sc shiftScenario) shiftResult {
 		if sec == shiftStartWindow {
 			res.startBursts = sumBursts(n)
 		}
-		_, err := n.Now()
+		got, bound, err := n.Bounded()
+		if err == nil {
+			w.mu.Lock()
+			real := time.Unix(0, w.now+w.off)
+			w.mu.Unlock()
+			if lead := got.Sub(real) - bound; lead > 0 {
+				res.maxLead = max(res.maxLead, lead)
+				res.leadFor += time.Second
+			}
+		}
 		if err == nil && res.firstQuorumAfter == 0 {
 			res.firstQuorumAfter = sec + time.Nanosecond // 0 means none yet
 			res.firstQuorumMember = len(n.NTSSummary().Members)
@@ -215,6 +235,7 @@ func runShiftScenario(t testing.TB, sc shiftScenario) shiftResult {
 		}
 	}
 	res.queriesPerHour = float64(total) / hours
+	res.rho = n.NTSSummary().RhoViolations
 	for _, c := range n.NTSSummary().Operators {
 		res.counts.Queries += c.Queries
 		res.counts.Answers += c.Answers
@@ -334,9 +355,8 @@ func TestNTSShiftMinGapPropertyLocalTime(t *testing.T) {
 	}
 }
 
-// The scenario table for research/nts-shift-spike.md (10 seeds of 6 h,
-// blip 6 seeds). Long: run with
-// NTS_SHIFT_SIM=1.
+// The scenario table: blocked share, gaps and load per scenario (10 seeds
+// of 6 h, blip 6 seeds). Long: run with NTS_SHIFT_SIM=1.
 func TestNTSShiftScenarioTable(t *testing.T) {
 	if os.Getenv("NTS_SHIFT_SIM") == "" {
 		t.Skip("NTS_SHIFT_SIM not set")
@@ -400,4 +420,24 @@ func TestNTSShiftScenarioTable(t *testing.T) {
 			reviewScenarios(time.Hour, 0)[idx].name, mean, pcts[20], pcts[39], longest, qh)
 	}
 	t.Log("\n" + out.String())
+}
+
+// The host steps the local counter 2 s ahead. Under the shift schedule the
+// quorum in force shares most members with the next one, so the jump first
+// shows as outvoted samples; the drift check refuses once a majority of
+// samples is new. Until then the time can lead real time by the jump, at
+// most for the sample age limit: the lead budget NTSShiftMaxAge already
+// grants a host that runs the counter fast.
+func TestNTSShiftCounterJump(t *testing.T) {
+	for seed := uint64(1); seed <= 5; seed++ {
+		sc := shiftScenario{name: "jump", catalog: 8, dur: 30 * time.Minute, seed: seed, jumpAt: 20 * time.Minute, jump: 2 * time.Second}
+		r := runShiftScenario(t, sc)
+		t.Logf("seed %d: drift refusals %d, led beyond the bound for %v, by up to %v, blocked %v", seed, r.rho, r.leadFor, r.maxLead, r.blocked)
+		if r.rho == 0 {
+			t.Errorf("seed %d: the drift check never refused the jump", seed)
+		}
+		if r.maxLead > sc.jump || r.leadFor > NTSShiftMaxAge {
+			t.Errorf("seed %d: led by %v for %v", seed, r.maxLead, r.leadFor)
+		}
+	}
 }

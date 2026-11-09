@@ -352,3 +352,29 @@ func TestShiftsNoSeedAndTicksFollowTime(t *testing.T) {
 		t.Fatalf("first slot after the start at %v", time.Duration(first))
 	}
 }
+
+// At most NTSShiftFallbackCap fallbacks per hour; the window slides.
+func TestShiftsFallbackCap(t *testing.T) {
+	s := newNTSShifts(8, []byte("cap"), testTick)
+	s.started = true
+	got := 0
+	for q := 0; q < s.hour; q++ {
+		s.q = q
+		for {
+			if _, ok := s.fallback(1); !ok {
+				break
+			}
+			got++
+		}
+	}
+	if got != NTSShiftFallbackCap || s.capped == 0 {
+		t.Fatalf("%d fallbacks in an hour, %d capped", got, s.capped)
+	}
+	s.q = 3 * s.hour
+	if _, ok := s.fallback(1); !ok {
+		t.Fatal("no fallback an hour after the cap")
+	}
+	if _, _, capped := s.snapshot(make([]string, 8)); capped != s.capped {
+		t.Fatalf("snapshot capped %d", capped)
+	}
+}
