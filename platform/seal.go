@@ -3,10 +3,21 @@ package platform
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"io"
 )
+
+// ScheduleSeed is HMAC-SHA256(key, "tee-signer nts-schedule v1"): the
+// NTS schedule seed of a sealing key (Platform.NTSScheduleSeed). The label
+// keeps it apart from every other use of the key.
+func ScheduleSeed(key []byte) []byte {
+	m := hmac.New(sha256.New, key)
+	m.Write([]byte("tee-signer nts-schedule v1"))
+	return m.Sum(nil)
+}
 
 // GCMSealer seals with AES-256-GCM: blob = nonce(12) || ciphertext||tag.
 // Callers supply the sealing key; key release belongs to the platform backend.

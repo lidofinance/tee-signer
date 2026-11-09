@@ -46,6 +46,22 @@ func TestHealthNTS(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v, want %+v", got, want)
 	}
+	// One entry per server, a server that never answered included, with
+	// the shift counts of its operator.
+	got = healthNTS(clock.NTSSummary{FallbacksCapped: 2,
+		Peers: []clock.NTSPeerHealth{
+			{Operator: "a", Host: "a.test", Active: true, Queries: 10, Answers: 9, Losses: 1, KEOK: 1, LastAnswerAge: 1500 * time.Millisecond},
+			{Operator: "b", Host: "b.test", Queries: 3, Losses: 3, KEFail: 2, LastAnswerAge: -1, Off: "DENY", LastError: "kiss DENY"},
+		},
+		Operators: map[string]clock.NTSOperatorCounts{"a": {Fallbacks: 4, Handovers: 1, FallbackKE: 1}},
+	})
+	wantOps := []backend.ClockNTSOperator{
+		{Operator: "a", Host: "a.test", Active: true, Queries: 10, Answers: 9, Losses: 1, KEOK: 1, LastAnswerAgeMS: 1500, Fallbacks: 4, Handovers: 1, FallbackKE: 1},
+		{Operator: "b", Host: "b.test", Queries: 3, Losses: 3, KEFail: 2, LastAnswerAgeMS: -1, Off: "DENY", LastError: "kiss DENY"},
+	}
+	if !reflect.DeepEqual(got.Operators, wantOps) || got.FallbacksCapped != 2 {
+		t.Fatalf("operators %+v, capped %d", got.Operators, got.FallbacksCapped)
+	}
 	// A refused clock says why.
 	why := "samples of the last quorum 1m1s old, over 1m0s (no fresh quorum)"
 	if got := healthNTS(clock.NTSSummary{Refused: why}); got.Quorum || got.Refused != why {

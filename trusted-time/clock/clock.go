@@ -59,6 +59,25 @@ type NTSSummary struct {
 	Actives         []string
 	Operators       map[string]NTSOperatorCounts
 	FallbacksCapped int64
+	// Peers has one entry per server the clock dials, in Servers order,
+	// including servers that never answered.
+	Peers []NTSPeerHealth
+}
+
+// NTSPeerHealth is one server in NTSSummary. Queries counts NTP queries,
+// Answers those that gave a sample, Losses the rest (timeouts, errors,
+// Kiss-o'-Death). KEOK and KEFail count NTS-KE sessions. LastAnswerAge is
+// the time since the last answer, -1 for none yet. Off is the Kiss-o'-Death
+// code (DENY, RSTR) that stopped the server for now. Active: the shift
+// schedule asks it on a slot now; always true without shifts.
+type NTSPeerHealth struct {
+	Operator, Host           string
+	Active                   bool
+	Queries, Answers, Losses int64
+	KEOK, KEFail             int64
+	LastAnswerAge            time.Duration
+	Off                      string
+	LastError                string
 }
 
 // NTSOperatorCounts counts the contacts with one operator under the shift

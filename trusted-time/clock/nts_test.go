@@ -123,6 +123,28 @@ func TestNTSClockOneServerWrong(t *testing.T) {
 	}
 }
 
+// NTSSummary lists every server, one that never answered included, without
+// waiting for a Refresh.
+func TestNTSClockSummaryPeers(t *testing.T) {
+	fs := newServers(t, map[string]ntstest.NTPOptions{"d": {Kiss: "DENY"}}, "a", "b", "c", "d")
+	n := newNTS(fs, &coarseClock{})
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	ps := n.NTSSummary().Peers
+	if len(ps) != 4 {
+		t.Fatalf("peers %+v", ps)
+	}
+	for _, p := range ps[:3] {
+		if !p.Active || p.Queries != 1 || p.Answers != 1 || p.KEOK != 1 || p.LastAnswerAge < 0 || p.Off != "" || p.LastError != "" {
+			t.Fatalf("answering peer %+v", p)
+		}
+	}
+	if d := ps[3]; d.Operator != "d" || d.Answers != 0 || d.Losses != 1 || d.LastAnswerAge != -1 || d.Off != "DENY" || d.LastError == "" {
+		t.Fatalf("denied peer %+v", d)
+	}
+}
+
 func TestNTSClockTwoWrongGiveNoTime(t *testing.T) {
 	fs := newServers(t, map[string]ntstest.NTPOptions{"b": {Offset: 5 * time.Second}, "c": {Offset: 10 * time.Second}}, "a", "b", "c")
 	n := newNTS(fs, &coarseClock{})

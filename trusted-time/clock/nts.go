@@ -11,6 +11,7 @@ import (
 	"maps"
 	"math/rand/v2"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -247,6 +248,31 @@ type ntsPeer struct {
 	// contacted is the local time of the last contact under the shift
 	// schedule, 0 for none.
 	contacted int64
+	// health is what NTSSummary reports of this server. Unlike the fields
+	// above it is under n.mu, so HEALTH does not wait for a Refresh.
+	health ntsPeerHealth
+}
+
+type ntsPeerHealth struct {
+	queries, answers, losses int64
+	keOK, keFail             int64
+	lastAnswer               int64 // local ns of the last answer, 0 for none
+	off, lastErr             string
+}
+
+// noteHealth updates p's health under n.mu.
+func (n *NTS) noteHealth(p *ntsPeer, f func(h *ntsPeerHealth)) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	f(&p.health)
+}
+
+// reEnablePeer clears a server's DENY or RSTR stop once its time is up.
+func (n *NTS) reEnablePeer(p *ntsPeer, now int64) {
+	if p.disabled != "" && now >= p.reEnable {
+		p.disabled = ""
+		n.noteHealth(p, func(h *ntsPeerHealth) { h.off = "" })
+	}
 }
 
 // NTSPeerStats counts what happened with one server.
@@ -425,9 +451,7 @@ func (n *NTS) Refresh(ctx context.Context) error {
 	var wg sync.WaitGroup
 	now := coarseLocal
 	for _, p := range n.peers {
-		if p.disabled != "" && now >= p.reEnable {
-			p.disabled = ""
-		}
+		n.reEnablePeer(p, now)
 		if p.disabled != "" || now < p.nextPoll {
 			continue
 		}
@@ -514,9 +538,7 @@ func (n *NTS) askAll(ctx context.Context, coarse time.Time, asks []ntsAsk, at in
 	var lost []ntsAsk
 	for _, a := range asks {
 		p := n.peers[a.op]
-		if p.disabled != "" && at >= p.reEnable {
-			p.disabled = ""
-		}
+		n.reEnablePeer(p, at)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -639,6 +661,7 @@ func (n *NTS) keyExchange(ctx context.Context, p *ntsPeer) bool {
 		if err != nil {
 			p.stats.KEFail++
 			p.lastErr = err
+			n.noteHealth(p, func(h *ntsPeerHealth) { h.keFail++; h.lastErr = err.Error() })
 			if n.served.Load() {
 				p.keWait = min(max(2*p.keWait, n.interval()), n.maxPollD())
 			} else {
@@ -651,6 +674,7 @@ func (n *NTS) keyExchange(ctx context.Context, p *ntsPeer) bool {
 			return false
 		}
 		p.stats.KEOK++
+		n.noteHealth(p, func(h *ntsPeerHealth) { h.keOK++ })
 		p.stats.LastKE = r.Elapsed
 		p.stats.CookiesAfterKE = r.Assoc.Cookies()
 		p.keWait = 0
@@ -720,6 +744,19 @@ func (n *NTS) record(p *ntsPeer, s nts.Sample, err error) bool {
 		p.stats.LastDelay, p.stats.LastBound = s.Delay, s.Bound
 		p.stats.LastOffsetFromHost = time.Duration(s.Offset + nts.Monotonic() - time.Now().UnixNano())
 	}
+	now, off := n.local(), p.disabled
+	n.noteHealth(p, func(h *ntsPeerHealth) {
+		h.queries++
+		h.off = off
+		if err != nil {
+			h.losses++
+			h.lastErr = err.Error()
+			return
+		}
+		h.answers++
+		h.lastAnswer = now
+		h.lastErr = ""
+	})
 	return err == nil
 }
 
@@ -983,6 +1020,17 @@ func (n *NTS) NTSSummary() NTSSummary {
 			names[i] = p.srv.Operator
 		}
 		s.Actives, s.Operators, s.FallbacksCapped = n.shifts.snapshot(names)
+	}
+	s.Peers = make([]NTSPeerHealth, len(n.peers))
+	for i, p := range n.peers {
+		h := p.health
+		ph := NTSPeerHealth{Operator: p.srv.Operator, Host: p.srv.Host, Queries: h.queries, Answers: h.answers, Losses: h.losses,
+			KEOK: h.keOK, KEFail: h.keFail, LastAnswerAge: -1, Off: h.off, LastError: h.lastErr,
+			Active: n.shifts == nil || slices.Contains(s.Actives, p.srv.Operator)}
+		if h.lastAnswer != 0 {
+			ph.LastAnswerAge = time.Duration(now - h.lastAnswer)
+		}
+		s.Peers[i] = ph
 	}
 	return s
 }

@@ -191,8 +191,11 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   clock moves neither. HTTPS-date is no longer a signing clock, but it
   is still the coarse check, so this residual stays.
 - Shift schedule (`clock.NTS.Shifts` or `ScheduleSeed`, `ntsshift.go`; off
-  by default, and the runner does not turn it on yet). It asks public
-  servers less often and keeps the quorum alive when operators fail:
+  by default). The runner turns it on when its image dials 8 servers or
+  more (5 actives and 3 for fallbacks), seeded with an HMAC of the sealing
+  key (`platform.ScheduleSeed`), which the host does not know. With the 4
+  servers of today's catalog it stays off. It asks public servers less
+  often and keeps the quorum alive when operators fail:
   - Time is counted in ticks of 4 s since the start round. The start round
     asks every operator once, after a random wait under 10 s.
   - 5 operators are active, each asked on its own slot of a 60 s grid

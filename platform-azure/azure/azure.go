@@ -296,5 +296,6 @@ func New(o platform.Options) (*platform.Platform, error) {
 	if p.Sealer, err = platform.NewGCMSealer(dek); err != nil {
 		return nil, err
 	}
+	p.NTSScheduleSeed = platform.ScheduleSeed(dek)
 	return p, nil
 }

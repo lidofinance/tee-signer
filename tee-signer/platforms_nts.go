@@ -116,7 +116,7 @@ func withNTSClock(f platformFunc) platformFunc {
 		if p.Dial != nil {
 			dial = p.Dial
 		}
-		n, err := startNTSClock(context.Background(), p.HTTPClient, dial, o.Param("region", ""), log)
+		n, err := startNTSClock(context.Background(), p.HTTPClient, dial, o.Param("region", ""), p.NTSScheduleSeed, log)
 		if err != nil {
 			// main never gets this platform, so it cannot report the
 			// error to the host (Nitro: the enclave has no console).
@@ -240,10 +240,26 @@ func publicNTSServers() ([]clock.NTSServer, error) {
 // subtracts two such values, so the epoch does not matter.
 func rawLocal() time.Time { return time.Unix(0, nts.Monotonic()) }
 
+// ntsShiftMinServers is the fewest servers the shift schedule runs on:
+// clock.NTSShiftActives actives and 3 others for fallbacks and bursts.
+// With fewer, a lost answer has nowhere to go within the 60 s rule, and
+// the clock polls every server every Interval as before.
+const ntsShiftMinServers = clock.NTSShiftActives + 3
+
+// ntsSchedule turns the shift schedule on, with seed, when n has
+// ntsShiftMinServers servers or more.
+func ntsSchedule(n *clock.NTS, seed []byte) {
+	if len(n.Servers) >= ntsShiftMinServers {
+		n.Shifts, n.ScheduleSeed = true, seed
+	}
+}
+
 // startNTSClock takes the first coarse reading and the first quorum (up to
 // -nts-wait), then keeps both running and logs a status line. No quorum in
-// the wait is an error: the runner does not start without the clock.
-func startNTSClock(ctx context.Context, client *http.Client, dial nts.DialFunc, region string, log *slog.Logger) (*clock.NTS, error) {
+// the wait is an error: the runner does not start without the clock. With
+// ntsShiftMinServers servers or more the clock runs the shift schedule,
+// with seed (platform.Platform.NTSScheduleSeed; nil: a random one).
+func startNTSClock(ctx context.Context, client *http.Client, dial nts.DialFunc, region string, seed []byte, log *slog.Logger) (*clock.NTS, error) {
 	wait, err := ntsDuration(*ntsWaitFlag, "RUNNER_NTS_WAIT", 90*time.Second)
 	if err != nil {
 		return nil, err
@@ -256,7 +272,8 @@ func startNTSClock(ctx context.Context, client *http.Client, dial nts.DialFunc, 
 	if err != nil {
 		return nil, err
 	}
-	log.Info("nts: clock starting", "library", nts.Version(), "servers", n.Source(), "max_bound", n.MaxBound, "wait", wait)
+	ntsSchedule(n, seed)
+	log.Info("nts: clock starting", "library", nts.Version(), "servers", n.Source(), "shifts", n.Shifts, "max_bound", n.MaxBound, "wait", wait)
 	deadline := time.Now().Add(wait)
 	for {
 		rctx, cancel := context.WithTimeout(ctx, 15*time.Second)

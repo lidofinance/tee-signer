@@ -197,6 +197,47 @@ type ClockNTS struct {
 	// quorum (0 to 1000 ms with honest sources: the coarse time is whole
 	// seconds).
 	CoarseDiffMS float64 `json:"coarse_diff_ms"`
+	// Operators has one entry per NTS server the clock dials, in the
+	// clock's order, including servers that never answered, so a dead
+	// server shows before it costs refusals. Missing from older runners.
+	Operators []ClockNTSOperator `json:"operators,omitempty"`
+	// FallbacksCapped counts the fallbacks the shift schedule's hourly cap
+	// refused.
+	FallbacksCapped int64 `json:"fallbacks_capped,omitempty"`
+}
+
+// ClockNTSOperator is one NTS server in ClockNTS. Counts are since the
+// runner started.
+type ClockNTSOperator struct {
+	Operator string `json:"operator"`
+	Host     string `json:"host"`
+	// Active: the shift schedule asks it on a slot now. Always true
+	// without the shift schedule, which asks every server.
+	Active bool `json:"active"`
+	// Queries counts NTP queries, Answers those that gave a sample, Losses
+	// the rest (timeouts, errors, Kiss-o'-Death).
+	Queries int64 `json:"queries"`
+	Answers int64 `json:"answers"`
+	Losses  int64 `json:"losses"`
+	// KEOK and KEFail count NTS-KE sessions.
+	KEOK   int64 `json:"ke_ok"`
+	KEFail int64 `json:"ke_fail"`
+	// LastAnswerAgeMS is the time since the last answer, -1 for none yet.
+	LastAnswerAgeMS float64 `json:"last_answer_age_ms"`
+	// Off is the Kiss-o'-Death code (DENY, RSTR) that stopped the server
+	// for now; LastError the last failure, empty after an answer.
+	Off       string `json:"off,omitempty"`
+	LastError string `json:"last_error,omitempty"`
+	// Shift schedule only: contacts made as a fallback or in a recovery
+	// burst, RATE answers, shifts it came in at and those where it then
+	// did not answer, and fallbacks that ran NTS-KE first (cookies that
+	// expired while it was idle).
+	Fallbacks       int64 `json:"fallbacks,omitempty"`
+	Bursts          int64 `json:"bursts,omitempty"`
+	Rates           int64 `json:"rates,omitempty"`
+	Handovers       int64 `json:"handovers,omitempty"`
+	FailedHandovers int64 `json:"failed_handovers,omitempty"`
+	FallbackKE      int64 `json:"fallback_ke,omitempty"`
 }
 
 // SignerStats are the counters of the signer core (sc_signer_stats).

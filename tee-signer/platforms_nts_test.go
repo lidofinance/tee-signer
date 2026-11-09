@@ -142,7 +142,7 @@ func TestNTSClockStartFailsWithoutQuorum(t *testing.T) {
 	t.Setenv("RUNNER_NTS_COARSE_URLS", "https://127.0.0.1:1/,https://127.0.0.1:2/,https://127.0.0.1:3/")
 	t.Setenv("RUNNER_NTS_WAIT", "1s")
 	start := time.Now()
-	n, err := startNTSClock(context.Background(), &http.Client{Timeout: time.Second}, nil, "", slog.New(slog.DiscardHandler))
+	n, err := startNTSClock(context.Background(), &http.Client{Timeout: time.Second}, nil, "", nil, slog.New(slog.DiscardHandler))
 	if err == nil || !strings.Contains(err.Error(), "no quorum") {
 		t.Fatalf("started without a quorum: %v %v", n, err)
 	}
@@ -191,5 +191,18 @@ func TestNTSMaxBoundCap(t *testing.T) {
 	t.Setenv("RUNNER_NTS_MAX_BOUND", "24h")
 	if _, _, err := newNTSClock(nil, nil, "", nil); err == nil || !strings.Contains(err.Error(), "RUNNER_NTS_MAX_BOUND") {
 		t.Fatalf("RUNNER_NTS_MAX_BOUND=24h: %v", err)
+	}
+}
+
+// The shift schedule needs actives plus 3 others; with fewer servers (the
+// 4 of today's catalog) the clock keeps polling every server.
+func TestNTSScheduleNeedsEnoughServers(t *testing.T) {
+	seed := []byte("seed")
+	for n, want := range map[int]bool{4: false, ntsShiftMinServers - 1: false, ntsShiftMinServers: true, 12: true} {
+		c := &clock.NTS{Servers: make([]clock.NTSServer, n)}
+		ntsSchedule(c, seed)
+		if c.Shifts != want || (want && string(c.ScheduleSeed) != "seed") || (!want && c.ScheduleSeed != nil) {
+			t.Errorf("%d servers: shifts %v, seed %q", n, c.Shifts, c.ScheduleSeed)
+		}
 	}
 }

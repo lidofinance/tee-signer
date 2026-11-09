@@ -166,6 +166,13 @@ type Platform struct {
 	// platform does not set it (Azure derives the key inside the TEE; GCP
 	// and dev have no lock to plant before).
 	SealingKeyStored bool
+	// NTSScheduleSeed seeds the NTS clock's shift schedule
+	// (trusted-time/clock NTS.ScheduleSeed): ScheduleSeed of the sealing
+	// key, so it is fixed per signer, the same after a restart, and unknown
+	// to the host, which then cannot plan which time servers are active
+	// when. Whoever knows the sealing key knows it (see SealingKeyStored);
+	// it only orders the schedule. nil: the clock draws a random one (dev).
+	NTSScheduleSeed []byte
 }
 
 // KeyRule is the rule of the key that releases the sealing key, as the
