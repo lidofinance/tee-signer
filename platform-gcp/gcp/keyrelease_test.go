@@ -96,7 +96,9 @@ func TestAnotherSetupOpensNothing(t *testing.T) {
 // grants it to itself, an inherited binding) can make a blob that does.
 // Next to a share the platform takes it but reports it as stored, so the
 // runner needs every stored share to open under it (planting_test.go);
-// without a share it is set aside.
+// without a share it is set aside. That stops a holder of encrypt alone.
+// A holder of decrypt needs no planted key, it opens the stored one: GCP
+// stays outside the admin-proof goal.
 func TestPlantedDataKey(t *testing.T) {
 	g := fakeGoogle(t)
 	defer g.Close()

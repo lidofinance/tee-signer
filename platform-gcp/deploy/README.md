@@ -76,33 +76,39 @@ CHAIN=<chain> CHAIN_JSON=chain.json SETUP_FILE=signer-3.bin CONFIRM=yes platform
   length-prefixed, `governance/setupwire` contexts). A runner started with
   another setup does not decrypt this signer's data key (it stops) and opens
   none of its keys.
-- Who can plant a data key: whoever may encrypt with the key. `deploy.sh`
-  grants `cryptoKeyEncrypterDecrypter` on the key to the WIF principal set
-  alone, whose provider pins the image; the service account gets no KMS
-  role (`platform-gcp/gcp/deploy_test.go` checks the script). The AAD is
-  not secret, so a principal that holds the role anyway (an admin who
-  grants it to itself, a binding inherited from the project or the
-  organization) can still wrap a key it knows and leave the blob at
-  `sealing/dek.gcpkms`. The runner cannot see such bindings.
-- The runner uses a stored `sealing/dek.gcpkms` only when the store also
+- Who can use the key: `deploy.sh` grants `cryptoKeyEncrypterDecrypter`
+  on it to the WIF principal set alone, whose provider pins the image; the
+  service account gets no KMS role (`platform-gcp/gcp/deploy_test.go`
+  checks the script). A principal that holds a role on the key anyway (an
+  admin who grants it to itself, a binding inherited from the project or
+  the organization) is invisible to the runner, and the AADs are not
+  secret. With decrypt it opens `sealing/dek.gcpkms`, from the state copy
+  too, and reads every share; it needs no planted key. GCP is outside the
+  admin-proof goal: keep the KMS role with the WIF principal set, and
+  check the key's IAM policy and the inherited bindings before the first
+  start.
+- What the runner stops is a holder of encrypt alone
+  (`roles/cloudkms.cryptoKeyEncrypter` or a custom role) planting a key it
+  knows. It uses a stored `sealing/dek.gcpkms` only when the store also
   lists an object under `shares/`. On a store without one it copies the
   blob to `sealing/dek.gcpkms.ignored-<hash>` (the first 8 bytes of its
-  SHA-256), logs a warning and makes a new key in the VM. So the first
-  start always seals under a key of its own. If shares were only missing
-  at such a start (a partial restore), put the copy back as
-  `sealing/dek.gcpkms` with the shares and start again.
+  SHA-256), logs a warning and makes a new key in the VM, so the first
+  start seals under a key of its own. The copy is a trace only: it stays
+  in the runner's store, goes into the state copy, and cannot be put back
+  from outside. Each restart before the first import leaves one more.
 - A key from a stored blob is unproven: before the runner loads a share
   or seals a new one, every share listed at that start must unseal under
-  it (`server.ProveSealingKey`, the same check as on AWS,
-  `platform-aws/deploy/README.md`). Otherwise the start stops and names
-  the shares that did not open. A planted blob next to junk under
-  `shares/` fails this; a runner's own blob and shares pass, so signers
-  already in service keep their key on upgrade.
-- The check has the AWS limit: a holder of the role knows its planted key
-  and can seal a share under it (the share's AAD is public), and can wrap
-  a mark log key too. Keep the role on the key to the WIF principal set,
-  and check the key's IAM policy and the inherited bindings before the
-  first start.
+  it (`server.ProveSealingKey`, the same check as on AWS). Otherwise the
+  start stops and names the shares that did not open. A planted blob next
+  to junk under `shares/` fails this; a runner's own blob and shares
+  pass, so signers already in service keep their key on upgrade.
+- As on AWS, any object under `shares/` that does not open under the
+  current sealing key and the mark log's log_id (a leftover from an
+  earlier mark log, a foreign object) now stops the start, where before it
+  was logged and skipped. The store is the container's file system and
+  the state copy is encrypted and restored as a whole commit, so nobody
+  can remove such an object. The way out is a new setup, or
+  `-state-create` on an empty store, and a new import of the shares.
 - `CHAIN` picks the runner build of `build-image.sh` (the mainnet runner
   when unset); the chain config is checked, not put into the image. The
   script refuses `CLIENT_CA`, and `render_dockerfile` refuses `STATE_STORE`

@@ -253,8 +253,8 @@ func (s *Server) LoadShares() (int, error) {
 // this signer that does not open for another reason: one left from an
 // earlier life of the mark log (sealed under an older log_id) or restored
 // from another signer by mistake. LoadListedShares would log and skip it;
-// here it stops the start, the error names it, and the operator removes
-// it from shares/ before the restart. On success SealingKeyUnproven is
+// here it stops the start, the error names it, and the error says what
+// the operator can do on this platform (proveFix). On success SealingKeyUnproven is
 // cleared. Call it before Serve, and only when the image check lets the
 // shares load.
 //
@@ -294,13 +294,24 @@ func (s *Server) ProveSealingKey(keys []string) error {
 	}
 	if len(bad) > 0 {
 		return fmt.Errorf("the stored sealing key opens %d of %d stored shares; %s did not open. "+
-			"A sealing key that does not open every stored share may be one that someone outside the TEE planted "+
-			"(AWS-KMS-02: the key admin before the key policy was locked; GCP: a holder of the encrypter role on the KMS key), "+
-			"so this runner seals nothing under it. Remove what does not belong under shares/ on the host, or, if no share opens, "+
-			"move the sealing blob aside too, and restart", len(keys)-len(bad), len(keys), strings.Join(bad, ", "))
+			"A sealing key that does not open every stored share may be one that someone outside the TEE planted, "+
+			"so this runner seals nothing under it. %s", len(keys)-len(bad), len(keys), strings.Join(bad, ", "), proveFix(s.Platform.Name))
 	}
 	s.SealingKeyUnproven = false
 	return nil
+}
+
+// proveFix says what the operator can do after ProveSealingKey refused.
+func proveFix(platformName string) string {
+	if platformName == "gcp" {
+		// The store is the container's file system and the state copy is
+		// encrypted and restored as a whole commit: nobody outside the VM
+		// can edit either.
+		return "The store and its state copy cannot be edited from outside the VM: " +
+			"start over with a new setup, or with -state-create on an empty store, and import the shares again"
+	}
+	return "Remove what does not belong under shares/ on the host, or, if no share opens, " +
+		"move the sealing blob aside too, and restart"
 }
 
 // SetStateCopyFailed records the result of a state copy refresh: an error

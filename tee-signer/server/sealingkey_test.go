@@ -100,3 +100,24 @@ func TestOwnSharesProveTheSealingKey(t *testing.T) {
 		t.Fatal("an empty list proved the key")
 	}
 }
+
+// The refusal says what the operator can do on each platform. On Nitro
+// the parent holds the store; on GCP the store and its state copy stay
+// inside the VM, so the way out is a new setup or -state-create.
+func TestProveSealingKeyRefusalPerPlatform(t *testing.T) {
+	store := &shareStore{m: map[string][]byte{}}
+	setup, logID := [32]byte{0xa}, [32]byte{1}
+	store.Put("shares/"+strings.Repeat("aa", 48), []byte("anything"))
+	listed, _ := ListShares(store)
+	for name, c := range map[string]struct{ want, not string }{
+		"nitro": {"under shares/ on the host", "-state-create"},
+		"gcp":   {"-state-create", "on the host"},
+	} {
+		s := withSealer(t, shareServer(t, store, setup, logID), 0x42)
+		s.Platform.Name = name
+		err := s.ProveSealingKey(listed)
+		if err == nil || !strings.Contains(err.Error(), c.want) || strings.Contains(err.Error(), c.not) {
+			t.Errorf("%s: %v, want %q and not %q", name, err, c.want, c.not)
+		}
+	}
+}
