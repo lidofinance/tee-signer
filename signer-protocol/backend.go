@@ -219,10 +219,12 @@ type ClockNTSCoarse struct {
 	Failures int64  `json:"failures"`
 	// LastAnswerAgeMS is the time since the last answer, -1 for none yet.
 	LastAnswerAgeMS float64 `json:"last_answer_age_ms"`
-	// LastDiffMS is its last reading minus the coarse quorum's answer of
-	// that round, in whole seconds as Date headers are.
+	// LastDiffMS is its reading minus the coarse quorum's answer, from the
+	// last round that formed a quorum, in whole seconds as Date headers
+	// are. A round without a quorum leaves it as it was.
 	LastDiffMS float64 `json:"last_diff_ms"`
-	LastError  string  `json:"last_error,omitempty"`
+	// LastError is its last failure, empty after an answer.
+	LastError string `json:"last_error,omitempty"`
 }
 
 // ClockNTSOperator is one NTS server in ClockNTS. Counts are since the

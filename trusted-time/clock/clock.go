@@ -124,9 +124,10 @@ type Quorum struct {
 
 // SourceStats counts one source of a Quorum since start. LastAnswerAge is
 // the time since its last answer when the stats were read, -1 for none.
-// LastDiff is its last reading minus the quorum's answer of the same
-// round: a source that lags or leads the others shows here before it
-// costs a quorum.
+// LastDiff is its reading minus the quorum's answer, from the last round
+// that formed a quorum (a round without one leaves it as it was): a source
+// that lags or leads the others shows here before it costs a quorum.
+// LastError is its last failure, empty after an answer.
 type SourceStats struct {
 	Name             string
 	Queries, Answers int64
