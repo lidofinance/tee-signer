@@ -154,7 +154,8 @@ func (s *syncBuffer) String() string {
 // When a reload changes the client CA, an mtls listener retires its open
 // connections: a request in flight completes, its connection closes, and
 // the next request needs a new connection that passes the new check. Over
-// HTTP/1.1 (Connection: close) and HTTP/2 (GOAWAY).
+// HTTP/1.1 (Connection: close) and HTTP/2 (GOAWAY). A request that starts
+// on an open connection after the change is checked against the new CA.
 func TestRetireOnClientCAChange(t *testing.T) {
 	for _, h2 := range []bool{false, true} {
 		t.Run(map[bool]string{false: "http1.1", true: "h2"}[h2], func(t *testing.T) {
@@ -249,6 +250,12 @@ func TestRetireOnClientCAChange(t *testing.T) {
 					t.Fatalf("connections not retired:\n%s", logs)
 				}
 				time.Sleep(10 * time.Millisecond)
+			}
+			// A new request while that one is in flight: over HTTP/2 it is a
+			// new stream on the same connection, which must not pass on the
+			// check the connection passed under the old CA.
+			if resp, err := get(clientA, "/fast"); err == nil && resp.StatusCode == http.StatusOK {
+				t.Fatalf("client of the removed CA, request during the one in flight: %d", resp.StatusCode)
 			}
 			close(release)
 			r := <-inFlight

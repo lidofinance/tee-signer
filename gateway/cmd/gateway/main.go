@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
@@ -13,6 +14,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -183,7 +186,8 @@ func run(cfgPath string, log *slog.Logger) error {
 // plain HTTP for local and unsafe_plain_http. Failed handshakes (a client
 // without an accepted certificate) go to the log as warnings. An mtls
 // listener retires its connections when the client CA changes, until ctx
-// ends.
+// ends, and checks the client of an open connection again at its first
+// request after each change.
 //
 // The write timeout covers the slowest request: its read, a key list load
 // for a key the list lacks, then the signing, each up to signTimeout
@@ -197,6 +201,11 @@ func httpServer(ctx context.Context, access string, st *servertls.Server, h http
 		srv.TLSConfig = st.Config(access == config.AccessMTLS)
 	}
 	if access == config.AccessMTLS {
+		var gen atomic.Uint64
+		srv.Handler = recheck(h, st.VerifyClient, &gen)
+		srv.ConnContext = func(ctx context.Context, _ net.Conn) context.Context {
+			return context.WithValue(ctx, connCheckKey{}, &connCheck{gen: gen.Load()})
+		}
 		go func(changed <-chan struct{}) {
 			var t *time.Timer
 			for {
@@ -204,6 +213,7 @@ func httpServer(ctx context.Context, access string, st *servertls.Server, h http
 				case <-ctx.Done():
 					return
 				case <-changed:
+					gen.Add(1)
 					if t != nil {
 						t.Stop()
 					}
@@ -215,6 +225,45 @@ func httpServer(ctx context.Context, access string, st *servertls.Server, h http
 	}
 
 	return srv
+}
+
+// connCheck is the client check of one mtls connection: the client CA
+// generation it last ran under and its result.
+type connCheck struct {
+	mu  sync.Mutex
+	gen uint64
+	err error
+}
+
+type connCheckKey struct{}
+
+// recheck refuses a request whose connection's client certificate the
+// client check refused when run again after a client CA change. The
+// handshake check covers the generation the connection started under.
+func recheck(h http.Handler, verify func([][]byte) error, gen *atomic.Uint64) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if c, ok := r.Context().Value(connCheckKey{}).(*connCheck); ok && r.TLS != nil {
+			if err := c.check(r.TLS.PeerCertificates, verify, gen.Load()); err != nil {
+				w.Header().Set("Connection", "close")
+				http.Error(w, "client certificate no longer accepted", http.StatusForbidden)
+				return
+			}
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+func (c *connCheck) check(certs []*x509.Certificate, verify func([][]byte) error, gen uint64) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.gen != gen {
+		raw := make([][]byte, len(certs))
+		for i, cert := range certs {
+			raw[i] = cert.Raw
+		}
+		c.gen, c.err = gen, verify(raw)
+	}
+	return c.err
 }
 
 // retire turns keep-alives off for window: idle connections close, and
