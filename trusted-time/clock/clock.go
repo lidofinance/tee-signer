@@ -53,6 +53,23 @@ type NTSSummary struct {
 	DriftBaseline  time.Duration
 	RhoViolations  int64
 	CoarseDiff     time.Duration
+	// With the shift schedule (NTS.Shifts): the active operators
+	// now, and counts per operator since start.
+	Actives   []string
+	Operators map[string]NTSOperatorCounts
+}
+
+// NTSOperatorCounts counts the contacts with one operator under the shift
+// schedule. Queries counts every contact the schedule made (start, active
+// slot, fallback, burst); Fallbacks and Bursts count those made as a
+// fallback or in a recovery burst. Handovers counts the shifts this
+// operator came in at, FailedHandovers those where its first contact after
+// coming in got no answer. Rates counts Kiss-o'-Death RATE answers (also
+// counted as losses).
+type NTSOperatorCounts struct {
+	Queries, Answers, Losses   int64
+	Fallbacks, Bursts, Rates   int64
+	Handovers, FailedHandovers int64
 }
 
 // NTSReporter is a clock that reports an NTSSummary.

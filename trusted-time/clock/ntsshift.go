@@ -1,0 +1,316 @@
+package clock
+
+import (
+	crand "crypto/rand"
+	"crypto/sha256"
+	"math/rand/v2"
+	"slices"
+	"sync"
+	"time"
+)
+
+// Spike for issue #185 (research/nts-shift-spike.md): operator shifts.
+// The NTS clock runs this schedule when NTS.Shifts or NTS.ScheduleSeed is
+// set.
+//
+//   - Time is in ticks of Interval / 4 (4 s) since the start round: at
+//     least one tick per Refresh, more when calls are further apart (the
+//     runner's start loop). The 60 s grid sits on the tick grid and never
+//     slips to the next slot.
+//   - Start: the first tick asks every operator once.
+//   - Without a seed, every operator is active (asked once per 60 s on
+//     its slot). With a seed (SetScheduleSeed, or NTS.ScheduleSeed),
+//     NTSShiftActives operators are active, in a per-signer order, with the
+//     grid phase from the seed; the switch takes effect at the next slot.
+//   - Every NTSShiftLength the window of actives moves one place along the
+//     order: the first active leaves on time, the next operator in the
+//     order takes its slot. An incoming that does not answer stays (it is
+//     not replaced) and counts as a failed handover.
+//   - A lost answer of an active is followed at once by one query to a
+//     random non-active operator not asked within its minimum gap.
+//   - With fewer than NTSShiftBurstBelow fresh samples after the tick's
+//     queries, every operator past its minimum gap is asked.
+//   - Each operator's minimum gap is NTSShiftMinGap; a Kiss-o'-Death RATE
+//     doubles it (up to 1024 s), each answer halves it back.
+//   - No operator is contacted twice within its gap (see mark, and
+//     NTS.waitGap for the strict 60 s in local time).
+const (
+	NTSShiftActives      = 5
+	NTSShiftMinGap       = 60 * time.Second
+	NTSShiftLength       = 15 * time.Minute
+	NTSShiftMaxAge       = 90 * time.Second
+	NTSShiftQueryTimeout = time.Second
+	NTSShiftStartDelay   = 10 * time.Second
+	NTSShiftBurstBelow   = 3
+	// ntsShiftMaxGap caps the gap a RATE raises an operator to (NTSMaxPoll).
+	ntsShiftMaxGap = 1024 * time.Second
+)
+
+type ntsRole uint8
+
+const (
+	roleStart ntsRole = iota
+	roleActive
+	roleFallback
+	roleBurst
+)
+
+type ntsAsk struct {
+	op   int
+	role ntsRole
+}
+
+// never is the last tick of an operator not yet asked.
+const never = -1 << 40
+
+type ntsShifts struct {
+	mu         sync.Mutex
+	tickNs     int64
+	actives    int // active slots
+	gap        int // base ticks between two contacts with one operator
+	maxGap     int // the most a RATE raises an operator's gap to
+	shiftLen   int // ticks per shift
+	order      []int
+	phase      int // tick of slot 0 on the grid, 0 to gap-1
+	shift0     int // ticks added before dividing into shifts
+	startDelay time.Duration
+	rnd        *rand.Rand
+	seeded     bool
+
+	started  bool
+	t0       int64 // local ns of the start round
+	q        int   // the current tick
+	shift    int   // shifts done
+	slots    []int
+	last     []int  // tick of the last contact
+	gaps     []int  // minimum gap per operator, in ticks
+	incoming []bool // came in at a handover, no answer since
+	counts   []NTSOperatorCounts
+}
+
+// newNTSShifts: n operators, a tick of tick. seed nil: a random seed for
+// the phase and the start delay, and every operator active until
+// reseed. In production the seed would be HMAC(released key,
+// "nts-schedule"): fixed per signer, not visible to the host before the key
+// release, the same after a restart.
+func newNTSShifts(n int, seed []byte, tick time.Duration) *ntsShifts {
+	ceilTicks := func(d time.Duration) int { return int((d + tick - 1) / tick) }
+	s := &ntsShifts{
+		tickNs:   int64(tick),
+		gap:      ceilTicks(NTSShiftMinGap),
+		maxGap:   ceilTicks(ntsShiftMaxGap),
+		shiftLen: ceilTicks(NTSShiftLength),
+		last:     make([]int, n),
+		gaps:     make([]int, n),
+		incoming: make([]bool, n),
+		counts:   make([]NTSOperatorCounts, n),
+	}
+	for i := range s.last {
+		s.last[i], s.gaps[i] = never, s.gap
+	}
+	if seed == nil {
+		seed = make([]byte, 32)
+		_, _ = crand.Read(seed)
+		s.setOrder(seed, n)
+	} else {
+		s.setOrder(seed, n)
+		s.seeded = true
+		s.actives = min(NTSShiftActives, n)
+		s.setSlots()
+	}
+	s.startDelay = time.Duration(s.rnd.Int64N(int64(NTSShiftStartDelay) + 1))
+	return s
+}
+
+// setOrder draws the order, the grid phase and the shift phase from seed,
+// with every operator active.
+func (s *ntsShifts) setOrder(seed []byte, n int) {
+	s.rnd = rand.New(rand.NewChaCha8(sha256.Sum256(seed)))
+	s.order = s.rnd.Perm(n)
+	s.phase = s.rnd.IntN(s.gap)
+	s.shift0 = s.rnd.IntN(s.shiftLen)
+	s.actives = n
+	s.setSlots()
+}
+
+// setSlots puts the window of the current shift in the slots.
+func (s *ntsShifts) setSlots() {
+	c := len(s.order)
+	s.shift = (s.q + s.shift0) / s.shiftLen
+	s.slots = make([]int, s.actives)
+	for k := range s.slots {
+		s.slots[k] = s.order[(s.shift+k)%c]
+	}
+}
+
+// reseed switches to shifts with the order and phase from seed. Contacts
+// made so far keep their gaps, so the first slot of the new grid that is
+// at least a gap after an operator's last contact is its next one.
+func (s *ntsShifts) reseed(seed []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.setOrder(seed, len(s.last))
+	s.actives = min(NTSShiftActives, len(s.last))
+	s.setSlots()
+	clear(s.incoming)
+	s.seeded = true
+}
+
+func mod(a, m int) int { return (a%m + m) % m }
+
+// idle moves time on without queries (no coarse time).
+func (s *ntsShifts) idle(now int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tick(now)
+}
+
+// tick moves to the tick of local time now: one more than the last, or
+// the whole ticks since the start round if that is more.
+func (s *ntsShifts) tick(now int64) {
+	if !s.started {
+		return
+	}
+	s.q = max(s.q+1, int((now-s.t0)/s.tickNs))
+	s.handover()
+}
+
+// plan starts a tick at local time now and returns the operators to ask at
+// its start.
+func (s *ntsShifts) plan(now int64) []ntsAsk {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []ntsAsk
+	if !s.started {
+		s.started, s.t0 = true, now
+		for op := range s.last {
+			s.mark(op, s.q)
+			out = append(out, ntsAsk{op, roleStart})
+		}
+		return out
+	}
+	s.tick(now)
+	for k, op := range s.slots {
+		if s.q >= s.due(k, op) {
+			s.mark(op, s.q)
+			out = append(out, ntsAsk{op, roleActive})
+		}
+	}
+	return out
+}
+
+// due is the tick slot k's operator is next asked at: its slot on the grid,
+// at least its gap after its last contact.
+func (s *ntsShifts) due(k, op int) int {
+	if s.last[op] == never {
+		return s.q
+	}
+	g := s.phase + k*s.gap/s.actives
+	from := s.last[op] + s.gaps[op]
+	return from + mod(g-from, s.gap)
+}
+
+// handover moves the window of actives to the current shift, one place per
+// shift. The outgoing leaves now; the incoming takes its slot.
+func (s *ntsShifts) handover() {
+	c := len(s.order)
+	if c <= s.actives {
+		return
+	}
+	for want := (s.q + s.shift0) / s.shiftLen; s.shift < want; s.shift++ {
+		out := s.order[s.shift%c]
+		in := s.order[(s.shift+s.actives)%c]
+		s.slots[slices.Index(s.slots, out)] = in
+		s.incoming[in] = true
+		s.counts[in].Handovers++
+	}
+}
+
+// mark records a contact with op as made at tick at. A contact made after
+// the start of the tick (a fallback or a burst) is marked at a later tick
+// (see after), so the next contact is still a gap after it.
+func (s *ntsShifts) mark(op, at int) {
+	s.last[op] = at
+	s.counts[op].Queries++
+}
+
+func (s *ntsShifts) eligible(op int) bool {
+	return s.last[op] == never || s.q-s.last[op] >= s.gaps[op]
+}
+
+// result records the answer (or not) of a contact. rate: the answer was a
+// Kiss-o'-Death RATE, which doubles the operator's gap; an answer halves it
+// back towards the base.
+func (s *ntsShifts) result(a ntsAsk, ok, rate bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := &s.counts[a.op]
+	switch {
+	case ok:
+		c.Answers++
+		s.gaps[a.op] = max(s.gaps[a.op]/2, s.gap)
+	case rate:
+		c.Losses++
+		c.Rates++
+		s.gaps[a.op] = min(2*s.gaps[a.op], s.maxGap)
+	default:
+		c.Losses++
+	}
+	if s.incoming[a.op] {
+		s.incoming[a.op] = false
+		if !ok {
+			c.FailedHandovers++
+		}
+	}
+}
+
+// fallback picks a random non-active operator past its gap, for a contact
+// after ticks after the start of this tick (at least 1).
+func (s *ntsShifts) fallback(after int) (int, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var cand []int
+	for op := range s.last {
+		if !slices.Contains(s.slots, op) && s.eligible(op) {
+			cand = append(cand, op)
+		}
+	}
+	if len(cand) == 0 {
+		return 0, false
+	}
+	op := cand[s.rnd.IntN(len(cand))]
+	s.mark(op, s.q+after)
+	s.counts[op].Fallbacks++
+	return op, true
+}
+
+// burst returns every operator past its gap, for a contact after ticks
+// after the start of this tick (at least 1).
+func (s *ntsShifts) burst(after int) []ntsAsk {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []ntsAsk
+	for op := range s.last {
+		if s.eligible(op) {
+			s.mark(op, s.q+after)
+			s.counts[op].Bursts++
+			out = append(out, ntsAsk{op, roleBurst})
+		}
+	}
+	return out
+}
+
+// snapshot returns the active operators and the counts by operator name.
+func (s *ntsShifts) snapshot(names []string) ([]string, map[string]NTSOperatorCounts) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	act := make([]string, len(s.slots))
+	for k, op := range s.slots {
+		act[k] = names[op]
+	}
+	m := make(map[string]NTSOperatorCounts, len(names))
+	for op, c := range s.counts {
+		m[names[op]] = c
+	}
+	return act, m
+}

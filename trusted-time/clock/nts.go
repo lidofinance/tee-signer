@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"maps"
 	"math/rand/v2"
+	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -62,6 +63,9 @@ const (
 	ntsDriftBaselinePolls = 64
 	// ntsExchangeTimeout limits one NTS-KE session or one NTP query.
 	ntsExchangeTimeout = 5 * time.Second
+	// ntsRefreshLimit is the longest a Refresh contacts servers: one NTS-KE
+	// and one query, or the deadline of a tick of the shift schedule.
+	ntsRefreshLimit = 2 * ntsExchangeTimeout
 )
 
 // NTSServer is one NTS server and the operator who runs it.
@@ -139,6 +143,16 @@ type NTS struct {
 	// samples use too. A test moves it ahead to age the bound.
 	Local func() int64
 	Log   *slog.Logger // nil: no logs
+	// Shifts turns on the shift schedule (ntsshift.go): Servers is the
+	// catalog, MaxAge defaults to NTSShiftMaxAge and an NTP query times out
+	// after NTSShiftQueryTimeout. Until a seed is set every server is
+	// asked once per NTSShiftMinGap; with one, NTSShiftActives at a time.
+	// Off: every server is asked every Interval.
+	Shifts bool
+	// ScheduleSeed is the seed of the shift schedule from the start, and
+	// turns Shifts on. SetScheduleSeed sets it later. In production it
+	// would be HMAC(released key, "nts-schedule").
+	ScheduleSeed []byte
 
 	minPoll time.Duration // 0: NTSMinPoll; tests set it lower
 	maxPoll time.Duration // 0: NTSMaxPoll; tests set it lower
@@ -149,6 +163,15 @@ type NTS struct {
 	sleep func(d time.Duration)
 	// started is set by the first Refresh, after its start wait. Under rmu.
 	started bool
+
+	shifts *ntsShifts // set by init when ScheduleSeed is set
+	// testQuery, if set, stands in for NTS-KE and the NTP query (tests).
+	// at is the local time the query goes out.
+	testQuery    func(operator string, at int64) (nts.Sample, error)
+	noStartDelay bool // tests: no NTSShiftStartDelay before the first tick
+	// resolveAnyDial: resolve the NTP host at NTS-KE with a Dial set too
+	// (the live test records dials through its own Dial).
+	resolveAnyDial bool
 
 	once   sync.Once
 	rmu    sync.Mutex // one Refresh at a time; Status waits for it
@@ -219,6 +242,9 @@ type ntsPeer struct {
 	reEnable int64
 	lastErr  error
 	stats    NTSPeerStats
+	// contacted is the local time of the last contact under the shift
+	// schedule, 0 for none.
+	contacted int64
 }
 
 // NTSPeerStats counts what happened with one server.
@@ -237,7 +263,33 @@ type NTSPeerStats struct {
 
 func (n *NTS) interval() time.Duration { return cmpOr(n.Interval, NTSInterval) }
 func (n *NTS) maxBound() time.Duration { return cmpOr(n.MaxBound, NTSMaxBound) }
-func (n *NTS) maxAge() time.Duration   { return cmpOr(n.MaxAge, NTSMaxAge) }
+func (n *NTS) shiftMode() bool         { return n.Shifts || n.ScheduleSeed != nil }
+
+// SetScheduleSeed switches the shift schedule from every operator to
+// NTSShiftActives in the order seed gives. The runner would call it once
+// the key is released, with HMAC(released key, "nts-schedule"). Contacts
+// made so far keep their minimum gap. No effect without Shifts.
+func (n *NTS) SetScheduleSeed(seed []byte) {
+	n.init()
+	if n.shifts != nil {
+		n.shifts.reseed(seed)
+	}
+}
+func (n *NTS) maxAge() time.Duration {
+	if n.shiftMode() {
+		return cmpOr(n.MaxAge, NTSShiftMaxAge)
+	}
+	return cmpOr(n.MaxAge, NTSMaxAge)
+}
+
+// sampleMaxAge is the oldest a sample may be to join a quorum, in local ns:
+// joinAge, and without the shift schedule also at most 4 x Interval.
+func (n *NTS) sampleMaxAge() int64 {
+	if n.shiftMode() {
+		return int64(n.joinAge())
+	}
+	return int64(min(4*n.interval(), n.joinAge()))
+}
 func (n *NTS) maxDiff() time.Duration  { return cmpOr(n.MaxCoarseDiff, NTSMaxCoarseDiff) }
 func (n *NTS) minPollD() time.Duration { return cmpOr(n.minPoll, NTSMinPoll) }
 func (n *NTS) maxPollD() time.Duration { return cmpOr(n.maxPoll, NTSMaxPoll) }
@@ -246,11 +298,12 @@ func (n *NTS) baseline() int64         { return int64(ntsDriftBaselinePolls * n.
 // joinAge is the oldest a sample may be to join a quorum: it must stay
 // under MaxAge until the next quorum can replace that quorum, or Now fails
 // in between. Run starts the next Refresh at most a tick (Interval/4) after
-// one ends, and a Refresh takes at most one NTS-KE and one query (the polls
-// run in parallel). 46 s with the defaults. Refresh refuses a MaxAge that
-// leaves it at 0 or below.
+// one ends, and a Refresh takes at most ntsRefreshLimit: one NTS-KE and one
+// query (the polls run in parallel), or under the shift schedule its
+// deadline (refreshShifts). 46 s with the defaults, 76 s under the shift
+// schedule. Refresh refuses a MaxAge that leaves it at 0 or below.
 func (n *NTS) joinAge() time.Duration {
-	return n.maxAge() - n.interval()/4 - 2*ntsExchangeTimeout
+	return n.maxAge() - n.interval()/4 - ntsRefreshLimit
 }
 
 // coarseRefused says whether the NTS time is too far from the coarse
@@ -282,6 +335,9 @@ func (n *NTS) init() {
 	n.once.Do(func() {
 		for _, s := range n.Servers {
 			n.peers = append(n.peers, &ntsPeer{srv: s, poll: max(n.interval(), n.minPollD()), stats: NTSPeerStats{Kisses: map[string]int{}}})
+		}
+		if n.shiftMode() {
+			n.shifts = newNTSShifts(len(n.peers), n.ScheduleSeed, n.interval()/4)
 		}
 	})
 }
@@ -348,6 +404,9 @@ func (n *NTS) Refresh(ctx context.Context) error {
 		n.setErr(err)
 		return err
 	}
+	if n.shifts != nil {
+		return n.refreshShifts(ctx)
+	}
 	if !n.started {
 		n.started = true
 		if err := n.startWait(ctx); err != nil {
@@ -373,11 +432,126 @@ func (n *NTS) Refresh(ctx context.Context) error {
 		wg.Add(1)
 		go func(p *ntsPeer) {
 			defer wg.Done()
-			n.poll(ctx, p, coarse)
+			n.poll(ctx, p, coarse, now)
 		}(p)
 	}
 	wg.Wait()
 	return n.combine(coarse, coarseLocal)
+}
+
+// refreshShifts is one tick of the shift schedule: the queries due, a
+// fallback for each lost answer of an active, a burst if fewer than
+// NTSShiftBurstBelow samples are fresh, then the quorum.
+func (n *NTS) refreshShifts(ctx context.Context) error {
+	if !n.shifts.started && !n.noStartDelay {
+		// Spreads the first contacts of signers that start together.
+		select {
+		case <-time.After(n.shifts.startDelay):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	coarse, err := n.Coarse.Now()
+	coarseLocal := n.local()
+	if err != nil {
+		n.shifts.idle(coarseLocal)
+		err = fmt.Errorf("clock: nts: no coarse time: %w", err)
+		n.setErr(err)
+		return err
+	}
+	// All rounds share one deadline, so the tick ends within
+	// ntsRefreshLimit and the samples that join its quorum (joinAge) are
+	// still under MaxAge when the next quorum forms. A round cut short loses
+	// its late answers; the next tick asks again.
+	ctx, cancel := context.WithTimeout(ctx, ntsRefreshLimit)
+	defer cancel()
+	// Three rounds, each in parallel: the queries due at the start of the
+	// tick, then one fallback per lost active, then the burst. A contact
+	// made after the start of the tick counts at a later tick (after), so
+	// the next contact with that operator is still NTSShiftMinGap after it.
+	tick := int64(n.interval() / 4)
+	after := func(at int64) int { return max(1, int((at-coarseLocal+tick-1)/tick)) }
+	lost := n.askAll(ctx, coarse, n.shifts.plan(coarseLocal), coarseLocal)
+	var fallbacks []ntsAsk
+	at := n.local()
+	for _, a := range lost {
+		if a.role != roleActive {
+			continue
+		}
+		if op, found := n.shifts.fallback(after(at)); found {
+			fallbacks = append(fallbacks, ntsAsk{op, roleFallback})
+		}
+	}
+	n.askAll(ctx, coarse, fallbacks, at)
+	if n.fresh() < NTSShiftBurstBelow {
+		at := n.local()
+		n.askAll(ctx, coarse, n.shifts.burst(after(at)), at)
+	}
+	return n.combine(coarse, coarseLocal)
+}
+
+// askAll polls asks in parallel, sent at local time at, and returns those
+// that got no sample. A server stopped by DENY or RSTR counts as lost.
+func (n *NTS) askAll(ctx context.Context, coarse time.Time, asks []ntsAsk, at int64) []ntsAsk {
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var lost []ntsAsk
+	for _, a := range asks {
+		p := n.peers[a.op]
+		if p.disabled != "" && at >= p.reEnable {
+			p.disabled = ""
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ok := p.disabled == "" && n.waitGap(ctx, p, at) && n.poll(ctx, p, coarse, at)
+			var kiss *nts.KissError
+			rate := !ok && errors.As(p.lastErr, &kiss) && kiss.Code == "RATE"
+			n.shifts.result(a, ok, rate)
+			if !ok {
+				mu.Lock()
+				lost = append(lost, a)
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	return lost
+}
+
+// waitGap keeps contacts with p at least NTSShiftMinGap apart in local
+// time. The schedule keeps them 15 ticks apart, but a tick can come a few
+// ms early against the one before (the live run saw 59.999 s); waitGap
+// waits out such a shortfall. A shortfall over one tick would be a bug of
+// the schedule: no contact then.
+func (n *NTS) waitGap(ctx context.Context, p *ntsPeer, at int64) bool {
+	if p.contacted != 0 {
+		if wait := time.Duration(p.contacted + int64(NTSShiftMinGap) - at); wait > 0 {
+			if wait > n.interval()/4 {
+				n.logf(slog.LevelError, "nts: contact within the minimum gap refused", "operator", p.srv.Operator, "short_by", wait)
+				return false
+			}
+			select {
+			case <-time.After(wait):
+			case <-ctx.Done():
+				return false
+			}
+			at += int64(wait)
+		}
+	}
+	p.contacted = at
+	return true
+}
+
+// fresh counts the samples that would join a quorum now.
+func (n *NTS) fresh() int {
+	now, c := n.local(), 0
+	for _, p := range n.peers {
+		if p.sample != nil && now-p.sample.T4 <= n.sampleMaxAge() && p.sample.T4 > n.refusedT4 {
+			c++
+		}
+	}
+	return c
 }
 
 // certTime is the time NTS-KE checks certificate validity at: the coarse
@@ -393,9 +567,35 @@ func (n *NTS) certTime() time.Time {
 	return t
 }
 
-// poll runs NTS-KE if needed, then one query. Only this peer's fields are
-// written, and Refresh runs one poll per peer at a time.
-func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time) {
+// poll runs NTS-KE if needed, then one query, and says whether a sample
+// came. at is the local time it starts (for testQuery). Only this peer's fields are written, and Refresh runs one poll per
+// peer at a time.
+func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time, at int64) bool {
+	var s nts.Sample
+	var err error
+	if n.testQuery != nil {
+		s, err = n.testQuery(p.srv.Operator, at)
+		p.stats.Queries++
+	} else {
+		if !n.keyExchange(ctx, p) {
+			return false
+		}
+		timeout := ntsExchangeTimeout
+		if n.shifts != nil {
+			timeout = NTSShiftQueryTimeout
+		}
+		qctx, cancel := context.WithTimeout(ctx, timeout)
+		s, err = p.assoc.Query(qctx, p.ntpAddr, coarse, n.Dial)
+		cancel()
+		p.stats.Queries++
+		p.stats.CookiesHeld = p.assoc.Cookies()
+	}
+	return n.record(p, s, err)
+}
+
+// keyExchange runs NTS-KE if p has no cookies left, and says whether p can
+// be queried.
+func (n *NTS) keyExchange(ctx context.Context, p *ntsPeer) bool {
 	now := n.local()
 	if p.assoc == nil || p.assoc.Cookies() == 0 {
 		if p.assoc != nil {
@@ -403,7 +603,7 @@ func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time) {
 			p.assoc = nil
 		}
 		if now < p.nextKE {
-			return
+			return false
 		}
 		kctx, cancel := context.WithTimeout(ctx, ntsExchangeTimeout)
 		r, err := nts.KeyExchange(kctx, nts.KEConfig{
@@ -423,21 +623,43 @@ func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time) {
 			}
 			p.nextKE = now + int64(p.keWait)
 			n.logf(slog.LevelWarn, "nts: key exchange failed", "operator", p.srv.Operator, "host", p.srv.Host, "retry_in", p.keWait, "err", err)
-			return
+			return false
 		}
 		p.stats.KEOK++
 		p.stats.LastKE = r.Elapsed
 		p.stats.CookiesAfterKE = r.Assoc.Cookies()
 		p.keWait = 0
 		p.assoc, p.ntpAddr = r.Assoc, r.NTPAddr
+		if n.shifts != nil && (n.Dial == nil || n.resolveAnyDial) {
+			p.ntpAddr = n.resolve(ctx, p.ntpAddr)
+		}
 		n.logf(slog.LevelInfo, "nts: key exchange", "operator", p.srv.Operator, "host", p.srv.Host, "ntp", r.NTPAddr,
 			"cookies", p.stats.CookiesAfterKE, "took", r.Elapsed.Round(time.Millisecond))
 	}
-	qctx, cancel := context.WithTimeout(ctx, ntsExchangeTimeout)
-	s, err := p.assoc.Query(qctx, p.ntpAddr, coarse, n.Dial)
-	cancel()
-	p.stats.Queries++
-	p.stats.CookiesHeld = p.assoc.Cookies()
+	return true
+}
+
+// resolve looks up the host of addr (host:port) once, at NTS-KE, so the
+// short NTP timeout does not include a DNS lookup. On failure addr stays
+// as it is, and each query looks it up. Only for the default dialer: a
+// platform dialer (the Nitro UDP relay) resolves on its side.
+func (n *NTS) resolve(ctx context.Context, addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || net.ParseIP(host) != nil {
+		return addr
+	}
+	lctx, cancel := context.WithTimeout(ctx, ntsExchangeTimeout)
+	defer cancel()
+	ips, err := net.DefaultResolver.LookupNetIP(lctx, "ip", host)
+	if err != nil || len(ips) == 0 {
+		n.logf(slog.LevelWarn, "nts: no address for the NTP host; each query looks it up", "host", host, "err", err)
+		return addr
+	}
+	return net.JoinHostPort(ips[0].Unmap().String(), port)
+}
+
+// record takes the outcome of one query.
+func (n *NTS) record(p *ntsPeer, s nts.Sample, err error) bool {
 	p.nextPoll = n.local() + int64(p.poll)
 	var kiss *nts.KissError
 	switch {
@@ -455,8 +677,10 @@ func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time) {
 			p.reEnable = n.local() + int64(n.maxPollD())
 			p.sample = nil
 		case "NTSN":
-			p.assoc.Close()
-			p.assoc = nil
+			if p.assoc != nil {
+				p.assoc.Close()
+				p.assoc = nil
+			}
 		}
 		n.logf(slog.LevelWarn, "nts: kiss-o'-death", "operator", p.srv.Operator, "code", kiss.Code, "poll", p.poll)
 	case err != nil:
@@ -471,13 +695,14 @@ func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time) {
 		p.stats.LastDelay, p.stats.LastBound = s.Delay, s.Bound
 		p.stats.LastOffsetFromHost = time.Duration(s.Offset + nts.Monotonic() - time.Now().UnixNano())
 	}
+	return err == nil
 }
 
 // combine forms the quorum of the fresh samples and checks it against the
 // coarse time.
 func (n *NTS) combine(coarse time.Time, coarseLocal int64) error {
 	now := n.local()
-	maxAge := int64(min(4*n.interval(), n.joinAge()))
+	maxAge := n.sampleMaxAge()
 	var in []nts.Interval
 	var errs []error
 	for _, p := range n.peers {
@@ -714,6 +939,7 @@ type NTSPeerStatus struct {
 // in force, its bound is within MaxBound and its samples within MaxAge.
 // Refused says why not.
 func (n *NTS) NTSSummary() NTSSummary {
+	n.init()
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	s := NTSSummary{MaxBound: n.maxBound(), MaxSampleAge: n.maxAge(), Refusals: n.refusals.Load(), DriftPPM: n.drift.ppm,
@@ -725,6 +951,13 @@ func (n *NTS) NTSSummary() NTSSummary {
 		s.Members = append([]string(nil), r.members...)
 		s.AgeOfQuorum = time.Duration(now - r.at)
 		s.OffsetFromHost = time.Duration(now + r.offset - time.Now().UnixNano())
+	}
+	if n.shifts != nil {
+		names := make([]string, len(n.peers))
+		for i, p := range n.peers {
+			names[i] = p.srv.Operator
+		}
+		s.Actives, s.Operators = n.shifts.snapshot(names)
 	}
 	return s
 }
