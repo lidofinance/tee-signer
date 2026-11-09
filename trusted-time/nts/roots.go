@@ -9,6 +9,8 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
+
+	"github.com/lidofinance/tee-signer/trusted-time/ntscatalog"
 )
 
 // The pinned root certificates, one small set per operator. Each server's
@@ -33,7 +35,7 @@ import (
 // The Let's Encrypt operators get both ISRG roots, since Let's Encrypt moves
 // between them. A CA change by an operator outside its set makes NTS-KE to
 // that server fail until the set is updated; the quorum then runs on the
-// other three.
+// others. The catalog (trusted-time/ntscatalog) names each operator's files.
 //
 //go:embed roots/*.pem
 var rootFiles embed.FS
@@ -52,13 +54,16 @@ type Server struct {
 	Roots    []string // files under roots/
 }
 
-// PublicServers are the four NTS operators the runner uses. PTB runs ptbtime1, 2
-// and 3; one of them counts, since the quorum needs distinct operators.
-var PublicServers = []Server{
-	{Host: "time.cloudflare.com", Operator: "cloudflare", Roots: []string{"sslcom-root-ecc.pem"}},
-	{Host: "nts.netnod.se", Operator: "netnod", Roots: []string{"isrg-root-x1.pem", "isrg-root-x2.pem"}},
-	{Host: "ptbtime1.ptb.de", Operator: "ptb", Roots: []string{"isrg-root-x1.pem", "isrg-root-x2.pem"}},
-	{Host: "ntppool1.time.nl", Operator: "time.nl", Roots: []string{"isrg-root-x1.pem", "isrg-root-x2.pem"}},
+// PublicServers are the NTS servers the runner uses: the entries of the
+// built-in catalog that are not withdrawn (trusted-time/ntscatalog).
+var PublicServers = publicServers(ntscatalog.Builtin.Dialed())
+
+func publicServers(in []ntscatalog.NTSServer) []Server {
+	out := make([]Server, 0, len(in))
+	for _, e := range in {
+		out = append(out, Server{Host: e.Host, Operator: e.Operator, Roots: append([]string(nil), e.Roots...)})
+	}
+	return out
 }
 
 // RootPool builds the pool of the named root files, each checked against
