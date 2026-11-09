@@ -25,8 +25,8 @@ const (
 )
 
 // NitroNTSKE are the NTS-KE servers of the NTS clock (trusted-time/ntscatalog,
-// the entries a runner dials) on their fixed ports 8005 to 8008. A test of
-// the nts build (tee-signer) checks hosts and ports against the catalog.
+// the entries a runner dials) on their fixed ports 8005 to 8008. A
+// tee-signer test checks hosts and ports against the catalog.
 var NitroNTSKE = []Route{
 	{Port: 8005, Host: "time.cloudflare.com", HostPort: 4460},
 	{Port: 8006, Host: "nts.netnod.se", HostPort: 4460},

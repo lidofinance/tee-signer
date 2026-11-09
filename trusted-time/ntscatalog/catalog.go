@@ -12,7 +12,6 @@ package ntscatalog
 import (
 	"fmt"
 	"net/netip"
-	"strings"
 )
 
 // Status of a catalog entry.
@@ -90,7 +89,21 @@ func (c *Catalog) Dialed() []NTSServer {
 	return out
 }
 
-// Check is the catalog's own consistency: IDs unique and lower case, one
+// validID: 1 to MaxLabel of a-z, 0-9, '.' and '-'. Setups will list IDs,
+// so an ID holds no separator, space or upper case.
+func validID(id string) bool {
+	if id == "" || len(id) > MaxLabel {
+		return false
+	}
+	for _, c := range []byte(id) {
+		if !('a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '.' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+// Check is the catalog's own consistency: valid unique IDs, one
 // NTS server per operator, a known status, host and roots set, NTP nets
 // that parse, and a distinct Nitro vsock port for every server. A test runs it on Builtin.
 func (c *Catalog) Check() error {
@@ -98,8 +111,8 @@ func (c *Catalog) Check() error {
 	ops := map[string]string{}
 	ports := map[uint32]string{}
 	for _, e := range c.NTS {
-		if e.ID == "" || e.ID != strings.ToLower(e.ID) || len(e.ID) > MaxLabel {
-			return fmt.Errorf("ntscatalog: ID %q: 1 to %d lower-case octets", e.ID, MaxLabel)
+		if !validID(e.ID) {
+			return fmt.Errorf("ntscatalog: ID %q: 1 to %d of a-z, 0-9, '.' and '-'", e.ID, MaxLabel)
 		}
 		if ids[e.ID] {
 			return fmt.Errorf("ntscatalog: ID %q twice", e.ID)

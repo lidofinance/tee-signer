@@ -3,15 +3,12 @@
 package main
 
 import (
-	"net/netip"
 	"slices"
 	"strings"
 	"testing"
 
-	"github.com/lidofinance/tee-signer/platform-aws/udprelay"
 	"github.com/lidofinance/tee-signer/platform/setup"
 	"github.com/lidofinance/tee-signer/trusted-time/nts"
-	"github.com/lidofinance/tee-signer/trusted-time/ntscatalog"
 )
 
 // The Nitro image names its coarse-time hosts with {region}; the runner
@@ -52,33 +49,5 @@ func TestNitroPortMapMatchesTheNTSServers(t *testing.T) {
 	}
 	if !slices.Equal(hosts, want) {
 		t.Fatalf("port map NTS-KE hosts %v, the NTS clock dials %v", hosts, want)
-	}
-}
-
-// The Nitro port map and the parent's UDP relay allowlist follow the
-// catalog: the same port per host, every NTS-KE host, every NTP net.
-func TestNitroRoutingMatchesTheCatalog(t *testing.T) {
-	dialed := ntscatalog.Builtin.Dialed()
-	if len(setup.NitroNTSKE) != len(dialed) {
-		t.Fatalf("port map has %d NTS-KE routes, the catalog dials %d servers", len(setup.NitroNTSKE), len(dialed))
-	}
-	var nets []netip.Prefix
-	for i, e := range dialed {
-		r := setup.NitroNTSKE[i]
-		if r.Host != e.Host || r.Port != e.NitroPort {
-			t.Errorf("route %s:%d, catalog %s %s:%d", r.Host, r.Port, e.ID, e.Host, e.NitroPort)
-		}
-		if !slices.Contains(udprelay.DefaultNames, e.Host) {
-			t.Errorf("udprelay does not allow %s (%s)", e.Host, e.ID)
-		}
-		for _, n := range e.NTPNets {
-			nets = append(nets, netip.MustParsePrefix(n))
-		}
-	}
-	if len(udprelay.DefaultNames) != len(dialed) {
-		t.Errorf("udprelay allows %v, the catalog dials %d servers", udprelay.DefaultNames, len(dialed))
-	}
-	if !slices.Equal(udprelay.DefaultNets, nets) {
-		t.Errorf("udprelay nets %v, catalog %v", udprelay.DefaultNets, nets)
 	}
 }

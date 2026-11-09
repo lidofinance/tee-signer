@@ -28,9 +28,12 @@ func TestCheckRefuses(t *testing.T) {
 		edit func(c *Catalog)
 		want string
 	}{
-		"upper-case ID":   {func(c *Catalog) { c.NTS[0].ID = "A" }, "lower-case"},
-		"empty ID":        {func(c *Catalog) { c.NTS[0].ID = "" }, "lower-case"},
-		"long ID":         {func(c *Catalog) { c.NTS[0].ID = strings.Repeat("a", MaxLabel+1) }, "lower-case"},
+		"upper-case ID":   {func(c *Catalog) { c.NTS[0].ID = "A" }, "a-z, 0-9"},
+		"empty ID":        {func(c *Catalog) { c.NTS[0].ID = "" }, "a-z, 0-9"},
+		"long ID":         {func(c *Catalog) { c.NTS[0].ID = strings.Repeat("a", MaxLabel+1) }, "a-z, 0-9"},
+		"comma in ID":     {func(c *Catalog) { c.NTS[0].ID = "a,b" }, "a-z, 0-9"},
+		"space in ID":     {func(c *Catalog) { c.NTS[0].ID = "time nl" }, "a-z, 0-9"},
+		"non-ASCII ID":    {func(c *Catalog) { c.NTS[0].ID = "zeit-é" }, "a-z, 0-9"},
 		"repeated ID":     {func(c *Catalog) { c.NTS[1].ID = "a" }, "twice"},
 		"no host":         {func(c *Catalog) { c.NTS[0].Host = "" }, "required"},
 		"no roots":        {func(c *Catalog) { c.NTS[0].Roots = nil }, "required"},

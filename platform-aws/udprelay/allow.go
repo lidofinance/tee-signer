@@ -47,8 +47,8 @@ type resolved struct {
 
 // DefaultNames are the NTS-KE hosts of the runner's four operators
 // (trusted-time/ntscatalog); each names itself as its NTP server, except
-// Netnod. A test of the nts build (tee-signer) checks them and DefaultNets
-// against the catalog.
+// Netnod. A tee-signer test checks them and DefaultNets against the
+// catalog.
 var DefaultNames = []string{"time.cloudflare.com", "nts.netnod.se", "ptbtime1.ptb.de", "ntppool1.time.nl"}
 
 // DefaultPorts: NTP, and the port Netnod's NTS-KE negotiates.
