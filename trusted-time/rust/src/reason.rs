@@ -158,13 +158,13 @@ pub fn quorum(e: &QuorumError) -> u32 {
 
 const QUORUM_TEXT: [&CStr; 9] = [
     c"quorum: unknown reason",
-    c"fewer than 3 servers",
+    c"too few servers for the quorum rule",
     c"more than 16 servers",
     c"operator label empty or over 32 octets",
     c"two servers of one operator",
     c"negative error bound",
     c"measurement after the quorum time",
-    c"the servers disagree: more than 1 wrong",
+    c"the servers disagree: too many wrong",
     c"offset out of range",
 ];
 
@@ -229,7 +229,9 @@ mod tests {
         assert_eq!(ke(&KeError::ServerError(1)), (12 << 16) | 1);
         assert_eq!(text(E_NTP, ntp(&NtpError::BadStratum(16))), c"stratum above 15 (value: stratum)");
         assert_eq!(text(E_SAMPLE, sample(&SampleError::BoundTooLarge)), c"error bound over 1 s (MAXDIST)");
-        assert_eq!(text(E_QUORUM, quorum(&QuorumError::NoAgreement)), c"the servers disagree: more than 1 wrong");
+        assert_eq!(text(E_QUORUM, quorum(&QuorumError::NoAgreement)), c"the servers disagree: too many wrong");
+        assert_eq!(text(E_QUORUM, quorum(&QuorumError::NoAgreement)).to_str().unwrap(), QuorumError::NoAgreement.to_string());
+        assert_eq!(text(E_QUORUM, quorum(&QuorumError::TooFew)).to_str().unwrap(), QuorumError::TooFew.to_string());
         // Unknown kinds and codes still give a text.
         assert_eq!(text(E_KE, 99 << 16), c"NTS-KE: unknown reason");
         assert_eq!(text(-99, 0), c"unknown return code");

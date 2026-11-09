@@ -97,15 +97,15 @@ pub struct QuorumOut {
 }
 
 /// The quorum over C intervals: checks the labels and calls the core.
-pub fn quorum(input: &[IntervalIn], now_local_ns: i64) -> Result<QuorumOut, signer_nts_core::quorum::QuorumError> {
-    use signer_nts_core::quorum::{Interval, QuorumError, combine};
+pub fn quorum(input: &[IntervalIn], max_wrong: usize, now_local_ns: i64) -> Result<QuorumOut, signer_nts_core::quorum::QuorumError> {
+    use signer_nts_core::quorum::{Interval, QuorumError, combine_with};
     let mut v = Vec::with_capacity(input.len());
     for i in input {
         let len = usize::try_from(i.operator_len).map_err(|_| QuorumError::BadOperator)?;
         let operator = i.operator_label.get(..len).ok_or(QuorumError::BadOperator)?;
         v.push(Interval { operator, offset_ns: i.offset_ns, bound_ns: i.bound_ns, t4_local_ns: i.t4_local_ns });
     }
-    let r = combine(&v, now_local_ns)?;
+    let r = combine_with(&v, now_local_ns, max_wrong)?;
     Ok(QuorumOut { offset_ns: r.offset_ns, bound_ns: r.bound_ns, lo_ns: r.lo_ns, hi_ns: r.hi_ns })
 }
 
@@ -376,6 +376,7 @@ mod ffi {
     pub unsafe extern "C" fn snts_quorum(
         intervals: *const IntervalIn,
         n: usize,
+        max_wrong: usize,
         now_local_ns: i64,
         out: *mut QuorumOut,
         reason: *mut u32,
@@ -388,7 +389,7 @@ mod ffi {
             return E_QUORUM;
         }
         let input: &[IntervalIn] = if n == 0 { &[] } else { unsafe { std::slice::from_raw_parts(intervals, n) } };
-        match quorum(input, now_local_ns) {
+        match quorum(input, max_wrong, now_local_ns) {
             Ok(q) => {
                 unsafe { out.write(q) };
                 OK

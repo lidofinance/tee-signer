@@ -95,7 +95,7 @@ fn header_matches_the_library() {
         "int snts_ntp_request(snts_assoc *a, const uint8_t *random, size_t random_len, uint8_t *out, size_t cap,\n                     size_t *out_len, snts_request **req);",
         "void snts_request_free(snts_request *r);",
         "int snts_ntp_verify(snts_assoc *a, snts_request *r, const uint8_t *packet, size_t packet_len,\n                    int64_t t1_local_ns, int64_t t4_local_ns, int64_t pivot_unix_ns, snts_sample *out,\n                    uint32_t *reason);",
-        "int snts_quorum(const snts_interval *intervals, size_t n, int64_t now_local_ns, snts_quorum_result *out,\n                uint32_t *reason);",
+        "int snts_quorum(const snts_interval *intervals, size_t n, size_t max_wrong, int64_t now_local_ns,\n                snts_quorum_result *out, uint32_t *reason);",
     ] {
         assert!(h.contains(decl), "header lacks: {decl}");
     }
@@ -382,21 +382,42 @@ fn quorum_through_c() {
     let ivs = [interval("cloudflare", 100 * MS, 10 * MS), interval("netnod", 110 * MS, 15 * MS), interval("ptb", 102 * MS, 2 * MS)];
     let mut q = QuorumOut::default();
     let mut why = 0;
-    assert_eq!(unsafe { snts_quorum(ivs.as_ptr(), 3, 0, &mut q, &mut why) }, OK);
+    assert_eq!(unsafe { snts_quorum(ivs.as_ptr(), 3, 1, 0, &mut q, &mut why) }, OK);
     assert_eq!((q.lo_ns, q.hi_ns, q.offset_ns, q.bound_ns), (95 * MS, 110 * MS, 102_500_000, 7_500_000));
     let dup = [ivs[0], ivs[1], ivs[0]];
-    assert_eq!(unsafe { snts_quorum(dup.as_ptr(), 3, 0, &mut q, &mut why) }, E_QUORUM);
+    assert_eq!(unsafe { snts_quorum(dup.as_ptr(), 3, 1, 0, &mut q, &mut why) }, E_QUORUM);
     assert_eq!(cstr(snts_reason_text(E_QUORUM, why)), "two servers of one operator");
-    assert_eq!(unsafe { snts_quorum(ivs.as_ptr(), 2, 0, &mut q, &mut why) }, E_QUORUM);
+    assert_eq!(unsafe { snts_quorum(ivs.as_ptr(), 2, 1, 0, &mut q, &mut why) }, E_QUORUM);
     assert_eq!(why, 1 << 16);
-    assert_eq!(unsafe { snts_quorum(ivs.as_ptr(), 17, 0, &mut q, &mut why) }, E_QUORUM);
+    assert_eq!(unsafe { snts_quorum(ivs.as_ptr(), 17, 1, 0, &mut q, &mut why) }, E_QUORUM);
     assert_eq!(why, 2 << 16);
     let mut bad = ivs;
     bad[2].operator_len = 33;
-    assert_eq!(unsafe { snts_quorum(bad.as_ptr(), 3, 0, &mut q, &mut why) }, E_QUORUM);
+    assert_eq!(unsafe { snts_quorum(bad.as_ptr(), 3, 1, 0, &mut q, &mut why) }, E_QUORUM);
     assert_eq!(why, 3 << 16);
-    assert_eq!(unsafe { snts_quorum(null(), 3, 0, &mut q, &mut why) }, E_NULL);
-    assert_eq!(unsafe { snts_quorum(ivs.as_ptr(), 3, 0, null_mut(), &mut why) }, E_NULL);
+    assert_eq!(unsafe { snts_quorum(null(), 3, 1, 0, &mut q, &mut why) }, E_NULL);
+    assert_eq!(unsafe { snts_quorum(ivs.as_ptr(), 3, 1, 0, null_mut(), &mut why) }, E_NULL);
+}
+
+#[test]
+fn quorum_through_c_majority() {
+    // Three agree near 100 ms, two are far off and disagree with each other.
+    let ivs = [
+        interval("a", 100 * MS, 5 * MS),
+        interval("b", 101 * MS, 5 * MS),
+        interval("c", 99 * MS, 5 * MS),
+        interval("d", -900 * MS, MS),
+        interval("e", 900 * MS, MS),
+    ];
+    let mut q = QuorumOut::default();
+    let mut why = 0;
+    assert_eq!(unsafe { snts_quorum(ivs.as_ptr(), 5, 1, 0, &mut q, &mut why) }, E_QUORUM);
+    assert_eq!(why, 7 << 16);
+    assert_eq!(unsafe { snts_quorum(ivs.as_ptr(), 5, 2, 0, &mut q, &mut why) }, OK);
+    assert_eq!((q.lo_ns, q.hi_ns), (96 * MS, 104 * MS));
+    // max_wrong 2 needs at least 5 intervals.
+    assert_eq!(unsafe { snts_quorum(ivs.as_ptr(), 4, 2, 0, &mut q, &mut why) }, E_QUORUM);
+    assert_eq!(why, 1 << 16);
 }
 
 // Go calls C from many threads. Each association is used by one thread at a

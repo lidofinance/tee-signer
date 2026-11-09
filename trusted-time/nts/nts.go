@@ -298,11 +298,15 @@ type QuorumResult struct {
 	Lo, Hi int64
 }
 
-// Quorum combines 3 to MaxServers intervals from distinct operators, one of
-// which may be wrong, at the Monotonic time now.
-func Quorum(in []Interval, now int64) (QuorumResult, error) {
+// Quorum combines 3 to MaxServers intervals from distinct operators, up to
+// maxWrong of which may be wrong, at the Monotonic time now. len(in) must
+// be at least 2 * maxWrong + 1; MajorityWrong(len(in)) is the most it takes.
+func Quorum(in []Interval, now int64, maxWrong int) (QuorumResult, error) {
 	if len(in) > MaxServers {
 		return QuorumResult{}, fmt.Errorf("nts: %d servers, at most %d", len(in), MaxServers)
+	}
+	if maxWrong < 0 {
+		return QuorumResult{}, fmt.Errorf("nts: max wrong %d", maxWrong)
 	}
 	cs := make([]C.snts_interval, len(in))
 	for i, v := range in {
@@ -323,11 +327,15 @@ func Quorum(in []Interval, now int64) (QuorumResult, error) {
 	}
 	var out C.snts_quorum_result
 	var reason C.uint32_t
-	if err := check(C.snts_quorum(first, C.size_t(len(cs)), C.int64_t(now), &out, &reason), reason); err != nil {
+	if err := check(C.snts_quorum(first, C.size_t(len(cs)), C.size_t(maxWrong), C.int64_t(now), &out, &reason), reason); err != nil {
 		return QuorumResult{}, err
 	}
 	return QuorumResult{Offset: int64(out.offset_ns), Bound: time.Duration(out.bound_ns), Lo: int64(out.lo_ns), Hi: int64(out.hi_ns)}, nil
 }
+
+// MajorityWrong is the most wrong servers the majority rule allows among
+// n: (n - 1) / 2, rounded down.
+func MajorityWrong(n int) int { return max(n-1, 0) / 2 }
 
 // Drift is how far a bound grows over d: RhoPPM of d, rounded up, as
 // drift_ns in the Rust core. The product takes 128 bits: in int64 it

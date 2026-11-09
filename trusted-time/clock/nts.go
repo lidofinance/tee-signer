@@ -488,7 +488,7 @@ func (n *NTS) combine(coarse time.Time, coarseLocal int64) error {
 		}
 		in = append(in, nts.Interval{Operator: p.srv.Operator, Offset: p.sample.Offset, Bound: p.sample.Bound, T4: p.sample.T4})
 	}
-	q, err := nts.Quorum(in, now)
+	q, err := nts.Quorum(in, now, nts.MajorityWrong(len(in)))
 	if err != nil {
 		err = fmt.Errorf("clock: nts: %d fresh samples: %w (%v)", len(in), err, errors.Join(errs...))
 		n.setErr(err)

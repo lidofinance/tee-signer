@@ -85,11 +85,14 @@ rho = 500 ppm (RFC 5905 MAXFREQ). Refused: T4 before T1, T3 before T2, a
 negative delay, stratum outside 1 to 15, a zero reference timestamp or one
 after T3, and a bound over 1 s (MAXDIST).
 
-`quorum`: `combine(intervals, now)`. 3 to 16 intervals from distinct
-operators (labels from the caller, duplicates refused), F = 1. Each bound
-first grows by rho times its age at `now`. [lo, hi] spans the points that at
-least n - 1 intervals cover (the intersection of RFC 5905 section 11.2.1,
-without clustering); no such point is an error. Result: the midpoint, bound
+`quorum`: `combine_with(intervals, now, max_wrong)`. 3 to 16 intervals from
+distinct operators (labels from the caller, duplicates refused). Up to F =
+max_wrong of them may be wrong; fewer than 2F + 1 intervals is an error. The
+clock passes the majority rule, F = (n - 1) / 2 rounded down: 3 of 3, 3 of 4,
+3 of 5, 4 of 6 and 4 of 7 must agree. With 3 or 4 intervals this is F = 1.
+Each bound first grows by rho times its age at `now`. [lo, hi] spans the
+points that at least n - F intervals cover (the intersection of RFC 5905
+section 11.2.1, without clustering); no such point is an error. Result: the midpoint, bound
 (hi - lo) / 2. The plan's rule ("(F+1)-th smallest lower end, (F+1)-th
 largest upper end, fail if lo > hi") never fails for three servers; the
 module comment has the reason. The result here is always inside that rule's

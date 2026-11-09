@@ -166,13 +166,14 @@ int snts_ntp_verify(snts_assoc *a, snts_request *r, const uint8_t *packet, size_
                     int64_t t1_local_ns, int64_t t4_local_ns, int64_t pivot_unix_ns, snts_sample *out,
                     uint32_t *reason);
 
-/* Combines 3 to 16 intervals from distinct operators, one of which may be
- * wrong, at the caller's monotonic time now_local_ns. Each bound first grows
- * by SNTS_RHO_PPM of its age. [lo, hi] spans the points that at least n - 1
- * intervals cover (RFC 5905 11.2.1, Marzullo); SNTS_E_QUORUM if no point
- * does. */
-int snts_quorum(const snts_interval *intervals, size_t n, int64_t now_local_ns, snts_quorum_result *out,
-                uint32_t *reason);
+/* Combines 3 to 16 intervals from distinct operators, up to max_wrong of
+ * which may be wrong, at the caller's monotonic time now_local_ns. Each bound
+ * first grows by SNTS_RHO_PPM of its age. [lo, hi] spans the points that at
+ * least n - max_wrong intervals cover (RFC 5905 11.2.1, Marzullo);
+ * SNTS_E_QUORUM if no point does, or if n < 2 * max_wrong + 1 (too few).
+ * The majority rule is max_wrong = (n - 1) / 2. */
+int snts_quorum(const snts_interval *intervals, size_t n, size_t max_wrong, int64_t now_local_ns,
+                snts_quorum_result *out, uint32_t *reason);
 
 #ifdef __cplusplus
 }
