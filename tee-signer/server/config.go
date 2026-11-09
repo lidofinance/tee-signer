@@ -153,6 +153,9 @@ type Updates struct {
 	// stuck: the core refused values of the log; nothing is signed until a
 	// restart builds the core from the log.
 	stuck error
+	// retry: the core could not read the clock while taking values of the
+	// log; nothing is signed until a later reconcile takes them.
+	retry error
 }
 
 // NewUpdates returns the config updates of a runner with a setup. Call
@@ -412,19 +415,18 @@ func (u *Updates) reconcileLocked(now uint64) {
 	if u.signer == nil || u.stuck != nil {
 		return
 	}
+	u.retry = nil
 	v := &u.view
 	if r := refOf(v.state.Locked); v.locked != nil && r != u.coreLocked {
 		if st := slotTimesOf(v.locked); !slices.Equal(st, u.signer.Config().SlotTimeChanges) {
 			if err := u.signer.SetSlotTimes(st, v.lockedAt); err != nil {
-				u.stuck = fmt.Errorf("the core refused the slot time changes of locked version %d: %w", r.version, err)
-				u.opt.Logger.Error("config: "+u.stuck.Error()+"; nothing is signed until a restart", "version", r.version)
+				u.refusedLocked(now, fmt.Errorf("the core refused the slot time changes of locked version %d: %w", r.version, err), r.version)
 				return
 			}
 			u.opt.Logger.Info("config: slot time changes in force", "version", r.version, "changes", len(st))
 		}
 		if err := u.signer.SetPolicy(policyOf(v.locked)); err != nil {
-			u.stuck = fmt.Errorf("the core refused the values of locked version %d: %w", r.version, err)
-			u.opt.Logger.Error("config: "+u.stuck.Error()+"; nothing is signed until a restart", "version", r.version)
+			u.refusedLocked(now, fmt.Errorf("the core refused the values of locked version %d: %w", r.version, err), r.version)
 			return
 		}
 		u.coreLocked = r
@@ -433,13 +435,26 @@ func (u *Updates) reconcileLocked(now uint64) {
 	}
 	if v.newest != nil && v.newestRef != u.coreOpen {
 		if err := u.signer.SetSchedule(scheduleOf(v.newest), v.newestAt, v.pendingSlots...); err != nil {
-			u.stuck = fmt.Errorf("the core refused the fork schedule of open version %d: %w", v.newestRef.version, err)
-			u.opt.Logger.Error("config: "+u.stuck.Error()+"; nothing is signed until a restart", "version", v.newestRef.version)
+			u.refusedLocked(now, fmt.Errorf("the core refused the fork schedule of open version %d: %w", v.newestRef.version, err), v.newestRef.version)
 			return
 		}
 		u.coreOpen = v.newestRef
 		u.opt.Logger.Info("config: fork schedule in the core", "open_version", v.newestRef.version, "effective_at", v.newestAt)
 	}
+}
+
+// refusedLocked records that the core refused values of the log. A clock
+// error is passing: the next reconcile, at the next sign, tries again.
+// Any other refusal stops signing until a restart.
+func (u *Updates) refusedLocked(now uint64, err error, version uint64) {
+	var r *backend.RefusedError
+	if errors.As(err, &r) && r.Code == backend.StatusClock {
+		u.retry, u.next = err, now
+		u.opt.Logger.Warn("config: "+err.Error()+"; the next request tries again", "version", version)
+		return
+	}
+	u.stuck = err
+	u.opt.Logger.Error("config: "+err.Error()+"; nothing is signed until a restart", "version", version)
 }
 
 // pruneLocked drops decoded bodies that neither the log's state nor the
@@ -466,6 +481,9 @@ func (u *Updates) pruneLocked() {
 func (u *Updates) blockedLocked() error {
 	if u.stuck != nil {
 		return backend.Refused(backend.StatusStorage, "config: %v; restart the runner, it builds the core from the log", u.stuck)
+	}
+	if u.retry != nil {
+		return backend.Refused(backend.StatusClock, "config: %v", u.retry)
 	}
 	if u.view.missing != nil {
 		return backend.Refused(backend.StatusStorage, "config: the values in force are unknown, so nothing is signed: %v (send that update again to restore its body)", u.view.missing)

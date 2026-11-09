@@ -1,10 +1,13 @@
 package server
 
 import (
+	"slices"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/lidofinance/tee-signer/governance/setupwire"
+	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	wireadmin "github.com/lidofinance/tee-signer/signer-protocol/wire/admin"
 )
@@ -129,5 +132,42 @@ func TestAcceptDoesNotUndoAnActivation(t *testing.T) {
 	e.restart()
 	if st := e.srv.SetupState(); st.Locked.Version != 1 || st.ApproverSetHash != newSet.Hash() {
 		t.Fatalf("after a restart: %+v, want the rotation in force", st.Locked)
+	}
+}
+
+// steadyClock is the test clock without its error: the runner's reads
+// succeed while the core's reads (state.Hooks.Now) see fakeClock.err.
+type steadyClock struct{ *fakeClock }
+
+func (c steadyClock) Now() (time.Time, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t, nil
+}
+
+// A clock failure inside the core while the runner applies an update that
+// came due refuses that sign only: the next sign with the clock back
+// applies the update and signs.
+func TestConfigApplyRetriesAfterCoreClockError(t *testing.T) {
+	e := newEnv(t, u64(3600))
+	e.upd.opt.Clock = steadyClock{e.clock}
+	t0 := e.now()
+	eT := (t0 + 3600 - testGenesis) / testEpoch
+	b := e.body(locked, 1, e.groupHash(locked), t0)
+	b.Locked.SlotTimeChanges = []setupwire.SlotTimeChange{{Epoch: eT + 4, SecondsPerSlot: 4}}
+	e.mustSend(signed(t, b, first2, nil), wireadmin.ConfigAccepted)
+	e.clock.add(3600)
+	fee := e.setup.Locked.AllowedFeeRecipients[0]
+	e.clock.set(func(c *fakeClock) { c.err = errClockDown })
+	if err := e.register(fee); err == nil {
+		t.Fatal("core clock down: signed")
+	}
+	e.clock.set(func(c *fakeClock) { c.err = nil })
+	if err := e.register(fee); err != nil {
+		t.Fatalf("clock back: %v", err)
+	}
+	want := []core.SlotTimeChange{{Epoch: eT + 4, SecondsPerSlot: 4}}
+	if got := e.signer.Config().SlotTimeChanges; !slices.Equal(got, want) {
+		t.Fatalf("slot times in the core: %+v", got)
 	}
 }
