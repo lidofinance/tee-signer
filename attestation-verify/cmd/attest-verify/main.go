@@ -73,7 +73,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.Var(&pcrs, "pcr", "nitro: expected PCR as index=hex (repeatable)")
 	fs.Var(&digests, "image-digest", "gcp: accepted image digest (repeatable)")
 	fs.Var(&support, "support-attr", "gcp: required support attribute (repeatable, default STABLE)")
-	fs.Var(&hwmodels, "hwmodel", "gcp: accepted hwmodel (repeatable, default the memory-encrypted models, never GCP_SHIELDED_VM)")
+	fs.Var(&hwmodels, "hwmodel", "gcp: accepted hwmodel (repeatable, default: the memory-encrypted models)")
 	fs.Var(&hostdata, "hostdata", "azure: accepted x-ms-sevsnpvm-hostdata, hex (repeatable)")
 	fs.Var(&launch, "launch-measurement", "azure: accepted launch measurement, hex (repeatable)")
 	if err := fs.Parse(args); err != nil {

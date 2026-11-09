@@ -212,8 +212,9 @@ and the
   `disabled-since-boot` (`enabled` only with `AllowDebug`),
   `submods.confidential_space.support_attributes` contains `STABLE` (or
   the configured list), `submods.container.image_digest` in the allowed
-  list, every expected nonce in `eat_nonce` (string or array), optional
-  `hwmodel` and service account.
+  list, every expected nonce in `eat_nonce` (string or array), `hwmodel`
+  in the configured list (default `GCP_AMD_SEV`, `GCP_AMD_SEV_ES` or
+  `GCP_INTEL_TDX`, never `GCP_SHIELDED_VM`), optional service account.
 - `submods.container.env_override`, `cmd_override` and `args_override`
   absent or empty: an operator override changes what the measured image
   runs.
