@@ -1418,3 +1418,32 @@ func TestConfigUpdateSlotTimesPendingForkUnreadable(t *testing.T) {
 		t.Fatal("the pending fork is not in the core")
 	}
 }
+
+// The record names locked version 1 as in force and version 2 pending and
+// due, and version 1 has no readable copy: whether 2 is a rotation is
+// unknown, so nothing is signed. Sending version 1 again restores its body
+// and the runner signs under version 2.
+func TestConfigUpdatePredecessorBodyAgain(t *testing.T) {
+	e := newEnv(t, u64(3600))
+	b1 := e.body(locked, 1, e.groupHash(locked), e.now())
+	raw1 := signed(t, b1, first2, nil)
+	e.mustSend(raw1, wireadmin.ConfigAccepted)
+	e.clock.add(3600)
+	if err := e.upd.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	b2 := e.body(locked, 2, hashOf(t, b1), e.now())
+	b2.Locked.AllowedFeeRecipients = append(b2.Locked.AllowedFeeRecipients, x)
+	e.mustSend(signed(t, b2, first2, nil), wireadmin.ConfigAccepted)
+	e.signer.Close()
+	if err := os.Remove(filepath.Join(e.dir, "marks", markstore.BodyName(e.hash, locked, 1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	e.start()
+	e.clock.add(3600)
+	wantCode(t, e.register(x), backend.StatusStorage, "no readable copy")
+	e.mustSend(raw1, wireadmin.ConfigKnown)
+	if err := e.register(x); err != nil {
+		t.Fatalf("with the body back: %v", err)
+	}
+}

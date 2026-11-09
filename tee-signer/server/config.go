@@ -735,7 +735,7 @@ func (u *Updates) Accept(ctx context.Context, raw []byte) (uint8, backend.SetupS
 	u.mu.Lock()
 	u.reconcileLocked(now)
 	now = u.lastNow
-	v, stuck, signer := u.view, u.stuck, u.signer
+	v, stuck, signer, logSt := u.view, u.stuck, u.signer, u.logSt
 	u.mu.Unlock()
 	if signer == nil {
 		return 0, none, backend.Refused(backend.StatusNotReady, "config update: the runner is not serving yet")
@@ -756,6 +756,12 @@ func (u *Updates) Accept(ctx context.Context, raw []byte) (uint8, backend.SetupS
 	if ref == refOf(*gs) {
 		// The update in force again. The record that named it was written
 		// after every check, so its hash is enough.
+		return u.again(ctx, raw, upd, ref, now)
+	}
+	if lg, _ := logSt.Group(b.Group); ref == refOf(*lg) {
+		// The update the record names as in force, which a pending update
+		// has replaced in the view: the view still needs its body to tell
+		// whether that one is a rotation.
 		return u.again(ctx, raw, upd, ref, now)
 	}
 	// A new locked update takes no change delay below the chain's floor.
