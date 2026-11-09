@@ -186,7 +186,7 @@ func fromSetup(ctx context.Context, a *startArgs, log *slog.Logger) (_ *start, e
 
 // checkFlagPath is the setup rule of checkFlags. The flag path has no
 // setup, so the checks that need one do not run: the mark store's lock
-// check, the key rule read and its mainnet rule, and the mark log's age
+// check, the key rule read and its prod chain rule, and the mark log's age
 // check and refresh. A release runner refuses it on nitro, azure and gcp. dev
 // keeps it, and so do debug builds, which no cloud image is (the e2e tests
 // with fake hardware need it). -clock-check is not affected.

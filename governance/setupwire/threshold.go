@@ -29,7 +29,7 @@ var MainnetForkVersion = backend.Version{0, 0, 0, 0}
 // signing set there is nothing to overlap, and the cut accepts that one
 // signer whose mark fails, plus a hostile gateway, can sign a slashable
 // pair. Its protection is the mark log and the key rule lock, not a
-// quorum. Every real split (n > 1) keeps the mainnet rule.
+// quorum. Every real split (n > 1) keeps the prod chain rule.
 func CheckThreshold(genesisForkVersion backend.Version, genesisValidatorsRoot backend.Root, t, n int) error {
 	if t < 1 || t > n || 2*t <= n {
 		return fmt.Errorf("threshold %d of %d: want more than half and at most all", t, n)
@@ -126,7 +126,7 @@ func CheckShareIndices(n int, shares map[string]uint8) error {
 
 // CheckSingleKeyProd refuses a setup of a prod chain that accepts a key held
 // alone on GCP (sealing_key_release.unsafe_single_key_accepted) without
-// sealing_key_release.no_lock_accepted. A GCP runner starts on mainnet only
+// sealing_key_release.no_lock_accepted. A GCP runner starts on a prod chain only
 // with no_lock_accepted (platform.Options.CheckNoLock), so such a setup
 // makes a runner that never starts. signer-admin setup and setup-tool
 // encode both run it before they write a setup.

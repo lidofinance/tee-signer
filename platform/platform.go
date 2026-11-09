@@ -200,11 +200,11 @@ type KeyRule struct {
 const KeyRuleTimeout = time.Minute
 
 // ReadKeyRule reads the key rule with read before the constructor releases
-// any key, and applies the mainnet rule (docs/protocol.md, "Key rule
-// lock"): with Mainnet set, a rule that is not locked, or one the runner
+// any key, and applies the prod chain rule (docs/protocol.md, "Key rule
+// lock"): with Prod set (setupwire.ProdChain), a rule that is not locked, or one the runner
 // cannot read, stops the start, so nothing is sealed under a key whose
 // rule someone can still change. A platform without a lock (GCP) passes
-// only when the setup accepts that (CheckKeyRule). Off mainnet a failed
+// only when the setup accepts that (CheckKeyRule). Off a prod chain a failed
 // read gives KeyLockUnread and the start goes on, as before. On the flag
 // path (no setup_hash) nothing is read: nil.
 func (o Options) ReadKeyRule(ctx context.Context, read func(context.Context) (KeyRule, error)) (*KeyRule, error) {
@@ -263,11 +263,12 @@ func (o Options) CheckKeyRule(r *KeyRule) error {
 	}
 }
 
-// CheckNoLock is the mainnet rule for a key rule without a lock (T-124): GCP Cloud KMS has no lock on a key's IAM bindings,
-// so a GCP runner starts on mainnet only when its setup accepts that
+// CheckNoLock is the prod chain rule (Options.Prod, setupwire.ProdChain) for a key
+// rule without a lock (T-124): GCP Cloud KMS has no lock on a key's IAM bindings,
+// so a GCP runner starts on a prod chain only when its setup accepts that
 // (sealing_key_release.no_lock_accepted, Options.NoLockAccepted). The dev
 // platform (no key release service, NoService) has no real attestation
-// either: it never starts on mainnet, whatever the setup accepts. A
+// either: it never starts on a prod chain, whatever the setup accepts. A
 // single-node GCP signer needs a second acceptance apart from this
 // (sealing_key_release.unsafe_single_key_accepted, setupwire.CheckThresholdOn).
 func (o Options) CheckNoLock(r *KeyRule) error {

@@ -9,9 +9,9 @@ import (
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
-// ReadKeyRule: on mainnet only a locked rule or an accepted platform
-// without a lock passes, never the dev platform (no real attestation); a rule that is not locked or not readable stops the start. Off
-// mainnet every rule passes and a failed read gives unread, as before.
+// ReadKeyRule: on a prod chain only a locked rule or an accepted platform
+// without a lock passes, never the dev platform (no real attestation); a rule that is not locked or not readable stops the start. Off a
+// prod chain every rule passes and a failed read gives unread, as before.
 // Without a setup nothing is read.
 func TestReadKeyRule(t *testing.T) {
 	setup := [32]byte{1}
