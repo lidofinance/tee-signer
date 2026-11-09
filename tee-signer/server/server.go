@@ -1542,5 +1542,13 @@ func healthNTS(s clock.NTSSummary) *backend.ClockNTS {
 			FallbackKE: c.FallbackKE,
 		})
 	}
+	for _, c := range s.Coarse {
+		age := -1.0
+		if c.LastAnswerAge >= 0 {
+			age = ms(c.LastAnswerAge)
+		}
+		out.Coarse = append(out.Coarse, backend.ClockNTSCoarse{Source: c.Name, Queries: c.Queries, Answers: c.Answers,
+			Failures: c.Failures, LastAnswerAgeMS: age, LastDiffMS: ms(c.LastDiff), LastError: c.LastError})
+	}
 	return out
 }

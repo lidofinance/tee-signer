@@ -123,6 +123,23 @@ func TestNTSClockOneServerWrong(t *testing.T) {
 	}
 }
 
+// NTSSummary carries the per-host stats of a coarse clock that keeps them.
+func TestNTSClockSummaryCoarse(t *testing.T) {
+	q := &Quorum{Sources: []Source{&fakeSource{name: "x", t: time.Now()}, &fakeSource{name: "y", err: errors.New("down")}}, Min: 1}
+	coarse := &Anchored{Src: q, Interval: time.Second}
+	if err := coarse.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	n := &NTS{Coarse: coarse, Servers: []NTSServer{{Host: "a.test", Operator: "a"}}}
+	s := n.NTSSummary().Coarse
+	if len(s) != 2 || s[0].Name != "x" || s[0].Answers != 1 || s[1].Failures != 1 {
+		t.Fatalf("coarse %+v", s)
+	}
+	if got := (&NTS{Coarse: &coarseClock{}}).NTSSummary().Coarse; got != nil {
+		t.Fatalf("a coarse clock without stats: %+v", got)
+	}
+}
+
 // NTSSummary lists every server, one that never answered included, without
 // waiting for a Refresh.
 func TestNTSClockSummaryPeers(t *testing.T) {

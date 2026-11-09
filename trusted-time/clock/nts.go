@@ -1033,6 +1033,10 @@ func (n *NTS) NTSSummary() NTSSummary {
 		}
 		s.Peers[i] = ph
 	}
+	// The coarse clock has its own lock and never calls the NTS clock.
+	if c, ok := n.Coarse.(SourceStatser); ok {
+		s.Coarse = c.SourceStats()
+	}
 	return s
 }
 

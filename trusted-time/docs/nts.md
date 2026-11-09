@@ -239,6 +239,12 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   `clock_nts.fallbacks_capped` counts the fallbacks the hourly cap refused.
   A server with queries and no answers is dead from this signer's network
   before it costs a refusal.
+  `clock_nts.coarse` has one entry per HTTPS-date host of the coarse
+  check: `source`, `queries`, `answers`, `failures`, `last_answer_age_ms`
+  (-1: no answer yet), `last_diff_ms` (its last Date minus the coarse
+  quorum's answer of that round, in whole seconds) and `last_error`. Without
+  a coarse time there is no NTS time, so a host that fails or lags matters
+  as much as an NTS server.
 - `tee-signer/platforms_nts.go`: `-nts-clock` (or `RUNNER_NTS_CLOCK=1`) gives a
   tagged runner the NTS clock, with `-nts-coarse-urls`, `-nts-wait` and
   `-nts-max-bound` (or their variables; a set flag wins). The runner

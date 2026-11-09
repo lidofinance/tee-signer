@@ -204,6 +204,25 @@ type ClockNTS struct {
 	// FallbacksCapped counts the fallbacks the shift schedule's hourly cap
 	// refused.
 	FallbacksCapped int64 `json:"fallbacks_capped,omitempty"`
+	// Coarse has one entry per HTTPS-date host of the coarse check. Without
+	// a coarse time the clock gives no NTS time either, so a host that
+	// fails or lags shows here first. Missing from older runners.
+	Coarse []ClockNTSCoarse `json:"coarse,omitempty"`
+}
+
+// ClockNTSCoarse is one HTTPS-date host of the coarse check. Counts are
+// since the runner started.
+type ClockNTSCoarse struct {
+	Source   string `json:"source"`
+	Queries  int64  `json:"queries"`
+	Answers  int64  `json:"answers"`
+	Failures int64  `json:"failures"`
+	// LastAnswerAgeMS is the time since the last answer, -1 for none yet.
+	LastAnswerAgeMS float64 `json:"last_answer_age_ms"`
+	// LastDiffMS is its last reading minus the coarse quorum's answer of
+	// that round, in whole seconds as Date headers are.
+	LastDiffMS float64 `json:"last_diff_ms"`
+	LastError  string  `json:"last_error,omitempty"`
 }
 
 // ClockNTSOperator is one NTS server in ClockNTS. Counts are since the

@@ -63,6 +63,18 @@ func TestHealthNTS(t *testing.T) {
 	if !reflect.DeepEqual(got.Operators, wantOps) || got.FallbacksCapped != 2 {
 		t.Fatalf("operators %+v, capped %d", got.Operators, got.FallbacksCapped)
 	}
+	// One entry per coarse host, one that never answered included.
+	got = healthNTS(clock.NTSSummary{Coarse: []clock.SourceStats{
+		{Name: "https-date(https://a.test/)", Queries: 4, Answers: 3, Failures: 1, LastAnswerAge: 2 * time.Second, LastDiff: -time.Second},
+		{Name: "https-date(https://b.test/)", Queries: 4, Failures: 4, LastAnswerAge: -1, LastError: "timeout"},
+	}})
+	wantCoarse := []backend.ClockNTSCoarse{
+		{Source: "https-date(https://a.test/)", Queries: 4, Answers: 3, Failures: 1, LastAnswerAgeMS: 2000, LastDiffMS: -1000},
+		{Source: "https-date(https://b.test/)", Queries: 4, Failures: 4, LastAnswerAgeMS: -1, LastError: "timeout"},
+	}
+	if !reflect.DeepEqual(got.Coarse, wantCoarse) {
+		t.Fatalf("coarse %+v", got.Coarse)
+	}
 	// A refused clock says why.
 	why := "samples of the last quorum 1m1s old, over 1m0s (no fresh quorum)"
 	if got := healthNTS(clock.NTSSummary{Refused: why}); got.Quorum || got.Refused != why {
