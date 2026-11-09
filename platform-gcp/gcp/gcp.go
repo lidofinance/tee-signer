@@ -341,9 +341,10 @@ func sealingAAD(setup [32]byte) []byte { return setupwire.CtxGCPSealing.Message(
 // new key costs nothing while no share is sealed.
 //
 // Any object under sharePrefix passes that check, and whoever plants the
-// blob may plant a share next to it. So stored reports whether the key came from the stored blob: the
-// runner then uses it only once every stored share opens under it, and
-// seals no new share before (platform.Platform.SealingKeyStored).
+// blob may plant a share next to it. So stored reports whether the key
+// came from the stored blob: the runner then uses it only once every
+// stored share opens under it, and seals no new share before
+// (platform.Platform.SealingKeyStored).
 func (k *KMS) dataKey(ctx context.Context, store platform.Store, setup [32]byte) (key []byte, stored bool, err error) {
 	aad := sealingAAD(setup)
 	shares, err := store.List(sharePrefix)

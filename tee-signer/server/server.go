@@ -254,9 +254,9 @@ func (s *Server) LoadShares() (int, error) {
 // earlier life of the mark log (sealed under an older log_id) or restored
 // from another signer by mistake. LoadListedShares would log and skip it;
 // here it stops the start, the error names it, and the error says what
-// the operator can do on this platform (proveFix). On success SealingKeyUnproven is
-// cleared. Call it before Serve, and only when the image check lets the
-// shares load.
+// the operator can do on this platform (proveFix). On success
+// SealingKeyUnproven is cleared. Call it before Serve, and only when the
+// image check lets the shares load.
 //
 // The check has a limit. A key admin who made the blob before the key
 // policy was locked knows the key, can seal a share under it and, before
@@ -306,9 +306,10 @@ func proveFix(platformName string) string {
 	if platformName == "gcp" {
 		// The store is the container's file system and the state copy is
 		// encrypted and restored as a whole commit: nobody outside the VM
-		// can edit either.
+		// can edit either. A new setup has a new setup_hash, so a new
+		// state copy path and a new sealing AAD.
 		return "The store and its state copy cannot be edited from outside the VM: " +
-			"start over with a new setup, or with -state-create on an empty store, and import the shares again"
+			"start over with a new setup and import the shares again"
 	}
 	return "Remove what does not belong under shares/ on the host, or, if no share opens, " +
 		"move the sealing blob aside too, and restart"
