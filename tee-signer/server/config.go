@@ -735,7 +735,7 @@ func (u *Updates) Accept(ctx context.Context, raw []byte) (uint8, backend.SetupS
 	u.mu.Lock()
 	u.reconcileLocked(now)
 	now = u.lastNow
-	v, stuck, signer, logSt := u.view, u.stuck, u.signer, u.logSt
+	v, stuck, retry, signer, logSt := u.view, u.stuck, u.retry, u.signer, u.logSt
 	u.mu.Unlock()
 	if signer == nil {
 		return 0, none, backend.Refused(backend.StatusNotReady, "config update: the runner is not serving yet")
@@ -798,6 +798,14 @@ func (u *Updates) Accept(ctx context.Context, raw []byte) (uint8, backend.SetupS
 		return 0, none, backend.Refused(backend.StatusBadRequest, "config update: %v", err)
 	}
 	at := setupwire.EffectiveActivation(b.ActivateAt, now, wait)
+	// The core checks below run against the values the core holds, which
+	// lag the view while the core refused them.
+	if stuck != nil {
+		return 0, none, backend.Refused(backend.StatusStorage, "config update: %v; restart the runner first", stuck)
+	}
+	if retry != nil {
+		return 0, none, backend.Refused(backend.StatusClock, "config update: the clock was not readable: %v; send it again", retry)
+	}
 	switch b.Group {
 	case setupwire.GroupLocked:
 		if err := signer.CheckPolicy(policyOf(b.Locked)); err != nil {
@@ -824,9 +832,6 @@ func (u *Updates) Accept(ctx context.Context, raw []byte) (uint8, backend.SetupS
 			}
 		}
 	case setupwire.GroupOpen:
-		if stuck != nil {
-			return 0, none, backend.Refused(backend.StatusStorage, "config update: %v; restart the runner first", stuck)
-		}
 		// The epochs count under the slot times in force and under those of a
 		// pending locked update.
 		if err := signer.CheckSchedule(scheduleOf(b.Open), at, v.pendingSlots...); err != nil {

@@ -171,3 +171,38 @@ func TestConfigApplyRetriesAfterCoreClockError(t *testing.T) {
 		t.Fatalf("slot times in the core: %+v", got)
 	}
 }
+
+// A clock failure inside the core while Accept applies an update that came
+// due leaves the core on the values before it. A new update is refused
+// then, open and locked, since the core checks would run against those
+// values; once a reconcile applies the update, both are accepted.
+func TestConfigAcceptRefusedAfterCoreClockError(t *testing.T) {
+	e := newEnv(t, u64(3600))
+	e.upd.opt.Clock = steadyClock{e.clock}
+	t0 := e.now()
+	eT := (t0 + 3600 - testGenesis) / testEpoch
+	b1 := e.body(locked, 1, e.groupHash(locked), t0)
+	b1.Locked.SlotTimeChanges = []setupwire.SlotTimeChange{{Epoch: eT + 4, SecondsPerSlot: 4}}
+	e.mustSend(signed(t, b1, first2, nil), wireadmin.ConfigAccepted)
+	e.clock.add(3600)
+	now := e.now()
+	ob := e.body(open, 1, e.groupHash(open), now)
+	ob.Open.ForkSchedule = append(ob.Open.ForkSchedule, setupwire.Fork{Epoch: eT + 1000, Version: v6})
+	lb := e.body(locked, 2, hashOf(t, b1), now)
+	lb.Locked.AllowedFeeRecipients = append(lb.Locked.AllowedFeeRecipients, x)
+	lb.Locked.SlotTimeChanges = b1.Locked.SlotTimeChanges
+	for _, raw := range [][]byte{signed(t, ob, first2, nil), signed(t, lb, first2, nil)} {
+		e.clock.set(func(c *fakeClock) { c.failNext = 1 })
+		_, _, err := e.send(raw)
+		wantCode(t, err, backend.StatusClock, "send it again")
+	}
+	if st := e.log.State(); st.Open.Pending != nil || st.Locked.Pending == nil || st.Locked.Pending.Version != 1 {
+		t.Fatalf("refused, but pending: %+v", st)
+	}
+	e.mustSend(signed(t, ob, first2, nil), wireadmin.ConfigAccepted)
+	e.mustSend(signed(t, lb, first2, nil), wireadmin.ConfigAccepted)
+	want := []core.SlotTimeChange{{Epoch: eT + 4, SecondsPerSlot: 4}}
+	if got := e.signer.Config().SlotTimeChanges; !slices.Equal(got, want) {
+		t.Fatalf("slot times in the core: %+v", got)
+	}
+}

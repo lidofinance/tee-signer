@@ -52,11 +52,22 @@ type fakeClock struct {
 	t       time.Time
 	trusted bool
 	err     error
+	// failNext: the next reads that many fail with errClockDown.
+	failNext int
 }
 
-func (c *fakeClock) Now() (time.Time, error) { c.mu.Lock(); defer c.mu.Unlock(); return c.t, c.err }
-func (c *fakeClock) Source() string          { return "fake" }
-func (c *fakeClock) Trusted() bool           { c.mu.Lock(); defer c.mu.Unlock(); return c.trusted }
+func (c *fakeClock) Now() (time.Time, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.failNext > 0 {
+		c.failNext--
+		return time.Time{}, errClockDown
+	}
+	return c.t, c.err
+}
+
+func (c *fakeClock) Source() string { return "fake" }
+func (c *fakeClock) Trusted() bool  { c.mu.Lock(); defer c.mu.Unlock(); return c.trusted }
 func (c *fakeClock) add(s uint64) {
 	c.mu.Lock()
 	c.t = c.t.Add(time.Duration(s) * time.Second)
