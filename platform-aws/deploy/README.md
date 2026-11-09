@@ -409,11 +409,15 @@ the writer is an IAM user whose access key only the enclave can read:
    parent). The enclave decrypts it with `Recipient` (the same PCR-bound
    policy as the data key), so the parent never sees the plaintext.
 
-The account admins can still delete or rewrite records and can mint new
-keys for the user; they already control the KMS key policy, so this adds
-no new trusted party. SigV4 signing uses the enclave's clock; a host that
-moves it can only make AWS refuse the request (the runner then refuses to
-sign).
+While the bucket policy stands, the account admins cannot put objects or
+retention under `marks/` and `config/`, and no request adds a delete
+marker (see "Mark log"). They can still mint new access keys or a console
+password for the user and write records with them, have S3 add delete
+markers through a lifecycle expiration rule, and, if they can change the
+bucket policy, lift the deny. They already control the KMS key policy, so
+this adds no new trusted party. SigV4 signing uses the enclave's clock; a
+host that moves it can only make AWS refuse the request (the runner then
+refuses to sign).
 
 The runner had a second clone guard, a DynamoDB record per node
 (`-record dynamodb:...`). The mark log replaced it and the runner no longer
@@ -436,8 +440,21 @@ the runner's mark in an S3 bucket with versioning and Object Lock, default
 retention in compliance mode (`slashing-log/docs/marklog.md`). The mark log
 is required. The client signs with the enclave-held record credentials
 (`RecordCredentials`, `record/writer-credentials.kms`), so the parent cannot
-write records. The admin can add versions and delete markers but not delete
-or overwrite a locked version; the reader lists every version.
+write records. While the bucket policy stands, no principal but the record
+writer may put objects or retention under `marks/` and `config/`, and no
+principal, the account's admins included, may delete an object or a
+version, so no request adds a delete marker. A lifecycle expiration rule
+still can: S3 runs it, not a principal the policy matches. Compliance mode
+keeps everyone from deleting or overwriting a locked version. An admin who
+can change the bucket policy can lift these denies, and one who mints an
+access key or a console password for the record writer user writes as it
+without changing the policy. So alert in CloudTrail on `PutBucketPolicy`,
+`DeleteBucketPolicy` and `PutBucketLifecycle` for the bucket, and on
+`CreateAccessKey`, `UpdateAccessKey`, `CreateLoginProfile`,
+`UpdateLoginProfile` and `CreateUser` for the record writer user. The
+reader lists every version, and the runner's checks after each create
+(s3log `checkHidden`, `checkMarker`) catch a create that a delete marker
+let through either way.
 
 The lock check at start reads the bucket's default retention, but that
 default is a bucket setting: an admin with

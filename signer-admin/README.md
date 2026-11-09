@@ -42,6 +42,7 @@ An admin certificate that t signers accept can exit every key they hold, and not
   The partial files are not secret.
 - A signer accepts admin chains from every root in its `allowed_client_ca` list. Pin on each signer only roots whose keys its own holder controls. Keep any root that all signers share offline, like an admin key. A setup file that sets `allowed_client_ca` once, before the first `[signer NAME]` section, gives every signer the same root.
 - The runner has no revocation list. If an admin root key leaks, make a new setup and import the keys again.
+- A pre-signed voluntary exit exits its key without the signer and stays valid for good (EIP-7044). Keep only a few of them loaded in the validator ejector, not one for every key. The TEE signer does not change the usual ejector advice.
 
 ## Splitting existing keys
 
@@ -53,7 +54,7 @@ signer-admin split -keystores DIR -password-file FILE -t T -n N -signers NAME,..
 
 - `-keystores` is a folder of `keystore-*.json` with the kdf `scrypt` (n*r*p at most 2^24) or `pbkdf2` (c at most 2^24). All keystores share the one password in `-password-file`, which must be printable ASCII, in a file of mode 0600.
 - `-signers` lists the signer names of `cluster.json` in share index order, 1 to n. n is at most 8, the most the gateway serves.
-- t and n must pass the threshold rule of `-chain` (default mainnet), as `import-draft` checks it. Choose n - t >= 2 (4 of 6 is the smallest on a prod chain): signers upgrade one at a time ([docs/upgrade.md](../docs/upgrade.md#rules), "Rules"), and with n - t = 1 one failure during an upgrade stops the keys.
+- t and n must pass the threshold rule of `-chain` (default mainnet), as `import-draft` checks it. On a prod chain a split needs 2t - n >= 2 (`governance/setupwire/threshold.go`). 2 of 2 passes but stops signing when any signer is down; 3 of 4 is the smallest that keeps signing with one signer down. Signers upgrade one at a time ([docs/upgrade.md](../docs/upgrade.md#rules), "Rules"). A larger margin (n - t >= 2, for example 4 of 6) lets one signer be upgraded or restarted while another is down; with n - t = 1, a second fault during an upgrade stops signing.
 - For a single-node signer, `-t 1 -n 1 -signers NAME` writes each whole key as the share of index 1. The signer's setup must say `signing_mode = single`; on GCP it must also accept the risk (`sealing_key_release.unsafe_single_key_accepted`), and `import-draft` needs `-allow-gcp-unsafe-single-key`. It misses duties for the restart floor of every restart ([docs/upgrade.md](../docs/upgrade.md#downtime-per-signer), "Downtime per signer"), about 20 to 25 minutes on mainnet.
 - With `-expect`, a file of one `0x` pubkey per line, split takes exactly these keys in that order and refuses any other. Without it, split takes every keystore in the folder and prints the list.
 - `-out` must be a new folder on tmpfs. Swap must be off (`swapoff -a`): split refuses to run when `/proc/swaps` lists a swap device or cannot be read, because tmpfs pages and the heap can reach the swap disk. `-allow-swap` goes on with a warning, for zram or an encrypted swap device.

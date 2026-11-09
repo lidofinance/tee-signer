@@ -316,13 +316,17 @@ resource "aws_iam_user" "record_writer" {
 # objects under marks/ and config/, a cost, not a weakening. The state copy
 # has no prefix here: the Nitro platform does not restore one
 # (-state-store is restored on azure, gcp and dev only). No delete for
-# anyone here. NoDeleteMarkers
-# denies DeleteObject (which puts a delete marker on a versioned bucket)
-# and DeleteObjectVersion to every principal, the account's admins
-# included: a delete marker over a clone's record would let a second
-# runner's conditional create through (issue #5 R3). An admin who can
-# change this policy can still lift it; the runner's check after each
-# create (s3log checkHidden) catches a marker either way.
+# anyone here. NoDeleteMarkers denies DeleteObject (which puts a delete
+# marker on a versioned bucket) and DeleteObjectVersion to every
+# principal, the account's admins and the writer user included: a delete
+# marker over a clone's record would let a second runner's conditional
+# create through (issue #5 R3). So no request adds a delete marker while
+# this policy stands. A lifecycle expiration rule still can (S3 runs it,
+# not a principal the policy matches), and an admin who can change this
+# policy can lift it. Credentials minted for the writer user put records
+# as the writer but are denied deletes too. The runner's checks after each
+# create (s3log checkHidden, checkMarker) catch a create that a delete
+# marker let through either way.
 # ShortRetention and NoRetention (EDS-FRESH-04) refuse a put that would
 # leave a record with less retention than the setups ask for. The runner
 # dates each put max(slashing_log_min_lock_days, bucket default) days plus

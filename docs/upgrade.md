@@ -95,10 +95,13 @@ endpoint the runner calls moves to G1, add it.
 
 - Keep t of n signers up. Switch one signer at a time, and finish it
   (signing again) before the next one goes down.
-- Size splits with n - t >= 2, so one signer can be mid-upgrade while
-  another fails and t still sign. With n - t = 1 (3 of 4, 4 of 5) a fault
-  during an upgrade stops the keys until one of the two is back. On a prod
-  chain the smallest split with both rules is 4 of 6.
+- On a prod chain a split needs 2t - n >= 2
+  (`governance/setupwire/threshold.go`). 2 of 2 passes but stops signing
+  when any signer is down; 3 of 4 is the smallest that keeps signing with
+  one signer down. A larger margin (n - t >= 2, for example 4 of 6) lets
+  one signer be upgraded or restarted while another is down, and t still
+  sign. With n - t = 1 (3 of 4, 4 of 5), a second fault during a
+  one-at-a-time upgrade stops signing until one of the two is back.
 - Never run the old and the new image of one signer at the same time.
   They share one mark log; the second writer finds a record it did not
   write and stops.
