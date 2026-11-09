@@ -85,6 +85,9 @@ func (l *attestLimit) pruneLocked(now time.Time) {
 		if i == len(list) {
 			delete(l.certs, cert)
 		} else if i > 0 {
+			// Clear the dropped entries so the backing array does not keep
+			// their answers alive.
+			clear(list[:i])
 			l.certs[cert] = list[i:]
 		}
 	}
