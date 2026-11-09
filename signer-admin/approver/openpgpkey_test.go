@@ -29,3 +29,27 @@ func TestSelectOpenPGPKeyFullFingerprint(t *testing.T) {
 		}
 	}
 }
+
+// With two signing subkeys the error lists their full fingerprints, and
+// one pasted from it selects that key.
+func TestSelectOpenPGPKeyAmbiguous(t *testing.T) {
+	var a, b OpenPGPKey
+	for i := range a.Fingerprint {
+		a.Fingerprint[i], b.Fingerprint[i] = byte(i), byte(0x80+i)
+	}
+	a.CanSign, b.CanSign, a.Subkey, b.Subkey = true, true, true, true
+	keys := []OpenPGPKey{a, b}
+	_, err := SelectOpenPGPKey(keys, "")
+	if err == nil {
+		t.Fatal("two signing subkeys: no error")
+	}
+	for _, k := range keys {
+		full := strings.ToUpper(hex.EncodeToString(k.Fingerprint[:]))
+		if !strings.Contains(err.Error(), full) {
+			t.Fatalf("error %q lacks the fingerprint %s", err, full)
+		}
+		if p, err := SelectOpenPGPKey(keys, full); err != nil || p.Fingerprint != k.Fingerprint {
+			t.Fatalf("SelectOpenPGPKey(%s): %X %v", full, p.Fingerprint, err)
+		}
+	}
+}

@@ -117,7 +117,7 @@ func SelectOpenPGPKey(keys []OpenPGPKey, want string) (OpenPGPKey, error) {
 	}
 	var ids []string
 	for _, k := range c {
-		ids = append(ids, k.KeyID())
+		ids = append(ids, strings.ToUpper(hex.EncodeToString(k.Fingerprint[:])))
 	}
 	return OpenPGPKey{}, fmt.Errorf("%d Ed25519 signing keys (%s); name one with -fingerprint", len(c), strings.Join(ids, ", "))
 }

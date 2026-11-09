@@ -858,8 +858,12 @@ Reading the public key needs no card:
 gpg --with-keygrip --list-keys FINGERPRINT    # Keygrip of the [S] subkey
 signer-admin approver-key -key openpgp:KEYGRIP
 gpg --export FINGERPRINT > approver.pgp       # or from a file someone sent
-signer-admin approver-key -openpgp approver.pgp [-fingerprint SUBKEY]
+signer-admin approver-key -openpgp approver.pgp [-fingerprint SUBKEY_FPR]
 ```
+
+SUBKEY_FPR is the subkey's full fingerprint, all 40 hex digits, from
+`gpg --with-subkey-fingerprint --list-keys FINGERPRINT`; a key ID is
+refused.
 
 Both print `approvers = 0x...`. The first reads the public key gpg-agent
 keeps for a card key; the second reads the exported key's Ed25519 keys

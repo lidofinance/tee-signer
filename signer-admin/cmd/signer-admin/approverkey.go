@@ -17,17 +17,17 @@ import (
 // stub, -openpgp reads an exported public key (gpg --export).
 //
 //	signer-admin approver-key -key FILE|openpgp:KEYGRIP
-//	signer-admin approver-key -openpgp FILE [-fingerprint HEX]
+//	signer-admin approver-key -openpgp FILE [-fingerprint SUBKEY_FPR]
 func cmdApproverKey(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("approver-key", flag.ContinueOnError)
 	keyURI := fs.String("key", "", "the approver's key: a seed file or openpgp:KEYGRIP (reads the public key only)")
 	pgpPath := fs.String("openpgp", "", "an exported OpenPGP public key, armored or binary (gpg --export FINGERPRINT)")
-	fpr := fs.String("fingerprint", "", "with -openpgp: the full fingerprint (40 hex digits) of the Ed25519 key; default: the one Ed25519 signing subkey")
+	fpr := fs.String("fingerprint", "", "with -openpgp: the full fingerprint of the Ed25519 key, all 40 hex digits (gpg --with-subkey-fingerprint --list-keys); default: the one Ed25519 signing subkey")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if (*keyURI == "") == (*pgpPath == "") || fs.NArg() != 0 || *fpr != "" && *pgpPath == "" {
-		return errors.New("usage: signer-admin approver-key -key FILE|openpgp:KEYGRIP | -openpgp FILE [-fingerprint HEX]")
+		return errors.New("usage: signer-admin approver-key -key FILE|openpgp:KEYGRIP | -openpgp FILE [-fingerprint SUBKEY_FPR]")
 	}
 	var pub ed25519.PublicKey
 	if *keyURI != "" {
