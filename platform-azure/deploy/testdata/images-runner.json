@@ -1,0 +1,12 @@
+{
+  "runner": {
+    "layers": [
+      "13e27242e2f432b1bdb1ddce34883b820982e6525d1ab9d9635ff6c1968ef0cc",
+      "87cd806eb9d9570d552ca350e277bf16401a93bb9f5e92c699f422b91237aac0"
+    ],
+    "env": ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"],
+    "working_dir": "/",
+    "user": "",
+    "stop_signal": ""
+  }
+}

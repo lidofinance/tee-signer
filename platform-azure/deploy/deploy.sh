@@ -16,7 +16,13 @@
 #                    the three are one policy and writes it to $OUT/policy.sha256:
 #                    the hash every release policy and verifier pins, for any
 #                    signer and any chain. The subnet and the log workspace
-#                    are deploy parameters and do not change it
+#                    are deploy parameters and do not change it. Before it
+#                    prints a hash, cce-policy-check.py reads the policy
+#                    and refuses one that allows more than the template's
+#                    containers with their local images' layers
+#   confcom-install  install az confcom CONFCOM_VERSION from its wheel,
+#                    checked against CONFCOM_WHEEL_SHA256 (common.sh); the
+#                    policy step refuses any other version
 #
 # Azure commands. Each one creates or changes something in Azure, prints
 # what it would do and refuses to run unless CONFIRM=yes is set:
@@ -52,6 +58,9 @@
 # its settings), STDIO=enable|disable (default enable),
 # KEY_IMMUTABLE=true|false (default true; false only on a non-prod CHAIN),
 # KEY_SIZE (default 2048),
+# DMVERITY_VHD (optional: the dmverity-vhd binary that hashes the image
+# layers for the policy check; default the one in the confcom extension;
+# either way its SHA-256 must be DMVERITY_VHD_SHA256 of common.sh),
 # KEY_NAME_PREFIX (default signer-kek: the keys are signer-kek-N; the
 # generic image takes its own, for example signer-gkek, so a running
 # per-chain image keeps its key),
@@ -234,21 +243,86 @@ ensure_images() {
   docker tag "$LOCAL_RUNNER_IMAGE" "$(registry_server)/signer-runner:$IMAGE_TAG"
 }
 
+# check_confcom: the installed az confcom is CONFCOM_VERSION, the version
+# whose policy text cce-policy-check.py rebuilds.
+check_confcom() {
+  local v
+  v="$(az extension show -n confcom --query version -o tsv 2>/dev/null)" || v=""
+  [ "$v" = "$CONFCOM_VERSION" ] ||
+    die "az confcom ${v:-not installed}: the policy step takes confcom $CONFCOM_VERSION only (deploy.sh confcom-install)"
+}
+
+# dmverity_vhd: the path of the dmverity-vhd binary (DMVERITY_VHD, else the
+# one in the confcom extension), checked against DMVERITY_VHD_SHA256.
+dmverity_vhd() {
+  local bin="${DMVERITY_VHD:-}" ext
+  if [ -z "$bin" ]; then
+    ext="$(az extension show -n confcom --query path -o tsv)" && [ -n "$ext" ] ||
+      die "cannot find the folder of the confcom extension (az extension show -n confcom)"
+    bin="$ext/azext_confcom/bin/dmverity-vhd"
+  fi
+  [ -x "$bin" ] || die "no executable dmverity-vhd at $bin"
+  [ "$(sha256sum <"$bin" | cut -d' ' -f1)" = "$DMVERITY_VHD_SHA256" ] ||
+    die "$bin is not dmverity-vhd v2.2 (SHA-256 $DMVERITY_VHD_SHA256)"
+  echo "$bin"
+}
+
+# policy_images DIR: DIR/policy-images.json, what cce-policy-check.py needs
+# from the local image of each container of DIR/template.json: the
+# dm-verity hash of each layer, computed here with the pinned dmverity-vhd
+# and not taken from az confcom, and the image config.
+policy_images() {
+  local dir="$1" bin digest name image src pair layers config out='{}'
+  bin="$(dmverity_vhd)" || exit 1
+  # policy_for runs inside $(...), where set -e does not stop a failed
+  # command, so each step below stops on its own failure.
+  digest="$(cat "$OUT/runner.digest")" || die "no $OUT/runner.digest"
+  [ "$(docker image inspect "$LOCAL_RUNNER_IMAGE" --format '{{.Id}}')" = "$digest" ] ||
+    die "local image $LOCAL_RUNNER_IMAGE is not $digest ($OUT/runner.digest): run build-image.sh again"
+  while IFS=$'\t' read -r name image; do
+    src=""
+    if [ "$image" = "$(registry_server)/signer-runner@$digest" ]; then
+      src="$LOCAL_RUNNER_IMAGE"
+    else
+      while IFS= read -r pair; do
+        [ "${pair%%|*}" != "$image" ] || src="${pair#*|}"
+      done < <(network_images)
+    fi
+    [ -n "$src" ] || die "container $name in $dir/template.json runs $image, which is neither the runner image nor one of the network part"
+    layers="$("$bin" -d roothash -i "$src" 2>>"$dir/policy.log")" || die "dmverity-vhd could not hash the layers of $src (log: $dir/policy.log)"
+    config="$(docker image inspect "$src" --format '{{json .Config}}')" || die "cannot read the config of $src"
+    out="$(jq -c --arg n "$name" --argjson l "$layers" --argjson c "$config" '. + {($n): {layers: $l.layers,
+      env: ($c.Env // []), working_dir: ($c.WorkingDir // ""), user: ($c.User // ""), stop_signal: ($c.StopSignal // "")}}' <<<"$out")" ||
+      die "unexpected dmverity-vhd output for $src: $layers"
+  done < <(jq -r '.parameters as $p | .resources[0].properties.containers[]
+    | [.name, (.properties.image | (capture("^\\[parameters\\('"'"'(?<p>[A-Za-z0-9_]+)'"'"'\\)\\]$").p as $k | $p[$k].defaultValue) // .)]
+    | @tsv' "$dir/template.json")
+  [ "$(jq -c 'keys' <<<"$out")" = "$(jq -c '[.resources[0].properties.containers[].name] | sort' "$dir/template.json")" ] ||
+    die "could not read the image of every container in $dir/template.json"
+  echo "$out" >"$dir/policy-images.json" || die "cannot write $dir/policy-images.json"
+}
+
 # policy_for N: render and run az confcom acipolicygen. The template gets
 # its ccePolicy and the SHA-256 of the decoded policy is printed on stdout
 # (all other output goes to stderr, which is kept in policy.log). The hash
-# is the value of the x-ms-sevsnpvm-hostdata claim.
+# is the value of the x-ms-sevsnpvm-hostdata claim. Before the hash is
+# printed, cce-policy-check.py reads the policy and refuses anything but
+# the containers of the template with their images' layers (README.md,
+# "CCE policy check").
 policy_for() {
   local n="$1" dir hash check
   case "$STDIO" in enable | disable) ;; *) die "STDIO must be enable or disable" ;; esac
   render "$n"
   ensure_images
+  check_confcom
   dir="$(signer_dir "$n")"
+  : >"$dir/policy.log"
+  policy_images "$dir"
   # -y approves the wildcard rule for the parameters without a default
   # (signerSetup and those of the network part). --omit-id keeps the registry and image tag out
   # of the policy. stdin is closed: the tool asks before it overwrites a policy.
   if ! hash="$(az confcom acipolicygen -a "$dir/template.json" -y --omit-id "--$STDIO-stdio" \
-    </dev/null 2>"$dir/policy.log")"; then
+    </dev/null 2>>"$dir/policy.log")"; then
     tail -n 20 "$dir/policy.log" >&2
     die "az confcom acipolicygen failed (log: $dir/policy.log)"
   fi
@@ -257,17 +331,42 @@ policy_for() {
     base64 -d >"$dir/policy.rego"
   check="$(sha256sum <"$dir/policy.rego" | cut -d' ' -f1)"
   [ "$check" = "$hash" ] || die "printed hash $hash is not the SHA-256 of the policy in the template ($check)"
+  python3 -I "$AZ_DIR/cce-policy-check.py" check "$dir/policy.rego" "$dir/template.json" "$dir/policy-images.json" "$STDIO" ||
+    die "signer $n: the CCE policy is not the one this tree expects; nothing pinned (compare with: python3 -I $AZ_DIR/cce-policy-check.py render $dir/template.json $dir/policy-images.json $STDIO)"
   echo "$hash" >"$dir/policy.sha256"
   echo "$hash"
 }
 
 cmd_render() { render "$1"; echo "$(signer_dir "$1")/template.json"; }
 
+# confcom-install: the confcom wheel of CONFCOM_VERSION, checked against
+# CONFCOM_WHEEL_SHA256 before az installs it (in place of any other
+# confcom version). pip resolves the wheel's own dependencies.
+cmd_confcom_install() {
+  local got wheel
+  TMP_DIR="$(mktemp -d)"
+  wheel="$TMP_DIR/${CONFCOM_WHEEL_URL##*/}"
+  log "downloading $CONFCOM_WHEEL_URL"
+  curl -fsSL --proto '=https' -o "$wheel" "$CONFCOM_WHEEL_URL"
+  got="$(sha256sum <"$wheel" | cut -d' ' -f1)"
+  [ "$got" = "$CONFCOM_WHEEL_SHA256" ] || die "confcom wheel SHA-256 $got, want $CONFCOM_WHEEL_SHA256"
+  # If the add below fails, no confcom is left: run confcom-install again.
+  if az extension show -n confcom -o none 2>/dev/null; then
+    az extension remove -n confcom
+  fi
+  az extension add --source "$wheel" --yes
+  check_confcom
+  dmverity_vhd >/dev/null
+  log "az confcom $CONFCOM_VERSION installed"
+}
+
 cmd_policy() {
   local n h hashes=()
   if [ $# -gt 0 ]; then
     check_signer "$1"
-    echo "signer $1  $(policy_for "$1")"
+    # An assignment, so a refused policy stops here.
+    h="$(policy_for "$1")"
+    echo "signer $1  $h"
     return 0
   fi
   for n in 1 2 3; do
@@ -549,6 +648,7 @@ main() {
     plan) cmd_plan ;;
     render) cmd_render "${1:?signer index}" ;;
     policy) cmd_policy "$@" ;;
+    confcom-install) cmd_confcom_install ;;
     rg-create) cmd_rg_create ;;
     vault-create) cmd_vault_create ;;
     vault-operator-role) cmd_vault_operator_role ;;

@@ -202,6 +202,78 @@ and checks that its SHA-256 equals the printed one. For the runner alone,
 or a network entry whose command holds nothing of one signer, it also
 checks that the three signers have one policy.
 
+## CCE policy check
+
+The hash says which policy a key is released to, not what that policy
+allows. A policy that also allows an exec process, an elevated container
+or a second container would let another process run in the same utility
+VM, with the same host data, and release the key. So `deploy.sh` reads the
+policy before it prints or pins its hash, and `policy`, `key-create` and
+`group-deploy` all stop on a policy it refuses.
+
+`cce-policy-check.py` (Python standard library, no other dependency)
+rebuilds the policy that confcom 2.3.0 writes for the rendered template
+and the local images, and refuses the policy unless:
+
+- every line outside the containers list is confcom 2.3.0's text: API
+  version 0.11.0, framework 0.2.3, the one infrastructure fragment
+  (`mcr.microsoft.com/aci/aci-cc-infra-fragment`, Microsoft's issuer,
+  minimum SVN 4), stack dumps, runtime logging and unencrypted scratch
+  off, and every enforcement rule bound to `data.framework`;
+- the containers list holds each template container once and confcom's
+  pause container, nothing else, and has no duplicate JSON key;
+- each container has the template's command, no exec process, is not
+  elevated, has the default capabilities, only the `resolv.conf` mount,
+  stdio as `STDIO` sets it, and the layer hashes of its local image;
+- its environment rules are the template's variables (a literal value is
+  an exact rule, a parameter without a default `NAME=.*`), the image's own
+  variables and confcom's fixed infrastructure rules (`TERM`, fabric,
+  managed identity, restart). Their order does not matter.
+
+The layer hashes come from `dmverity-vhd` (`microsoft/integrity-vhd`
+release v2.2, the binary confcom 2.3.0 bundles), which `deploy.sh` runs
+itself on the local image. `deploy.sh` refuses a binary whose SHA-256 is
+not `DMVERITY_VHD_SHA256` in `common.sh`. `DMVERITY_VHD` names another
+copy of the same binary.
+
+`deploy.sh` also refuses any confcom version but `CONFCOM_VERSION`.
+`deploy.sh confcom-install` downloads the wheel, checks it against
+`CONFCOM_WHEEL_SHA256` (the `sha256Digest` of the Azure CLI extension
+index) and installs it with `az extension add --source`.
+
+On a refusal, `deploy.sh` names the container and field that differ, and
+`python3 -I cce-policy-check.py render <template> <policy-images.json>
+<enable|disable>` prints the policy it expected.
+
+What the check does not cover:
+
+- A template change that the check does not model, such as
+  `volumeMounts`, `securityContext` or probes, an image with a `USER` or a
+  stop signal, or a new confcom version, gets refused. Supporting one means
+  extending the check against real confcom output (the fixtures in
+  `testdata` are confcom 2.3.0 output).
+- The fragment lets Microsoft's signed infrastructure fragment add
+  containers; the check trusts that issuer, as every confidential ACI
+  group does.
+- pip resolves the confcom wheel's Python dependencies at install time,
+  unpinned. The check does not depend on them, but `acipolicygen` does.
+- `dmverity-vhd` runs on the machine that makes the policy. The pin
+  covers the binary, not that machine's Docker daemon.
+- The version pin reads the version that `az extension show` reports, so
+  it catches a wrong install, not a modified one. The exact-text check is
+  what limits a modified confcom.
+- A network entry part (build overlay) adds its own containers. The check
+  holds them to the same rules as the runner (their template command,
+  their image's layers, no exec, not elevated), but it accepts them: they
+  run in the same utility VM and could ask for a report too. Review the
+  part's image and command as you review the runner's.
+- The check takes these settings as confcom 2.3.0 writes them and does
+  not change them: `allow_properties_access`,
+  `allow_environment_variable_dropping` and `allow_capability_dropping`
+  are true; the infrastructure environment rules are `re2` patterns such
+  as `HOSTNAME=.+`; `SIGNER_SETUP=.*` takes any value. Stdio follows
+  `STDIO`, whose default is `enable`.
+
 ## One image for every signer
 
 ACI's `command` replaces the image entrypoint
@@ -707,6 +779,7 @@ Local, no Azure account touched:
 ```sh
 platform-azure/deploy/build-image.sh            # the same image for every signer and chain
 export VAULT=<globally unique name> ACR_NAME=<globally unique name>
+platform-azure/deploy/deploy.sh confcom-install # az confcom 2.3.0 from its pinned wheel, once per machine
 platform-azure/deploy/deploy.sh plan
 platform-azure/deploy/deploy.sh policy          # the policy hashes, about 10 seconds
 export CHAIN=<chain> CHAIN_JSON=<secrets-dir>/chain.json   # no CHAIN_JSON for a committed chain config
