@@ -15,6 +15,7 @@ import (
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/verify"
 	"github.com/lidofinance/tee-signer/gateway/internal/certreload"
 	"github.com/lidofinance/tee-signer/gateway/internal/metrics"
+	"github.com/lidofinance/tee-signer/governance/setupwire"
 	proto "github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/web3signer-api/signing"
 )
@@ -80,7 +81,10 @@ type Signers struct {
 	// first one. A signer that does not answer keeps its last answer, so
 	// its shares stay in the groups and the others still sign.
 	listed [][]proto.ValidatorKey
-	// derived caches deriveGroup by validator key and share keys.
+	// modes is the signing_mode each signer's HEALTH last reported, ""
+	// before the first. Only a signer that lists a whole key is asked.
+	modes []string
+	// derived caches deriveGroup by validator key, share keys and modes.
 	derived map[string]derivedGroup
 }
 
@@ -150,7 +154,7 @@ func newSigners(names []string, nodes []runner, maxIndex int, timeout time.Durat
 		maxIndex = len(nodes)
 	}
 	s := &Signers{nodes: nodes, names: names, maxIndex: min(maxIndex, maxShareIndex), timeout: timeout, log: log,
-		listed: make([][]proto.ValidatorKey, len(nodes)), derived: map[string]derivedGroup{}, m: metrics.New(),
+		listed: make([][]proto.ValidatorKey, len(nodes)), modes: make([]string, len(nodes)), derived: map[string]derivedGroup{}, m: metrics.New(),
 		warns: newWarnLimit(warnEvery)}
 	s.keys = newKeyList(s.loadKeys, keysMaxAge, log)
 
@@ -184,20 +188,40 @@ func (s *Signers) Close() error {
 // loadKeys asks every signer for PUBLIC_KEYS at once and builds the
 // groups: for each validator key the shares the signers hold, their
 // indices and the threshold (deriveGroup). A key whose shares do not fit
-// is left out and logged once.
+// is left out and logged once. A signer that lists a whole key is also
+// asked for HEALTH: a whole key is served only from a signer that reports
+// signing_mode = single (checkWhole).
 func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, error) {
 	type answer struct {
-		keys []proto.ValidatorKey
-		err  error
+		keys    []proto.ValidatorKey
+		err     error
+		asked   bool // HEALTH was asked: the signer lists a whole key
+		mode    string
+		modeErr error
 	}
 	answers := make([]answer, len(s.nodes))
 	var wg sync.WaitGroup
 	for i, n := range s.nodes {
 		wg.Go(func() {
 			cctx, cancel := context.WithTimeout(ctx, s.timeout)
-			defer cancel()
 			keys, err := n.PublicKeys(cctx)
-			answers[i] = answer{keys, capDetail(err)}
+			cancel()
+			answers[i] = answer{keys: keys, err: capDetail(err)}
+			if err != nil || !listsWholeKey(keys) {
+				return
+			}
+			answers[i].asked = true
+			cctx, cancel = context.WithTimeout(ctx, s.timeout)
+			defer cancel()
+			h, err := n.Health(cctx)
+			switch {
+			case err != nil:
+				answers[i].modeErr = capDetail(err)
+			case h == nil:
+				answers[i].modeErr = errors.New("no HEALTH answer")
+			default:
+				answers[i].mode = h.SigningMode
+			}
 		})
 	}
 	wg.Wait()
@@ -214,6 +238,13 @@ func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, err
 		}
 		s.listed[i] = a.keys
 		s.m.SignerKeysRefreshed.Set(float64(time.Now().UnixMilli())/1000, s.names[i])
+		switch {
+		case a.modeErr != nil:
+			// Keep the last mode: a whole key it served stays served.
+			s.log.Warn("signer health failed", "signer", s.names[i], "err", a.modeErr.Error())
+		case a.asked:
+			s.modes[i] = a.mode
+		}
 	}
 	shares := map[phase0.BLSPubKey][]share{}
 	answered := false
@@ -230,10 +261,13 @@ func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, err
 	groups := make(map[phase0.BLSPubKey]group, len(shares))
 	derived := make(map[string]derivedGroup, len(shares))
 	for pk, sh := range shares {
-		id := groupID(pk, sh)
+		id := groupID(pk, sh, s.modes)
 		d, ok := s.derived[id]
 		if !ok {
 			d.g, d.err = deriveGroup(pk, sh, s.maxIndex)
+			if d.err == nil {
+				d.err = s.checkWhole(d.g)
+			}
 			if d.err != nil {
 				s.log.Warn("key refused", "pubkey", fmt.Sprintf("%#x", pk), "shares", len(sh), "err", d.err.Error())
 			}
@@ -252,15 +286,48 @@ func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, err
 	return groups, nil
 }
 
-func groupID(pk phase0.BLSPubKey, shares []share) string {
+// groupID is the key of the deriveGroup cache: the validator key, and the
+// signer, its signing_mode and the share key of each share.
+func groupID(pk phase0.BLSPubKey, shares []share, modes []string) string {
 	var b strings.Builder
 	b.Write(pk[:])
 	for _, s := range shares {
-		fmt.Fprintf(&b, "|%d:", s.node)
+		fmt.Fprintf(&b, "|%d:%s:", s.node, modes[s.node])
 		b.Write(s.pub[:])
 	}
 
 	return b.String()
+}
+
+// listsWholeKey reports whether a PUBLIC_KEYS answer has a share key equal
+// to its validator key.
+func listsWholeKey(keys []proto.ValidatorKey) bool {
+	for _, k := range keys {
+		if k.SharePubkey == k.Pubkey {
+			return true
+		}
+	}
+
+	return false
+}
+
+// checkWhole refuses a whole key (threshold 1) unless its signer's HEALTH
+// says signing_mode = single; s.mu is held. Share keys equal to the
+// validator key are not enough: the runner of a threshold setup refuses a
+// whole key at import, so one that lists it is not following its setup,
+// and an old runner or one without a setup does not say. HEALTH is not
+// attested, so this catches a wrong configuration, not a runner that lies.
+// deriveGroup has already refused a whole key on more than one signer.
+func (s *Signers) checkWhole(g group) error {
+	if g.threshold != 1 {
+		return nil
+	}
+	n := g.shares[0].node
+	if m := s.modes[n]; m != setupwire.SigningModeSingle.String() {
+		return fmt.Errorf("the whole key is on signer %s, whose HEALTH says signing_mode = %q; a whole key needs signing_mode = single", s.names[n], m)
+	}
+
+	return nil
 }
 
 // Sign implements Signer.

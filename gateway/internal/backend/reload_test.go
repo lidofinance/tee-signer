@@ -167,6 +167,8 @@ func (c *fakeConn) Sign(context.Context, proto.SignRequest) (proto.Signature, er
 	return proto.Signature{}, nil
 }
 
+func (c *fakeConn) Health(context.Context) (*proto.Health, error) { return &proto.Health{}, nil }
+
 func (c *fakeConn) Close() error {
 	b := c.book
 	b.mu.Lock()
