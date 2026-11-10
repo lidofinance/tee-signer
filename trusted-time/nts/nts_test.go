@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/trusted-time/nts/ntstest"
+	"github.com/lidofinance/tee-signer/trusted-time/ntscatalog"
 )
 
 func TestVersion(t *testing.T) {
@@ -438,6 +439,30 @@ func TestPinnedRoots(t *testing.T) {
 	}
 	if _, err := RootPool([]string{"other.pem"}); err == nil {
 		t.Fatal("unpinned root accepted")
+	}
+	// Every root the catalog names, for its entries and their alt hosts,
+	// is pinned and loads, and every pinned file is used.
+	used := map[string]bool{}
+	for _, e := range ntscatalog.Builtin.NTS {
+		sets := [][]string{e.Roots}
+		for _, a := range e.Alt {
+			if len(a.Roots) > 0 {
+				sets = append(sets, a.Roots)
+			}
+		}
+		for _, roots := range sets {
+			if _, err := RootPool(roots); err != nil {
+				t.Errorf("%s: %v", e.ID, err)
+			}
+			for _, r := range roots {
+				used[r] = true
+			}
+		}
+	}
+	for f := range rootSHA256 {
+		if !used[f] {
+			t.Errorf("pinned root %s is named by no catalog entry", f)
+		}
 	}
 }
 

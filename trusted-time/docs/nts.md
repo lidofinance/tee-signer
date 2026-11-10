@@ -273,6 +273,34 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   `RUNNER_NTS_TEST_ROOTS`, `nts_servers_debug.go`); a release build cannot.
 - `trusted-time/nts/ntstest`: a loopback NTS-KE and NTP server for the tests,
   with its own AES-SIV from RFC 5297 (checked against appendix A.1).
+- `trusted-time/ntscatalog/catalog.json`: the image's NTS servers, one entry
+  per operator, embedded in the binary. Each entry has its pinned root
+  files, Nitro vsock port, status (active, retired, withdrawn), `terms`,
+  `regions`, optional `alt` hosts and a `note`.
+  - `terms`: `open` when the operator's published terms allow use without
+    contact and state no limit the clock breaks; `ask` when the operator
+    wants contact first, states a limit the polling exceeds (TimeNL: one
+    query per 1024 s), or publishes no terms. `terms_url` is the page they
+    were read from (required for `open`). The image never decides for a
+    user: an `ask` operator is for a setup whose writer asked it.
+  - `regions`: `global` (anycast), or some of `eu`, `na`, `sa`, `apac`,
+    where the median NTP round trip was under 180 ms from every test point
+    (the 100 ms bound limit is about half the round trip plus the server's
+    root distance). Measured 2026-11 from GCP europe-west3, -west4, -west9,
+    us-east4, us-west1, southamerica-east1, asia-northeast1, asia-southeast1
+    and australia-southeast1. `ForRegion` lists what a new setup for a
+    region may name; signer-admin will suggest from it.
+  - Asia and Oceania have no NTS operator close enough of their own. Their
+    open set is the two anycast services, Cloudflare and Meta, under the
+    quorum's 3; a setup there needs `ask` operators (TimeNL's any.time.nl
+    is anycast) or one of the North American servers at the edge of the
+    bound.
+  - `alt`: other hosts of the same operator (more sites, anycast). They count
+    as the same operator and this image does not dial them.
+  - `default`: dialed while setups cannot name servers. That is the four
+    servers of earlier images (Cloudflare, Netnod, PTB, TimeNL), so the
+    runner's behavior does not change with the catalog. TimeNL is `ask`
+    and is to be replaced in the default set.
 
 Untrusted bytes are read only through checked reads (`core/src/bytes.rs`),
 with no indexing, `unwrap` or `expect` on parsed data, and every allocation

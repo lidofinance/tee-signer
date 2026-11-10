@@ -22,15 +22,31 @@ import (
 // Which root each operator uses was read from one TLS handshake per server
 // on port 4460 (the verified chain, nothing sent):
 //
-//	file                 subject                                   sha256 of the DER
-//	sslcom-root-ecc.pem  SSL.com Root Certification Authority ECC  3417bb06cc6007da1b961c920b8ab4ce3fad820e4aa30b9acbc4a74ebdcebc65
-//	isrg-root-x1.pem     ISRG Root X1                              96bcec06264976f37460779acf28c5a7cfe8a3c0aae11a8ffcee05c0bddf08c6
-//	isrg-root-x2.pem     ISRG Root X2                              69729b8e15a86efc177a57afb7171dfc64add28c2fca8cf1507e34453ccb1470
+//	file                              subject                                          sha256 of the DER
+//	sslcom-root-ecc.pem               SSL.com Root Certification Authority ECC         3417bb06cc6007da1b961c920b8ab4ce3fad820e4aa30b9acbc4a74ebdcebc65
+//	isrg-root-x1.pem                  ISRG Root X1                                     96bcec06264976f37460779acf28c5a7cfe8a3c0aae11a8ffcee05c0bddf08c6
+//	isrg-root-x2.pem                  ISRG Root X2                                     69729b8e15a86efc177a57afb7171dfc64add28c2fca8cf1507e34453ccb1470
+//	sectigo-server-auth-root-r46.pem  Sectigo Public Server Authentication Root R46    7bb647a62aeeac88bf257aa522d01ffea395e0ab45c73f93f65654ec38f25a06
+//	digicert-global-root-g2.pem       DigiCert Global Root G2                          cb3ccbb76031e5e0138f8dd39a23f9de47ffc35e43c1144cea27d46a5ab1cb5f
+//	harica-tls-rsa-root-2021.pem      HARICA TLS RSA Root CA 2021                      d95d0e8eda79525bf9beb11b14d2100d3294985f0c62d9fabd9cd999eccb7b1d
+//	harica-root-2015.pem              Hellenic Academic and Research Institutions      a040929a02ce53b4acf4f2ffc6981ce4496f755e6d45fe0b2a692bcd52523f36
+//	                                  RootCA 2015
 //
-//	time.cloudflare.com  leaf <- SSL.com SSL Intermediate CA ECC R2 <- SSL.com Root CA ECC
-//	nts.netnod.se        leaf <- Let's Encrypt YR1 <- ISRG Root YR <- ISRG Root X1
-//	ptbtime1.ptb.de      leaf <- Let's Encrypt YR2 <- ISRG Root YR <- ISRG Root X1
-//	ntppool1.time.nl     leaf <- Let's Encrypt YE2 <- ISRG Root YE <- ISRG Root X2 (also cross-signed by X1)
+//	time.cloudflare.com     leaf <- SSL.com SSL Intermediate CA ECC R2 <- SSL.com Root CA ECC
+//	nts.netnod.se           leaf <- Let's Encrypt YR1 <- ISRG Root YR <- ISRG Root X1
+//	ptbtime1.ptb.de         leaf <- Let's Encrypt YR2 <- ISRG Root YR <- ISRG Root X1
+//	ntppool1.time.nl        leaf <- Let's Encrypt YE2 <- ISRG Root YE <- ISRG Root X2 (also cross-signed by X1)
+//
+// Added 2026-11-10 from package ca-certificates 20260816ubuntu0.24.04.2, for
+// the catalog's candidates (not dialed by default):
+//
+//	bevtime1.metrologie.at  leaf <- Let's Encrypt YR1 <- ISRG Root YR <- ISRG Root X1
+//	nts1.ntp.hr             leaf <- Sectigo DV R36 <- Sectigo Public Server Authentication Root R46
+//	nts.meta.com            leaf <- DigiCert Global G2 TLS RSA SHA256 2020 CA1 <- DigiCert Global Root G2
+//	ntp0.cam.ac.uk          leaf <- DigiCert Global G2 TLS RSA SHA256 2020 CA1 <- DigiCert Global Root G2
+//	ntp.obspm.fr            leaf <- GEANT TLS RSA 1 <- HARICA TLS RSA Root CA 2021, sent cross-signed by
+//	                        the Hellenic RootCA 2015, so both are pinned
+//	time1.mbix.ca, ntp1.wiktel.com, a.st1.ntp.br  <- ISRG Root X1
 //
 // The Let's Encrypt operators get both ISRG roots, since Let's Encrypt moves
 // between them. A CA change by an operator outside its set makes NTS-KE to
@@ -42,9 +58,13 @@ var rootFiles embed.FS
 
 // rootSHA256 pins each file's certificate, so a changed file fails at start.
 var rootSHA256 = map[string]string{
-	"sslcom-root-ecc.pem": "3417bb06cc6007da1b961c920b8ab4ce3fad820e4aa30b9acbc4a74ebdcebc65",
-	"isrg-root-x1.pem":    "96bcec06264976f37460779acf28c5a7cfe8a3c0aae11a8ffcee05c0bddf08c6",
-	"isrg-root-x2.pem":    "69729b8e15a86efc177a57afb7171dfc64add28c2fca8cf1507e34453ccb1470",
+	"sslcom-root-ecc.pem":              "3417bb06cc6007da1b961c920b8ab4ce3fad820e4aa30b9acbc4a74ebdcebc65",
+	"isrg-root-x1.pem":                 "96bcec06264976f37460779acf28c5a7cfe8a3c0aae11a8ffcee05c0bddf08c6",
+	"isrg-root-x2.pem":                 "69729b8e15a86efc177a57afb7171dfc64add28c2fca8cf1507e34453ccb1470",
+	"sectigo-server-auth-root-r46.pem": "7bb647a62aeeac88bf257aa522d01ffea395e0ab45c73f93f65654ec38f25a06",
+	"digicert-global-root-g2.pem":      "cb3ccbb76031e5e0138f8dd39a23f9de47ffc35e43c1144cea27d46a5ab1cb5f",
+	"harica-tls-rsa-root-2021.pem":     "d95d0e8eda79525bf9beb11b14d2100d3294985f0c62d9fabd9cd999eccb7b1d",
+	"harica-root-2015.pem":             "a040929a02ce53b4acf4f2ffc6981ce4496f755e6d45fe0b2a692bcd52523f36",
 }
 
 // Server is a public NTS server and who runs it.
