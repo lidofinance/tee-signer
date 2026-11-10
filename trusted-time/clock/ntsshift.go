@@ -45,8 +45,9 @@ const (
 	NTSShiftSpares = 3
 	// NTSShiftMinServers is the fewest operators the runner runs the shift
 	// schedule on: 4 actives and the spares. With 4 actives the quorum is
-	// 3 of 4, and right after a handover the newcomer's first sample can
-	// age out before its first slot, leaving exactly 3 fresh for a while.
+	// 3 of 4. The newcomer of a handover is asked at once, off its slot,
+	// and its next slot can come up to 29 ticks later; that first sample
+	// ages out before it, leaving exactly 3 fresh for up to about 40 s.
 	NTSShiftMinServers   = 4 + NTSShiftSpares
 	NTSShiftMinGap       = 60 * time.Second
 	NTSShiftLength       = 15 * time.Minute

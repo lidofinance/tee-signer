@@ -195,17 +195,20 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   by default). The runner turns it on when its image dials 7 servers or
   more: 4 actives and 3 kept for fallbacks with 7, 5 actives from 8 on
   (`clock.ShiftActives`). With 4 actives the quorum is 3 of 4, so two
-  wrong at once (a leap smear plus one more) stop it, and right after a
-  handover the newcomer's first sample can age out before its first slot,
-  leaving exactly 3 fresh for a while. Seeded with an HMAC of the sealing
+  wrong at once (a leap smear plus one more) stop it: 15.6 % of the time
+  against 0.07 % with 5 actives, in a simulation of 10 runs of 6 h. The
+  newcomer of a handover is asked at once, off its slot, and its next slot
+  can come up to 116 s later, so that first sample ages out before it and
+  exactly 3 are fresh for up to about 40 s. Seeded with an HMAC of the sealing
   key (`platform.ScheduleSeed`), which the host does not know. With the 4
   servers the image dials today (the catalog's default set) it stays off.
   It asks public servers less
   often and keeps the quorum alive when operators fail:
   - Time is counted in ticks of 4 s since the start round. The start round
     asks every operator once, after a random wait under 10 s.
-  - 5 operators are active, each asked on its own slot of a 60 s grid
-    (slots 12 s apart, the phase from the seed). Two contacts with one
+  - `ShiftActives(n)` operators are active (4 of 7, 5 from 8), each asked
+    on its own slot of a 60 s grid (slots 12 s apart with 5, 12 to 16 s
+    with 4, the phase from the seed). Two contacts with one
     operator start at least 60 s apart (a contact that runs NTS-KE first
     sends its query a few seconds later); a RATE doubles that operator's
     gap up to 1024 s.
@@ -225,7 +228,7 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
     up to 90 s instead of 60 s; the 106 s case above does not depend on
     it, and the restart floor's 384 s epoch covers both.
   - The quorum is the majority rule over the fresh samples, so 5 actives
-    give a time with 2 of them wrong or missing.
+    give a time with 2 of them wrong or missing, and 4 actives with 1.
   - Consecutive quorums share most members, so a jump of the local
     counter first shows as outvoted samples. In the simulation a 2 s jump
     was served for 24 to 32 s before the drift check refused it, inside
@@ -234,8 +237,8 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
     answers, losses, fallbacks, bursts, RATE answers, handovers, failed
     handovers, fallbacks that needed NTS-KE first) and the fallbacks the
     cap refused. Fallbacks to an operator that often need NTS-KE mean its
-    cookies expire while it idles; an operator can idle for about (catalog
-    size - 5) x 15 minutes.
+    cookies expire while it idles; an operator can idle for about (n -
+    ShiftActives(n)) x 15 minutes: 45 minutes with 7 or 8 operators.
 - HEALTH `clock_nts.operators` has one entry per server the clock dials,
   with or without shifts, servers that never answered included:
   `operator`, `host`, `active`, `queries`, `answers`, `losses`, `ke_ok`,

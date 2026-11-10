@@ -555,7 +555,7 @@ func TestNTSShiftSevenServers(t *testing.T) {
 		checkMinGap(t, sc.name, r)
 		t.Logf("%s: blocked %v (%.3f%%), longest %v, %.1f q/h", sc.name, r.blocked, r.blockedPct(), r.longest, r.queriesPerHour)
 		switch sc.name {
-		case "healthy", "one active at 50% loss", "one operator wrong":
+		case "healthy", "one active at 50% loss", "two actives down", "one operator wrong":
 			if r.blocked != 0 {
 				t.Errorf("%s: blocked %v", sc.name, r.blocked)
 			}
