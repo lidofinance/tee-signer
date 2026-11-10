@@ -122,9 +122,13 @@ a restore reads the state only through a commit. So a write that fails at
 any step leaves the copy at the commit before; chunks without a commit are
 never read. If the create of the commit object fails without an answer,
 the runner reads the name back, and its own object there means the change
-landed. If the create lands only later, the next commit's create at that
-version finds it and the process stops changing state (`ErrLost`); a
-restart restores it.
+landed. The read back runs on a context of its own, up to three times, so
+it still finds a commit that landed when the create used up the commit's
+time limit or the first read is lost too. Each read has 20 s, so a
+commit takes at most 60 s plus 60 s for the read back. If the create lands only later,
+or every read back fails, the next commit's create at that version finds
+it and the process stops changing state (`ErrLost`); a restart restores
+it.
 
 The local store follows the copy: `Apply` writes the local files after the
 commit. If they fail, the process refuses further changes until a restart,
@@ -323,7 +327,11 @@ CCE policy hash or the image digest.
   release down, the value limit, refresh. Commits: each write of a
   three-object commit failed in turn, refused and with the reply lost, the
   copy holding the state before or after and the same process writing the
-  change again (`TestApplyAllOrNothing`); 4,000 random commits against a
+  change again (`TestApplyAllOrNothing`); a commit that landed while its
+  reply and then its first read back were lost, or its time limit ran
+  out, stands with no `ErrLost` after (`TestCommitLandedReplyAndReadBackLost`, and on the
+  share write path `TestShareWriteStateCopyLostReply` in
+  `tee-signer/server`); 4,000 random commits against a
   model with restarts from the copy alone (`TestCommitsAgainstModel`);
   8,192 keys written in batches, upload per batch flat, every object under 1 MiB, one small change one
   small object (`TestWriteCostPerSessionIsFlat`); a lost

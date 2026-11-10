@@ -375,7 +375,8 @@ func (s *Store) localEntries() (map[string][]byte, error) {
 }
 
 // putTimeout bounds one commit. Put and Apply have no context of their own.
-const putTimeout = 60 * time.Second
+// A variable so a test can shorten it.
+var putTimeout = 60 * time.Second
 
 func (s *Store) Get(key string) ([]byte, error)       { return s.local.Get(key) }
 func (s *Store) List(prefix string) ([]string, error) { return s.local.List(prefix) }

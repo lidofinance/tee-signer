@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/lidofinance/tee-signer/slashing-log"
 )
@@ -290,17 +291,21 @@ func (s *Store) createCommit(ctx context.Context, plain []byte) (uint64, []byte,
 		name := Name(s.setup, s.signer, v)
 		err = s.log.Create(ctx, name, obj)
 		if errors.Is(err, markstore.ErrExists) {
-			es, lerr := s.log.List(ctx, name)
-			if lerr != nil {
-				return 0, nil, fmt.Errorf("statestore: version %d exists and cannot be read back: %w", v, lerr)
-			}
-			var mine []markstore.Entry
-			for _, e := range es {
-				if e.Name == name {
-					mine = append(mine, e)
+			var found []*object
+			gerr := readBack(ctx, func(ctx context.Context) error {
+				es, err := s.log.List(ctx, name)
+				if err != nil {
+					return err
 				}
-			}
-			found, gerr := s.validAt(ctx, v, mine)
+				var mine []markstore.Entry
+				for _, e := range es {
+					if e.Name == name {
+						mine = append(mine, e)
+					}
+				}
+				found, err = s.validAt(ctx, v, mine)
+				return err
+			})
 			if gerr != nil {
 				return 0, nil, fmt.Errorf("statestore: version %d exists and cannot be read back: %w", v, gerr)
 			}
@@ -347,19 +352,56 @@ func (s *Store) createCommit(ctx context.Context, plain []byte) (uint64, []byte,
 // create at that version finds it and stops this process (ErrLost); a
 // restart then restores it.
 func (s *Store) landed(ctx context.Context, name string, obj []byte) bool {
-	es, err := s.log.List(ctx, name)
-	if err != nil {
-		return false
-	}
 	ok := false
-	for _, e := range es {
-		if e.Name != name {
-			continue
+	err := readBack(ctx, func(ctx context.Context) error {
+		es, err := s.log.List(ctx, name)
+		if err != nil {
+			return err
 		}
-		if b, err := s.log.Get(ctx, e); err != nil || !bytes.Equal(b, obj) {
-			return false
+		ok = false
+		for _, e := range es {
+			if e.Name != name {
+				continue
+			}
+			b, err := s.log.Get(ctx, e)
+			if err != nil {
+				return err
+			}
+			if !bytes.Equal(b, obj) {
+				return nil
+			}
+			ok = true
 		}
-		ok = true
+		return nil
+	})
+	return err == nil && ok
+}
+
+const (
+	readBackTries   = 3
+	readBackTimeout = 20 * time.Second
+	readBackPause   = 100 * time.Millisecond
+)
+
+// readBack runs read up to readBackTries times while it fails, each time
+// on a context of its own with readBackTimeout. A create that failed
+// without an answer may have spent the commit's time limit, and the reply
+// and the first read may be lost alike; with the commit's own context the
+// read back would fail where the commit landed, and the next commit at
+// that version would stop this process (ErrLost). A commit then takes at
+// most putTimeout plus readBackTries times readBackTimeout.
+func readBack(ctx context.Context, read func(context.Context) error) error {
+	var err error
+	for try := range readBackTries {
+		if try > 0 {
+			time.Sleep(readBackPause)
+		}
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), readBackTimeout)
+		err = read(rctx)
+		cancel()
+		if err == nil {
+			return nil
+		}
 	}
-	return ok
+	return err
 }
