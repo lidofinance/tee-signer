@@ -46,12 +46,12 @@ type resolved struct {
 }
 
 // DefaultNames are the NTP host names the runner's default NTS servers
-// (trusted-time/ntscatalog) can name: each server's own name, and
-// time.meta.com, which Meta's NTS-KE names. Netnod's NTS-KE names
-// addresses instead (DefaultNets). A tee-signer test checks both lists
-// against the catalog.
+// (trusted-time/ntscatalog) can send it to: each server's own name, which
+// the client uses when NTS-KE names none, and time.meta.com, which Meta's
+// NTS-KE names. Netnod's NTS-KE names addresses instead (DefaultNets). A
+// tee-signer test checks both lists against the catalog (ntscatalog.NTPHosts).
 var DefaultNames = []string{"time.cloudflare.com", "nts.netnod.se", "ptbtime1.ptb.de", "bevtime1.metrologie.at",
-	"nts1.ntp.hr", "time.meta.com", "ntp1.wiktel.com"}
+	"nts1.ntp.hr", "nts.meta.com", "time.meta.com", "ntp1.wiktel.com"}
 
 // DefaultPorts: NTP, and the port Netnod's NTS-KE negotiates.
 var DefaultPorts = []uint16{123, 4123}

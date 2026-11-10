@@ -96,8 +96,8 @@ while read -r port host hostport; do
     vsock-proxy "$port" "$host" "$hostport" --config /etc/nitro_enclaves/vsock-proxy.yaml
 done <<<"$ROUTES"
 
-# 2b. NTP of the NTS clock: vsock 7102 to UDP, to the allowlist of the four
-#     operators only (udprelay -h; the defaults are that list). It sees
+# 2b. NTP of the NTS clock: vsock 7102 to UDP, to the allowlist of the
+#     default NTS servers only (udprelay -h; the defaults are that list). It sees
 #     only NTS-protected packets: it can delay or drop them, not forge them.
 start /tmp/udprelay.log "$HERE/udprelay" -listen vsock:any:7102
 

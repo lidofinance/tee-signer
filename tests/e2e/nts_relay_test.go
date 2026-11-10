@@ -406,4 +406,26 @@ func TestE2ENTSRelayInterop(t *testing.T) {
 	if n < 3 {
 		t.Fatalf("the last status line has a quorum of %d, want at least 3: %s", n, last)
 	}
+	// The start round asks every server, so each default server must have
+	// answered at least once (peers: operator:samples/queries/keN,...), and
+	// the relay must have refused no destination: a missing NTP name would
+	// otherwise hide behind the 3 of 4 the quorum needs.
+	_, peers, _ := strings.Cut(last, `peers="`)
+	peers, _, _ = strings.Cut(peers, `"`)
+	answered := map[string]bool{}
+	for _, p := range strings.Fields(peers) {
+		op, rest, ok := strings.Cut(p, ":")
+		samples, _, _ := strings.Cut(rest, "/")
+		if s, err := strconv.Atoi(samples); ok && err == nil && s > 0 {
+			answered[op] = true
+		}
+	}
+	for op := range known {
+		if !answered[op] {
+			t.Errorf("default server %s never answered: %s", op, last)
+		}
+	}
+	if b, err := os.ReadFile(relayLog); err != nil || strings.Contains(string(b), "destination refused") {
+		t.Errorf("the relay refused a destination (or its log is unreadable: %v)", err)
+	}
 }

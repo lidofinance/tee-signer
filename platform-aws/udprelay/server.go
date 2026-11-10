@@ -20,8 +20,8 @@ import (
 // Server is the relay. It reads a destination, checks it against Allow,
 // and copies datagrams between the stream and a connected UDP socket.
 //
-// Limits (the defaults suit the runner's default NTS servers: up to 16
-// asked at once, as in the shift schedule's start round, then far fewer):
+// Limits (the defaults suit the runner's 7 default NTS servers: the shift
+// schedule's start round asks all 7 at once, later ticks one to a few):
 //
 //   - MaxSessions connections at once (16); one over it is refused.
 //   - A session ends after Idle without a datagram either way (10 s) and

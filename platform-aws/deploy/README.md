@@ -686,9 +686,10 @@ destination it accepted.
 
 ### Allowlist
 
-The destination's port must be 123 or 4123. A name must be one of the four
-NTS-KE host names; the relay resolves it itself and sends to the first IPv4
-address. An address must lie in `194.58.200.0/21` or be one that one of the
+The destination's port must be 123 or 4123. A name must be one of the NTP
+host names of the default NTS servers (`udprelay.DefaultNames`: each
+server's own name and `time.meta.com`); the relay resolves it itself and
+sends to the first IPv4 address. An address must lie in `194.58.200.0/21` or be one that one of the
 allowed names resolves to now (cached 5 minutes, a failed lookup 30 s).
 Nothing else goes out and no other name is resolved. The block is for
 Netnod: each IPv4 address of `nts.netnod.se` names a different NTP server by
@@ -703,8 +704,10 @@ until `-allow-nets` is extended.
 
 16 sessions at once; a session ends 10 s after its last datagram or 30 s
 after it began; 8 datagrams out per session; 10 datagrams per second out in
-all (burst 20) and 0.5 per second to one address (burst 4). The clock asks
-each server every 16 s at most, so a normal minute is 15 datagrams. Over a
+all (burst 20) and 0.5 per second to one address (burst 4). Under the shift
+schedule the clock asks each server at most once per 60 s: 4 actives make
+4 datagrams a normal minute, plus fallbacks; the start round asks all 7 at
+once. Over a
 limit the datagram is dropped and counted, as a network would drop it.
 `udprelay` logs its counters every 10 minutes.
 
@@ -712,17 +715,18 @@ limit the datagram is dropped and counted, as a network would drop it.
 
 Delay or drop NTS-KE and NTP. A delayed answer widens that sample's bound by
 half the delay and cannot move the time outside it; dropped answers stop
-signing once the oldest sample of the last quorum is 60 s old (or the bound,
+signing once the oldest sample of the last quorum is 90 s old (or the bound,
 aged by 500 ppm, reaches 100 ms first). It cannot forge: TLS 1.3 with pinned roots ends in the
 enclave, and every NTP answer carries the NTS authenticator with keys from
 that TLS session (AES-SIV-CMAC-256). It can send unauthenticated
 Kiss-o'-Death packets with our unique identifier, which may disable a server
-(RFC 8915 section 5.7 allows the client to act on them); two of four
-disabled stop the quorum, so signing stops: fail closed. The host also runs
+(RFC 8915 section 5.7 allows the client to act on them). A disabled
+active's slots go to fallbacks among the other servers; with too few
+servers answering, signing stops: fail closed. The host also runs
 the enclave's CPU counter, the clock's local time (`CLOCK_MONOTONIC_RAW`);
 the drift check against a quorum 17 minutes old refuses a rate beyond
 500 ppm. While it blocks the servers, a counter it runs fast moves the time
-ahead by less than the 60 s sample age limit, see `trusted-time/docs/nts.md`.
+ahead by less than the 90 s sample age limit, see `trusted-time/docs/nts.md`.
 
 ### Security group
 

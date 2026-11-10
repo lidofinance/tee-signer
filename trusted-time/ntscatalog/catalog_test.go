@@ -38,7 +38,7 @@ func TestDefaultSet(t *testing.T) {
 
 func TestNTPHosts(t *testing.T) {
 	got := NTPHosts([]NTSServer{{Host: "a.example"}, {Host: "b.example", NTPNames: []string{"ntp.b.example"}}})
-	if strings.Join(got, ",") != "a.example,ntp.b.example" {
+	if strings.Join(got, ",") != "a.example,b.example,ntp.b.example" {
 		t.Fatalf("NTPHosts %v", got)
 	}
 }

@@ -305,16 +305,14 @@ func parseStatus(s string) (Status, error) {
 const MaxLabel = 32
 
 // NTPHosts are the NTP host names a runner that dials servers can be sent
-// to by their NTS-KE: each server's own name, or its NTPNames when it has
-// some. The Nitro UDP relay allowlist follows them for the Dialed set.
+// to: each server's own name, which the client uses when NTS-KE names no
+// NTP server (RFC 8915 section 4.1.7), then its NTPNames. The Nitro UDP
+// relay allowlist follows them for the Dialed set.
 func NTPHosts(servers []NTSServer) []string {
 	var out []string
 	for _, e := range servers {
-		if len(e.NTPNames) > 0 {
-			out = append(out, e.NTPNames...)
-		} else {
-			out = append(out, e.Host)
-		}
+		out = append(out, e.Host)
+		out = append(out, e.NTPNames...)
 	}
 	return out
 }
