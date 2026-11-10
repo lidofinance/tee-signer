@@ -206,3 +206,36 @@ func TestNTSScheduleNeedsEnoughServers(t *testing.T) {
 		}
 	}
 }
+
+// -nts-terms-confirmed adds catalog entries to the default set; id@host
+// picks an alt host. A bad value stops the clock from being built.
+func TestNTSTermsConfirmed(t *testing.T) {
+	t.Setenv("RUNNER_NTS_TERMS_CONFIRMED", "")
+	def, err := publicNTSServers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RUNNER_NTS_TERMS_CONFIRMED", "time.nl@any.time.nl")
+	got, err := publicNTSServers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(def)+1 || len(got) < ntsShiftMinServers {
+		t.Fatalf("%d servers with time.nl, %d without; shifts need %d", len(got), len(def), ntsShiftMinServers)
+	}
+	var found bool
+	for _, s := range got {
+		if s.Operator == "time.nl" && s.Host == "any.time.nl" && s.Roots != nil {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no time.nl on any.time.nl in %+v", got)
+	}
+	for _, bad := range []string{"nope", "cloudflare", "time.nl@ntppool2.time.nl", "time.nl,time.nl"} {
+		t.Setenv("RUNNER_NTS_TERMS_CONFIRMED", bad)
+		if _, err := publicNTSServers(); err == nil || !strings.Contains(err.Error(), "-nts-terms-confirmed") {
+			t.Errorf("%q: %v", bad, err)
+		}
+	}
+}

@@ -20,9 +20,9 @@ To move a running signer to a new image, see [docs/upgrade.md](../../docs/upgrad
 | `kms-key-policy.json.tmpl` | key policy: `Decrypt`/`GenerateDataKey` only with `kms:RecipientAttestation:PCR0/1/2/3`; `Encrypt` for the key admin only with exactly the encryption context `purpose=record-creds` (the record credentials), so the admin cannot make a sealing key (`purpose=sealing`) or a mark log key (`signer-key`), which carry setup_hash (`platform-aws/nitro`, `slashing-log/docs/marklog.md`, "Record keys"); `DescribeKey`, `GetKeyPolicy` and `ListGrants` for the parent role, which the runner reads at start for key_release_hash and the lock check (`platform-aws/nitro` KeyRule). `platform-aws/nitro/planting_test.go` evaluates these conditions. `scripts/kms-policy.sh` renders it per build to `build/nitro/kms-key-policy-<arch>.json` |
 | `main.tf` | KMS key (PCR0-3), parent role, enclave-enabled EC2 instance, the record writer user (the mark log's S3 credentials), the mark bucket's policy (`mark_bucket`), and an optional inbound rule for the network entry (`entry_cidrs`). Optional `ssh_public_key` and `ssh_cidrs` give a key pair and an SSH rule for the operator. Variables `instance_type` (default `c6g.large`) and `region` (default `eu-central-1`) are the Graviton choice, see "Graviton (arm64)". The name variables and `extra_egress` are in "Steps". `scripts/aws-tf-test.sh` tests it with a mock provider |
 | `target/main.tf` | a second signer next to a running one. Its own root module and state, so no plan of it can change the running signer. It reads the parent role, instance profile, security group and key pair by name. It makes a new KMS key that releases to the target EIF's PCR0..2 alone (the same PCR3, the parent role's read of the key and its policy, the admin's `record-creds` encrypt) and, with `instance = true`, a second `c6g.large` parent. The admin encrypts a second access key of the record writer under the new key. `scripts/tf-validate.sh` validates it |
-| `parent-run.sh` | parent setup: allocator, one vsock-proxy per route of the signer's setup (KMS, STS, the coarse-time host, the mark bucket, seven NTS-KE), the host agent with the setup (`SETUP`), udprelay, `nitro-cli run-enclave`, the forwarder (network entry). Runs on x86_64 and arm64 parents (`SETUP`, `CPU_COUNT`, `MEMORY_MIB`) |
+| `parent-run.sh` | parent setup: allocator, one vsock-proxy per route of the signer's setup (KMS, STS, the coarse-time host, the mark bucket, one NTS-KE route per catalog host), the host agent with the setup (`SETUP`), udprelay, `nitro-cli run-enclave`, the forwarder (network entry). Runs on x86_64 and arm64 parents (`SETUP`, `CPU_COUNT`, `MEMORY_MIB`) |
 | `../../platform-aws/cmd/forwarder` | the network entry: a plain TCP to vsock byte forwarder, no TLS. Built by `scripts/build-runner.sh`, started by `parent-run.sh` |
-| `../../platform-aws/cmd/udprelay` | the NTS clock's NTP path: vsock 7102 to UDP 123 and 4123, for an allowlist of the default NTS servers, with rate limits (package `platform-aws/udprelay`). Built by `scripts/build-runner.sh`, started by `parent-run.sh` |
+| `../../platform-aws/cmd/udprelay` | the NTS clock's NTP path: vsock 7102 to UDP 123 and 4123, for an allowlist of the catalog's NTS servers, with rate limits (package `platform-aws/udprelay`). Built by `scripts/build-runner.sh`, started by `parent-run.sh` |
 | `signer-runner.service`, `parent-service.sh`, `parent.env.example` | the parent as a systemd service: `parent-run.sh` at boot, a new start after the enclave or a parent tool ends, none after `systemctl stop` ("Restarts"). `scripts/aws-parent-service-test.sh` tests it with a fake `nitro-cli` |
 | `allocator.yaml`, `vsock-proxy.yaml` | parent config in the formats shipped with nitro-cli v1.5.2. `vsock-proxy.yaml` is an example: `parent-run.sh` writes the allowlist from the setup |
 
@@ -258,7 +258,8 @@ SETUP=signer-2.bin platform-aws/deploy/parent-run.sh               # on the pare
 - The routes follow from the setup over a fixed port map: KMS and STS of
   the key release region on vsock 8000 and 8001, `www.cloudflare.com` on
   8002, the mark bucket on 8004 and NTS-KE on the catalog ports of the
-  default servers (8005 to 8007, 8009 to 8011, 8015; trusted-time/ntscatalog).
+  catalog's hosts (8005 to 8018, trusted-time/ntscatalog Endpoints): the
+  parent cannot see which of them the enclave's command chose.
   `hostagent -setup FILE -proxy-routes` prints them; `parent-run.sh` starts
   one vsock-proxy per line and writes the allowlist. The coarse-time URLs
   name `{region}`; the runner fills in the setup's region.
@@ -318,7 +319,7 @@ signer is a new setup on the parent. The order of a deploy is in
  vsock-proxy 8000 -> kms.<region>:443  <-------- TLS from inside the enclave (KMS, Date header)
  vsock-proxy 8001/8002 -> time sources
  vsock-proxy 8004 -> <bucket>.s3.<region>:443 <-- mark log, signed with enclave-only keys
- vsock-proxy 8005-8015 -> NTS-KE (TCP 4460)
+ vsock-proxy 8005-8018 -> NTS-KE (TCP 4460)
 ```
 
 The signing client connects to the forwarder over TCP and never sees vsock (see
@@ -649,8 +650,9 @@ What the parent reports for the running enclave is the real check:
   clock is set at start and drifts; their fix reads time from the host
   ([Evervault](https://evervault.com/blog/how-we-built-enclaves-resolving-clock-drift-in-nitro-enclaves)),
   which is exactly what the floor must not trust. The image runs the NTS
-  clock instead (`-nts-clock`, next section): seven NTS operators on a
-  shift schedule, a quorum with an error bound, signing refused above
+  clock instead (`-nts-clock`, next section): the six default NTS
+  operators and any the image's command confirms (`-nts-terms-confirmed`;
+  from seven a shift schedule), a quorum with an error bound, signing refused above
   100 ms or when the samples are over 90 s old. The parent can delay or
   drop that traffic but not forge it. The same clock checks the dates of
   client certificates. HTTPS Date readings over vsock-proxy are its coarse
@@ -664,7 +666,7 @@ therefore takes two paths out, both through the parent and both untrusted:
 
 | Traffic | Enclave side | Parent side | Destination |
 | --- | --- | --- | --- |
-| NTS-KE, TLS 1.3 | `proxy=` routes `time.cloudflare.com:4460=vsock:3:8005`, `nts.netnod.se:4460=vsock:3:8006`, `ptbtime1.ptb.de:4460=vsock:3:8007`, `bevtime1.metrologie.at:4460=vsock:3:8009`, `nts1.ntp.hr:4460=vsock:3:8010`, `nts.meta.com:4460=vsock:3:8011`, `ntp1.wiktel.com:4460=vsock:3:8015` | vsock-proxy, allowlist in `vsock-proxy.yaml` | the seven default hosts, TCP 4460 |
+| NTS-KE, TLS 1.3 | `proxy=` routes `time.cloudflare.com:4460=vsock:3:8005`, `nts.netnod.se:4460=vsock:3:8006`, `ptbtime1.ptb.de:4460=vsock:3:8007` ... `any.time.nl:4460=vsock:3:8018`, one per catalog host | vsock-proxy, allowlist in `vsock-proxy.yaml` | the catalog's hosts, TCP 4460 |
 | NTP with NTS fields | `ntp_relay=vsock:3:7102` | `udprelay -listen vsock:any:7102` | the NTP server each NTS-KE named, UDP 123 or 4123 |
 | coarse check (HTTPS Date) | the routes 8000 to 8002 | vsock-proxy | KMS, STS, `www.cloudflare.com` |
 
@@ -687,7 +689,7 @@ destination it accepted.
 ### Allowlist
 
 The destination's port must be 123 or 4123. A name must be one of the NTP
-host names of the default NTS servers (`udprelay.DefaultNames`: each
+host names of every catalog host (`udprelay.DefaultNames`: each
 server's own name and `time.meta.com`); the relay resolves it itself and
 sends to the first IPv4 address. An address must lie in `194.58.200.0/21` or be one that one of the
 allowed names resolves to now (cached 5 minutes, a failed lookup 30 s).
@@ -695,7 +697,7 @@ Nothing else goes out and no other name is resolved. The block is for
 Netnod: each IPv4 address of `nts.netnod.se` names a different NTP server by
 address, port 4123, in `194.58.203.x` to `194.58.207.x`, and none of them is
 an address of the name. Meta's NTS-KE names time.meta.com, which is on the
-list; the other default servers name themselves. If
+list; the other servers name themselves. If
 Netnod moves its NTP servers out of the block, the relay refuses them
 (`destination refused` in its log) and the quorum runs on the others
 until `-allow-nets` is extended.
@@ -706,8 +708,8 @@ until `-allow-nets` is extended.
 after it began; 8 datagrams out per session; 10 datagrams per second out in
 all (burst 20) and 0.5 per second to one address (burst 4). Under the shift
 schedule the clock asks each server at most once per 60 s: 4 actives make
-4 datagrams a normal minute, plus fallbacks; the start round asks all 7 at
-once. Over a
+4 datagrams a normal minute, plus fallbacks; the start round asks every dialed
+server at once. Over a
 limit the datagram is dropped and counted, as a network would drop it.
 `udprelay` logs its counters every 10 minutes.
 

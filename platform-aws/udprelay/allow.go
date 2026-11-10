@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/lidofinance/tee-signer/trusted-time/ntscatalog"
 )
 
 // Allowlist decides which destinations the relay sends to. A destination is
@@ -45,25 +47,30 @@ type resolved struct {
 	at    time.Time
 }
 
-// DefaultNames are the NTP host names the runner's default NTS servers
-// (trusted-time/ntscatalog) can send it to: each server's own name, which
-// the client uses when NTS-KE names none, and time.meta.com, which Meta's
-// NTS-KE names. Netnod's NTS-KE names addresses instead (DefaultNets). A
-// tee-signer test checks both lists against the catalog (ntscatalog.NTPHosts).
-var DefaultNames = []string{"time.cloudflare.com", "nts.netnod.se", "ptbtime1.ptb.de", "bevtime1.metrologie.at",
-	"nts1.ntp.hr", "nts.meta.com", "time.meta.com", "ntp1.wiktel.com"}
+// DefaultNames are the NTP host names of every NTS-KE host a runner of this
+// image may dial (trusted-time/ntscatalog Endpoints and NTPHosts): each
+// host's own name, which the client uses when NTS-KE names none, and the
+// names NTS-KE servers name instead (Meta: time.meta.com). The parent cannot
+// see which servers the enclave's command chose, so it allows all of them.
+var DefaultNames = ntscatalog.NTPHosts(ntscatalog.Builtin.Endpoints())
 
 // DefaultPorts: NTP, and the port Netnod's NTS-KE negotiates.
 var DefaultPorts = []uint16{123, 4123}
 
-// DefaultNets hold the NTP servers that Netnod's NTS-KE servers name: each
-// IPv4 address of nts.netnod.se names another NTP server in 194.58.203.0 to
-// 194.58.207.255, port 4123, none of them an address of nts.netnod.se.
-var DefaultNets = []netip.Prefix{
-	netip.MustParsePrefix("194.58.200.0/21"),
+// DefaultNets hold NTP servers that NTS-KE servers name by address outside
+// their own names' addresses (Netnod: each IPv4 address of nts.netnod.se
+// names another NTP server in 194.58.203.0 to 194.58.207.255, port 4123).
+var DefaultNets = defaultNets()
+
+func defaultNets() []netip.Prefix {
+	var out []netip.Prefix
+	for _, n := range ntscatalog.NTPNets(ntscatalog.Builtin.Endpoints()) {
+		out = append(out, netip.MustParsePrefix(n)) // ntscatalog.Check parsed them
+	}
+	return out
 }
 
-// Default is the allowlist of the runner's default NTS servers.
+// Default is the allowlist of the NTS servers a runner of this image may dial.
 func Default() *Allowlist {
 	return &Allowlist{Names: slices.Clone(DefaultNames), Nets: slices.Clone(DefaultNets), Ports: slices.Clone(DefaultPorts)}
 }

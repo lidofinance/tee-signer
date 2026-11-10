@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/lidofinance/tee-signer/governance/setupwire"
+	"github.com/lidofinance/tee-signer/trusted-time/ntscatalog"
 )
 
 // The Nitro port map, fixed in the image. The
@@ -24,18 +25,19 @@ const (
 	PortMarkBucket = 8004
 )
 
-// NitroNTSKE are the NTS-KE servers of the NTS clock (trusted-time/ntscatalog,
-// its default set) on their fixed catalog ports. A port belongs to its
-// catalog entry for good, so the set has gaps (8008 was TimeNL's). A
-// tee-signer test checks hosts and ports against the catalog.
-var NitroNTSKE = []Route{
-	{Port: 8005, Host: "time.cloudflare.com", HostPort: 4460},
-	{Port: 8006, Host: "nts.netnod.se", HostPort: 4460},
-	{Port: 8007, Host: "ptbtime1.ptb.de", HostPort: 4460},
-	{Port: 8009, Host: "bevtime1.metrologie.at", HostPort: 4460},
-	{Port: 8010, Host: "nts1.ntp.hr", HostPort: 4460},
-	{Port: 8011, Host: "nts.meta.com", HostPort: 4460},
-	{Port: 8015, Host: "ntp1.wiktel.com", HostPort: 4460},
+// NitroNTSKE are the NTS-KE hosts a runner of this image may dial
+// (trusted-time/ntscatalog Endpoints) on their fixed catalog ports. The
+// parent routes all of them, since it cannot see which ones the enclave's
+// command chose (-nts-terms-confirmed); the enclave dials only its own
+// choice. A port belongs to its catalog host for good.
+var NitroNTSKE = nitroNTSKE()
+
+func nitroNTSKE() []Route {
+	var out []Route
+	for _, e := range ntscatalog.Builtin.Endpoints() {
+		out = append(out, Route{Port: e.NitroPort, Host: e.Host, HostPort: 4460})
+	}
+	return out
 }
 
 // CoarseHost is the coarse-time host that names no region.

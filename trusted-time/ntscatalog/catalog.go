@@ -90,11 +90,56 @@ type NTSServer struct {
 }
 
 // AltHost is another NTS-KE host of an entry's operator. Roots empty: the
-// entry's roots.
+// entry's roots. NitroPort set: a deployment may choose it in place of the
+// entry's host (-nts-terms-confirmed id@host), and Nitro routes it on that
+// port; 0: listed for reference only.
 type AltHost struct {
-	Host  string
-	Roots []string
-	Note  string
+	Host      string
+	Roots     []string
+	NitroPort uint32
+	Note      string
+}
+
+// Endpoint is one NTS-KE host a runner of this image may dial: an entry's
+// host, or an alt host with a Nitro port, with the roots and NTP names that
+// go with it.
+type Endpoint struct {
+	ID        string // the entry
+	Operator  string
+	Host      string
+	Roots     []string
+	NTPNames  []string
+	NTPNets   []string
+	NitroPort uint32
+}
+
+// Endpoints are every host a runner of this image may dial, in catalog
+// order: each entry that is not withdrawn, then its alt hosts that have a
+// Nitro port. The Nitro parent routes all of them (platform/setup) and its
+// UDP relay allows their NTP hosts, since the parent cannot see which ones
+// the enclave's command chose; the enclave dials only its own choice.
+func (c *Catalog) Endpoints() []Endpoint {
+	var out []Endpoint
+	for _, e := range c.NTS {
+		if e.Status == Withdrawn {
+			continue
+		}
+		out = append(out, e.endpoint())
+		for _, a := range e.Alt {
+			if a.NitroPort != 0 {
+				out = append(out, e.altEndpoint(a))
+			}
+		}
+	}
+	return out
+}
+
+func (e NTSServer) altEndpoint(a AltHost) Endpoint {
+	roots := a.Roots
+	if len(roots) == 0 {
+		roots = e.Roots
+	}
+	return Endpoint{ID: e.ID, Operator: e.Operator, Host: a.Host, Roots: roots, NitroPort: a.NitroPort}
 }
 
 // Terms of an operator, as its own published pages state them.
@@ -172,9 +217,10 @@ type jsonServer struct {
 	TermsURL  string   `json:"terms_url"`
 	Regions   []string `json:"regions"`
 	Alt       []struct {
-		Host  string   `json:"host"`
-		Roots []string `json:"roots"`
-		Note  string   `json:"note"`
+		Host      string   `json:"host"`
+		Roots     []string `json:"roots"`
+		NitroPort uint32   `json:"nitro_port"`
+		Note      string   `json:"note"`
 	} `json:"alt"`
 	Default bool   `json:"default"`
 	Note    string `json:"note"`
@@ -211,7 +257,7 @@ func Parse(b []byte) (Catalog, error) {
 			NTPNets: r.NTPNets, NTPNames: r.NTPNames, NitroPort: r.NitroPort, Status: s, Terms: t, TermsURL: r.TermsURL,
 			Regions: r.Regions, Default: r.Default, Note: r.Note}
 		for _, a := range r.Alt {
-			e.Alt = append(e.Alt, AltHost{Host: a.Host, Roots: a.Roots, Note: a.Note})
+			e.Alt = append(e.Alt, AltHost{Host: a.Host, Roots: a.Roots, NitroPort: a.NitroPort, Note: a.Note})
 		}
 		c.NTS = append(c.NTS, e)
 	}
@@ -226,7 +272,7 @@ func Parse(b []byte) (Catalog, error) {
 var formatKeys = map[string][]string{
 	"":           {"nts"},
 	"nts[]":      {"id", "host", "operator", "roots", "ntp_nets", "ntp_names", "nitro_port", "status", "terms", "terms_url", "regions", "alt", "default", "note"},
-	"nts[]alt[]": {"host", "roots", "note"},
+	"nts[]alt[]": {"host", "roots", "nitro_port", "note"},
 }
 
 // strictKeys walks the whole document once: every object key must appear
@@ -304,15 +350,28 @@ func parseStatus(s string) (Status, error) {
 // the Rust core refuses longer operator labels (MAX_OPERATOR_LEN).
 const MaxLabel = 32
 
-// NTPHosts are the NTP host names a runner that dials servers can be sent
-// to: each server's own name, which the client uses when NTS-KE names no
-// NTP server (RFC 8915 section 4.1.7), then its NTPNames. The Nitro UDP
-// relay allowlist follows them for the Dialed set.
-func NTPHosts(servers []NTSServer) []string {
+// NTPHosts are the NTP host names a runner that dials endpoints can be
+// sent to: each host, which the client uses when NTS-KE names no NTP
+// server (RFC 8915 section 4.1.7), then its NTPNames. The Nitro UDP relay
+// allows them for Endpoints.
+func NTPHosts(eps []Endpoint) []string {
 	var out []string
-	for _, e := range servers {
+	for _, e := range eps {
 		out = append(out, e.Host)
 		out = append(out, e.NTPNames...)
+	}
+	return out
+}
+
+// NTPNets are the NTP address blocks of eps, without repeats.
+func NTPNets(eps []Endpoint) []string {
+	var out []string
+	for _, e := range eps {
+		for _, n := range e.NTPNets {
+			if !slices.Contains(out, n) {
+				out = append(out, n)
+			}
+		}
 	}
 	return out
 }
@@ -327,6 +386,51 @@ func (c *Catalog) Dialed() []NTSServer {
 		}
 	}
 	return out
+}
+
+// WithConfirmed is the Dialed set plus the entries ids names, in catalog
+// order: what a deployment dials whose writer confirmed those operators'
+// terms (the runner's -nts-terms-confirmed). An id must name an entry that
+// is not Default; a withdrawn one is refused, since the image no longer
+// trusts it. Ask and open entries both qualify. A spec is "id", for the
+// entry's host, or "id@host" for one of its alt hosts that has a Nitro
+// port (Endpoints routes only those).
+func (c *Catalog) WithConfirmed(specs []string) ([]Endpoint, error) {
+	want := map[string]string{} // id -> chosen host, "" for the entry's own
+	for _, s := range specs {
+		id, host, _ := strings.Cut(s, "@")
+		if _, dup := want[id]; dup {
+			return nil, fmt.Errorf("ntscatalog: %q named twice", id)
+		}
+		want[id] = host
+	}
+	var out []Endpoint
+	for _, e := range c.NTS {
+		host, named := want[e.ID]
+		delete(want, e.ID)
+		switch {
+		case named && e.Default:
+			return nil, fmt.Errorf("ntscatalog: %q is in the default set already", e.ID)
+		case named && e.Status == Withdrawn:
+			return nil, fmt.Errorf("ntscatalog: %q is withdrawn from this image", e.ID)
+		case named && host != "" && host != e.Host:
+			i := slices.IndexFunc(e.Alt, func(a AltHost) bool { return a.Host == host && a.NitroPort != 0 })
+			if i < 0 {
+				return nil, fmt.Errorf("ntscatalog: %q has no alt host %q with a Nitro port", e.ID, host)
+			}
+			out = append(out, e.altEndpoint(e.Alt[i]))
+		case named, e.Default && e.Status != Withdrawn:
+			out = append(out, e.endpoint())
+		}
+	}
+	for id := range want {
+		return nil, fmt.Errorf("ntscatalog: no entry %q", id)
+	}
+	return out, nil
+}
+
+func (e NTSServer) endpoint() Endpoint {
+	return Endpoint{ID: e.ID, Operator: e.Operator, Host: e.Host, Roots: e.Roots, NTPNames: e.NTPNames, NTPNets: e.NTPNets, NitroPort: e.NitroPort}
 }
 
 // ForRegion are the active entries a new setup for region may name, in
@@ -454,6 +558,15 @@ func (c *Catalog) Check() error {
 			return fmt.Errorf("ntscatalog: vsock port %d for %s and %s", e.NitroPort, prev, e.ID)
 		}
 		ports[e.NitroPort] = e.ID
+		for _, a := range e.Alt {
+			if a.NitroPort == 0 {
+				continue
+			}
+			if prev, dup := ports[a.NitroPort]; dup {
+				return fmt.Errorf("ntscatalog: vsock port %d for %s and %s (%s)", a.NitroPort, prev, e.ID, a.Host)
+			}
+			ports[a.NitroPort] = e.ID + "@" + a.Host
+		}
 	}
 	return nil
 }

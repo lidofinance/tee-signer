@@ -71,10 +71,10 @@
         {"host": "ntppool2.time.nl"},
         {"host": "ntppool3.time.nl"},
         {"host": "ntppool4.time.nl"},
-        {"host": "any.time.nl", "roots": ["harica-tls-rsa-root-2021.pem", "harica-root-2015.pem"],
-         "note": "Anycast, stratum 2, called experimental by TimeNL. Under 10 ms from every GCP test point on 2026-11-10."}
+        {"host": "any.time.nl", "roots": ["harica-tls-rsa-root-2021.pem", "harica-root-2015.pem"], "nitro_port": 8018,
+         "note": "Anycast, stratum 2, called experimental by TimeNL. 2 to 8 ms and 16/16 from every GCP test point on 2026-11-10. Chosen with -nts-terms-confirmed time.nl@any.time.nl."}
       ],
-      "note": "TimeNL / SIDN Labs. Fair use with a 1024 s poll interval, no hard-coding in mass-market products; the runner polls far more often, and spreading queries over the alt hosts does not change that, since the policy is per client. In the default set of images before 2026-11; left it for its terms."
+      "note": "TimeNL / SIDN Labs. Fair use with a 1024 s poll interval, no hard-coding in mass-market products; the runner polls far more often, and spreading queries over the hosts does not change that, since the policy is per client. Not in the default set for its terms; a deployment that confirmed them adds it (-nts-terms-confirmed time.nl, or time.nl@<host> for an alt host with a Nitro port)."
     },
     {
       "id": "bev",
@@ -106,8 +106,7 @@
       "alt": [
         {"host": "nts2.ntp.hr"}
       ],
-      "default": true,
-      "note": "University of Zagreb FER, stratum 1 GNSS. Public and free; large users should run their own secondary. Rejects stale cookies with the kiss code NTS and a zero octet; keeps cookies 3 to 4 h. NTS-KE timed out from all six non-EU GCP regions on 2026-11-10, so eu only."
+      "note": "University of Zagreb FER, stratum 1 GNSS. Public and free; large users should run their own secondary. Rejects stale cookies with the kiss code NTS and a zero octet; keeps cookies 3 to 4 h. NTS-KE timed out from all six non-EU GCP regions on 2026-11-10, so eu only. Left the default set on 2026-11-10: in a 15 min live run from Europe its NTS-KE failed twice and its handover failed on an NTP timeout."
     },
     {
       "id": "meta",

@@ -1,6 +1,7 @@
 package ntscatalog
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -16,9 +17,9 @@ func TestBuiltinIsConsistent(t *testing.T) {
 }
 
 // The default set holds only operators whose terms are open, active, and in
-// eu and na or global, so a runner that cannot name servers yet dials no
-// operator that asks for contact. It is large enough for the shift
-// schedule (7).
+// eu and na or global, so a runner dials no operator that asks for contact
+// unless its deployment confirmed it. It has 6: a deployment adds one more
+// (-nts-terms-confirmed) to run the shift schedule, which needs 7.
 func TestDefaultSet(t *testing.T) {
 	var ids []string
 	for _, e := range Builtin.Dialed() {
@@ -31,15 +32,97 @@ func TestDefaultSet(t *testing.T) {
 			t.Errorf("default %s: regions %v, not eu", e.ID, e.Regions)
 		}
 	}
-	if strings.Join(ids, ",") != "cloudflare,netnod,ptb,bev,fer,meta,wiktel" {
+	if strings.Join(ids, ",") != "cloudflare,netnod,ptb,bev,meta,wiktel" {
 		t.Fatalf("default set %v", ids)
 	}
 }
 
-func TestNTPHosts(t *testing.T) {
-	got := NTPHosts([]NTSServer{{Host: "a.example"}, {Host: "b.example", NTPNames: []string{"ntp.b.example"}}})
-	if strings.Join(got, ",") != "a.example,b.example,ntp.b.example" {
+func TestNTPHostsAndNets(t *testing.T) {
+	eps := []Endpoint{{Host: "a.example", NTPNets: []string{"192.0.2.0/24"}},
+		{Host: "b.example", NTPNames: []string{"ntp.b.example"}, NTPNets: []string{"192.0.2.0/24", "198.51.100.0/24"}}}
+	if got := NTPHosts(eps); strings.Join(got, ",") != "a.example,b.example,ntp.b.example" {
 		t.Fatalf("NTPHosts %v", got)
+	}
+	if got := NTPNets(eps); strings.Join(got, ",") != "192.0.2.0/24,198.51.100.0/24" {
+		t.Fatalf("NTPNets %v", got)
+	}
+}
+
+func confirmCatalog() Catalog {
+	return Catalog{NTS: []NTSServer{
+		{ID: "d", Operator: "op-d", Host: "d.example", Roots: []string{"r.pem"}, NitroPort: 9001, Default: true},
+		{ID: "t", Operator: "op-t", Host: "t1.example", Roots: []string{"r.pem"}, NitroPort: 9002, Terms: Ask,
+			Alt: []AltHost{{Host: "t2.example"}, {Host: "any.t.example", Roots: []string{"s.pem"}, NitroPort: 9010}}},
+		{ID: "gone", Operator: "op-g", Host: "g.example", Roots: []string{"r.pem"}, NitroPort: 9003, Status: Withdrawn, Default: true},
+		{ID: "x", Operator: "op-x", Host: "x.example", Roots: []string{"r.pem"}, NitroPort: 9004, Status: Withdrawn},
+	}}
+}
+
+func TestWithConfirmed(t *testing.T) {
+	c := confirmCatalog()
+	hosts := func(eps []Endpoint) string {
+		var s []string
+		for _, e := range eps {
+			s = append(s, e.Host+"/"+e.Operator+"/"+strings.Join(e.Roots, "+"))
+		}
+		return strings.Join(s, ",")
+	}
+	for _, tc := range []struct {
+		specs []string
+		want  string
+	}{
+		{nil, "d.example/op-d/r.pem"},
+		{[]string{"t"}, "d.example/op-d/r.pem,t1.example/op-t/r.pem"},
+		{[]string{"t@t1.example"}, "d.example/op-d/r.pem,t1.example/op-t/r.pem"},
+		{[]string{"t@any.t.example"}, "d.example/op-d/r.pem,any.t.example/op-t/s.pem"},
+	} {
+		eps, err := c.WithConfirmed(tc.specs)
+		if err != nil || hosts(eps) != tc.want {
+			t.Errorf("%v: %s %v, want %s", tc.specs, hosts(eps), err, tc.want)
+		}
+	}
+	if eps, _ := c.WithConfirmed([]string{"t@any.t.example"}); eps[1].NitroPort != 9010 {
+		t.Errorf("alt port %d", eps[1].NitroPort)
+	}
+	for _, tc := range []struct {
+		specs []string
+		want  string
+	}{
+		{[]string{"t", "t@any.t.example"}, "twice"},
+		{[]string{"d"}, "default set already"},
+		{[]string{"x"}, "withdrawn"},
+		{[]string{"nope"}, "no entry"},
+		{[]string{"t@t2.example"}, "no alt host"},
+		{[]string{"t@other.example"}, "no alt host"},
+	} {
+		if _, err := c.WithConfirmed(tc.specs); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%v: %v, want %q", tc.specs, err, tc.want)
+		}
+	}
+}
+
+// Endpoints: every entry that is not withdrawn, then its alt hosts with a
+// Nitro port; the built-in catalog routes TimeNL's anycast host too.
+func TestEndpoints(t *testing.T) {
+	var got []string
+	c := confirmCatalog()
+	for _, e := range c.Endpoints() {
+		got = append(got, fmt.Sprintf("%s:%d", e.Host, e.NitroPort))
+	}
+	if strings.Join(got, ",") != "d.example:9001,t1.example:9002,any.t.example:9010" {
+		t.Fatalf("endpoints %v", got)
+	}
+	var any bool
+	for _, e := range Builtin.Endpoints() {
+		if e.Host == "any.time.nl" && e.ID == "time.nl" && e.NitroPort == 8018 {
+			any = true
+		}
+	}
+	if !any {
+		t.Error("any.time.nl is not a built-in endpoint on port 8018")
+	}
+	if _, err := Builtin.WithConfirmed([]string{"time.nl@any.time.nl"}); err != nil {
+		t.Error(err)
 	}
 }
 
@@ -90,6 +173,7 @@ func TestCheckRefuses(t *testing.T) {
 		"ntp name port":    {func(c *Catalog) { c.NTS[0].NTPNames = []string{"ntp.a.example:123"} }, "NTP name"},
 		"no port":          {func(c *Catalog) { c.NTS[0].NitroPort = 0 }, "no vsock port"},
 		"shared port":      {func(c *Catalog) { c.NTS[1].NitroPort = 9001 }, "vsock port 9001"},
+		"alt shares port":  {func(c *Catalog) { c.NTS[0].Alt[0].NitroPort = 9002 }, "vsock port 9002"},
 	} {
 		c := okCatalog()
 		tc.edit(&c)

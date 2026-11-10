@@ -33,8 +33,8 @@ func TestNTSCoarseURLsRegion(t *testing.T) {
 	}
 }
 
-// The fixed Nitro port map routes the NTS-KE servers the NTS clock dials,
-// and the coarse-time hosts of the image's URLs.
+// The fixed Nitro port map routes every NTS-KE server the NTS clock dials by
+// default (it routes the rest of the catalog too, for -nts-terms-confirmed).
 func TestNitroPortMapMatchesTheNTSServers(t *testing.T) {
 	var hosts []string
 	for _, r := range setup.NitroNTSKE {
@@ -43,11 +43,9 @@ func TestNitroPortMapMatchesTheNTSServers(t *testing.T) {
 		}
 		hosts = append(hosts, r.Host)
 	}
-	var want []string
 	for _, s := range nts.PublicServers {
-		want = append(want, s.Host)
-	}
-	if !slices.Equal(hosts, want) {
-		t.Fatalf("port map NTS-KE hosts %v, the NTS clock dials %v", hosts, want)
+		if !slices.Contains(hosts, s.Host) {
+			t.Errorf("the NTS clock dials %s, the port map does not route it: %v", s.Host, hosts)
+		}
 	}
 }

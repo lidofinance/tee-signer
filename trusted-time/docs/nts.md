@@ -193,7 +193,7 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   clock moves neither. HTTPS-date is no longer a signing clock, but it
   is still the coarse check, so this residual stays.
 - Shift schedule (`clock.NTS.Shifts` or `ScheduleSeed`, `ntsshift.go`; off
-  by default). The runner turns it on when its image dials 7 servers or
+  by default). The runner turns it on when it dials 7 servers or
   more: 4 actives and 3 kept for fallbacks with 7, 5 actives from 8 on
   (`clock.ShiftActives`). With 4 actives the quorum is 3 of 4, so two
   wrong at once (a leap smear plus one more) stop it: 15.6 % of the time
@@ -202,7 +202,8 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   can come up to 116 s later, so that first sample ages out before it and
   exactly 3 are fresh for up to about 40 s. Seeded with an HMAC of the sealing
   key (`platform.ScheduleSeed`), which the host does not know. The
-  catalog's default set has 7 servers, so the runner runs it (4 actives).
+  catalog's default set has 6 servers, so a runner runs it only when its
+  image's command adds one or more (`-nts-terms-confirmed`).
   It asks public servers less
   often and keeps the quorum alive when operators fail:
   - Time is counted in ticks of 4 s since the start round. The start round
@@ -307,12 +308,19 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   - `alt`: other hosts of the same operator (more sites, anycast). They count
     as the same operator and this image does not dial them.
   - `default`: dialed while setups cannot name servers. Only open
-    operators of eu and na (or global): Cloudflare, Netnod, PTB, BEV, FER,
-    Meta and Wiktel. Earlier images dialed Cloudflare, Netnod, PTB and
-    TimeNL; TimeNL left the set for its terms. A signer outside eu and na
-    gets fewer close servers from this set (Asia and Oceania: Cloudflare and
-    Meta only); there the setup tops the set up with `ask` operators once
-    setups can name servers.
+    operators of eu and na (or global): Cloudflare, Netnod, PTB, BEV, Meta
+    and Wiktel. Earlier images dialed Cloudflare, Netnod, PTB and TimeNL;
+    TimeNL left the set for its terms, FER for failing NTS-KE in a live run.
+    Six are too few for the shift schedule: a deployment adds the seventh,
+    an operator whose terms it confirmed, with `-nts-terms-confirmed` in the
+    image's measured command (for example `time.nl@any.time.nl`, TimeNL's
+    anycast host). Outside eu and na this set gives fewer close servers (Asia
+    and Oceania: Cloudflare and Meta only), so a deployment there adds more.
+    Once setups can name servers, the same choice moves into the setup.
+  - `alt` hosts with a `nitro_port` can be chosen in place of the entry's
+    host (`id@host`). The Nitro parent routes every entry and every such alt
+    host (`Endpoints`), and its UDP relay allows their NTP host names, since
+    it cannot see the enclave's command; the enclave dials only its choice.
   - `ntp_names`: NTP host names an NTS-KE server names other than its own
     (Meta's names time.meta.com). The Nitro UDP relay allows them.
 
@@ -520,7 +528,7 @@ cannot turn it off or point it elsewhere:
 
 | Image | Where the flags are | Coarse check URLs | Path to the NTS servers |
 | --- | --- | --- | --- |
-| AWS EIF | `platform-aws/deploy/enclave/Dockerfile` (PCR0, PCR2) | KMS, STS, `www.cloudflare.com`, through the platform's vsock-proxy routes | NTS-KE through vsock-proxy (catalog ports 8005 to 8007, 8009 to 8011 and 8015, TCP 4460), NTP through `udprelay` on the parent (vsock 7102) |
+| AWS EIF | `platform-aws/deploy/enclave/Dockerfile` (PCR0, PCR2) | KMS, STS, `www.cloudflare.com`, through the platform's vsock-proxy routes | NTS-KE through vsock-proxy (catalog ports 8005 to 8018, one per catalog host, TCP 4460), NTP through `udprelay` on the parent (vsock 7102) |
 | Azure | `platform-azure/deploy/aci-template.json` command (CCE policy hash) | `login.microsoftonline.com`, `management.azure.com`, `www.cloudflare.com` | ACI's default outbound access, direct |
 | GCP | `platform-gcp/deploy/Dockerfile` entrypoint (image digest) | `cloudkms.googleapis.com`, `sts.googleapis.com`, `www.cloudflare.com` | the VM's external address, direct (implied allow-all egress) |
 
@@ -537,7 +545,7 @@ dev platform and debug builds may run on the system clock.
 The UDP relay (`platform-aws/udprelay`, `platform-aws/deploy/README.md`, "NTS clock in the
 enclave"): one vsock connection per NTP query; frames of a u16 length and
 1 to 2048 octets; the destination first, then a status, then datagrams. It
-sends only to ports 123 and 4123, and only to one of the default servers'
+sends only to ports 123 and 4123, and only to one of the catalog hosts'
 NTP host names (resolved by the relay; `udprelay.DefaultNames`), an address those names resolve to, or
 Netnod's NTP block `194.58.200.0/21`. Rate limits per session, per address
 and in all. It cannot forge an answer (NTS authenticates every one), only

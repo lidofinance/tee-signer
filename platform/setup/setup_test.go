@@ -152,8 +152,10 @@ func TestNitroOptionsAndRoutes(t *testing.T) {
 	wantProxy := "kms.eu-west-1.amazonaws.com:443=vsock:3:8000,sts.eu-west-1.amazonaws.com:443=vsock:3:8001," +
 		"www.cloudflare.com:443=vsock:3:8002,signer-marks.s3.eu-west-1.amazonaws.com:443=vsock:3:8004," +
 		"time.cloudflare.com:4460=vsock:3:8005,nts.netnod.se:4460=vsock:3:8006,ptbtime1.ptb.de:4460=vsock:3:8007," +
+		"ntppool1.time.nl:4460=vsock:3:8008,any.time.nl:4460=vsock:3:8018," +
 		"bevtime1.metrologie.at:4460=vsock:3:8009,nts1.ntp.hr:4460=vsock:3:8010,nts.meta.com:4460=vsock:3:8011," +
-		"ntp1.wiktel.com:4460=vsock:3:8015"
+		"ntp.obspm.fr:4460=vsock:3:8012,ntp0.cam.ac.uk:4460=vsock:3:8013,time1.mbix.ca:4460=vsock:3:8014," +
+		"ntp1.wiktel.com:4460=vsock:3:8015,a.st1.ntp.br:4460=vsock:3:8016,time-gps.globalentry.systems:4460=vsock:3:8017"
 	if o["proxy"] != wantProxy {
 		t.Fatalf("proxy\n%s\nwant\n%s", o["proxy"], wantProxy)
 	}

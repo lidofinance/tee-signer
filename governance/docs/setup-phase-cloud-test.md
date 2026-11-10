@@ -239,7 +239,7 @@ Set these once per shell, from the deploy settings of each cloud.
    `platform-gcp/deploy/deploy.sh plan`, and
    `build/x86_64/bin/hostagent -setup setups/signer-2.setup -proxy-routes`,
    which prints the parent's routes as `parent-run.sh` will start them:
-   8000 to 8015 (the NTS-KE ports of the catalog's default servers).
+   8000 to 8018 (8005 and up: one NTS-KE port per catalog host).
 8. Negative setups for the lock check (C3): the same file with
    `slashing_log_min_lock_days = 2` and the names `lockneg-N`, written to
    `setups-neg/`.

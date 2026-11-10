@@ -18,6 +18,10 @@ package main
 //	                                                         from the setup), so one image serves every region
 //	-nts-wait 90s              RUNNER_NTS_WAIT=90s           how long start-up waits for the first quorum
 //	-nts-max-bound 100ms       RUNNER_NTS_MAX_BOUND=100ms    Now fails above this error bound; at most 250ms
+//	-nts-terms-confirmed a,b   RUNNER_NTS_TERMS_CONFIRMED    catalog entries (trusted-time/ntscatalog) dialed next to
+//	                                                         the default set, whose operators' terms the deployment's
+//	                                                         writer confirmed; id@host picks an alt host with a Nitro
+//	                                                         port (time.nl@any.time.nl)
 //	                           RUNNER_NTS_STATUS_EVERY=60s   period of the "nts: status" log line
 //
 // The clock dials through the platform (platform.Platform.Dial): on Nitro,
@@ -47,6 +51,7 @@ import (
 	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/trusted-time/clock"
 	"github.com/lidofinance/tee-signer/trusted-time/nts"
+	"github.com/lidofinance/tee-signer/trusted-time/ntscatalog"
 )
 
 var (
@@ -54,7 +59,23 @@ var (
 	ntsCoarseFlag   = flag.String("nts-coarse-urls", "", "comma-separated https URLs (3 or more) of the NTS clock's coarse check; default RUNNER_NTS_COARSE_URLS")
 	ntsWaitFlag     = flag.Duration("nts-wait", 0, "how long start-up waits for the first NTS quorum; 0 = RUNNER_NTS_WAIT or 90s")
 	ntsMaxBoundFlag = flag.Duration("nts-max-bound", 0, "signing fails above this NTS error bound, at most 250ms; 0 = RUNNER_NTS_MAX_BOUND or 100ms")
+	ntsConfirmFlag  = flag.String("nts-terms-confirmed", "", "comma-separated NTS catalog IDs (id or id@alt-host) whose operators' terms the deployment confirmed, dialed next to the default set; default RUNNER_NTS_TERMS_CONFIRMED")
 )
+
+// ntsConfirmed is -nts-terms-confirmed, or RUNNER_NTS_TERMS_CONFIRMED.
+func ntsConfirmed() []string {
+	list := *ntsConfirmFlag
+	if list == "" {
+		list = os.Getenv("RUNNER_NTS_TERMS_CONFIRMED")
+	}
+	var out []string
+	for _, s := range strings.Split(list, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
 
 // ntsMaxBoundCap is the largest -nts-max-bound the runner accepts. A
 // sample's bound is about half its round trip, so 250 ms leaves room for
@@ -225,13 +246,17 @@ func ntsCoarseURLs(region string) ([]string, error) {
 
 // publicNTSServers are nts.PublicServers with their pinned roots.
 func publicNTSServers() ([]clock.NTSServer, error) {
+	eps, err := ntscatalog.Builtin.WithConfirmed(ntsConfirmed())
+	if err != nil {
+		return nil, fmt.Errorf("nts clock: -nts-terms-confirmed (RUNNER_NTS_TERMS_CONFIRMED): %w", err)
+	}
 	var out []clock.NTSServer
-	for _, s := range nts.PublicServers {
-		pool, err := nts.RootPool(s.Roots)
+	for _, e := range eps {
+		pool, err := nts.RootPool(e.Roots)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, clock.NTSServer{Host: s.Host, Operator: s.Operator, Roots: pool})
+		out = append(out, clock.NTSServer{Host: e.Host, Operator: e.Operator, Roots: pool})
 	}
 	return out, nil
 }

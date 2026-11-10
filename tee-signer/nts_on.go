@@ -78,7 +78,7 @@ func ntsClockCheckWith(client *http.Client, dial nts.DialFunc, log *slog.Logger)
 	rerr := n.Refresh(ctx)
 	st := n.Status()
 	fmt.Println(nts.Version())
-	for _, s := range nts.PublicServers {
+	for _, s := range n.Servers {
 		p := st.Peers[s.Operator]
 		line := fmt.Sprintf("%-10s %-20s ke=%d queries=%d samples=%d", s.Operator, s.Host, p.Stats.KEOK, p.Stats.Queries, p.Stats.Samples)
 		if p.Sample != nil {

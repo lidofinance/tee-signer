@@ -11,7 +11,7 @@
 # Needs next to this script, all built for the arch of this instance
 # (uname -m): runner-<arch>.eif (scripts/nitro-eif.sh), hostagent, forwarder
 # and udprelay (scripts/build-runner.sh), and the instance role named in
-# kms-key-policy.json. The enclave's NTS clock needs the NTS-KE proxies of its default servers
+# kms-key-policy.json. The enclave's NTS clock needs the NTS-KE proxies of the catalog's hosts
 # (TCP 4460) and udprelay (NTP over vsock 7102 to UDP 123 and 4123), and the
 # security group's egress for them (main.tf nts_egress).
 #
@@ -81,7 +81,7 @@ sudo systemctl enable --now nitro-enclaves-allocator.service
 
 # 2. vsock-proxy, one per route of the setup: KMS and STS of its region
 #    (8000, 8001), the third coarse-time host (8002), the mark bucket (8004)
-#    and the NTS-KE servers of the NTS clock (catalog ports, 8005 to 8015). TLS ends in the
+#    and the NTS-KE servers of the NTS clock (catalog ports, 8005 to 8018). TLS ends in the
 #    enclave. The allowlist holds these destinations only
 #    (platform-aws/deploy/vsock-proxy.yaml is an example of what it gets).
 {
@@ -97,7 +97,7 @@ while read -r port host hostport; do
 done <<<"$ROUTES"
 
 # 2b. NTP of the NTS clock: vsock 7102 to UDP, to the allowlist of the
-#     default NTS servers only (udprelay -h; the defaults are that list). It sees
+#     catalog's NTS servers only (udprelay -h; the defaults are that list). It sees
 #     only NTS-protected packets: it can delay or drop them, not forge them.
 start /tmp/udprelay.log "$HERE/udprelay" -listen vsock:any:7102
 
