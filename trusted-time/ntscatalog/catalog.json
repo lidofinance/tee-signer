@@ -1,0 +1,41 @@
+{
+  "nts": [
+    {
+      "id": "cloudflare",
+      "host": "time.cloudflare.com",
+      "operator": "cloudflare",
+      "roots": ["sslcom-root-ecc.pem"],
+      "nitro_port": 8005,
+      "status": "active",
+      "note": "Anycast. Terms: Cloudflare website terms, no stated rate limit."
+    },
+    {
+      "id": "netnod",
+      "host": "nts.netnod.se",
+      "operator": "netnod",
+      "roots": ["isrg-root-x1.pem", "isrg-root-x2.pem"],
+      "ntp_nets": ["194.58.200.0/21"],
+      "nitro_port": 8006,
+      "status": "active",
+      "note": "NTS-KE names NTP servers by address in 194.58.200.0/21, port 4123. Terms: free for anyone."
+    },
+    {
+      "id": "ptb",
+      "host": "ptbtime1.ptb.de",
+      "operator": "ptb",
+      "roots": ["isrg-root-x1.pem", "isrg-root-x2.pem"],
+      "nitro_port": 8007,
+      "status": "active",
+      "note": "PTB runs ptbtime1 to 4; one is listed, since the quorum counts one server per operator. Terms: free, no rate limiting."
+    },
+    {
+      "id": "time.nl",
+      "host": "ntppool1.time.nl",
+      "operator": "time.nl",
+      "roots": ["isrg-root-x1.pem", "isrg-root-x2.pem"],
+      "nitro_port": 8008,
+      "status": "active",
+      "note": "Terms: fair use with a 1024 s poll interval; the runner polls more often."
+    }
+  ]
+}

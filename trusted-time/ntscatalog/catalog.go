@@ -4,12 +4,20 @@
 // host agent and signer-admin can all read it. The roots themselves stay in
 // trusted-time/nts (roots.go), which checks each file against its pin.
 //
+// The list is catalog.json, embedded in the binary: it is part of the
+// image like the code, and nothing at run time can change it. A test
+// parses it and runs Check, so a bad entry fails the build, not a start.
+//
 // An ID is never removed from the catalog and never reused. A later image
 // must still load every setup that names it, so an entry the image no
 // longer wants changes its Status instead.
 package ntscatalog
 
 import (
+	"bytes"
+	_ "embed"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 )
@@ -53,6 +61,9 @@ type NTSServer struct {
 	NTPNets   []string
 	NitroPort uint32 // vsock port of its vsock-proxy route on the Nitro parent
 	Status    Status
+	// Note is free text for reviewers: why the entry is there, the
+	// operator's terms. The runner does not read it.
+	Note string
 }
 
 // Catalog is the built-in list.
@@ -60,17 +71,71 @@ type Catalog struct {
 	NTS []NTSServer
 }
 
-// Builtin is the catalog of this image: the four operators the runner has
-// dialed so far. PTB runs ptbtime1, 2 and 3; one of them is listed, since
-// the quorum needs distinct operators.
-var Builtin = Catalog{
-	NTS: []NTSServer{
-		{ID: "cloudflare", Host: "time.cloudflare.com", Operator: "cloudflare", Roots: []string{"sslcom-root-ecc.pem"}, NitroPort: 8005},
-		{ID: "netnod", Host: "nts.netnod.se", Operator: "netnod", Roots: []string{"isrg-root-x1.pem", "isrg-root-x2.pem"},
-			NTPNets: []string{"194.58.200.0/21"}, NitroPort: 8006},
-		{ID: "ptb", Host: "ptbtime1.ptb.de", Operator: "ptb", Roots: []string{"isrg-root-x1.pem", "isrg-root-x2.pem"}, NitroPort: 8007},
-		{ID: "time.nl", Host: "ntppool1.time.nl", Operator: "time.nl", Roots: []string{"isrg-root-x1.pem", "isrg-root-x2.pem"}, NitroPort: 8008},
-	},
+//go:embed catalog.json
+var builtinJSON []byte
+
+// Builtin is the catalog of this image, from catalog.json. An image whose
+// file does not parse or check does not start; the package test makes
+// sure the build never gets that far.
+var Builtin = mustParse(builtinJSON)
+
+func mustParse(b []byte) Catalog {
+	c, err := Parse(b)
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
+
+// jsonServer is one entry of catalog.json.
+type jsonServer struct {
+	ID        string   `json:"id"`
+	Host      string   `json:"host"`
+	Operator  string   `json:"operator"`
+	Roots     []string `json:"roots"`
+	NTPNets   []string `json:"ntp_nets"`
+	NitroPort uint32   `json:"nitro_port"`
+	Status    string   `json:"status"`
+	Note      string   `json:"note"`
+}
+
+// Parse reads a catalog in the catalog.json format and checks it (Check).
+// Unknown fields, trailing data and a missing or unknown status are
+// refused.
+func Parse(b []byte) (Catalog, error) {
+	d := json.NewDecoder(bytes.NewReader(b))
+	d.DisallowUnknownFields()
+	var raw struct {
+		NTS []jsonServer `json:"nts"`
+	}
+	if err := d.Decode(&raw); err != nil {
+		return Catalog{}, fmt.Errorf("ntscatalog: %w", err)
+	}
+	if d.More() {
+		return Catalog{}, errors.New("ntscatalog: data after the catalog")
+	}
+	var c Catalog
+	for _, r := range raw.NTS {
+		s, err := parseStatus(r.Status)
+		if err != nil {
+			return Catalog{}, fmt.Errorf("ntscatalog: NTS server %q: %w", r.ID, err)
+		}
+		c.NTS = append(c.NTS, NTSServer{ID: r.ID, Host: r.Host, Operator: r.Operator, Roots: r.Roots,
+			NTPNets: r.NTPNets, NitroPort: r.NitroPort, Status: s, Note: r.Note})
+	}
+	if err := c.Check(); err != nil {
+		return Catalog{}, err
+	}
+	return c, nil
+}
+
+func parseStatus(s string) (Status, error) {
+	for _, st := range []Status{Active, Retired, Withdrawn} {
+		if s == st.String() {
+			return st, nil
+		}
+	}
+	return 0, fmt.Errorf("status %q: want active, retired or withdrawn", s)
 }
 
 // MaxLabel is the longest ID and operator label, in octets. The quorum in
@@ -105,7 +170,8 @@ func validID(id string) bool {
 
 // Check is the catalog's own consistency: valid unique IDs, one
 // NTS server per operator, a known status, host and roots set, NTP nets
-// that parse, and a distinct Nitro vsock port for every server. A test runs it on Builtin.
+// that parse, and a distinct Nitro vsock port for every server. Parse runs
+// it on every catalog it reads.
 func (c *Catalog) Check() error {
 	ids := map[string]bool{}
 	ops := map[string]string{}

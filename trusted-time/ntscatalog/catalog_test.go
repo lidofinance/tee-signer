@@ -63,3 +63,40 @@ func TestDialedSkipsWithdrawn(t *testing.T) {
 		t.Fatalf("dialed %v", got)
 	}
 }
+
+// The embedded catalog.json parses and checks, and Builtin is that file.
+func TestEmbeddedCatalogParses(t *testing.T) {
+	c, err := Parse(builtinJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.NTS) != len(Builtin.NTS) || c.NTS[0].ID != Builtin.NTS[0].ID {
+		t.Fatalf("parsed %d entries, Builtin %d", len(c.NTS), len(Builtin.NTS))
+	}
+	for _, e := range Builtin.NTS {
+		if e.Note == "" {
+			t.Errorf("%s: no note; say why it is in the catalog and the operator's terms", e.ID)
+		}
+	}
+}
+
+func TestParseRefuses(t *testing.T) {
+	entry := `{"id":"a","host":"a.example","operator":"op-a","roots":["r.pem"],"nitro_port":9001,"status":"active"}`
+	if c, err := Parse([]byte(`{"nts":[` + entry + `]}`)); err != nil || c.NTS[0].Status != Active {
+		t.Fatalf("good catalog: %+v %v", c, err)
+	}
+	for name, tc := range map[string]struct{ in, want string }{
+		"unknown field":   {`{"nts":[{"id":"a","host":"a.example","operator":"op-a","roots":["r.pem"],"nitro_port":9001,"status":"active","port":1}]}`, "unknown field"},
+		"unknown top key": {`{"nts":[` + entry + `],"coarse":[]}`, "unknown field"},
+		"trailing data":   {`{"nts":[` + entry + `]} {}`, "data after"},
+		"no status":       {`{"nts":[{"id":"a","host":"a.example","operator":"op-a","roots":["r.pem"],"nitro_port":9001}]}`, "status"},
+		"bad status":      {`{"nts":[{"id":"a","host":"a.example","operator":"op-a","roots":["r.pem"],"nitro_port":9001,"status":"Active"}]}`, "status"},
+		"check fails":     {`{"nts":[` + entry + `,` + entry + `]}`, "twice"},
+		"not an object":   {`[]`, "ntscatalog"},
+		"wrong type":      {`{"nts":[{"id":"a","host":"a.example","operator":"op-a","roots":"r.pem","nitro_port":9001,"status":"active"}]}`, "ntscatalog"},
+	} {
+		if _, err := Parse([]byte(tc.in)); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: %v, want %q", name, err, tc.want)
+		}
+	}
+}
