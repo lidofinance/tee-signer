@@ -51,6 +51,8 @@ Forwarder:
 - `signer_forwarder_connections_refused_total{reason="max_conns"|"max_conns_per_source"}`
 - `signer_forwarder_dial_failures_total`: dials to the enclave that failed
 
+The forwarder logs a refused connection or a failed dial at most once every 10 s for each kind, with the count since start, so a peer that keeps connecting does not fill `/tmp/forwarder.log`. These counters have every one.
+
 Host agent:
 
 - `signer_hostagent_start_time_seconds`
