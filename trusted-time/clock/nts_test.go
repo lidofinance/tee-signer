@@ -475,6 +475,24 @@ func TestNTSClockNTSNRunsKeyExchangeAgain(t *testing.T) {
 	}
 }
 
+// Some servers send the NAK as "NTS" and a zero octet (nts1.ntp.hr for a
+// stale cookie). The clock takes it as NTSN and runs NTS-KE again.
+func TestNTSClockNTSZeroNAKRunsKeyExchangeAgain(t *testing.T) {
+	fs := newServers(t, map[string]ntstest.NTPOptions{"a": {Kiss: "NTS\x00"}}, "a", "b", "c", "d")
+	n := newNTS(fs, &coarseClock{})
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(60 * time.Millisecond)
+	_ = refresh(t, n)
+	if k := n.Status().Peers["a"].Stats.Kisses["NTSN"]; k < 1 {
+		t.Fatalf("NTSN count %d, kisses %v", k, n.Status().Peers["a"].Stats.Kisses)
+	}
+	if s := fs[0].ke.Sessions.Load(); s != 2 {
+		t.Fatalf("NTS-KE sessions with a: %d, want 2", s)
+	}
+}
+
 // All servers move 300 ms between two quorums 60 ms apart: as seen from
 // here, the local clock ran far outside rho. That quorum is refused and Now
 // fails; the next quorum, which agrees with it, is served.

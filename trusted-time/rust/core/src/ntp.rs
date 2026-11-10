@@ -266,7 +266,10 @@ pub enum KissCode {
     /// "RATE": poll less often (RFC 5905 section 7.4).
     Rate,
     /// "NTSN": the server could not check our cookie or request; run NTS-KE
-    /// again (RFC 8915 section 5.7).
+    /// again (RFC 8915 section 5.7). Also "NTS" and a zero octet, which
+    /// some servers send for the same NAK (seen from nts1.ntp.hr for stale
+    /// cookies). A forged kiss can already say NTSN, so taking this one too
+    /// lets nobody do more than force an NTS-KE.
     Ntsn,
     /// "DENY": access denied; stop using this server (RFC 5905 section 7.4).
     Deny,
@@ -280,7 +283,7 @@ impl KissCode {
     fn from_reference_id(id: [u8; 4]) -> Self {
         match &id {
             b"RATE" => Self::Rate,
-            b"NTSN" => Self::Ntsn,
+            b"NTSN" | b"NTS\0" => Self::Ntsn,
             b"DENY" => Self::Deny,
             b"RSTR" => Self::Rstr,
             _ => Self::Other(id),
@@ -645,6 +648,8 @@ mod tests {
     fn kiss_codes() {
         assert_eq!(KissCode::from_reference_id(*b"RATE"), KissCode::Rate);
         assert_eq!(KissCode::from_reference_id(*b"NTSN"), KissCode::Ntsn);
+        assert_eq!(KissCode::from_reference_id(*b"NTS\0"), KissCode::Ntsn);
+        assert_eq!(KissCode::from_reference_id(*b"NTS "), KissCode::Other(*b"NTS "));
         assert_eq!(KissCode::from_reference_id(*b"DENY"), KissCode::Deny);
         assert_eq!(KissCode::from_reference_id(*b"RSTR"), KissCode::Rstr);
         assert_eq!(KissCode::from_reference_id(*b"INIT"), KissCode::Other(*b"INIT"));

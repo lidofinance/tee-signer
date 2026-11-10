@@ -129,7 +129,8 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
 - `trusted-time/clock.NTS`: polls each server every 16 s (RFC 5905 MINPOLL),
   doubles a server's interval on RATE up to 1024 s, stops asking a server
   for 1024 s on DENY or RSTR (a Kiss-o'-Death is not authenticated, so a
-  forged one must not stop it for good), runs NTS-KE again on NTSN, feeds
+  forged one must not stop it for good), runs NTS-KE again on NTSN (or
+  "NTS" and a zero octet, which nts1.ntp.hr sends for a stale cookie), feeds
   the latest sample of each server to the Rust quorum if it is at most 46 s
   old with the defaults (60 s minus the 4 s tick of `Run` with the
   defaults and the 10 s a refresh can take for one NTS-KE and one query,
