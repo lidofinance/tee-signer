@@ -187,7 +187,7 @@ Every new connection to a signer goes through all of `runnerclient`'s checks bef
 - `IDENTITY` with a fresh nonce over the new channel, and the attestation document checked by its verifier (`dev`, `azure-maa`, `aws-nitro` or `gcp-cs`) with the setup pins (`setup_sha256`, the minimum config versions, `key_release_sha256`);
 - the TLS key the signer presented must be the one its attested identity names, and `tls_key_pin` if set.
 
-A connection that fails a check takes no request. The gateway keeps `signers.connections` connections to each signer (default 2) and uses one per request at a time. After an I/O error or a timeout a connection is closed, and the next request on that slot dials a new one with every check again; a restarted signer has a new TLS key and a new identity, so this is how the gateway notices. A request whose connection the signer closed under it goes once more on a new connection: a signer signs an exact repeat of an attestation or block again with the same signature.
+A connection that fails a check takes no request. The gateway keeps `signers.connections` connections to each signer (default 2) and uses one per request at a time. After an I/O error or a timeout a connection is closed, and the next request on that slot dials a new one with every check again; a restarted signer has a new TLS key and a new identity, so this is how the gateway notices. A request whose connection the signer closed under it goes once more, on a new connection in the same slot (another slot could hold a connection the same restart closed): a signer signs an exact repeat of an attestation or block again with the same signature.
 
 ## Keys, shares and the threshold
 

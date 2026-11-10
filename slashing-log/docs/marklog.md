@@ -425,9 +425,14 @@ stored), and, while a write is under way, the root of the set after it.
   it is, and none of the batch's keys. Else it loads no key, as above.
   Later records vouch for sets without those records, so later starts
   leave them out too, until the operator imports the keys again. The
-  next batch must hold every key of that batch and takes its tag, so the
-  store never holds records of two batches that did not complete; a key
-  of it imported on its own leaves it. Leaving records out never loads a
+  next batch must hold every key of that batch that may have a record
+  stored, and takes its tag, so the store never holds records of two
+  batches that did not complete; a key of it imported on its own leaves
+  it. The runner that saw the write fail asks for every key of the
+  batch, since it does not know which records landed. After a restart
+  the runner asks for the keys of the records it found under the tag: a
+  key of the batch whose record never landed is not asked for, and a
+  batch without it is taken. Leaving records out never loads a
   key the log does not vouch for: what loads is still a vouched set. A
   batch whose writes all landed loads as the set after, through the
   pending root.

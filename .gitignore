@@ -1,3 +1,4 @@
+# build artifacts
 /build/
 /logs/
 /signer-core/build/
@@ -5,3 +6,7 @@
 /signer-core/sim/build/
 /trusted-time/rust/target/
 /gateway/bin/
+
+# OS generated files
+.DS_Store
+Thumbs.db

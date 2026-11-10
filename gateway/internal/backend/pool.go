@@ -235,11 +235,13 @@ func (n *node) release(s *slot) {
 
 // do runs f on an idle client. A call that failed on the connection
 // itself (the signer closed it or reset it, as after a restart) runs once
-// more on another client, which dials and checks a new connection when it
-// has none. The signer signs an exact repeat of an attestation or block
-// again with the same signature, so a SIGN may go twice. A refusal, a
-// failed check, a timeout or the end of ctx is not tried again. With an
-// expired client certificate f does not run.
+// more on the same client: it dropped that connection, so the second call
+// dials and checks a new one. Another idle client could hold a connection
+// the same restart closed, and the second call would fail on it too. The
+// signer signs an exact repeat of an attestation or block again with the
+// same signature, so a SIGN may go twice. A refusal, a failed check, a
+// timeout or the end of ctx is not tried again. With an expired client
+// certificate f does not run.
 func (n *node) do(ctx context.Context, f func(runner) error) (err error) {
 	defer func() { n.pc.m.SignerRequests.Inc(n.pc.name, callResult(err)) }()
 	if n.pc.certs != nil {
@@ -247,15 +249,14 @@ func (n *node) do(ctx context.Context, f func(runner) error) (err error) {
 			return fmt.Errorf("%s: %w", n.addr, err)
 		}
 	}
+	var s *slot
+	if s, err = n.acquire(ctx); err != nil {
+		return err
+	}
+	defer n.release(s)
 	for attempt := 1; ; attempt++ {
-		var s *slot
-		s, err = n.acquire(ctx)
-		if err != nil {
-			return err
-		}
 		err = f(s.c)
 		n.track(ctx, s, err)
-		n.release(s)
 		if err == nil || attempt == 2 || ctx.Err() != nil || !connectionLost(err) {
 			return err
 		}

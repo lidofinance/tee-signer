@@ -760,8 +760,11 @@ stored goes in with IMPORT_SHARE_SEALED. The runner then stores the
 batch all or none, under one mark log record
 ([marklog.md](../../slashing-log/docs/marklog.md), "Share set"), and
 answers the keys it loaded. After a batch that did not complete, the
-next batch must hold all of its keys (`SC_ERR_BAD_REQUEST` otherwise),
-or they go in one at a time.
+next batch must hold every key of it that may have a record stored
+(`SC_ERR_BAD_REQUEST` otherwise), or they go in one at a time. Until a
+restart those are all keys of the batch; after one, the keys whose
+records the runner found in the store. A key of the batch outside that
+set is not asked for, and stays absent until it is imported.
 
 A batch of no share writes nothing and answers no key: a sender learns
 that the runner knows the message. A runner older than the message

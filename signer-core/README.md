@@ -485,7 +485,10 @@ device that votes every epoch writes nothing more for Gloas. Their exact
 repeat roots stay in RAM, as all repeat roots do, so a repeat
 right after a restart is refused and the other signers of the threshold sign
 it. The envelope's block binding also lives in RAM: after a restart between
-a block and its envelope, this node refuses the envelope.
+a block and its envelope, this node refuses the envelope. A node that did
+not get the block's SIGN refuses it too. So a threshold of nodes that
+answer is not enough for an envelope: it takes a threshold of nodes that
+signed that block and have not restarted since.
 
 ## Hash-to-G2 cache
 
