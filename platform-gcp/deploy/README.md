@@ -225,6 +225,12 @@ the `storage.buckets.get` permission the lock check needs too) and does
 not start when it differs. A setup without `project_number` gets none of
 these checks.
 
+The runner checks the first two itself: before each key release it reads
+the project of its VM from the launcher token (`submods.gce`), and gets
+no token from STS when `wif_provider` is not a WIF provider of its
+project number, or `kms_key` not a KMS key of its project. It does not
+check the buckets.
+
 `PROJECT_ID`, `PROJECT_NUMBER`, `REGION` and `ZONE` (default
 `europe-west4-a`) set the project and location. The mark log and the state
 copy (`slashing-log/docs/durable-state.md`) are the setup's

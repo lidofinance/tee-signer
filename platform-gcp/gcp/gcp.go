@@ -54,6 +54,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -198,6 +200,50 @@ func tokenImage(tok string) (setupwire.Image, error) {
 	return setupwire.Image{Kind: setupwire.ImageGCP, Measurement: b}, nil
 }
 
+// checkProject refuses a WIF provider or KMS key outside the project the
+// VM runs in, which the launcher token names in submods.gce: project_number
+// for the provider, project_id or project_number for the key. A setup that
+// names another project's provider and key would release the sealing key
+// through a project its author holds. deploy.sh vm-create checks the same,
+// but only for the setups it deploys. The token comes from the launcher
+// socket inside the VM, so its claims are read without the signature
+// check (jwtclaims).
+func (k *KMS) checkProject(tok string) error {
+	c, err := jwtclaims.Claims(tok)
+	if err != nil {
+		return fmt.Errorf("gcp: launcher token: %w", err)
+	}
+	sub, _ := c["submods"].(map[string]any)
+	gce, _ := sub["gce"].(map[string]any)
+	id, _ := gce["project_id"].(string)
+	// Google's docs show project_number as a string. A JSON number is read
+	// too: a wrong guess about the type would stop every GCP signer.
+	num, _ := gce["project_number"].(string)
+	if n, ok := gce["project_number"].(json.Number); ok {
+		if v, err := strconv.ParseUint(n.String(), 10, 64); err == nil {
+			num = strconv.FormatUint(v, 10)
+		}
+	}
+	if id == "" || num == "" {
+		return errors.New("gcp: launcher token: no submods.gce.project_id and project_number; the runner cannot tell which project it runs in")
+	}
+	if m := wifProviderRE.FindStringSubmatch(k.Provider); m == nil || m[1] != num {
+		return fmt.Errorf("gcp: wif_provider %q is not a WIF provider of project %s (number %s), where this VM runs", k.Provider, id, num)
+	}
+	if m := kmsKeyRE.FindStringSubmatch(k.Key); m == nil || (m[1] != id && m[1] != num) {
+		return fmt.Errorf("gcp: kms_key %q is not a KMS key of project %s (number %s), where this VM runs", k.Key, id, num)
+	}
+	return nil
+}
+
+// The resource names checkProject takes, whole: the KMS key goes into the
+// request path as it is, so a name with more segments or with "..", whose
+// first segment names this project, could reach a key of another.
+var (
+	wifProviderRE = regexp.MustCompile(`^//iam\.googleapis\.com/projects/([0-9]+)/locations/global/workloadIdentityPools/[a-z0-9-]+/providers/[a-z0-9-]+$`)
+	kmsKeyRE      = regexp.MustCompile(`^projects/([a-z0-9-]+)/locations/[a-z0-9-]+/keyRings/[A-Za-z0-9_-]+/cryptoKeys/[A-Za-z0-9_-]+$`)
+)
+
 func or(v, def string) string {
 	if v != "" {
 		return v
@@ -248,10 +294,15 @@ func (k *KMS) postJSON(ctx context.Context, u, bearer string, in, out any) error
 }
 
 // accessToken: attestation token with the STS audience -> STS federated
-// token -> (optional) SA token. The STS-audience token goes only to STS.
+// token -> (optional) SA token. The STS-audience token goes only to STS,
+// and only when the WIF provider and KMS key are in the VM's own project
+// (checkProject).
 func (k *KMS) accessToken(ctx context.Context) (string, error) {
 	att, err := k.L.Token(ctx, stsAudience, nil)
 	if err != nil {
+		return "", err
+	}
+	if err := k.checkProject(att); err != nil {
 		return "", err
 	}
 	k.Seen.Record(tokenImage(att))

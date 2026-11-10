@@ -29,6 +29,10 @@ func fakeJWT(claims map[string]any) string {
 	return "eyJhbGciOiJSUzI1NiJ9." + base64.RawURLEncoding.EncodeToString(p) + ".c2ln"
 }
 
+// testGCE is the submods.gce claim of the fake launcher's tokens: the
+// project of testKMS's WIF provider (by number) and KMS key (by ID).
+var testGCE = map[string]any{"project_id": "p", "project_number": "1", "zone": "europe-west4-a", "instance_id": "123"}
+
 // fakeLauncher serves POST /v1/token on a unix socket like the
 // Confidential Space launcher (request fields from Google's docs).
 func fakeLauncher(t *testing.T, iat int64) string {
@@ -48,7 +52,7 @@ func fakeLauncher(t *testing.T, iat int64) string {
 			return
 		}
 		w.Write([]byte(fakeJWT(map[string]any{"aud": req.Audience, "iat": iat, "eat_nonce": req.Nonces,
-			"swname": "CONFIDENTIAL_SPACE"})))
+			"swname": "CONFIDENTIAL_SPACE", "submods": map[string]any{"gce": testGCE}})))
 	})}
 	go srv.Serve(l)
 	t.Cleanup(func() { srv.Close() })
