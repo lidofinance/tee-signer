@@ -71,17 +71,46 @@ var ErrFrameTooLarge = errors.New("wire: frame too large")
 
 // WriteFrame writes f as one frame.
 func WriteFrame(w io.Writer, f Frame) error {
-	n := headerLen + len(f.Payload)
-	if n > MaxFrame {
+	if headerLen+len(f.Payload) > MaxFrame {
 		return ErrFrameTooLarge
 	}
-	buf := make([]byte, 4+n)
-	binary.BigEndian.PutUint32(buf[0:], uint32(n))
+	buf := make([]byte, 4+headerLen+len(f.Payload))
+	putHeader(buf, f)
+	copy(buf[4+headerLen:], f.Payload)
+	_, err := w.Write(buf)
+	return err
+}
+
+// putHeader puts the length prefix and header of f into buf[:4+headerLen].
+func putHeader(buf []byte, f Frame) {
+	binary.BigEndian.PutUint32(buf[0:], uint32(headerLen+len(f.Payload)))
 	buf[4] = Version
 	buf[5] = byte(f.Type)
 	binary.BigEndian.PutUint32(buf[6:], f.ID)
-	copy(buf[10:], f.Payload)
-	_, err := w.Write(buf)
+}
+
+// sharedCopyMax is the largest payload WriteSharedFrame copies to send
+// with its header in one Write.
+const sharedCopyMax = 16 << 10
+
+// WriteSharedFrame writes f as WriteFrame does, but sends a payload over
+// 16 KiB in a second Write instead of copying it. A server can then send
+// one payload on many connections, and a write that stalls holds no copy.
+// The two Writes are not atomic: use it only where one goroutine at a
+// time writes to w.
+func WriteSharedFrame(w io.Writer, f Frame) error {
+	if len(f.Payload) <= sharedCopyMax {
+		return WriteFrame(w, f)
+	}
+	if headerLen+len(f.Payload) > MaxFrame {
+		return ErrFrameTooLarge
+	}
+	var hdr [4 + headerLen]byte
+	putHeader(hdr[:], f)
+	if _, err := w.Write(hdr[:]); err != nil {
+		return err
+	}
+	_, err := w.Write(f.Payload)
 	return err
 }
 

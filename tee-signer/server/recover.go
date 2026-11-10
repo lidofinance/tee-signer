@@ -62,6 +62,10 @@ func (s *Server) answer(ctx context.Context, f wire.Frame, cl *client) (payload 
 	if err != nil {
 		return wire.EncodeError(err), true
 	}
+	if f.Type == wire.TypePublicKeys {
+		// The shared answer, status included (dispatch): no copy.
+		return body, true
+	}
 	return wire.EncodeOK(body), true
 }
 
@@ -115,7 +119,7 @@ func (s *Server) checkAfterPanic(wait time.Duration) {
 
 // lockers are the server's locks.
 func (s *Server) lockers() []sync.Locker {
-	ls := []sync.Locker{&s.blockedMu, &s.admitMu, &s.shareSetMu, &s.attestOnlyLimit.mu, &s.signingLimit.mu}
+	ls := []sync.Locker{&s.blockedMu, &s.admitMu, &s.shareSetMu, &s.attestOnlyLimit.mu, &s.signingLimit.mu, &s.keysAnswer.mu}
 	if u := s.Updates; u != nil {
 		ls = append(ls, &u.writeMu, &u.mu)
 	}

@@ -564,6 +564,15 @@ func (s *Signer) Keys() []backend.ValidatorKey {
 	return append([]backend.ValidatorKey(nil), s.keys...)
 }
 
+// KeyCount is the number of loaded validators, without the copy Keys
+// makes. Keys are only ever added, so a list from Keys is current while
+// KeyCount equals its length.
+func (s *Signer) KeyCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.keys)
+}
+
 // Import raises a validator's watermark to EIP-3076 maxima.
 func (s *Signer) Import(pubkey backend.Pubkey, wm backend.Watermark) error {
 	s.mu.Lock()
