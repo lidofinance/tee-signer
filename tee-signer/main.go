@@ -163,6 +163,14 @@ func run() (err error) {
 	} else {
 		log = slog.New(slog.NewTextHandler(os.Stderr, nil))
 	}
+	switch limit := setMemoryLimit(); {
+	case limit > 0:
+		log.Info("go memory limit", "bytes", limit)
+	case os.Getenv("GOMEMLIMIT") != "":
+		log.Info("go memory limit from GOMEMLIMIT", "value", os.Getenv("GOMEMLIMIT"))
+	default:
+		log.Warn("no go memory limit: neither " + meminfoPath + " nor a cgroup gave a memory size")
+	}
 
 	var addrs []transport.Addr
 	for _, a := range strings.Split(*listen, ",") {

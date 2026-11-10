@@ -50,8 +50,13 @@ import (
 //     for memory. Only the bytes past 64 KiB of a frame count: share
 //     imports and big config updates. 64 MiB holds 64
 //     frames of the full 1 MiB at once; with 256 connections times 64 KiB
-//     the frame buffers stay below 80 MiB, against the 1 GiB of the Azure
-//     container.
+//     the frame buffers stay below 80 MiB. The smallest runner is a Nitro
+//     enclave of 512 MiB (MEMORY_MIB in parent-run.sh), whose Go memory
+//     limit is under 384 MiB (tee-signer/memlimit.go); the Azure
+//     container has 1 GiB. Answers do not count here. The largest, PUBLIC_KEYS (up to 1 MiB at
+//     10,082 keys), is built once per key set and every connection writes
+//     the same bytes (pubkeys.go), so a peer that stops reading holds no
+//     copy of it.
 //   - DefaultIdleTimeout 0: no limit between frames. The signing client's pool
 //     reuses the connection freed last, so in a quiet hour most of its 16
 //     connections sit idle, and it does not dial again when a request
