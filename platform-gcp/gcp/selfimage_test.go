@@ -33,7 +33,7 @@ func imageLauncher(t *testing.T, digest *string) string {
 			return
 		}
 		w.Write([]byte(fakeJWT(map[string]any{"aud": req.Audience, "iat": 1, "eat_nonce": req.Nonces,
-			"swname": "CONFIDENTIAL_SPACE", "submods": map[string]any{"container": map[string]any{"image_digest": *digest}}})))
+			"swname": "CONFIDENTIAL_SPACE", "submods": map[string]any{"container": map[string]any{"image_digest": *digest}, "gce": testGCE}})))
 	})}
 	go srv.Serve(l)
 	t.Cleanup(func() { srv.Close() })

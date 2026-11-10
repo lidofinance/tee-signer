@@ -7,8 +7,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -129,5 +131,80 @@ func TestPlantedDataKey(t *testing.T) {
 	store.Put(sharePrefix+"aa01", []byte("sealed share"))
 	if dek, stored, err := k.dataKey(ctx, store, setup); err != nil || !bytes.Equal(dek, known) || !stored {
 		t.Fatalf("a holder of the role with the right AAD, next to a share: stored %v, %v", stored, err)
+	}
+}
+
+// The runner releases its key only through the WIF provider and KMS key of
+// the project it runs in, as its launcher token names it (submods.gce): a
+// setup that names another project's provider or key gets no token to STS
+// and no key. The KMS key may name the project by ID or by number.
+func TestKeyReleaseStaysInTheRunnersProject(t *testing.T) {
+	g := fakeGoogle(t)
+	defer g.Close()
+	ctx := context.Background()
+	for _, c := range []struct {
+		name, provider, key, err string
+	}{
+		{"own project", "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/q", testKey, ""},
+		{"key by project number", "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/q",
+			"projects/1/locations/l/keyRings/r/cryptoKeys/k", ""},
+		{"provider of another project", "//iam.googleapis.com/projects/2/locations/global/workloadIdentityPools/p/providers/q", testKey,
+			"wif_provider"},
+		{"key of another project", "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/q",
+			"projects/other/locations/l/keyRings/r/cryptoKeys/k", "kms_key"},
+		{"provider not a WIF resource", "projects/1/locations/global/workloadIdentityPools/p/providers/q", testKey, "wif_provider"},
+		{"key path out of the project", "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/q",
+			"projects/p/../../v1/projects/other/locations/l/keyRings/r/cryptoKeys/k", "kms_key"},
+		{"key with more segments", "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/q",
+			testKey + "/cryptoKeyVersions/1", "kms_key"},
+		{"provider with more segments", "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/q/x", testKey,
+			"wif_provider"},
+	} {
+		k := testKMS(t, g)
+		k.Provider, k.Key = c.provider, c.key
+		store, _ := filestore.New(t.TempDir())
+		_, err := k.dataKey(ctx, store, [32]byte{1})
+		switch {
+		case c.err == "" && err != nil:
+			t.Errorf("%s: %v", c.name, err)
+		case c.err != "" && (err == nil || !strings.Contains(err.Error(), c.err)):
+			t.Errorf("%s: %v, want an error naming %s", c.name, err, c.err)
+		}
+	}
+}
+
+// A launcher token without the project claims releases no key. A project
+// number given as a JSON number instead of a string is read.
+func TestKeyReleaseNeedsTheProjectClaims(t *testing.T) {
+	g := fakeGoogle(t)
+	defer g.Close()
+	for _, c := range []struct {
+		name    string
+		submods map[string]any
+		err     string
+	}{
+		{"no submods.gce", nil, "submods.gce"},
+		{"no project_number", map[string]any{"gce": map[string]any{"project_id": "p"}}, "submods.gce"},
+		{"project_number as a number", map[string]any{"gce": map[string]any{"project_id": "p", "project_number": 1}}, ""},
+	} {
+		sock := filepath.Join(t.TempDir(), "teeserver.sock")
+		l, err := net.Listen("unix", sock)
+		if err != nil {
+			t.Fatal(err)
+		}
+		srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(fakeJWT(map[string]any{"aud": stsAudience, "iat": 1, "swname": "CONFIDENTIAL_SPACE", "submods": c.submods})))
+		})}
+		go srv.Serve(l)
+		t.Cleanup(func() { srv.Close() })
+		k := testKMS(t, g)
+		k.L = NewLauncher(sock)
+		_, err = k.accessToken(context.Background())
+		switch {
+		case c.err == "" && err != nil:
+			t.Errorf("%s: %v", c.name, err)
+		case c.err != "" && (err == nil || !strings.Contains(err.Error(), c.err)):
+			t.Errorf("%s: %v, want an error naming %s", c.name, err, c.err)
+		}
 	}
 }
