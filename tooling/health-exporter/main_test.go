@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -465,7 +467,7 @@ func TestPollSkewOnlyWhenMeasured(t *testing.T) {
 	}
 }
 
-// TEE-3: a client certificate renewed on disk is used at the next poll,
+// A client certificate renewed on disk is used at the next poll,
 // with no restart: the poll opens a new connection with it.
 func TestPollReloadsRenewedCertificate(t *testing.T) {
 	fr := fakerunner.Start(t, backend.SetupState{})
@@ -529,4 +531,51 @@ func TestPollKeepsClientOnBadCertificate(t *testing.T) {
 		t.Fatal("the good pair after the bad one was not taken")
 	}
 	wantLine(t, rendered(r), `tee_signer_up{runner="s1"} 1`)
+}
+
+// Files that cannot be read leave the client in use and are logged once for
+// that error, not at every poll. The error is logged again after a read
+// that worked.
+func TestPollLogsUnreadableCertificateOnce(t *testing.T) {
+	fr := fakerunner.Start(t, backend.SetupState{})
+	path := writeConn(t, fr.Addr(), fr, "")
+	r, err := newRunner("s1", path, 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { r.cl.Close() }()
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	const line = "client certificate on disk not read"
+	r.poll(10 * time.Second)
+	first := r.cl
+	cert := filepath.Join(filepath.Dir(path), "client.pem")
+	pem, err := os.ReadFile(cert)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(cert); err != nil {
+		t.Fatal(err)
+	}
+	r.poll(10 * time.Second)
+	r.poll(10 * time.Second)
+	if n := strings.Count(buf.String(), line); n != 1 {
+		t.Fatalf("%d log lines for one read error, want 1:\n%s", n, buf.String())
+	}
+	if r.cl != first {
+		t.Fatal("a new client with no certificate file")
+	}
+	wantLine(t, rendered(r), `tee_signer_up{runner="s1"} 1`)
+	if err := os.WriteFile(cert, pem, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.poll(10 * time.Second)
+	if err := os.Remove(cert); err != nil {
+		t.Fatal(err)
+	}
+	r.poll(10 * time.Second)
+	if n := strings.Count(buf.String(), line); n != 2 {
+		t.Fatalf("%d log lines after the error came back, want 2:\n%s", n, buf.String())
+	}
 }

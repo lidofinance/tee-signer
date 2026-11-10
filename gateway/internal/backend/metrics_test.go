@@ -60,14 +60,15 @@ func TestMetricsNodeCallsAndConnections(t *testing.T) {
 	expectMetric(t, "dials ok after the second client", dials("ok"), 2)
 	expectMetric(t, "up", up(), 2)
 
-	// The connection ends under the call: tried once more on the other
-	// client, which fails too. One call, one error, both down.
+	// The connection ends under the call: tried once more on the same
+	// client, which fails too. One call, one error, that client down. The
+	// other client counts as up until a call on it finds out.
 	f.set(func(f *fakeRunner) { f.err = io.EOF })
 	if _, err := n.Sign(ctx, sign); err == nil {
 		t.Fatal("no error")
 	}
 	expectMetric(t, "error", req("error"), 1)
-	expectMetric(t, "up after the connections ended", up(), 0)
+	expectMetric(t, "up after the connection ended", up(), 1)
 
 	// Failed dials, one refused by the attestation check.
 	f.set(func(f *fakeRunner) { f.err = fmt.Errorf("remote: dial tcp:x: %w", errors.New("connection refused")) })

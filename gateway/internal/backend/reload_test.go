@@ -428,16 +428,10 @@ func TestSwapAgainstSignerThatAcceptsOneCertificate(t *testing.T) {
 		t.Fatalf("%d signed, %d failed across the swap: %v", ok, failed, first)
 	}
 	// New connections after the swap present N+1, which the signer takes.
-	// The first call may meet both dropped connections and fail with EOF,
-	// as before this change; the next one dials.
+	// The first call meets a dropped connection and dials again on the
+	// same client.
 	runners[0].dropConns()
-	var err error
-	for range 2 {
-		if _, err = nodes[0].PublicKeys(ctxShort(t)); err == nil {
-			break
-		}
-	}
-	if err != nil {
+	if _, err := nodes[0].PublicKeys(ctxShort(t)); err != nil {
 		t.Fatalf("new connection after the swap: %v", err)
 	}
 	t.Logf("%d requests signed across the swap, none failed", ok)

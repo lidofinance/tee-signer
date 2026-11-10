@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"math/big"
@@ -326,6 +327,50 @@ func TestNodeAttestsEveryNewConnection(t *testing.T) {
 	}
 	if got := r.seen(wire.TypeIdentity); got != 2 {
 		t.Fatalf("%d IDENTITY requests after a new connection, want 2", got)
+	}
+}
+
+// After a restart of the signer every connection of the pool is
+// closed. The first request must not fail on them: its second try goes on
+// a new connection, whatever the number of closed ones.
+func TestNodeFirstRequestAfterEveryConnectionDropped(t *testing.T) {
+	for _, size := range []int{2, 3} {
+		t.Run(fmt.Sprintf("%d connections", size), func(t *testing.T) {
+			ca := newTestCA(t)
+			k := splitKey(t, 2, 3)
+			r := startTLSRunner(t, ca, k, 0, false, nil)
+			n, err := newNode(devConnection(t, ca, r), poolConfig{size: size}, runnerclient.WithTimeout(3*time.Second))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { n.Close() })
+			// Idle clients are taken in turn, so size calls open size
+			// connections.
+			for range size {
+				if _, err := n.PublicKeys(ctxShort(t)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := r.seen(wire.TypeIdentity); got != size {
+				t.Fatalf("%d connections open, want %d", got, size)
+			}
+			req := proto.SignRequest{Pubkey: proto.Pubkey(k.pk), Message: &proto.AttestationData{Slot: 1}}
+			// Each request after the restart meets a closed connection
+			// until every client has a new one.
+			r.dropConns()
+			for i := range size {
+				sig, err := n.Sign(ctxShort(t), req)
+				if err != nil {
+					t.Fatalf("request %d after the signer dropped %d connections: %v", i+1, size, err)
+				}
+				if err := VerifyBLS(pubOf(&k.shares[0]), testRoot, phase0.BLSSignature(sig)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := r.seen(wire.TypeIdentity); got != 2*size {
+				t.Fatalf("%d IDENTITY requests, want %d: one new connection per closed one", got, 2*size)
+			}
+		})
 	}
 }
 

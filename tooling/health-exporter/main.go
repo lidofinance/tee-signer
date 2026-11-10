@@ -39,11 +39,14 @@ type runner struct {
 	name    string
 	conn    *runnerclient.Connection
 	timeout time.Duration
-	// cl, pair and refused belong to the poll loop. pair is the pairSum cl
-	// was made at; refused is the last one that made no client.
+	// cl, pair, refused and unread belong to the poll loop. pair is the
+	// pairSum cl was made at; refused is the last one that made no client;
+	// unread is the last logged error of reading the files, empty after a
+	// read that worked.
 	cl      *runnerclient.Client
 	pair    [32]byte
 	refused [32]byte
+	unread  string
 
 	mu       sync.Mutex
 	h        *backend.Health // nil after a failed call
@@ -153,11 +156,20 @@ func pairSum(conn *runnerclient.Connection) ([32]byte, error) {
 // keeps the pair it read at its start, so without this a renewed certificate
 // is not used until the exporter restarts. A pair that makes no client
 // (half written, not a pair, expired) leaves the client in use and is logged
-// once for that content. Files that cannot be read are tried again at the
-// next poll.
+// once for that content. Files that cannot be read (missing, wrong owner or
+// mode) also leave it, are tried again at the next poll, and are logged once
+// for each error text, not at every poll.
 func (r *runner) reload() bool {
 	sum, err := pairSum(r.conn)
-	if err != nil || sum == r.pair || sum == r.refused {
+	if err != nil {
+		if msg := err.Error(); msg != r.unread {
+			r.unread = msg
+			log.Printf("%s: client certificate on disk not read, keeping the one in use: %v", r.name, err)
+		}
+		return false
+	}
+	r.unread = ""
+	if sum == r.pair || sum == r.refused {
 		return false
 	}
 	cl, err := r.newClient()

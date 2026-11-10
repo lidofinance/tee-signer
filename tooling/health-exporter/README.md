@@ -106,6 +106,9 @@ rename them over the old ones.
 A pair that does not load (the key does not belong to the certificate, the
 certificate is expired) leaves the pair in use, and the exporter logs `client
 certificate on disk refused, keeping the one in use` once for that content.
+Files that cannot be read (missing, wrong owner or mode) also leave the pair
+in use. The exporter logs `client certificate on disk not read, keeping the
+one in use` once for each error, and tries again at the next poll.
 The rest of the connection file (address, pins) is read at start only.
 
 ## Metrics

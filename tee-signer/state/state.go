@@ -564,11 +564,12 @@ func (h *Hooks) LoadDeviceMark() (backend.Watermark, bool, error) {
 		e := h.epochAt(uint64(now.Unix()))
 		f := satAdd(e, h.mode.FloorMargin)
 		fw := FloorWatermark(h.cfg, f)
-		// The log's mark is authoritative for sources. A log with no vote
-		// yet (fresh, or lost and set up again) gets the floor's source
-		// bound through the source gate (SourceFloor), not in the core:
-		// the core cannot lower a bound, and an import with history may
-		// need a lower one.
+		// This merge keeps the log's source bound; the core then raises
+		// the source to its own restart floor (see the package comment).
+		// A log with no vote yet (fresh, or lost and set up again) gets
+		// the floor's source bound through the source gate (SourceFloor),
+		// not in this mark: the core cannot lower a bound, and an import
+		// with history may need a lower one.
 		fw.SourceEpoch = 0
 		if wm.HasAttestation {
 			fw.SourceEpoch = wm.SourceEpoch
