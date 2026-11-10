@@ -220,11 +220,15 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   It asks public servers less
   often and keeps the quorum alive when operators fail:
   - Time is counted in ticks of 4 s since the start round. The start round
-    asks every operator once, after a random wait under 10 s.
+    asks every operator once, after a random wait under 10 s. Until the
+    first quorum, an operator that did not answer (and sent no RATE) may
+    be asked again 20 s after its last try (`NTSShiftStartRetry`), so a
+    relay that comes up late gets about 4 tries in the 90 s start wait,
+    not 1. A server that never answered took no load from that run.
   - `ShiftActives(n)` operators are active (all below 7, 4 of 7, 5 from 8), each asked
     on its own slot of a 60 s grid (slots 12 s apart with 5, 12 to 16 s
     with 4, the phase from the seed). Two contacts with one
-    operator start at least 60 s apart (a contact that runs NTS-KE first
+    operator start at least 60 s apart, except those start retries (a contact that runs NTS-KE first
     sends its query a few seconds later); a RATE doubles that operator's
     gap up to 1024 s.
     Without a seed every operator is active.
@@ -232,7 +236,7 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
     drawn from the seed. The outgoing leaves on time; its last sample stays
     until it ages out. An incoming that does not answer is not replaced.
   - A lost answer of an active gets one fallback at once to a random
-    operator not asked in 60 s, at most 120 per hour. With fewer than 3
+    operator not asked in 60 s, at most 120 per hour. With fewer than 4
     fresh samples, every operator not asked in 60 s is asked (a burst).
   - NTP queries time out after 1 s; the NTP host is resolved once at
     NTS-KE (default dialer only). NTS-KE keeps 5 s.
@@ -288,7 +292,9 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   80 s (16 s rounded up to the loop): 5 in 90 s, 2 in the 30 s of the
   e2e tests. Now the loop starts up to 5 s later and a retry comes 15 or
   20 s after a try: at the latest 5, 25, 45, 65 and 85 s, so as many tries
-  as before.
+  as before. Under the 60 s schedule, which every runner runs, the start
+  retries above give a server that did not answer a try every 20 s until
+  the first quorum.
   The clock dials through the platform (`platform.Platform.Dial`; nil is
   the default dialer). `runner -nts-clock-check`
   queries the servers once, with no start wait, and prints the result. A debug build (tag debugimport) can name

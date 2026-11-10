@@ -510,7 +510,7 @@ func (n *NTS) refreshShifts(ctx context.Context) error {
 	// Past the deadline the later rounds would mark contacts, use the
 	// fallback cap and back off NTS-KE without sending anything.
 	if ctx.Err() != nil {
-		return n.combine(coarse, coarseLocal)
+		return n.combineShifts(coarse, coarseLocal)
 	}
 	var fallbacks []ntsAsk
 	at := n.local()
@@ -527,7 +527,16 @@ func (n *NTS) refreshShifts(ctx context.Context) error {
 		at := n.local()
 		n.askAll(ctx, coarse, n.shifts.burst(after(at)), at)
 	}
-	return n.combine(coarse, coarseLocal)
+	return n.combineShifts(coarse, coarseLocal)
+}
+
+// combineShifts is combine; a quorum ends the start retries of the schedule.
+func (n *NTS) combineShifts(coarse time.Time, coarseLocal int64) error {
+	err := n.combine(coarse, coarseLocal)
+	if err == nil {
+		n.shifts.quorum()
+	}
+	return err
 }
 
 // askAll polls asks in parallel, sent at local time at, and returns those
@@ -543,7 +552,7 @@ func (n *NTS) askAll(ctx context.Context, coarse time.Time, asks []ntsAsk, at in
 		go func() {
 			defer wg.Done()
 			ke := p.stats.KEOK + p.stats.KEFail
-			ok := p.disabled == "" && n.waitGap(ctx, p, at) && n.poll(ctx, p, coarse, at)
+			ok := p.disabled == "" && n.waitGap(ctx, p, at, n.shifts.minGap(a.op)) && n.poll(ctx, p, coarse, at)
 			if a.role == roleFallback && p.stats.KEOK+p.stats.KEFail != ke {
 				n.shifts.fallbackKE(a.op)
 			}
@@ -561,14 +570,14 @@ func (n *NTS) askAll(ctx context.Context, coarse time.Time, asks []ntsAsk, at in
 	return lost
 }
 
-// waitGap keeps contacts with p at least NTSShiftMinGap apart in local
-// time. The schedule keeps them 15 ticks apart, but a tick can come a few
+// waitGap keeps contacts with p at least gap (NTSShiftMinGap, or
+// NTSShiftStartRetry before the first quorum) apart in local time. The schedule keeps them 15 ticks apart, but a tick can come a few
 // ms early against the one before (the live run saw 59.999 s); waitGap
 // waits out such a shortfall. A shortfall over one tick would be a bug of
 // the schedule: no contact then.
-func (n *NTS) waitGap(ctx context.Context, p *ntsPeer, at int64) bool {
+func (n *NTS) waitGap(ctx context.Context, p *ntsPeer, at int64, gap time.Duration) bool {
 	if p.contacted != 0 {
-		if wait := time.Duration(p.contacted + int64(NTSShiftMinGap) - at); wait > 0 {
+		if wait := time.Duration(p.contacted + int64(gap) - at); wait > 0 {
 			if wait > n.interval()/4 {
 				n.logf(slog.LevelError, "nts: contact within the minimum gap refused", "operator", p.srv.Operator, "short_by", wait)
 				return false

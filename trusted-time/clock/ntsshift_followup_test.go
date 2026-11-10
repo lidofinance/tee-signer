@@ -26,6 +26,7 @@ func newFollowNTS(w *shiftWorld, catalog int, seed []byte) *NTS {
 		n.Servers = append(n.Servers, NTSServer{Host: fmt.Sprintf("op%d.test", i), Operator: fmt.Sprintf("op%d", i)})
 	}
 	n.init()
+	w.inStart = inStartOf(n)
 	return n
 }
 
@@ -37,17 +38,7 @@ func (w *shiftWorld) at(d time.Duration) {
 	w.tickAt = w.now
 }
 
-func minGapOf(w *shiftWorld) (time.Duration, string) {
-	best, who := time.Duration(1<<62), ""
-	for op, cs := range w.contacts {
-		for i := 1; i < len(cs); i++ {
-			if d := time.Duration(cs[i] - cs[i-1]); d < best {
-				best, who = d, op
-			}
-		}
-	}
-	return best, who
-}
+func minGapOf(w *shiftWorld) (time.Duration, string) { return gapsOf(w) }
 
 // Without a seed every operator is active, once per 60 s; the seed set
 // later moves to 5 actives at their next slot, with the 60 s minimum kept
@@ -188,9 +179,10 @@ func TestNTSShiftStartWithOperatorsDown(t *testing.T) {
 	}
 	got := startQuorum(t, w, n, 3*time.Minute)
 	t.Logf("5 down, 3 down for the first 10 s: first quorum %v after the start round", got)
-	// The retry may go out at the first call 60 s after the start round:
-	// the calls come every 5 s plus the 1 s timeouts, so by 66 s.
-	if got < NTSShiftMinGap || got > 66*time.Second {
+	// The 3 that did not answer are asked again NTSShiftStartRetry after
+	// the start round, at the first call then: the calls come every 5 s
+	// plus the 1 s timeouts, so by 26 s.
+	if got < NTSShiftStartRetry || got > 26*time.Second {
 		t.Errorf("first quorum after %v", got)
 	}
 	if g, op := minGapOf(w); g < NTSShiftMinGap {

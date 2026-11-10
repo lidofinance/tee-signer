@@ -34,6 +34,12 @@ type shiftWorld struct {
 	blipTo   int64
 	ntsOnly  bool // the blip stops NTS answers only, not coarse readings
 	contacts map[string][]int64
+	// early marks the contacts made before the first quorum to an operator
+	// that had not answered: they may follow a lost one after
+	// NTSShiftStartRetry. inStart reports that no quorum formed yet.
+	early    map[string][]bool
+	answered map[string]bool
+	inStart  func() bool
 	// downUntil: no answers before this local time; rateUntil: a
 	// Kiss-o'-Death RATE before this local time.
 	downUntil map[string]int64
@@ -62,6 +68,10 @@ func (w *shiftWorld) query(op string, t int64) (nts.Sample, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.contacts[op] = append(w.contacts[op], t)
+	if w.early == nil {
+		w.early, w.answered = map[string][]bool{}, map[string]bool{}
+	}
+	w.early[op] = append(w.early[op], w.inStart != nil && w.inStart() && !w.answered[op])
 	if t < w.rateUntil[op] {
 		return nts.Sample{}, &nts.KissError{Code: "RATE"}
 	}
@@ -69,7 +79,38 @@ func (w *shiftWorld) query(op string, t int64) (nts.Sample, error) {
 		w.now = max(w.now, t+int64(NTSShiftQueryTimeout))
 		return nts.Sample{}, errors.New("timeout")
 	}
+	w.answered[op] = true
 	return nts.Sample{Offset: w.off + int64(w.wrong[op]), Bound: 15 * time.Millisecond, Delay: 30 * time.Millisecond, T4: t}, nil
+}
+
+// gapsOf is the shortest gap between two contacts with one operator, an
+// early contact's gap counted as NTSShiftMinGap/NTSShiftStartRetry times
+// longer (so 20 s before the first quorum reads as 60 s), and its operator.
+func gapsOf(w *shiftWorld) (time.Duration, string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	best, who := time.Duration(1<<62), ""
+	for op, cs := range w.contacts {
+		for i := 1; i < len(cs); i++ {
+			d := time.Duration(cs[i] - cs[i-1])
+			if w.early[op][i] {
+				d *= NTSShiftMinGap / NTSShiftStartRetry
+			}
+			if d < best {
+				best, who = d, op
+			}
+		}
+	}
+	return best, who
+}
+
+// inStartOf reports whether n formed no quorum yet.
+func inStartOf(n *NTS) func() bool {
+	return func() bool {
+		n.shifts.mu.Lock()
+		defer n.shifts.mu.Unlock()
+		return !n.shifts.warm
+	}
 }
 
 func (w *shiftWorld) Now() (time.Time, error) {
@@ -149,6 +190,7 @@ func runShiftScenario(t testing.TB, sc shiftScenario) shiftResult {
 	w := &shiftWorld{off: 1_800_000_000 * int64(time.Second), seed: sc.seed, loss: map[string]float64{}, down: map[string]bool{},
 		wrong: map[string]time.Duration{}, contacts: map[string][]int64{}}
 	n := &NTS{Coarse: w, Local: w.local, ScheduleSeed: fmt.Appendf(nil, "signer-%d", sc.seed), testQuery: w.queryCtx, noStartDelay: true}
+	w.inStart = inStartOf(n)
 	for i := range sc.catalog {
 		n.Servers = append(n.Servers, NTSServer{Host: fmt.Sprintf("op%d.test", i), Operator: fmt.Sprintf("op%d", i)})
 	}
@@ -221,16 +263,14 @@ func runShiftScenario(t testing.TB, sc shiftScenario) shiftResult {
 	}
 	res.window = to - sc.from
 	hours := sc.dur.Hours()
-	res.minGap, res.opMin = time.Duration(math.MaxInt64), math.Inf(1)
+	res.opMin = math.Inf(1)
+	res.minGap, res.minGapOp = gapsOf(w)
 	total := 0
-	for op, cs := range w.contacts {
+	for _, cs := range w.contacts {
 		total += len(cs)
 		ph := float64(len(cs)) / hours
 		res.opMax, res.opMin = max(res.opMax, ph), min(res.opMin, ph)
 		for i := 1; i < len(cs); i++ {
-			if d := time.Duration(cs[i] - cs[i-1]); d < res.minGap {
-				res.minGap, res.minGapOp = d, op
-			}
 			res.idleMax = max(res.idleMax, time.Duration(cs[i]-cs[i-1]))
 		}
 	}

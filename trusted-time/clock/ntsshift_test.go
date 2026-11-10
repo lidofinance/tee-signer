@@ -23,6 +23,9 @@ type contact struct {
 	at   int
 	role ntsRole
 	rate bool // the answer was RATE
+	// early: made before the first quorum to an operator with no answer
+	// yet, so it may follow a lost contact after NTSShiftStartRetry.
+	early bool
 }
 
 // driveShifts runs the schedule alone for ticks ticks. answer says whether a
@@ -42,7 +45,8 @@ func driveShiftsRate(s *ntsShifts, ticks int, answer func(op, q int) (ok, rate b
 	}
 	do := func(a ntsAsk, at int) bool {
 		ok, rate := answer(a.op, at)
-		got[a.op] = append(got[a.op], contact{at, a.role, rate})
+		early := !s.warm && s.counts[a.op].Answers == 0
+		got[a.op] = append(got[a.op], contact{at, a.role, rate, early})
 		s.result(a, ok, rate)
 		if ok {
 			lastOK[a.op] = at
@@ -71,6 +75,9 @@ func driveShiftsRate(s *ntsShifts, ticks int, answer func(op, q int) (ok, rate b
 				do(a, s.q+1)
 			}
 		}
+		if fresh >= 3 {
+			s.quorum()
+		}
 	}
 	return got
 }
@@ -79,8 +86,12 @@ func checkGaps(t *testing.T, s *ntsShifts, got map[int][]contact) {
 	t.Helper()
 	for op, cs := range got {
 		for i := 1; i < len(cs); i++ {
-			if d := cs[i].at - cs[i-1].at; d < s.gap {
-				t.Fatalf("operator %d contacted at ticks %d and %d (%d ticks, minimum %d)", op, cs[i-1].at, cs[i].at, d, s.gap)
+			min := s.gap
+			if cs[i].early {
+				min = s.retry
+			}
+			if d := cs[i].at - cs[i-1].at; d < min {
+				t.Fatalf("operator %d contacted at ticks %d and %d (%d ticks, minimum %d)", op, cs[i-1].at, cs[i].at, d, min)
 			}
 		}
 	}
@@ -376,5 +387,45 @@ func TestShiftsFallbackCap(t *testing.T) {
 	}
 	if _, _, capped := s.snapshot(make([]string, 8)); capped != s.capped {
 		t.Fatalf("snapshot capped %d", capped)
+	}
+}
+
+// Before the first quorum an operator that got the start round and did not
+// answer may be asked again after NTSShiftStartRetry (5 ticks); one that
+// answered or sent RATE waits the full gap. After a quorum every gap is the
+// full one again.
+func TestShiftsStartRetry(t *testing.T) {
+	s := newNTSShifts(4, []byte("seed"), testTick)
+	for _, a := range s.next() {
+		s.result(a, a.op == 0, a.op == 1)
+	}
+	for range s.retry - 1 {
+		s.next()
+	}
+	if b := s.burst(1); len(b) != 0 {
+		t.Fatalf("burst before the retry gap: %v", b)
+	}
+	s.next()
+	var got []int
+	for _, a := range s.burst(1) {
+		got = append(got, a.op)
+		s.result(a, false, false)
+	}
+	slices.Sort(got)
+	if !slices.Equal(got, []int{2, 3}) {
+		t.Fatalf("retried %v, want the two that did not answer", got)
+	}
+	if s.minGap(0) != NTSShiftMinGap || s.minGap(1) != NTSShiftMinGap || s.minGap(2) != NTSShiftStartRetry {
+		t.Fatalf("min gaps %v %v %v", s.minGap(0), s.minGap(1), s.minGap(2))
+	}
+	s.quorum()
+	for range s.retry + 1 {
+		s.next()
+	}
+	if b := s.burst(1); len(b) != 0 {
+		t.Fatalf("burst after the quorum within the full gap: %v", b)
+	}
+	if s.minGap(2) != NTSShiftMinGap {
+		t.Fatalf("after the quorum: %v", s.minGap(2))
 	}
 }

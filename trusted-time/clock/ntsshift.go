@@ -48,8 +48,14 @@ const (
 	// 3 of 4. The newcomer of a handover is asked at once, off its slot,
 	// and its next slot can come up to 29 ticks later; that first sample
 	// ages out before it, leaving exactly 3 fresh for up to about 40 s.
-	NTSShiftMinServers   = 4 + NTSShiftSpares
-	NTSShiftMinGap       = 60 * time.Second
+	NTSShiftMinServers = 4 + NTSShiftSpares
+	NTSShiftMinGap     = 60 * time.Second
+	// NTSShiftStartRetry is the gap before the first quorum of a run for an
+	// operator that has not answered yet (and sent no RATE). The start
+	// round asks every operator; without this a failed start round (a
+	// relay that comes up late) would be retried only after 60 s, once in
+	// the runner's start wait.
+	NTSShiftStartRetry   = 20 * time.Second
 	NTSShiftLength       = 15 * time.Minute
 	NTSShiftMaxAge       = 90 * time.Second
 	NTSShiftQueryTimeout = time.Second
@@ -89,6 +95,7 @@ type ntsShifts struct {
 	tickNs     int64
 	actives    int // active slots
 	gap        int // base ticks between two contacts with one operator
+	retry      int // ticks of NTSShiftStartRetry
 	maxGap     int // the most a RATE raises an operator's gap to
 	shiftLen   int // ticks per shift
 	hour       int // ticks per hour, the window of NTSShiftFallbackCap
@@ -100,6 +107,7 @@ type ntsShifts struct {
 	seeded     bool
 
 	started  bool
+	warm     bool  // a quorum formed in this run
 	t0       int64 // local ns of the start round
 	q        int   // the current tick
 	shift    int   // shifts done
@@ -107,6 +115,7 @@ type ntsShifts struct {
 	last     []int  // tick of the last contact
 	gaps     []int  // minimum gap per operator, in ticks
 	incoming []bool // came in at a handover, no answer since
+	missed   []bool // asked and got no answer (start retries)
 	counts   []NTSOperatorCounts
 	// fallbackAt holds the ticks of the fallbacks of the last hour; capped
 	// counts the fallbacks the cap refused.
@@ -123,12 +132,14 @@ func newNTSShifts(n int, seed []byte, tick time.Duration) *ntsShifts {
 	s := &ntsShifts{
 		tickNs:   int64(tick),
 		gap:      ceilTicks(NTSShiftMinGap),
+		retry:    ceilTicks(NTSShiftStartRetry),
 		maxGap:   ceilTicks(ntsShiftMaxGap),
 		shiftLen: ceilTicks(NTSShiftLength),
 		hour:     ceilTicks(time.Hour),
 		last:     make([]int, n),
 		gaps:     make([]int, n),
 		incoming: make([]bool, n),
+		missed:   make([]bool, n),
 		counts:   make([]NTSOperatorCounts, n),
 	}
 	for i := range s.last {
@@ -245,7 +256,7 @@ func (s *ntsShifts) due(k, op int) int {
 		return s.q
 	}
 	g := s.phase + k*s.gap/s.actives
-	from := s.last[op] + s.gaps[op]
+	from := s.last[op] + s.gapOf(op)
 	return from + mod(g-from, s.gap)
 }
 
@@ -274,7 +285,38 @@ func (s *ntsShifts) mark(op, at int) {
 }
 
 func (s *ntsShifts) eligible(op int) bool {
-	return s.last[op] == never || s.q-s.last[op] >= s.gaps[op]
+	return s.last[op] == never || s.q-s.last[op] >= s.gapOf(op)
+}
+
+// gapOf is op's minimum gap in ticks: NTSShiftStartRetry before the first
+// quorum for an operator that was asked, has not answered and sent no RATE,
+// else its gap.
+func (s *ntsShifts) gapOf(op int) int {
+	if s.startRetry(op) {
+		return s.retry
+	}
+	return s.gaps[op]
+}
+
+func (s *ntsShifts) startRetry(op int) bool {
+	return !s.warm && s.missed[op] && s.counts[op].Answers == 0 && s.counts[op].Rates == 0
+}
+
+// minGap is op's minimum gap in local time, for NTS.waitGap.
+func (s *ntsShifts) minGap(op int) time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.startRetry(op) {
+		return NTSShiftStartRetry
+	}
+	return NTSShiftMinGap
+}
+
+// quorum records that a quorum formed: from now on every gap is the full one.
+func (s *ntsShifts) quorum() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.warm = true
 }
 
 // result records the answer (or not) of a contact. rate: the answer was a
@@ -295,6 +337,7 @@ func (s *ntsShifts) result(a ntsAsk, ok, rate bool) {
 	default:
 		c.Losses++
 	}
+	s.missed[a.op] = !ok
 	if s.incoming[a.op] {
 		s.incoming[a.op] = false
 		if !ok {
