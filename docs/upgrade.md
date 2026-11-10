@@ -209,10 +209,19 @@ the old measurements listed until every signer has switched.
 5. Start the new image on the same setup and store.
 6. Check the start (see the platform section).
 7. One-value pins: `runnerclient` (`signer-admin`, the gateway, other
-   tools on it) pins one value per signer in `cloud.json`: `nitro_pcrs`,
+   tools on it) pins one value per signer: `nitro_pcrs`,
    `cce_policy_sha256` or `gcp_image_digest`. Set the new value now, in
-   every copy of that `cloud.json` on every machine. Until you do, that
-   client refuses the signer with `measurement mismatch`.
+   every place that holds it, on every machine:
+   - `signer-admin` and the tools that read its connection files: every
+     copy of that signer's `cloud.json`.
+   - The gateway: `signers.nodes[].attestation` of that signer in
+     `gateway.yml`. The gateway does not read `cloud.json`, and reads
+     `gateway.yml` at its start only, so start it again
+     ([gateway/README.md](../gateway/README.md#configuration),
+     "Configuration").
+
+   Until you do, that client refuses the signer with
+   `measurement mismatch`.
 8. Check the signer:
    - `signer-admin status -cluster cluster.json -signers NAME` prints
      `NAME setup=... locked=vN/...`: the signer's setup hash (first 8

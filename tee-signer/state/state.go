@@ -28,9 +28,11 @@
 // mark for every validator, and every raise of it is a record in a locked,
 // append-only log outside the host's reach, written before the core signs
 // past the old mark. At start the runner reads the newest record and the
-// core restores from it. The log is authoritative for the source bound, so
-// the restart floor then bounds targets and blocks only; that removes the
-// floor's stall while the chain does not finalize. The log is also the
+// core restores from it. The mark the runner hands the core
+// (LoadDeviceMark) keeps the log's source bound, but the core then raises
+// every key it loads to its own restart floor, sources included. So the
+// floor's stall stays with a mark log too: after a restart a vote signs
+// only once the chain justifies the floor epoch. The log is also the
 // clone protection: a second instance's write conflicts.
 //
 // Repeat roots stay in the core's RAM. Older builds could store them under
