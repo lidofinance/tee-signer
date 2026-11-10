@@ -94,6 +94,8 @@ func TestWithConfirmed(t *testing.T) {
 		{[]string{"nope"}, "no entry"},
 		{[]string{"t@t2.example"}, "no alt host"},
 		{[]string{"t@other.example"}, "no alt host"},
+		{[]string{"t@"}, "bad choice"},
+		{[]string{"@any.t.example"}, "bad choice"},
 	} {
 		if _, err := c.WithConfirmed(tc.specs); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%v: %v, want %q", tc.specs, err, tc.want)

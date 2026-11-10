@@ -80,7 +80,8 @@ type NTSServer struct {
 	// for Open; an Ask entry may have none (terms not public).
 	TermsURL string
 	// Alt are other hosts of the same operator (anycast, more sites).
-	// They count as the same operator. This image does not dial them.
+	// They count as the same operator. The runner dials one only when a
+	// deployment names it as id@host and it has a NitroPort.
 	Alt []AltHost
 	// Default: the runner dials it while setups cannot name servers yet.
 	Default bool
@@ -398,7 +399,10 @@ func (c *Catalog) Dialed() []NTSServer {
 func (c *Catalog) WithConfirmed(specs []string) ([]Endpoint, error) {
 	want := map[string]string{} // id -> chosen host, "" for the entry's own
 	for _, s := range specs {
-		id, host, _ := strings.Cut(s, "@")
+		id, host, at := strings.Cut(s, "@")
+		if id == "" || (at && host == "") {
+			return nil, fmt.Errorf("ntscatalog: bad choice %q: want id or id@host", s)
+		}
 		if _, dup := want[id]; dup {
 			return nil, fmt.Errorf("ntscatalog: %q named twice", id)
 		}

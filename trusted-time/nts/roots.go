@@ -75,8 +75,9 @@ type Server struct {
 	Roots    []string // files under roots/
 }
 
-// PublicServers are the NTS servers the runner uses: the Default entries
-// of the built-in catalog that are not withdrawn (ntscatalog Dialed).
+// PublicServers are the Default entries of the built-in catalog that are
+// not withdrawn (ntscatalog Dialed). The runner dials them plus the entries
+// a deployment names in -nts-terms-confirmed.
 var PublicServers = publicServers(ntscatalog.Builtin.Dialed())
 
 func publicServers(in []ntscatalog.NTSServer) []Server {

@@ -306,7 +306,8 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
     Meta, under the quorum's 3; a setup there needs `ask` operators
     (TimeNL's any.time.nl is anycast; MBIX is at the edge of the bound).
   - `alt`: other hosts of the same operator (more sites, anycast). They count
-    as the same operator and this image does not dial them.
+    as the same operator. The runner dials one only when a deployment
+    names it as `id@host` (see below).
   - `default`: dialed while setups cannot name servers. Only open
     operators of eu and na (or global): Cloudflare, Netnod, PTB, BEV, Meta
     and Wiktel. Earlier images dialed Cloudflare, Netnod, PTB and TimeNL;

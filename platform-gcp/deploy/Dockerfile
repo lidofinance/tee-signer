@@ -24,7 +24,7 @@
 # -nts-wait and -nts-max-bound in the command, so the launch environment
 # cannot set them. NTS-KE on
 # TCP 4460 and NTP on UDP 123 and 4123 to the default servers of
-# trusted-time/ntscatalog (nts.PublicServers), straight out through the VM's external address
+# trusted-time/ntscatalog plus any -nts-terms-confirmed entries, straight out through the VM's external address
 # (the VPC's implied egress rule allows all). The three HTTPS-date URLs are
 # its coarse check only.
 # Identity tokens carry the audience signer-runner-identity, which the WIF

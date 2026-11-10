@@ -55,7 +55,7 @@ import (
 )
 
 var (
-	ntsClockFlag    = flag.Bool("nts-clock", false, "use the NTS clock (RFC 8915, the catalog's default public servers) on every platform; also RUNNER_NTS_CLOCK=1")
+	ntsClockFlag    = flag.Bool("nts-clock", false, "use the NTS clock (RFC 8915, the catalog's default public servers plus -nts-terms-confirmed) on every platform; also RUNNER_NTS_CLOCK=1")
 	ntsCoarseFlag   = flag.String("nts-coarse-urls", "", "comma-separated https URLs (3 or more) of the NTS clock's coarse check; default RUNNER_NTS_COARSE_URLS")
 	ntsWaitFlag     = flag.Duration("nts-wait", 0, "how long start-up waits for the first NTS quorum; 0 = RUNNER_NTS_WAIT or 90s")
 	ntsMaxBoundFlag = flag.Duration("nts-max-bound", 0, "signing fails above this NTS error bound, at most 250ms; 0 = RUNNER_NTS_MAX_BOUND or 100ms")
@@ -154,7 +154,7 @@ func withNTSClock(f platformFunc) platformFunc {
 	}
 }
 
-// newNTSClock builds the NTS clock over nts.PublicServers (a debug build
+// newNTSClock builds the NTS clock over publicNTSServers (a debug build
 // can name test servers, nts_servers_debug.go) with an HTTPS-date quorum
 // (majority of the URLs) as its coarse clock. dial nil: the default dialer.
 // region replaces {region} in the URLs.
@@ -244,7 +244,8 @@ func ntsCoarseURLs(region string) ([]string, error) {
 	return urls, nil
 }
 
-// publicNTSServers are nts.PublicServers with their pinned roots.
+// publicNTSServers are the catalog's default set plus the entries named in
+// -nts-terms-confirmed (ntscatalog WithConfirmed), with their pinned roots.
 func publicNTSServers() ([]clock.NTSServer, error) {
 	eps, err := ntscatalog.Builtin.WithConfirmed(ntsConfirmed())
 	if err != nil {
