@@ -86,9 +86,15 @@ func TestParseRefuses(t *testing.T) {
 		t.Fatalf("good catalog: %+v %v", c, err)
 	}
 	for name, tc := range map[string]struct{ in, want string }{
-		"unknown field":   {`{"nts":[{"id":"a","host":"a.example","operator":"op-a","roots":["r.pem"],"nitro_port":9001,"status":"active","port":1}]}`, "unknown field"},
-		"unknown top key": {`{"nts":[` + entry + `],"coarse":[]}`, "unknown field"},
+		"unknown field":   {`{"nts":[{"id":"a","host":"a.example","operator":"op-a","roots":["r.pem"],"nitro_port":9001,"status":"active","port":1}]}`, "unknown key"},
+		"unknown top key": {`{"nts":[` + entry + `],"coarse":[]}`, "unknown key"},
 		"trailing data":   {`{"nts":[` + entry + `]} {}`, "data after"},
+		"trailing brace":  {`{"nts":[` + entry + `]}}`, "ntscatalog"},
+		"trailing ]":      {`{"nts":[` + entry + `]}]`, "ntscatalog"},
+		"key twice":       {`{"nts":[{"id":"a","host":"a.example","operator":"op-a","roots":["r.pem"],"nitro_port":9001,"status":"withdrawn","status":"active"}]}`, "twice"},
+		"key case":        {`{"nts":[{"id":"a","host":"a.example","operator":"op-a","roots":["r.pem"],"nitro_port":9001,"status":"withdrawn","Status":"active"}]}`, "unknown key"},
+		"nts twice":       {`{"nts":[],"nts":[` + entry + `]}`, "twice"},
+		"object in list":  {`{"nts":[{"id":"a","host":"a.example","operator":"op-a","roots":[{"x":1}],"nitro_port":9001,"status":"active"}]}`, "unknown key"},
 		"no status":       {`{"nts":[{"id":"a","host":"a.example","operator":"op-a","roots":["r.pem"],"nitro_port":9001}]}`, "status"},
 		"bad status":      {`{"nts":[{"id":"a","host":"a.example","operator":"op-a","roots":["r.pem"],"nitro_port":9001,"status":"Active"}]}`, "status"},
 		"check fails":     {`{"nts":[` + entry + `,` + entry + `]}`, "twice"},

@@ -19,7 +19,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/netip"
+	"slices"
 )
 
 // Status of a catalog entry.
@@ -100,9 +102,14 @@ type jsonServer struct {
 }
 
 // Parse reads a catalog in the catalog.json format and checks it (Check).
-// Unknown fields, trailing data and a missing or unknown status are
-// refused.
+// It refuses unknown fields, keys that repeat or differ in case from the
+// format's (encoding/json would take the last one, or match "Status" to
+// "status"), anything after the catalog, and a missing or unknown status.
+// So what a reviewer reads in the file is what the runner gets.
 func Parse(b []byte) (Catalog, error) {
+	if err := strictKeys(b); err != nil {
+		return Catalog{}, fmt.Errorf("ntscatalog: %w", err)
+	}
 	d := json.NewDecoder(bytes.NewReader(b))
 	d.DisallowUnknownFields()
 	var raw struct {
@@ -110,9 +117,6 @@ func Parse(b []byte) (Catalog, error) {
 	}
 	if err := d.Decode(&raw); err != nil {
 		return Catalog{}, fmt.Errorf("ntscatalog: %w", err)
-	}
-	if d.More() {
-		return Catalog{}, errors.New("ntscatalog: data after the catalog")
 	}
 	var c Catalog
 	for _, r := range raw.NTS {
@@ -127,6 +131,66 @@ func Parse(b []byte) (Catalog, error) {
 		return Catalog{}, err
 	}
 	return c, nil
+}
+
+// formatKeys are the keys of catalog.json by place: the top object and
+// each entry of "nts".
+var formatKeys = map[string][]string{
+	"":      {"nts"},
+	"nts[]": {"id", "host", "operator", "roots", "ntp_nets", "nitro_port", "status", "note"},
+}
+
+// strictKeys walks the whole document once: every object key must appear
+// exactly once and be spelled as in formatKeys, and the document must end
+// after its one value.
+func strictKeys(b []byte) error {
+	d := json.NewDecoder(bytes.NewReader(b))
+	if err := walkValue(d, ""); err != nil {
+		return err
+	}
+	if _, err := d.Token(); err != io.EOF {
+		return errors.New("data after the catalog")
+	}
+	return nil
+}
+
+func walkValue(d *json.Decoder, path string) error {
+	t, err := d.Token()
+	if err != nil {
+		return err
+	}
+	switch t {
+	case json.Delim('{'):
+		seen := map[string]bool{}
+		for d.More() {
+			kt, err := d.Token()
+			if err != nil {
+				return err
+			}
+			k, _ := kt.(string)
+			if seen[k] {
+				return fmt.Errorf("key %q twice", k)
+			}
+			seen[k] = true
+			if allowed, ok := formatKeys[path]; !ok || !slices.Contains(allowed, k) {
+				return fmt.Errorf("unknown key %q", k)
+			}
+			if err := walkValue(d, path+k); err != nil {
+				return err
+			}
+		}
+		_, err = d.Token() // the closing brace
+		return err
+	case json.Delim('['):
+		for d.More() {
+			if err := walkValue(d, path+"[]"); err != nil {
+				return err
+			}
+		}
+		_, err = d.Token() // the closing bracket
+		return err
+	}
+	return nil
 }
 
 func parseStatus(s string) (Status, error) {
