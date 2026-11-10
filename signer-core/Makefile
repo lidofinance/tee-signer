@@ -40,7 +40,10 @@ INCLUDES := -Iinclude -I$(BLST_SRC)/bindings
 WARN := -Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes
 # The core is built freestanding: no hosted libc assumptions. It still
 # calls memcpy/memset/memcmp, which every TA environment provides.
-CORE_CFLAGS := -std=c11 -O2 -fPIC -ffreestanding -fno-common $(WARN) $(INCLUDES) $(CFLAGS)
+# -ffreestanding drops the distro default stack protector, so it is turned
+# on here; the objects then need __stack_chk_fail (and __stack_chk_guard on
+# aarch64), which libc supplies.
+CORE_CFLAGS := -std=c11 -O2 -fPIC -ffreestanding -fstack-protector-strong -fno-common $(WARN) $(INCLUDES) $(CFLAGS)
 TEST_CFLAGS := -std=c11 -O2 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -Wno-format-truncation \
                -Isrc -I$(MARKFORMAT_DIR) $(INCLUDES) $(CFLAGS)
 
@@ -60,7 +63,7 @@ $(BLST_LIB):
 	mkdir -p $(BUILD)/blst
 	cd $(BUILD)/blst && CC=$(CC) $(BLST_SRC)/build.sh $(BLST_FLAGS) >build.log 2>&1 || { cat build.log; exit 1; }
 
-$(BUILD)/obj/%.o: src/%.c include/signer_core.h src/sc_internal.h | $(BLST_LIB)
+$(BUILD)/obj/%.o: src/%.c include/signer_core.h src/sc_internal.h Makefile | $(BLST_LIB)
 	@mkdir -p $(dir $@)
 	$(CC) $(CORE_CFLAGS) -c $< -o $@
 

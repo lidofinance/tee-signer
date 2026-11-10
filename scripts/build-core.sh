@@ -55,8 +55,8 @@ WARN="-Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes"
 for arch in "${archs[@]}"; do
   cc="$(cc_for "$arch")"
   command -v "$cc" >/dev/null || { echo "missing compiler $cc for $arch" >&2; exit 1; }
-  ar="ar"
-  [ "$arch" != "$HOST_ARCH" ] && ar="$arch-linux-gnu-ar"
+  ar="ar" nm="nm"
+  [ "$arch" != "$HOST_ARCH" ] && ar="$arch-linux-gnu-ar" nm="$arch-linux-gnu-nm"
   out="$BUILD/$arch"
   mkdir -p "$out/lib" "$out/obj" "$out/blst"
 
@@ -73,14 +73,20 @@ for arch in "${archs[@]}"; do
   objs=()
   for c in "$SRC"/src/*.c; do
     o="$out/obj/$(basename "${c%.c}").o"
-    if [ ! -f "$o" ] || [ "$c" -nt "$o" ] || [ "$SRC/include/signer_core.h" -nt "$o" ]; then
+    if [ ! -f "$o" ] || [ "$c" -nt "$o" ] || [ "$SRC/include/signer_core.h" -nt "$o" ] ||
+      [ "${BASH_SOURCE[0]}" -nt "$o" ]; then
+      # -ffreestanding drops the distro default stack protector; turn it on.
       # shellcheck disable=SC2086
-      "$cc" -std=c11 -O2 -fPIC -ffreestanding -fno-common $WARN \
+      "$cc" -std=c11 -O2 -fPIC -ffreestanding -fstack-protector-strong -fno-common $WARN \
         -I"$SRC/include" -I"$BLST_DIR/bindings" -c "$c" -o "$o"
     fi
     objs+=("$o")
   done
   rm -f "$out/lib/libsigner_core.a"
   "$ar" rcs "$out/lib/libsigner_core.a" "${objs[@]}"
+  # The stack protector flag must reach the objects (signer-core/scripts/test.sh
+  # checks the same for the make build).
+  "$nm" -u "$out/lib/libsigner_core.a" | grep -w __stack_chk_fail >/dev/null ||
+    { echo "libsigner_core.a for $arch has no stack protector (__stack_chk_fail)" >&2; exit 1; }
   log "libsigner_core.a built for $arch"
 done

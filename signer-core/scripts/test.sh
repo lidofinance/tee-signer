@@ -66,19 +66,28 @@ echo "$res eip3076_convert (refuses $nbad malformed vectors)"
 run eip3076 '^EIP3076' "$BUILD/test_eip3076" "$BUILD/eip3076.txt"
 
 # The core must not call into the OS. Its objects may only reference blst,
-# the mem* functions, the compiler's stack protector hook and the
-# linker-provided GOT symbol that -fPIC code uses.
+# the mem* functions, the compiler's stack protector hook and guard (aarch64
+# reads the canary from __stack_chk_guard) and the linker-provided GOT
+# symbol that -fPIC code uses.
 CROSS_CC=""
 [ "$ARCH" = "$HOST_ARCH" ] || CROSS_CC="CC=${ARCH}-linux-gnu-gcc"
 # shellcheck disable=SC2086
 syms="$(make -s -C "$CORE_DIR" ARCH="$ARCH" $CROSS_CC symbols)"
-extra="$(echo "$syms" | grep -v -E '^(blst_[a-z0-9_]+|memcpy|memset|memcmp|__stack_chk_fail|_GLOBAL_OFFSET_TABLE_)$' || true)"
+extra="$(echo "$syms" | grep -v -E '^(blst_[a-z0-9_]+|memcpy|memset|memcmp|__stack_chk_fail|__stack_chk_guard|_GLOBAL_OFFSET_TABLE_)$' || true)"
 echo "  undefined symbols in core objects: $(echo "$syms" | grep -c . ) ($(echo "$syms" | grep -v '^blst_' | tr '\n' ' ')+ blst_*)"
 if [ -n "$extra" ]; then
   echo "FAIL symbols: unexpected external references: $extra"
   status=1
 else
   echo "PASS symbols ($ARCH)"
+fi
+# -ffreestanding turns off the distro default -fstack-protector-strong, so
+# the build adds it back. Some core function must then call the canary check.
+if grep -qx __stack_chk_fail <<<"$syms"; then
+  echo "PASS stack protector ($ARCH)"
+else
+  echo "FAIL stack protector: no core object references __stack_chk_fail"
+  status=1
 fi
 
 # Fuzz targets with ASan and UBSan: the regression inputs, then a few

@@ -30,7 +30,9 @@ and the trusted clock come in through callbacks, and the caller hands it
 all the memory it uses. The only outside symbols its objects reference are
 `blst_*`, `memcpy`, `memset` and `memcmp`, plus the linker's
 `_GLOBAL_OFFSET_TABLE_` in x86_64 PIC builds (checked by `scripts/test.sh`,
-which also allows the stack protector hook `__stack_chk_fail`).
+which also allows the stack protector symbols `__stack_chk_fail` and
+`__stack_chk_guard`). The core is built with `-fstack-protector-strong`, and
+`scripts/test.sh` checks that its objects call `__stack_chk_fail`.
 
 ## Run it
 
