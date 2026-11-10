@@ -223,8 +223,9 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
     asks every operator once, after a random wait under 10 s. Until the
     first quorum, an operator that did not answer (and sent no RATE) may
     be asked again 20 s after its last try (`NTSShiftStartRetry`), so a
-    relay that comes up late gets about 4 tries in the 90 s start wait,
-    not 1. A server that never answered took no load from that run.
+    relay that comes up late gets up to 5 tries in the 90 s start wait,
+    not 2. A server that does not answer gets those tries once per run
+    (per restart), then the full 60 s gap.
   - `ShiftActives(n)` operators are active (all below 7, 4 of 7, 5 from 8), each asked
     on its own slot of a 60 s grid (slots 12 s apart with 5, 12 to 16 s
     with 4, the phase from the seed). Two contacts with one

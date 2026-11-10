@@ -709,7 +709,8 @@ after it began; 8 datagrams out per session; 10 datagrams per second out in
 all (burst 20) and 0.5 per second to one address (burst 4). Under the shift
 schedule the clock asks each server at most once per 60 s: 4 actives make
 4 datagrams a normal minute, plus fallbacks; the start round asks every dialed
-server at once. Over a
+server at once, and until the first quorum a server that did not answer is
+asked again every 20 s (at most the 90 s start wait). Over a
 limit the datagram is dropped and counted, as a network would drop it.
 `udprelay` logs its counters every 10 minutes.
 

@@ -34,7 +34,9 @@ import (
 //   - Each operator's minimum gap is NTSShiftMinGap; a Kiss-o'-Death RATE
 //     doubles it (up to 1024 s), each answer halves it back.
 //   - Two contacts with one operator start at least its gap apart (see
-//     mark, and NTS.waitGap for the strict 60 s in local time). A contact
+//     mark, and NTS.waitGap for the gap in local time). Until the first
+//     quorum, an operator that missed its last contact and sent no RATE
+//     has a gap of NTSShiftStartRetry. A contact
 //     that runs NTS-KE first sends its NTP query up to a few seconds after
 //     its start.
 const (

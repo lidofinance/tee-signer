@@ -571,7 +571,8 @@ func (n *NTS) askAll(ctx context.Context, coarse time.Time, asks []ntsAsk, at in
 }
 
 // waitGap keeps contacts with p at least gap (NTSShiftMinGap, or
-// NTSShiftStartRetry before the first quorum) apart in local time. The schedule keeps them 15 ticks apart, but a tick can come a few
+// NTSShiftStartRetry before the first quorum) apart in local time. The
+// schedule keeps them 15 ticks (5 for a start retry) apart, but a tick can come a few
 // ms early against the one before (the live run saw 59.999 s); waitGap
 // waits out such a shortfall. A shortfall over one tick would be a bug of
 // the schedule: no contact then.
