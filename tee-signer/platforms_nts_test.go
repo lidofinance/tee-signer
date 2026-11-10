@@ -194,8 +194,8 @@ func TestNTSMaxBoundCap(t *testing.T) {
 	}
 }
 
-// The shift schedule needs actives plus 3 others; with fewer servers (the
-// 4 of today's catalog) the clock keeps polling every server.
+// The shift schedule needs 4 actives plus 3 others; with fewer servers
+// (the 4 of today's default set) the clock keeps polling every server.
 func TestNTSScheduleNeedsEnoughServers(t *testing.T) {
 	seed := []byte("seed")
 	for n, want := range map[int]bool{4: false, ntsShiftMinServers - 1: false, ntsShiftMinServers: true, 12: true} {

@@ -327,7 +327,7 @@ func TestShiftsMinGapPropertySeedLaterAndRate(t *testing.T) {
 				}
 			}
 		}
-		if !s.seeded || len(s.slots) != min(5, c) {
+		if !s.seeded || len(s.slots) != ShiftActives(c) {
 			t.Fatalf("run %d: seeded %v slots %v", run, s.seeded, s.slots)
 		}
 	}

@@ -19,8 +19,9 @@ import (
 //   - Start: the first tick asks every operator once.
 //   - Without a seed, every operator is active (asked once per 60 s on
 //     its slot). With a seed (SetScheduleSeed, or NTS.ScheduleSeed),
-//     NTSShiftActives operators are active, in a per-signer order, with the
-//     grid phase from the seed; the switch takes effect at the next slot.
+//     ShiftActives(n) of the n operators are active, in a per-signer order,
+//     with the grid phase from the seed; the switch takes effect at the
+//     next slot.
 //   - Every NTSShiftLength the window of actives moves one place along the
 //     order: the first active leaves on time, the next operator in the
 //     order takes its slot. An incoming that does not answer stays (it is
@@ -37,7 +38,16 @@ import (
 //     that runs NTS-KE first sends its NTP query up to a few seconds after
 //     its start.
 const (
-	NTSShiftActives      = 5
+	// NTSShiftActives is the most operators active at once.
+	NTSShiftActives = 5
+	// NTSShiftSpares is how many operators ShiftActives keeps out of the
+	// active set, for fallbacks and bursts.
+	NTSShiftSpares = 3
+	// NTSShiftMinServers is the fewest operators the runner runs the shift
+	// schedule on: 4 actives and the spares. With 4 actives the quorum is
+	// 3 of 4, and right after a handover the newcomer's first sample can
+	// age out before its first slot, leaving exactly 3 fresh for a while.
+	NTSShiftMinServers   = 4 + NTSShiftSpares
 	NTSShiftMinGap       = 60 * time.Second
 	NTSShiftLength       = 15 * time.Minute
 	NTSShiftMaxAge       = 90 * time.Second
@@ -127,11 +137,22 @@ func newNTSShifts(n int, seed []byte, tick time.Duration) *ntsShifts {
 	} else {
 		s.setOrder(seed, n)
 		s.seeded = true
-		s.actives = min(NTSShiftActives, n)
+		s.actives = ShiftActives(n)
 		s.setSlots()
 	}
 	s.startDelay = time.Duration(s.rnd.Int64N(int64(NTSShiftStartDelay) + 1))
 	return s
+}
+
+// ShiftActives is how many of n operators are active under a seeded
+// schedule: NTSShiftActives, but never fewer than NTSShiftSpares left over
+// (4 of 7, 5 of 8 or more). Below NTSShiftMinServers, which the runner does
+// not use, the spares are not kept: up to NTSShiftActives are active.
+func ShiftActives(n int) int {
+	if n < NTSShiftMinServers {
+		return min(NTSShiftActives, n)
+	}
+	return min(NTSShiftActives, n-NTSShiftSpares)
 }
 
 // setOrder draws the order, the grid phase and the shift phase from seed,
@@ -162,7 +183,7 @@ func (s *ntsShifts) reseed(seed []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.setOrder(seed, len(s.last))
-	s.actives = min(NTSShiftActives, len(s.last))
+	s.actives = ShiftActives(len(s.last))
 	s.setSlots()
 	clear(s.incoming)
 	s.seeded = true

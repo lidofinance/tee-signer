@@ -241,10 +241,11 @@ func publicNTSServers() ([]clock.NTSServer, error) {
 func rawLocal() time.Time { return time.Unix(0, nts.Monotonic()) }
 
 // ntsShiftMinServers is the fewest servers the shift schedule runs on:
-// clock.NTSShiftActives actives and 3 others for fallbacks and bursts.
-// With fewer, a lost answer has nowhere to go within the 60 s rule, and
-// the clock polls every server every Interval as before.
-const ntsShiftMinServers = clock.NTSShiftActives + 3
+// clock.NTSShiftMinServers, 4 actives and 3 others for fallbacks and
+// bursts (5 actives from 8 servers, clock.ShiftActives). With fewer, a
+// lost answer has nowhere to go within the 60 s rule, and the clock polls
+// every server every Interval as before.
+const ntsShiftMinServers = clock.NTSShiftMinServers
 
 // ntsSchedule turns the shift schedule on, with seed, when n has
 // ntsShiftMinServers servers or more.

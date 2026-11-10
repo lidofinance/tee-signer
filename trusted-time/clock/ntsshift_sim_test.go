@@ -251,10 +251,15 @@ func runShiftScenario(t testing.TB, sc shiftScenario) shiftResult {
 	return res
 }
 
-// The scenarios of the reviews, as in ~/scratch/nts-sim/run7.py: C 8, A 5,
-// S 15 min, cap 90 s; 6 h runs counted from 20 min.
+// The scenarios of the design reviews: 8 operators (5 active), 15 min
+// shifts, 90 s cap; counted from 20 min.
 func reviewScenarios(dur time.Duration, seed uint64) []shiftScenario {
-	base := shiftScenario{catalog: 8, dur: dur, from: 20 * time.Minute, seed: seed}
+	return reviewScenariosN(dur, seed, 8)
+}
+
+// reviewScenariosN: the same scenarios with catalog operators.
+func reviewScenariosN(dur time.Duration, seed uint64, catalog int) []shiftScenario {
+	base := shiftScenario{catalog: catalog, dur: dur, from: 20 * time.Minute, seed: seed}
 	with := func(name string, f func(*shiftScenario)) shiftScenario {
 		s := base
 		s.name = name
@@ -531,4 +536,61 @@ func TestNTSSummaryDuringRefresh(t *testing.T) {
 	if active != NTSShiftActives {
 		t.Fatalf("%d active, want %d", active, NTSShiftActives)
 	}
+}
+
+// 7 operators run 4 actives (ShiftActives). The cases that must never
+// block with 8 operators must not block with 7 either; two wrong at once
+// may, since 3 of 4 must agree.
+func TestNTSShiftSevenServers(t *testing.T) {
+	if got := ShiftActives(7); got != 4 {
+		t.Fatalf("ShiftActives(7) = %d", got)
+	}
+	for n, want := range map[int]int{3: 3, 5: 5, 6: 5, 8: 5, 12: 5} {
+		if got := ShiftActives(n); got != want {
+			t.Errorf("ShiftActives(%d) = %d, want %d", n, got, want)
+		}
+	}
+	for _, sc := range reviewScenariosN(2*time.Hour, 1, 7) {
+		r := runShiftScenario(t, sc)
+		checkMinGap(t, sc.name, r)
+		t.Logf("%s: blocked %v (%.3f%%), longest %v, %.1f q/h", sc.name, r.blocked, r.blockedPct(), r.longest, r.queriesPerHour)
+		switch sc.name {
+		case "healthy", "one active at 50% loss", "one operator wrong":
+			if r.blocked != 0 {
+				t.Errorf("%s: blocked %v", sc.name, r.blocked)
+			}
+		}
+	}
+}
+
+// 7 against 8 operators over 10 seeds of 6 h per scenario: mean and worst
+// blocked share and the load. Long: run with NTS_SHIFT_SIM=1.
+func TestNTSShiftSevenVersusEight(t *testing.T) {
+	if os.Getenv("NTS_SHIFT_SIM") == "" {
+		t.Skip("NTS_SHIFT_SIM not set")
+	}
+	var out strings.Builder
+	for _, c := range []int{7, 8} {
+		names := reviewScenariosN(time.Hour, 0, c)
+		for i := range names {
+			var mean, worst, qh float64
+			var longest time.Duration
+			for seed := uint64(1); seed <= 10; seed++ {
+				r := runShiftScenario(t, reviewScenariosN(6*time.Hour, seed, c)[i])
+				mean += r.blockedPct() / 10
+				worst = max(worst, r.blockedPct())
+				longest = max(longest, r.longest)
+				qh += r.queriesPerHour / 10
+			}
+			fmt.Fprintf(&out, "C %d A %d | %-28s | blocked mean %.3f %% worst %.3f %% longest %v | %.1f q/h\n",
+				c, ShiftActives(c), names[i].name, mean, worst, longest, qh)
+		}
+		for seed := uint64(1); seed <= 6; seed++ {
+			sc := blipScenario(seed)
+			sc.catalog = c
+			r := runShiftScenario(t, sc)
+			fmt.Fprintf(&out, "C %d A %d | 5-minute blip, seed %d        | blocked %v\n", c, ShiftActives(c), seed, r.blocked)
+		}
+	}
+	t.Log("\n" + out.String())
 }

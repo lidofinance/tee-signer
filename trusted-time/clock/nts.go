@@ -148,7 +148,7 @@ type NTS struct {
 	// Shifts turns on the shift schedule (ntsshift.go): Servers is the
 	// catalog, MaxAge defaults to NTSShiftMaxAge and an NTP query times out
 	// after NTSShiftQueryTimeout. Until a seed is set every server is
-	// asked once per NTSShiftMinGap; with one, NTSShiftActives at a time.
+	// asked once per NTSShiftMinGap; with one, ShiftActives(n) at a time.
 	// Off: every server is asked every Interval.
 	Shifts bool
 	// ScheduleSeed is the seed of the shift schedule from the start, and
@@ -294,7 +294,7 @@ func (n *NTS) maxBound() time.Duration { return cmpOr(n.MaxBound, NTSMaxBound) }
 func (n *NTS) shiftMode() bool         { return n.Shifts || n.ScheduleSeed != nil }
 
 // SetScheduleSeed switches the shift schedule from every operator to
-// NTSShiftActives in the order seed gives, for a clock that starts before
+// ShiftActives(n) in the order seed gives, for a clock that starts before
 // its seed is known. Contacts made so far keep their minimum gap. No effect
 // without Shifts.
 func (n *NTS) SetScheduleSeed(seed []byte) {
