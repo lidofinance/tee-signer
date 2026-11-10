@@ -45,11 +45,13 @@ type resolved struct {
 	at    time.Time
 }
 
-// DefaultNames are the NTS-KE hosts of the runner's four operators
-// (trusted-time/ntscatalog); each names itself as its NTP server, except
-// Netnod. A tee-signer test checks them and DefaultNets against the
-// catalog.
-var DefaultNames = []string{"time.cloudflare.com", "nts.netnod.se", "ptbtime1.ptb.de", "ntppool1.time.nl"}
+// DefaultNames are the NTP host names the runner's default NTS servers
+// (trusted-time/ntscatalog) can name: each server's own name, and
+// time.meta.com, which Meta's NTS-KE names. Netnod's NTS-KE names
+// addresses instead (DefaultNets). A tee-signer test checks both lists
+// against the catalog.
+var DefaultNames = []string{"time.cloudflare.com", "nts.netnod.se", "ptbtime1.ptb.de", "bevtime1.metrologie.at",
+	"nts1.ntp.hr", "time.meta.com", "ntp1.wiktel.com"}
 
 // DefaultPorts: NTP, and the port Netnod's NTS-KE negotiates.
 var DefaultPorts = []uint16{123, 4123}
@@ -61,7 +63,7 @@ var DefaultNets = []netip.Prefix{
 	netip.MustParsePrefix("194.58.200.0/21"),
 }
 
-// Default is the allowlist of the runner's four NTS operators.
+// Default is the allowlist of the runner's default NTS servers.
 func Default() *Allowlist {
 	return &Allowlist{Names: slices.Clone(DefaultNames), Nets: slices.Clone(DefaultNets), Ports: slices.Clone(DefaultPorts)}
 }

@@ -62,7 +62,10 @@ type NTSServer struct {
 	// NTPNets are address blocks of the NTP servers the NTS-KE server
 	// names that its own name does not resolve to (Netnod). The Nitro UDP
 	// relay allows them.
-	NTPNets   []string
+	NTPNets []string
+	// NTPNames are NTP host names the NTS-KE server names other than its
+	// own (Meta's names time.meta.com). The Nitro UDP relay allows them.
+	NTPNames  []string
 	NitroPort uint32 // vsock port of its vsock-proxy route on the Nitro parent
 	Status    Status
 	// Terms says whether a signer may use the server as the operator's
@@ -162,6 +165,7 @@ type jsonServer struct {
 	Operator  string   `json:"operator"`
 	Roots     []string `json:"roots"`
 	NTPNets   []string `json:"ntp_nets"`
+	NTPNames  []string `json:"ntp_names"`
 	NitroPort uint32   `json:"nitro_port"`
 	Status    string   `json:"status"`
 	Terms     string   `json:"terms"`
@@ -204,7 +208,7 @@ func Parse(b []byte) (Catalog, error) {
 			return Catalog{}, fmt.Errorf("ntscatalog: NTS server %q: %w", r.ID, err)
 		}
 		e := NTSServer{ID: r.ID, Host: r.Host, Operator: r.Operator, Roots: r.Roots,
-			NTPNets: r.NTPNets, NitroPort: r.NitroPort, Status: s, Terms: t, TermsURL: r.TermsURL,
+			NTPNets: r.NTPNets, NTPNames: r.NTPNames, NitroPort: r.NitroPort, Status: s, Terms: t, TermsURL: r.TermsURL,
 			Regions: r.Regions, Default: r.Default, Note: r.Note}
 		for _, a := range r.Alt {
 			e.Alt = append(e.Alt, AltHost{Host: a.Host, Roots: a.Roots, Note: a.Note})
@@ -221,7 +225,7 @@ func Parse(b []byte) (Catalog, error) {
 // each entry of "nts".
 var formatKeys = map[string][]string{
 	"":           {"nts"},
-	"nts[]":      {"id", "host", "operator", "roots", "ntp_nets", "nitro_port", "status", "terms", "terms_url", "regions", "alt", "default", "note"},
+	"nts[]":      {"id", "host", "operator", "roots", "ntp_nets", "ntp_names", "nitro_port", "status", "terms", "terms_url", "regions", "alt", "default", "note"},
 	"nts[]alt[]": {"host", "roots", "note"},
 }
 
@@ -299,6 +303,21 @@ func parseStatus(s string) (Status, error) {
 // MaxLabel is the longest ID and operator label, in octets. The quorum in
 // the Rust core refuses longer operator labels (MAX_OPERATOR_LEN).
 const MaxLabel = 32
+
+// NTPHosts are the NTP host names a runner that dials servers can be sent
+// to by their NTS-KE: each server's own name, or its NTPNames when it has
+// some. The Nitro UDP relay allowlist follows them for the Dialed set.
+func NTPHosts(servers []NTSServer) []string {
+	var out []string
+	for _, e := range servers {
+		if len(e.NTPNames) > 0 {
+			out = append(out, e.NTPNames...)
+		} else {
+			out = append(out, e.Host)
+		}
+	}
+	return out
+}
 
 // Dialed are the NTS servers a runner dials while setups cannot name
 // servers: the Default entries that are not withdrawn, in catalog order.
@@ -420,6 +439,11 @@ func (c *Catalog) Check() error {
 			return fmt.Errorf("ntscatalog: NTS servers %s and %s share operator %s", prev, e.ID, e.Operator)
 		}
 		ops[e.Operator] = e.ID
+		for _, n := range e.NTPNames {
+			if n == "" || n == e.Host || strings.ContainsAny(n, ":/ ") {
+				return fmt.Errorf("ntscatalog: NTS server %s: NTP name %q: a host name other than the server's own", e.ID, n)
+			}
+		}
 		for _, n := range e.NTPNets {
 			if p, err := netip.ParsePrefix(n); err != nil || p != p.Masked() {
 				return fmt.Errorf("ntscatalog: NTS server %s: NTP net %q is not a masked CIDR prefix", e.ID, n)

@@ -308,14 +308,16 @@ func coarseServers(t *testing.T, dir string) (urls, routes []string, caFile stri
 	return urls, routes, caFile
 }
 
-// TestE2ENTSRelayInterop is the same path against the four public NTS
-// operators: NTS-KE over TCP (where the enclave has vsock-proxy) and NTP
+// TestE2ENTSRelayInterop is the same path against the catalog's default NTS
+// servers: NTS-KE over TCP (where the enclave has vsock-proxy) and NTP
 // through udprelay with its default allowlist. Network: TCP 4460 and UDP
-// 123 and 4123 to those four only (the coarse check uses loopback servers).
-// Runs only with NTS_INTEROP=1, for NTS_INTEROP_FOR (default 150s).
+// 123 and 4123 to those servers only (the coarse check uses loopback
+// servers). With 7 servers the clock runs the shift schedule, so the
+// quorum holds the active operators, not all seven. Runs only with
+// NTS_INTEROP=1, for NTS_INTEROP_FOR (default 150s).
 func TestE2ENTSRelayInterop(t *testing.T) {
 	if os.Getenv("NTS_INTEROP") != "1" {
-		t.Skip("set NTS_INTEROP=1 to run (network: the four public NTS operators)")
+		t.Skip("set NTS_INTEROP=1 to run (network: the default public NTS servers)")
 	}
 	run := 150 * time.Second
 	if s := os.Getenv("NTS_INTEROP_FOR"); s != "" {
@@ -327,7 +329,8 @@ func TestE2ENTSRelayInterop(t *testing.T) {
 	bin := runnerBinary(t, "aws-debug")
 	dir := t.TempDir()
 	coarse, routes, caFile := coarseServers(t, dir)
-	for _, h := range []string{"time.cloudflare.com", "nts.netnod.se", "ptbtime1.ptb.de", "ntppool1.time.nl"} {
+	for _, h := range []string{"time.cloudflare.com", "nts.netnod.se", "ptbtime1.ptb.de", "bevtime1.metrologie.at",
+		"nts1.ntp.hr", "nts.meta.com", "ntp1.wiktel.com"} {
 		routes = append(routes, h+":4460=tcp:"+h+":4460")
 	}
 	relayPort := freePort(t)
@@ -336,7 +339,8 @@ func TestE2ENTSRelayInterop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The relay with its defaults: the four names, Netnod's block, 123 and 4123.
+	// The relay with its defaults: the default servers' NTP names, Netnod's
+	// block, 123 and 4123.
 	relay := exec.Command(udprelayBinary(t), "-listen", fmt.Sprintf("tcp:127.0.0.1:%d", relayPort), "-debug", "-stats-every", "30s")
 	relay.Stdout, relay.Stderr = lf, lf
 	if err := relay.Start(); err != nil {
@@ -389,7 +393,17 @@ func TestE2ENTSRelayInterop(t *testing.T) {
 			last = l
 		}
 	}
-	if !strings.Contains(last, "members=cloudflare,netnod,ptb,time.nl ") {
-		t.Fatalf("the last status line lacks the quorum of all four: %s", last)
+	_, after, _ := strings.Cut(last, "members=")
+	members, _, _ := strings.Cut(after, " ")
+	known := map[string]bool{"cloudflare": true, "netnod": true, "ptb": true, "bev": true, "fer": true, "meta": true, "wiktel": true}
+	n := 0
+	for _, m := range strings.Split(members, ",") {
+		if !known[m] {
+			t.Fatalf("quorum member %q is not a default server: %s", m, last)
+		}
+		n++
+	}
+	if n < 3 {
+		t.Fatalf("the last status line has a quorum of %d, want at least 3: %s", n, last)
 	}
 }

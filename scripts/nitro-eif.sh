@@ -220,7 +220,7 @@ bash "$ROOT/scripts/kms-policy.sh" render "$OUT/build-enclave-$arch.json" "$OUT/
   printf 'Dockerfile  %s\n' "$(sha256sum <"$CTX/Dockerfile" | cut -d' ' -f1)"
   (cd "$CTX" && sha256sum licenses/*)
   printf 'setup       from the host agent at every start (chain, client CA, KMS key, region, mark bucket, signer)\n'
-  printf 'clock       nts: NTS-KE via vsock 8005-8008, NTP via udprelay on vsock 7102\n'
+  printf 'clock       nts: NTS-KE via vsock 8005-8015, NTP via udprelay on vsock 7102\n'
   printf 'nitro-cli  %s, target-arch.patch %s, built on %s, image %s\n' "$NITRO_CLI_TAG" \
     "$(sha256sum <"$ROOT/platform-aws/deploy/nitro-cli/target-arch.patch" | cut -c1-16)" "$HOST_ARCH" \
     "$(docker image inspect "$NITRO_IMAGE" --format '{{.Id}}')"

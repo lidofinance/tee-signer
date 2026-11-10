@@ -14,7 +14,8 @@ import (
 )
 
 // The Nitro port map and the parent's UDP relay allowlist follow the
-// catalog: the same port per host, every NTS-KE host, every NTP net.
+// catalog's default set: the same port per host, every NTP host name the
+// servers' NTS-KE can name (ntscatalog.NTPHosts), every NTP net.
 func TestNTSNitroRoutingMatchesTheCatalog(t *testing.T) {
 	dialed := ntscatalog.Builtin.Dialed()
 	if len(setup.NitroNTSKE) != len(dialed) {
@@ -26,15 +27,12 @@ func TestNTSNitroRoutingMatchesTheCatalog(t *testing.T) {
 		if r.Host != e.Host || r.Port != e.NitroPort || r.HostPort != 4460 {
 			t.Errorf("route %s:%d to port %d, catalog %s %s:%d", r.Host, r.Port, r.HostPort, e.ID, e.Host, e.NitroPort)
 		}
-		if !slices.Contains(udprelay.DefaultNames, e.Host) {
-			t.Errorf("udprelay does not allow %s (%s)", e.Host, e.ID)
-		}
 		for _, n := range e.NTPNets {
 			nets = append(nets, netip.MustParsePrefix(n))
 		}
 	}
-	if len(udprelay.DefaultNames) != len(dialed) {
-		t.Errorf("udprelay allows %v, the catalog dials %d servers", udprelay.DefaultNames, len(dialed))
+	if want := ntscatalog.NTPHosts(dialed); !slices.Equal(udprelay.DefaultNames, want) {
+		t.Errorf("udprelay allows %v, the catalog's NTP hosts are %v", udprelay.DefaultNames, want)
 	}
 	if !slices.Equal(udprelay.DefaultNets, nets) {
 		t.Errorf("udprelay nets %v, catalog %v", udprelay.DefaultNets, nets)

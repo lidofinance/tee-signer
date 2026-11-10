@@ -19,7 +19,7 @@ The parts:
 - The Go side, behind the build tag `nts`: NTS-KE over `crypto/tls` and NTP
   over UDP in `trusted-time/nts`, the clock `trusted-time/clock.NTS`, the switch
   `RUNNER_NTS_CLOCK=1` in tagged runners (`tee-signer/platforms_nts.go`),
-  and the interop test against four public operators
+  and the interop test against the default public servers
   (`scripts/nts-interop.sh`).
 - The clouds. The cloud runners (azure, aws, gcp, their debug and key
   generation builds) have the tag, and their images run `-nts-clock`
@@ -157,9 +157,10 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   restart waits for a fresh quorum. What lags: a client certificate that
   expired during the lag is still accepted, and a key imported during it
   gets a restart floor that is too low for history it built elsewhere.
-  A healthy server answers every 16 s, so after one lost answer its
-  sample is usually still under 46 s when the next answer comes; a
-  quorum needs 3 of the 4 operators. If every server is out of reach, signing stops within
+  Without the shift schedule (fewer than 7 servers) a healthy server
+  answers every 16 s, so after one lost answer its sample is usually
+  still under 46 s when the next answer comes; with 4 servers a quorum
+  needs 3 of them. If every server is out of reach, signing stops within
   60 s and resumes with the next quorum: within about one interval after a
   short outage, later after a long one, when the cookies ran out and NTS-KE
   backs off (up to 1024 s; before the first quorum of a run NTS-KE is tried
@@ -200,8 +201,8 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   newcomer of a handover is asked at once, off its slot, and its next slot
   can come up to 116 s later, so that first sample ages out before it and
   exactly 3 are fresh for up to about 40 s. Seeded with an HMAC of the sealing
-  key (`platform.ScheduleSeed`), which the host does not know. With the 4
-  servers the image dials today (the catalog's default set) it stays off.
+  key (`platform.ScheduleSeed`), which the host does not know. The
+  catalog's default set has 7 servers, so the runner runs it (4 actives).
   It asks public servers less
   often and keeps the quorum alive when operators fail:
   - Time is counted in ticks of 4 s since the start round. The start round
@@ -305,10 +306,15 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
     (TimeNL's any.time.nl is anycast; MBIX is at the edge of the bound).
   - `alt`: other hosts of the same operator (more sites, anycast). They count
     as the same operator and this image does not dial them.
-  - `default`: dialed while setups cannot name servers. That is the four
-    servers of earlier images (Cloudflare, Netnod, PTB, TimeNL), so the
-    runner's behavior does not change with the catalog. TimeNL is `ask`
-    and is to be replaced in the default set.
+  - `default`: dialed while setups cannot name servers. Only open
+    operators of eu and na (or global): Cloudflare, Netnod, PTB, BEV, FER,
+    Meta and Wiktel. Earlier images dialed Cloudflare, Netnod, PTB and
+    TimeNL; TimeNL left the set for its terms. A signer outside eu and na
+    gets fewer close servers from this set (Asia and Oceania: Cloudflare and
+    Meta only); there the setup tops the set up with `ask` operators once
+    setups can name servers.
+  - `ntp_names`: NTP host names an NTS-KE server names other than its own
+    (Meta's names time.meta.com). The Nitro UDP relay allows them.
 
 Untrusted bytes are read only through checked reads (`core/src/bytes.rs`),
 with no indexing, `unwrap` or `expect` on parsed data, and every allocation
@@ -348,7 +354,7 @@ scripts/build-nts.sh          builds libsigner_nts.a for both architectures, run
 scripts/nts-container.sh      the part of build-nts.sh that runs in the container
 scripts/build-runner-nts.sh   builds the runners with the build tag nts
 scripts/test-nts.sh           all of it, then the Go test on each architecture
-scripts/nts-interop.sh        the interop test against the four public operators (network)
+scripts/nts-interop.sh        the interop test against the default public servers (network)
 trusted-time/nts/                   the cgo binding, NTS-KE, NTP, pinned roots, tests (tag nts)
 trusted-time/clock/nts*.go          the NTS clock and its tests (tag nts)
 tee-signer/nts_on.go              -nts-selftest and -nts-clock-check (tag nts)
@@ -531,8 +537,8 @@ dev platform and debug builds may run on the system clock.
 The UDP relay (`platform-aws/udprelay`, `platform-aws/deploy/README.md`, "NTS clock in the
 enclave"): one vsock connection per NTP query; frames of a u16 length and
 1 to 2048 octets; the destination first, then a status, then datagrams. It
-sends only to ports 123 and 4123, and only to one of the four NTS-KE host
-names (resolved by the relay), an address those names resolve to, or
+sends only to ports 123 and 4123, and only to one of the default servers'
+NTP host names (resolved by the relay; `udprelay.DefaultNames`), an address those names resolve to, or
 Netnod's NTP block `194.58.200.0/21`. Rate limits per session, per address
 and in all. It cannot forge an answer (NTS authenticates every one), only
 delay or drop it.

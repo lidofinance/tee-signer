@@ -40,7 +40,8 @@
 #   8001  sts.REGION.amazonaws.com:443
 #   8002  www.cloudflare.com:443 (the third coarse-time host)
 #   8004  BUCKET.s3.REGION.amazonaws.com:443 (the mark bucket)
-#   8005 to 8008  NTS-KE, TCP 4460, of the four operators of trusted-time/nts.PublicServers
+#   8005 to 8007, 8009 to 8011, 8015  NTS-KE, TCP 4460, of the default servers of
+#                 trusted-time/ntscatalog (each port belongs to its catalog entry)
 #
 # The three HTTPS-date URLs are the NTS clock's coarse check; {region} is
 # the one value the runner fills in, with the setup's key release region.

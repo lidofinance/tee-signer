@@ -152,7 +152,8 @@ func TestNitroOptionsAndRoutes(t *testing.T) {
 	wantProxy := "kms.eu-west-1.amazonaws.com:443=vsock:3:8000,sts.eu-west-1.amazonaws.com:443=vsock:3:8001," +
 		"www.cloudflare.com:443=vsock:3:8002,signer-marks.s3.eu-west-1.amazonaws.com:443=vsock:3:8004," +
 		"time.cloudflare.com:4460=vsock:3:8005,nts.netnod.se:4460=vsock:3:8006,ptbtime1.ptb.de:4460=vsock:3:8007," +
-		"ntppool1.time.nl:4460=vsock:3:8008"
+		"bevtime1.metrologie.at:4460=vsock:3:8009,nts1.ntp.hr:4460=vsock:3:8010,nts.meta.com:4460=vsock:3:8011," +
+		"ntp1.wiktel.com:4460=vsock:3:8015"
 	if o["proxy"] != wantProxy {
 		t.Fatalf("proxy\n%s\nwant\n%s", o["proxy"], wantProxy)
 	}
@@ -165,7 +166,7 @@ func TestNitroOptionsAndRoutes(t *testing.T) {
 	}
 	if !strings.HasPrefix(lines, "8000 kms.eu-west-1.amazonaws.com 443\n") ||
 		!strings.Contains(lines, "8004 signer-marks.s3.eu-west-1.amazonaws.com 443\n") ||
-		strings.Count(lines, "\n") != 8 {
+		strings.Count(lines, "\n") != 4+len(NitroNTSKE) {
 		t.Fatalf("proxy lines:\n%s", lines)
 	}
 	if _, err := NitroProxyLines(load(t, "gcp")); err == nil {

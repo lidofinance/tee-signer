@@ -54,7 +54,8 @@ func TestProxyRoutes(t *testing.T) {
 	}
 	want := "8000 kms.eu-west-1.amazonaws.com 443\n8001 sts.eu-west-1.amazonaws.com 443\n8002 www.cloudflare.com 443\n" +
 		"8004 signer-marks.s3.eu-west-1.amazonaws.com 443\n8005 time.cloudflare.com 4460\n8006 nts.netnod.se 4460\n" +
-		"8007 ptbtime1.ptb.de 4460\n8008 ntppool1.time.nl 4460\n"
+		"8007 ptbtime1.ptb.de 4460\n8009 bevtime1.metrologie.at 4460\n8010 nts1.ntp.hr 4460\n" +
+		"8011 nts.meta.com 4460\n8015 ntp1.wiktel.com 4460\n"
 	if out != want {
 		t.Fatalf("routes:\n%s\nwant\n%s", out, want)
 	}

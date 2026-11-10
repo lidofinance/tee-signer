@@ -4,7 +4,7 @@
 //
 //	udprelay -listen vsock:any:7102
 //
-// The defaults allow the runner's four NTS operators: the NTS-KE host names,
+// The defaults allow the runner's default NTS servers: their NTP host names,
 // ports 123 and 4123, and Netnod's NTP server block 194.58.200.0/21. The
 // relay cannot forge time: NTS authenticates every answer. It can delay or
 // drop datagrams, as any network on the path can.

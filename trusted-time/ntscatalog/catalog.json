@@ -74,8 +74,7 @@
         {"host": "any.time.nl", "roots": ["harica-tls-rsa-root-2021.pem", "harica-root-2015.pem"],
          "note": "Anycast, stratum 2, called experimental by TimeNL. Under 10 ms from every GCP test point on 2026-11-10."}
       ],
-      "default": true,
-      "note": "TimeNL / SIDN Labs. Fair use with a 1024 s poll interval, no hard-coding in mass-market products; the runner polls far more often, and spreading queries over the alt hosts does not change that, since the policy is per client. Default only because images before this catalog dialed it; to be replaced in the default set."
+      "note": "TimeNL / SIDN Labs. Fair use with a 1024 s poll interval, no hard-coding in mass-market products; the runner polls far more often, and spreading queries over the alt hosts does not change that, since the policy is per client. In the default set of images before 2026-11; left it for its terms."
     },
     {
       "id": "bev",
@@ -91,6 +90,7 @@
         {"host": "bevtime2.metrologie.at"},
         {"host": "time.metrologie.at"}
       ],
+      "default": true,
       "note": "National metrology institute, Austria, stratum 1. Public, no limits stated, no liability for outages."
     },
     {
@@ -106,6 +106,7 @@
       "alt": [
         {"host": "nts2.ntp.hr"}
       ],
+      "default": true,
       "note": "University of Zagreb FER, stratum 1 GNSS. Public and free; large users should run their own secondary. Rejects stale cookies with the kiss code NTS and a zero octet; keeps cookies 3 to 4 h. NTS-KE timed out from all six non-EU GCP regions on 2026-11-10, so eu only."
     },
     {
@@ -113,12 +114,14 @@
       "host": "nts.meta.com",
       "operator": "meta",
       "roots": ["digicert-global-root-g2.pem"],
+      "ntp_names": ["time.meta.com"],
       "nitro_port": 8011,
       "status": "active",
       "terms": "open",
       "terms_url": "https://engineering.fb.com/2026/10/06/production-engineering/nts-authenticated-time-at-meta/",
       "regions": ["global"],
-      "note": "Meta, stratum 1 GNSS. Live and free, no usage policy found. Smears leap seconds over about 18 h. Short-lived KE certificates (renewed weekly in 2026-11). 0 answers from one home line on 2026-11-08, 16/16 elsewhere."
+      "default": true,
+      "note": "Meta, stratum 1 GNSS. NTS-KE names time.meta.com as its NTP server. Live and free, no usage policy found. Smears leap seconds over about 18 h. Short-lived KE certificates (renewed weekly in 2026-11). 0 answers from one home line on 2026-11-08, 16/16 elsewhere."
     },
     {
       "id": "obspm",
@@ -176,6 +179,7 @@
       "alt": [
         {"host": "ntp2.wiktel.com"}
       ],
+      "default": true,
       "note": "Wikstrom Telephone Company, Minnesota, stratum 1 GPS. Public NTP pool member, NTS client config published, no limits stated; the page does not name the operator. Offset -3 to -18 ms from far test points."
     },
     {

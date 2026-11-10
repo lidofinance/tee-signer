@@ -15,22 +15,31 @@ func TestBuiltinIsConsistent(t *testing.T) {
 	}
 }
 
-// The default set stays the four servers images dialed before the catalog
-// got terms and regions, so the runner's behavior does not change. Only
-// time.nl among them has terms that ask for contact; it is to be replaced.
+// The default set holds only operators whose terms are open, active, and in
+// eu and na or global, so a runner that cannot name servers yet dials no
+// operator that asks for contact. It is large enough for the shift
+// schedule (7).
 func TestDefaultSet(t *testing.T) {
-	var ids, ask []string
+	var ids []string
 	for _, e := range Builtin.Dialed() {
 		ids = append(ids, e.ID)
-		if e.Terms == Ask {
-			ask = append(ask, e.ID)
+		if e.Terms != Open || e.Status != Active {
+			t.Errorf("default %s: terms %v, status %v", e.ID, e.Terms, e.Status)
+		}
+		global := slices.Contains(e.Regions, RegionGlobal)
+		if !global && !slices.Contains(e.Regions, RegionEU) {
+			t.Errorf("default %s: regions %v, not eu", e.ID, e.Regions)
 		}
 	}
-	if strings.Join(ids, ",") != "cloudflare,netnod,ptb,time.nl" {
+	if strings.Join(ids, ",") != "cloudflare,netnod,ptb,bev,fer,meta,wiktel" {
 		t.Fatalf("default set %v", ids)
 	}
-	if strings.Join(ask, ",") != "time.nl" {
-		t.Fatalf("default entries with terms ask: %v", ask)
+}
+
+func TestNTPHosts(t *testing.T) {
+	got := NTPHosts([]NTSServer{{Host: "a.example"}, {Host: "b.example", NTPNames: []string{"ntp.b.example"}}})
+	if strings.Join(got, ",") != "a.example,ntp.b.example" {
+		t.Fatalf("NTPHosts %v", got)
 	}
 }
 
@@ -77,6 +86,8 @@ func TestCheckRefuses(t *testing.T) {
 		"alt in two":       {func(c *Catalog) { c.NTS[1].Alt = []AltHost{{Host: "a2.example"}} }, "host a2.example"},
 		"host twice":       {func(c *Catalog) { c.NTS[1].Host = "a.example" }, "host a.example"},
 		"bad net":          {func(c *Catalog) { c.NTS[1].NTPNets = []string{"192.0.2.1/24"} }, "masked CIDR"},
+		"ntp name is host": {func(c *Catalog) { c.NTS[0].NTPNames = []string{"a.example"} }, "NTP name"},
+		"ntp name port":    {func(c *Catalog) { c.NTS[0].NTPNames = []string{"ntp.a.example:123"} }, "NTP name"},
 		"no port":          {func(c *Catalog) { c.NTS[0].NitroPort = 0 }, "no vsock port"},
 		"shared port":      {func(c *Catalog) { c.NTS[1].NitroPort = 9001 }, "vsock port 9001"},
 	} {

@@ -65,21 +65,26 @@ func TestAllowlist(t *testing.T) {
 		}
 	}
 	refused := map[string]string{
-		"time.cloudflare.com:53":            "port 53 not allowed",
-		"time.cloudflare.com:4460":          "port 4460 not allowed",
-		"evil.example:123":                  "name evil.example not in the allowlist",
-		"ntppool1.time.nl.evil.example:123": "not in the allowlist",
-		"203.0.113.9:123":                   "not in the allowlist", // what evil.example resolves to
-		"194.58.208.1:4123":                 "not in the allowlist", // just outside the block
-		"127.0.0.1:123":                     "not in the allowlist",
-		"0.0.0.0:123":                       "not allowed",
-		"224.0.1.1:123":                     "not allowed", // NTP multicast
-		"[fe80::1%eth0]:123":                "not allowed",
-		"ntppool1.time.nl:123":              "cannot resolve",
-		"time.cloudflare.com":               "not host:port",
-		"time.cloudflare.com:x":             "port x not allowed",
-		"time.cloudflare.com:-1":            "not allowed",
-		"time.cloudflare.com:65659":         "not allowed",
+		"time.cloudflare.com:53":       "port 53 not allowed",
+		"time.cloudflare.com:4460":     "port 4460 not allowed",
+		"evil.example:123":             "name evil.example not in the allowlist",
+		"nts1.ntp.hr.evil.example:123": "not in the allowlist",
+		"203.0.113.9:123":              "not in the allowlist", // what evil.example resolves to
+		"194.58.208.1:4123":            "not in the allowlist", // just outside the block
+		"127.0.0.1:123":                "not in the allowlist",
+		"0.0.0.0:123":                  "not allowed",
+		"224.0.1.1:123":                "not allowed", // NTP multicast
+		"[fe80::1%eth0]:123":           "not allowed",
+		"nts1.ntp.hr:123":              "cannot resolve",
+		"time.cloudflare.com":          "not host:port",
+		"time.cloudflare.com:x":        "port x not allowed",
+		"time.cloudflare.com:-1":       "not allowed",
+		"time.cloudflare.com:65659":    "not allowed",
+	}
+	// An address of no allowed name makes the relay resolve every allowed
+	// name once; after that all are cached, nts1.ntp.hr's failure too.
+	if _, err := a.Check(context.Background(), "198.51.100.1:123"); err == nil {
+		t.Fatal("an address of no allowed name passed")
 	}
 	before := dns.calls.Load()
 	for dest, want := range refused {
@@ -87,12 +92,12 @@ func TestAllowlist(t *testing.T) {
 			t.Errorf("%s: got %v, want %q", dest, err, want)
 		}
 	}
-	// No name outside the list was looked up. The allowed names are
-	// cached from above, except ntppool1.time.nl, whose lookup fails.
-	if got := dns.calls.Load() - before; got > 1 {
-		t.Errorf("%d lookups for the refusals, want at most 1 (ntppool1.time.nl, then its failure is cached)", got)
+	// No name outside the list was looked up, and the allowed ones come
+	// from the cache.
+	if got := dns.calls.Load() - before; got != 0 {
+		t.Errorf("%d lookups for the refusals, want 0 (all allowed names cached, failures too)", got)
 	}
-	for _, f := range []string{"evil.example", "ntppool1.time.nl.evil.example"} {
+	for _, f := range []string{"evil.example", "nts1.ntp.hr.evil.example"} {
 		if _, ok := a.cache[f]; ok {
 			t.Errorf("%s was looked up", f)
 		}

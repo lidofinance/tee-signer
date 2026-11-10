@@ -25,13 +25,17 @@ const (
 )
 
 // NitroNTSKE are the NTS-KE servers of the NTS clock (trusted-time/ntscatalog,
-// the entries a runner dials) on their fixed ports 8005 to 8008. A
+// its default set) on their fixed catalog ports. A port belongs to its
+// catalog entry for good, so the set has gaps (8008 was TimeNL's). A
 // tee-signer test checks hosts and ports against the catalog.
 var NitroNTSKE = []Route{
 	{Port: 8005, Host: "time.cloudflare.com", HostPort: 4460},
 	{Port: 8006, Host: "nts.netnod.se", HostPort: 4460},
 	{Port: 8007, Host: "ptbtime1.ptb.de", HostPort: 4460},
-	{Port: 8008, Host: "ntppool1.time.nl", HostPort: 4460},
+	{Port: 8009, Host: "bevtime1.metrologie.at", HostPort: 4460},
+	{Port: 8010, Host: "nts1.ntp.hr", HostPort: 4460},
+	{Port: 8011, Host: "nts.meta.com", HostPort: 4460},
+	{Port: 8015, Host: "ntp1.wiktel.com", HostPort: 4460},
 }
 
 // CoarseHost is the coarse-time host that names no region.

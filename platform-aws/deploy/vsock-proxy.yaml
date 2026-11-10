@@ -4,8 +4,8 @@
 # -setup SETUP -proxy-routes), one entry per route of the fixed port map of
 # platform-aws/deploy/enclave/Dockerfile. Format from vsock_proxy/configs/vsock-proxy.yaml
 # in aws-nitro-enclaves-cli v1.5.2. Only these destinations can be proxied.
-# The four on port 4460 are the NTS-KE servers of the enclave's NTS clock
-# (trusted-time/nts.PublicServers); their NTP goes through udprelay, not through
+# The seven on port 4460 are the NTS-KE servers of the enclave's NTS clock
+# (the default set of trusted-time/ntscatalog); their NTP goes through udprelay, not through
 # vsock-proxy, which is TCP only. No DynamoDB: the setup's mark log is the
 # clone protection.
 allowlist:
@@ -16,4 +16,7 @@ allowlist:
 - {address: time.cloudflare.com, port: 4460}
 - {address: nts.netnod.se, port: 4460}
 - {address: ptbtime1.ptb.de, port: 4460}
-- {address: ntppool1.time.nl, port: 4460}
+- {address: bevtime1.metrologie.at, port: 4460}
+- {address: nts1.ntp.hr, port: 4460}
+- {address: nts.meta.com, port: 4460}
+- {address: ntp1.wiktel.com, port: 4460}

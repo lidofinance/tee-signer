@@ -135,7 +135,7 @@ outbound access. Clients then need another way in, such as a network entry
 part (see "Network entry").
 
 The runner needs outbound access for its NTS clock (`-nts-clock`: TCP 4460
-and UDP 123 and 4123 to the four NTS operators, HTTPS to the three
+and UDP 123 and 4123 to the NTS servers, HTTPS to the three
 coarse-check URLs), and for MAA, Key Vault and the managed identity
 endpoint. The runner's `nts: key exchange` and `nts: status` log lines show
 whether the NTS traffic gets out. In a subnet, give the subnet outbound
