@@ -653,8 +653,7 @@ What the parent reports for the running enclave is the real check:
   clock instead (`-nts-clock`, next section): the six default NTS
   operators and any the image's command confirms (`-nts-terms-confirmed`;
   from seven a shift schedule), a quorum with an error bound, signing refused above
-  100 ms or when the samples are over 60 s old (90 s under the shift
-  schedule, from seven servers). The parent can delay or
+  100 ms or when the samples are over 90 s old. The parent can delay or
   drop that traffic but not forge it. The same clock checks the dates of
   client certificates. HTTPS Date readings over vsock-proxy are its coarse
   check.
@@ -718,8 +717,7 @@ limit the datagram is dropped and counted, as a network would drop it.
 
 Delay or drop NTS-KE and NTP. A delayed answer widens that sample's bound by
 half the delay and cannot move the time outside it; dropped answers stop
-signing once the oldest sample of the last quorum is 60 s old (90 s under
-the shift schedule, from seven servers), or the bound,
+signing once the oldest sample of the last quorum is 90 s old, or the bound,
 aged by 500 ppm, reaches 100 ms first. It cannot forge: TLS 1.3 with pinned roots ends in the
 enclave, and every NTP answer carries the NTS authenticator with keys from
 that TLS session (AES-SIV-CMAC-256). It can send unauthenticated
@@ -730,8 +728,7 @@ servers answering, signing stops: fail closed. The host also runs
 the enclave's CPU counter, the clock's local time (`CLOCK_MONOTONIC_RAW`);
 the drift check against a quorum 17 minutes old refuses a rate beyond
 500 ppm. While it blocks the servers, a counter it runs fast moves the time
-ahead by less than the sample age limit (60 s, or 90 s under the shift
-schedule), see `trusted-time/docs/nts.md`.
+ahead by less than the 90 s sample age limit, see `trusted-time/docs/nts.md`.
 
 ### Security group
 

@@ -303,8 +303,9 @@ func TestNTSShiftScenariosShort(t *testing.T) {
 				t.Errorf("%s: blocked %v", sc.name, r.blocked)
 			}
 		}
-		// A healthy run bursts at most at the start dip.
-		if sc.name == "healthy" && (r.queriesPerHour < 295 || r.queriesPerHour > 310 || r.counts.Fallbacks != 0 || r.counts.Bursts != r.startBursts) {
+		// A healthy run bursts at the start dip and at most once per
+		// handover (the newcomer's first sample ages out before its slot).
+		if sc.name == "healthy" && (r.queriesPerHour < 295 || r.queriesPerHour > 310 || r.counts.Fallbacks != 0 || r.counts.Bursts > r.startBursts+r.counts.Handovers) {
 			t.Errorf("healthy: %.1f q/h, %+v", r.queriesPerHour, r.counts)
 		}
 	}
@@ -331,7 +332,7 @@ func TestNTSShiftBlipRecovers(t *testing.T) {
 }
 
 // An NTS-only outage (UDP blocked, coarse fine) of 3 minutes: the clock
-// keeps asking, falls below 3 fresh samples and bursts. After the outage
+// keeps asking, falls below 4 fresh samples and bursts. After the outage
 // it is back once 3 operators not asked in the last 60 s have answered:
 // up to 60 s, since the bursts asked every operator during the outage.
 func TestNTSShiftBurstAfterNTSOutage(t *testing.T) {
@@ -545,7 +546,7 @@ func TestNTSShiftSevenServers(t *testing.T) {
 	if got := ShiftActives(7); got != 4 {
 		t.Fatalf("ShiftActives(7) = %d", got)
 	}
-	for n, want := range map[int]int{3: 3, 5: 5, 6: 5, 8: 5, 12: 5} {
+	for n, want := range map[int]int{3: 3, 5: 5, 6: 6, 8: 5, 12: 5} {
 		if got := ShiftActives(n); got != want {
 			t.Errorf("ShiftActives(%d) = %d, want %d", n, got, want)
 		}
@@ -593,4 +594,30 @@ func TestNTSShiftSevenVersusEight(t *testing.T) {
 		}
 	}
 	t.Log("\n" + out.String())
+}
+
+// Below 7 operators every one is active, once per 60 s, and nothing hands
+// over: about 60 queries per operator per hour when healthy. A healthy run
+// and one wrong operator never block with 4 or 6; with 4, all 3 others
+// must agree.
+func TestNTSShiftSmallSets(t *testing.T) {
+	for _, c := range []int{4, 6} {
+		if got := ShiftActives(c); got != c {
+			t.Fatalf("ShiftActives(%d) = %d", c, got)
+		}
+		for _, sc := range reviewScenariosN(2*time.Hour, 1, c) {
+			r := runShiftScenario(t, sc)
+			checkMinGap(t, sc.name, r)
+			t.Logf("%d servers, %s: blocked %v (%.3f%%), longest %v, %.1f q/h, %+v", c, sc.name, r.blocked, r.blockedPct(), r.longest, r.queriesPerHour, r.counts)
+			switch sc.name {
+			case "healthy", "one operator wrong":
+				if r.blocked != 0 {
+					t.Errorf("%d servers, %s: blocked %v", c, sc.name, r.blocked)
+				}
+			}
+			if sc.name == "healthy" && (r.counts.Handovers != 0 || r.queriesPerHour > 61*float64(c)) {
+				t.Errorf("%d servers, healthy: %.1f q/h, %+v", c, r.queriesPerHour, r.counts)
+			}
+		}
+	}
 }

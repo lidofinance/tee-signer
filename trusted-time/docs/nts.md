@@ -88,8 +88,11 @@ after T3, and a bound over 1 s (MAXDIST).
 `quorum`: `combine_with(intervals, now, max_wrong)`. 3 to 16 intervals from
 distinct operators (labels from the caller, duplicates refused). Up to F =
 max_wrong of them may be wrong; fewer than 2F + 1 intervals is an error. The
-clock passes the majority rule, F = (n - 1) / 2 rounded down: 3 of 3, 3 of 4,
-3 of 5, 4 of 6 and 4 of 7 must agree. With 3 or 4 intervals this is F = 1.
+clock passes the majority rule, F = (n - 1) / 2 rounded down, but never
+so many that fewer than 3 agree (`nts.QuorumWrong`): 3 of 3, 3 of 4, 3 of 5,
+4 of 6 and 4 of 7 must agree. With 4 intervals this is F = 1, with 3 it is
+F = 0. Without that floor 2 of 3 would do, and a host that drops answers
+until 3 are fresh could let 2 wrong operators set the time.
 Each bound first grows by rho times its age at `now`. [lo, hi] spans the
 points that at least n - F intervals cover (the intersection of RFC 5905
 section 11.2.1, without clustering); no such point is an error. Result:
@@ -157,8 +160,8 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   restart waits for a fresh quorum. What lags: a client certificate that
   expired during the lag is still accepted, and a key imported during it
   gets a restart floor that is too low for history it built elsewhere.
-  Without the shift schedule (fewer than 7 servers) a healthy server
-  answers every 16 s, so after one lost answer its sample is usually
+  Without the 60 s schedule (a library user; the runner always runs it,
+  next item) a healthy server answers every 16 s, so after one lost answer its sample is usually
   still under 46 s when the next answer comes; with 4 servers a quorum
   needs 3 of them. If every server is out of reach, signing stops within
   60 s and resumes with the next quorum: within about one interval after a
@@ -193,25 +196,32 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   clock moves neither. HTTPS-date is no longer a signing clock, but it
   is still the coarse check, so this residual stays.
 - Shift schedule (`clock.NTS.Shifts` or `ScheduleSeed`, `ntsshift.go`; off
-  by default). The runner turns it on when it dials 7 servers or
-  more: 4 actives and 3 kept for fallbacks with 7, 5 actives from 8 on
+  by default). The runner always turns it on and refuses fewer than 4
+  servers (with 3, one slow server would stop the quorum). Below 7
+  servers every server is active, each asked once per 60 s on the same
+  grid, and nothing hands over: a small set (a region with few close
+  operators) is asked no more often than a shift asks. From 7 servers:
+  4 actives and 3 kept for fallbacks with 7, 5 actives from 8 on
   (`clock.ShiftActives`). With 4 actives the quorum is 3 of 4, so two
   wrong at once (a leap smear plus one more) stop it: 15.6 % of the time
   against 0.07 % with 5 actives, in a simulation of 10 runs of 6 h. The
   newcomer of a handover is asked at once, off its slot, and its next slot
   can come up to 116 s later, so that first sample ages out before it and
-  exactly 3 are fresh for up to about 40 s. Seeded with an HMAC of the sealing
+  exactly 3 are fresh for up to about 40 s. Fewer than 4 fresh starts a
+  burst (`NTSShiftBurstBelow`), so that gap does not leave a quorum of 3
+  that one wrong operator stops; in the simulation this adds about one
+  burst per handover. Seeded with an HMAC of the sealing
   key (`platform.ScheduleSeed`), which the host does not know, so it cannot
   plan ahead. It can learn the order: the order stays the same after a
   restart, and the host sees where each query goes, so after one round of
   handovers (n times 15 minutes) it knows the next active sets. The
-  catalog's default set has 6 servers, so a runner runs it only when its
-  image's command adds one or more (`-nts-terms-confirmed`).
+  catalog's default set has 6 servers, all active; with one more from
+  the image's command (`-nts-terms-confirmed`) they hand over.
   It asks public servers less
   often and keeps the quorum alive when operators fail:
   - Time is counted in ticks of 4 s since the start round. The start round
     asks every operator once, after a random wait under 10 s.
-  - `ShiftActives(n)` operators are active (4 of 7, 5 from 8), each asked
+  - `ShiftActives(n)` operators are active (all below 7, 4 of 7, 5 from 8), each asked
     on its own slot of a 60 s grid (slots 12 s apart with 5, 12 to 16 s
     with 4, the phase from the seed). Two contacts with one
     operator start at least 60 s apart (a contact that runs NTS-KE first
@@ -315,10 +325,10 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
     operators of eu and na (or global): Cloudflare, Netnod, PTB, BEV, Meta
     and Wiktel. Earlier images dialed Cloudflare, Netnod, PTB and TimeNL;
     TimeNL left the set for its terms, FER for failing NTS-KE in a live run.
-    Six are too few for the shift schedule: a deployment adds the seventh,
-    an operator whose terms it confirmed, with `-nts-terms-confirmed` in the
+    The six are all active, each asked once per 60 s. A deployment adds
+    operators whose terms it confirmed with `-nts-terms-confirmed` in the
     image's measured command (for example `time.nl@any.time.nl`, TimeNL's
-    anycast host). Outside eu and na this set gives fewer close servers (Asia
+    anycast host); from seven servers they hand over in shifts. Outside eu and na this set gives fewer close servers (Asia
     and Oceania: Cloudflare and Meta only), so a deployment there adds more.
     Once setups can name servers, the same choice moves into the setup.
   - `alt` hosts with a `nitro_port` can be chosen in place of the entry's

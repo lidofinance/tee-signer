@@ -43,8 +43,8 @@ const (
 	// NTSShiftSpares is how many operators ShiftActives keeps out of the
 	// active set, for fallbacks and bursts.
 	NTSShiftSpares = 3
-	// NTSShiftMinServers is the fewest operators the runner runs the shift
-	// schedule on: 4 actives and the spares. With 4 actives the quorum is
+	// NTSShiftMinServers is the fewest operators the schedule hands over
+	// on: 4 actives and the spares. Fewer are all active (ShiftActives). With 4 actives the quorum is
 	// 3 of 4. The newcomer of a handover is asked at once, off its slot,
 	// and its next slot can come up to 29 ticks later; that first sample
 	// ages out before it, leaving exactly 3 fresh for up to about 40 s.
@@ -54,7 +54,10 @@ const (
 	NTSShiftMaxAge       = 90 * time.Second
 	NTSShiftQueryTimeout = time.Second
 	NTSShiftStartDelay   = 10 * time.Second
-	NTSShiftBurstBelow   = 3
+	// NTSShiftBurstBelow: fewer fresh samples than this start a burst. At
+	// 3 fresh all 3 must agree (nts.QuorumWrong), so one wrong operator
+	// would stop the quorum in the gap after a handover; the burst fills it.
+	NTSShiftBurstBelow = 4
 	// NTSShiftFallbackCap caps the fallbacks per hour. A host that drops
 	// answers of actives can force fallbacks; past the cap a lost answer
 	// waits for the operator's next slot. In a simulation, 30 % loss
@@ -147,11 +150,13 @@ func newNTSShifts(n int, seed []byte, tick time.Duration) *ntsShifts {
 
 // ShiftActives is how many of n operators are active under a seeded
 // schedule: NTSShiftActives, but never fewer than NTSShiftSpares left over
-// (4 of 7, 5 of 8 or more). Below NTSShiftMinServers, which the runner does
-// not use, the spares are not kept: up to NTSShiftActives are active.
+// (4 of 7, 5 of 8 or more). Below NTSShiftMinServers every operator is
+// active, each once per NTSShiftMinGap, and nothing hands over: a small set
+// (a region with few close operators) keeps all its servers in the quorum
+// and asks each no more often than a shift does.
 func ShiftActives(n int) int {
 	if n < NTSShiftMinServers {
-		return min(NTSShiftActives, n)
+		return n
 	}
 	return min(NTSShiftActives, n-NTSShiftSpares)
 }

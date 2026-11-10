@@ -194,15 +194,15 @@ func TestNTSMaxBoundCap(t *testing.T) {
 	}
 }
 
-// The shift schedule needs 4 actives plus 3 others; with fewer servers
-// (the 4 of today's default set) the clock keeps polling every server.
+// The runner always runs the 60 s schedule (shifts from 7 servers, all
+// active below) and refuses fewer than 4 servers.
 func TestNTSScheduleNeedsEnoughServers(t *testing.T) {
 	seed := []byte("seed")
-	for n, want := range map[int]bool{4: false, ntsShiftMinServers - 1: false, ntsShiftMinServers: true, 12: true} {
+	for n, want := range map[int]bool{0: false, 3: false, ntsMinServers: true, 6: true, ntsShiftMinServers: true, 12: true} {
 		c := &clock.NTS{Servers: make([]clock.NTSServer, n)}
-		ntsSchedule(c, seed)
-		if c.Shifts != want || (want && string(c.ScheduleSeed) != "seed") || (!want && c.ScheduleSeed != nil) {
-			t.Errorf("%d servers: shifts %v, seed %q", n, c.Shifts, c.ScheduleSeed)
+		err := ntsSchedule(c, seed)
+		if (err == nil) != want || c.Shifts != want || (want && string(c.ScheduleSeed) != "seed") || (!want && c.ScheduleSeed != nil) {
+			t.Errorf("%d servers: err %v, shifts %v, seed %q", n, err, c.Shifts, c.ScheduleSeed)
 		}
 	}
 }

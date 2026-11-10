@@ -266,27 +266,34 @@ func publicNTSServers() ([]clock.NTSServer, error) {
 // subtracts two such values, so the epoch does not matter.
 func rawLocal() time.Time { return time.Unix(0, nts.Monotonic()) }
 
-// ntsShiftMinServers is the fewest servers the shift schedule runs on:
+// ntsShiftMinServers is the fewest servers the schedule hands over on:
 // clock.NTSShiftMinServers, 4 actives and 3 others for fallbacks and
-// bursts (5 actives from 8 servers, clock.ShiftActives). With fewer, a
-// lost answer has nowhere to go within the 60 s rule, and the clock polls
-// every server every Interval as before.
+// bursts (5 actives from 8 servers, clock.ShiftActives).
 const ntsShiftMinServers = clock.NTSShiftMinServers
 
-// ntsSchedule turns the shift schedule on, with seed, when n has
-// ntsShiftMinServers servers or more.
-func ntsSchedule(n *clock.NTS, seed []byte) {
-	if len(n.Servers) >= ntsShiftMinServers {
-		n.Shifts, n.ScheduleSeed = true, seed
+// ntsMinServers is the fewest servers the runner starts the NTS clock
+// with. At least 3 fresh samples must agree (nts.QuorumWrong), so with 3
+// servers one slow server would stop signing.
+const ntsMinServers = 4
+
+// ntsSchedule turns the seeded schedule on, with seed. From
+// ntsShiftMinServers servers it runs shifts; with fewer, every server is
+// active, each asked once per 60 s on the same grid, so a small set is not
+// asked more often than a large one. Fewer than ntsMinServers is an error.
+func ntsSchedule(n *clock.NTS, seed []byte) error {
+	if len(n.Servers) < ntsMinServers {
+		return fmt.Errorf("nts clock: %d servers, at least %d", len(n.Servers), ntsMinServers)
 	}
+	n.Shifts, n.ScheduleSeed = true, seed
+	return nil
 }
 
 // startNTSClock takes the first coarse reading and the first quorum (up to
 // -nts-wait), then keeps both running and logs a status line. No quorum in
-// the wait is an error: the runner does not start without the clock. With
-// ntsShiftMinServers servers or more the clock runs the shift schedule,
-// with seed (platform.Platform.NTSScheduleSeed; nil: every server active
-// on the 60 s grid, with a random phase).
+// the wait is an error: the runner does not start without the clock. The
+// clock runs the 60 s schedule (ntsSchedule) with seed
+// (platform.Platform.NTSScheduleSeed; nil: every server active, with a
+// random phase).
 func startNTSClock(ctx context.Context, client *http.Client, dial nts.DialFunc, region string, seed []byte, log *slog.Logger) (*clock.NTS, error) {
 	wait, err := ntsDuration(*ntsWaitFlag, "RUNNER_NTS_WAIT", 90*time.Second)
 	if err != nil {
@@ -300,7 +307,9 @@ func startNTSClock(ctx context.Context, client *http.Client, dial nts.DialFunc, 
 	if err != nil {
 		return nil, err
 	}
-	ntsSchedule(n, seed)
+	if err := ntsSchedule(n, seed); err != nil {
+		return nil, err
+	}
 	log.Info("nts: clock starting", "library", nts.Version(), "servers", n.Source(), "shifts", n.Shifts, "max_bound", n.MaxBound, "wait", wait)
 	deadline := time.Now().Add(wait)
 	for {

@@ -300,7 +300,8 @@ type QuorumResult struct {
 
 // Quorum combines 3 to MaxServers intervals from distinct operators, up to
 // maxWrong of which may be wrong, at the Monotonic time now. len(in) must
-// be at least 2 * maxWrong + 1; MajorityWrong(len(in)) is the most it takes.
+// be at least 2 * maxWrong + 1; MajorityWrong(len(in)) is the most it takes
+// (the clock passes QuorumWrong).
 func Quorum(in []Interval, now int64, maxWrong int) (QuorumResult, error) {
 	if len(in) > MaxServers {
 		return QuorumResult{}, fmt.Errorf("nts: %d servers, at most %d", len(in), MaxServers)
@@ -336,6 +337,13 @@ func Quorum(in []Interval, now int64, maxWrong int) (QuorumResult, error) {
 // MajorityWrong is the most wrong servers the majority rule allows among
 // n: (n - 1) / 2, rounded down.
 func MajorityWrong(n int) int { return max(n-1, 0) / 2 }
+
+// QuorumWrong is the most wrong servers the NTS clock allows among n fresh
+// samples: MajorityWrong(n), but never so many that fewer than 3 agree.
+// 3 of 3, 3 of 4, 3 of 5, 4 of 6 and 4 of 7 must agree. Without the floor,
+// 2 of 3 would do, and a host that drops answers until 3 are fresh could
+// let 2 wrong operators set the time.
+func QuorumWrong(n int) int { return max(min(MajorityWrong(n), n-3), 0) }
 
 // Drift is how far a bound grows over d: RhoPPM of d, rounded up, as
 // drift_ns in the Rust core. The product takes 128 bits: in int64 it

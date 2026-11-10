@@ -111,7 +111,9 @@ pub fn combine(samples: &[Interval<'_>], now_local_ns: i64) -> Result<QuorumResu
 }
 
 /// The most wrong servers a majority rule allows among `n`: (n - 1) / 2,
-/// rounded down. 3 of 3, 3 of 4, 3 of 5, 4 of 6, 4 of 7 must agree.
+/// rounded down. 2 of 3, 3 of 4, 3 of 5, 4 of 6, 4 of 7 must agree. The
+/// NTS clock passes less for 3 intervals, so that 3 of 3 must agree
+/// (`nts.QuorumWrong` in Go).
 pub const fn majority_wrong(n: usize) -> usize {
     n.saturating_sub(1) / 2
 }
