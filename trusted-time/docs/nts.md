@@ -201,7 +201,10 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   newcomer of a handover is asked at once, off its slot, and its next slot
   can come up to 116 s later, so that first sample ages out before it and
   exactly 3 are fresh for up to about 40 s. Seeded with an HMAC of the sealing
-  key (`platform.ScheduleSeed`), which the host does not know. The
+  key (`platform.ScheduleSeed`), which the host does not know, so it cannot
+  plan ahead. It can learn the order: the order stays the same after a
+  restart, and the host sees where each query goes, so after one round of
+  handovers (n times 15 minutes) it knows the next active sets. The
   catalog's default set has 6 servers, so a runner runs it only when its
   image's command adds one or more (`-nts-terms-confirmed`).
   It asks public servers less

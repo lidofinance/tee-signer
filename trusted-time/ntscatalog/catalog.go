@@ -140,7 +140,7 @@ func (e NTSServer) altEndpoint(a AltHost) Endpoint {
 	if len(roots) == 0 {
 		roots = e.Roots
 	}
-	return Endpoint{ID: e.ID, Operator: e.Operator, Host: a.Host, Roots: roots, NitroPort: a.NitroPort}
+	return Endpoint{ID: e.ID, Operator: e.Operator, Host: a.Host, Roots: roots, NTPNames: e.NTPNames, NTPNets: e.NTPNets, NitroPort: a.NitroPort}
 }
 
 // Terms of an operator, as its own published pages state them.
