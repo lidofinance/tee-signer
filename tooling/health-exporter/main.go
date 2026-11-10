@@ -10,10 +10,15 @@
 // Every new connection checks the runner's attestation and setup pins first.
 // A runner that fails the check, or does not answer, shows as
 // tee_signer_up 0, with the error in the log.
+//
+// The client certificate and key are read again before every poll. A pair
+// that changed on disk gives a new client, so a renewed certificate needs no
+// restart. The rest of the connection file is read once, at start.
 package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"flag"
 	"fmt"
 	"io"
@@ -31,8 +36,14 @@ import (
 )
 
 type runner struct {
-	name string
-	cl   *runnerclient.Client
+	name    string
+	conn    *runnerclient.Connection
+	timeout time.Duration
+	// cl, pair and refused belong to the poll loop. pair is the pairSum cl
+	// was made at; refused is the last one that made no client.
+	cl      *runnerclient.Client
+	pair    [32]byte
+	refused [32]byte
 
 	mu       sync.Mutex
 	h        *backend.Health // nil after a failed call
@@ -94,23 +105,81 @@ func newRunner(name, path string, timeout time.Duration) (*runner, error) {
 	if err != nil {
 		return nil, err
 	}
-	r := &runner{name: name}
-	r.cl, err = conn.New(runnerclient.WithTimeout(timeout), runnerclient.WithVerified(func(*backend.Identity) {
-		r.mu.Lock()
-		r.verified++
-		r.mu.Unlock()
-	}))
-	if err != nil {
+	r := &runner{name: name, conn: conn, timeout: timeout}
+	// The sum comes first: a pair that changes between the two reads gives
+	// another sum at the next poll, and one more client.
+	if r.pair, err = pairSum(conn); err != nil {
+		return nil, err
+	}
+	if r.cl, err = r.newClient(); err != nil {
 		return nil, err
 	}
 	return r, nil
 }
 
+// newClient reads the client certificate and key and returns a client that
+// has not connected yet.
+func (r *runner) newClient() (*runnerclient.Client, error) {
+	return r.conn.New(runnerclient.WithTimeout(r.timeout), runnerclient.WithVerified(func(*backend.Identity) {
+		r.mu.Lock()
+		r.verified++
+		r.mu.Unlock()
+	}))
+}
+
+// pairSum is a hash of the client certificate and key files of conn as they
+// are on disk now.
+func pairSum(conn *runnerclient.Connection) ([32]byte, error) {
+	var sum [32]byte
+	cert, err := os.ReadFile(conn.ClientCert)
+	if err != nil {
+		return sum, fmt.Errorf("client_cert: %w", err)
+	}
+	key, err := os.ReadFile(conn.ClientKey)
+	if err != nil {
+		return sum, fmt.Errorf("client_key: %w", err)
+	}
+	defer clear(key)
+	h := sha256.New()
+	h.Write(cert)
+	h.Write([]byte{0})
+	h.Write(key)
+	h.Sum(sum[:0])
+	return sum, nil
+}
+
+// reload gives r a client of the certificate and key on disk if they changed
+// since its client read them, and reports whether it did. The old client
+// keeps the pair it read at its start, so without this a renewed certificate
+// is not used until the exporter restarts. A pair that makes no client
+// (half written, not a pair, expired) leaves the client in use and is logged
+// once for that content. Files that cannot be read are tried again at the
+// next poll.
+func (r *runner) reload() bool {
+	sum, err := pairSum(r.conn)
+	if err != nil || sum == r.pair || sum == r.refused {
+		return false
+	}
+	cl, err := r.newClient()
+	if err != nil {
+		r.refused = sum
+		log.Printf("%s: client certificate on disk refused, keeping the one in use: %v", r.name, err)
+		return false
+	}
+	old := r.cl
+	r.cl, r.pair = cl, sum
+	old.Close()
+	log.Printf("%s: client certificate reloaded", r.name)
+	return true
+}
+
 func (r *runner) poll(timeout time.Duration) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+	swapped := r.reload()
 	r.mu.Lock()
-	v0, open := r.verified, r.h != nil
+	// A new client has no connection: its first call dials.
+	v0, open := r.verified, r.h != nil && !swapped
 	r.mu.Unlock()
 	t0 := time.Now()
 	h, err := r.cl.Health(ctx)

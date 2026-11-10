@@ -95,6 +95,19 @@ The `conn` folder holds the connection files and the client certificate and
 key. Make the key readable by the container user (uid 65532 in the image
 above) and nobody else.
 
+## Client certificate renewal
+
+The exporter reads `client_cert` and `client_key` again before every poll.
+When the files changed, the next poll opens a new connection with the new
+pair, with the attestation check, and the exporter logs `client certificate
+reloaded`. No restart is needed. Write the new files to temporary names and
+rename them over the old ones.
+
+A pair that does not load (the key does not belong to the certificate, the
+certificate is expired) leaves the pair in use, and the exporter logs `client
+certificate on disk refused, keeping the one in use` once for that content.
+The rest of the connection file (address, pins) is read at start only.
+
 ## Metrics
 
 Every metric has the label `runner`, the name given on the command line.

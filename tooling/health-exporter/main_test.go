@@ -464,3 +464,69 @@ func TestPollSkewOnlyWhenMeasured(t *testing.T) {
 		t.Errorf("skew that was never measured:\n%s", out)
 	}
 }
+
+// TEE-3: a client certificate renewed on disk is used at the next poll,
+// with no restart: the poll opens a new connection with it.
+func TestPollReloadsRenewedCertificate(t *testing.T) {
+	fr := fakerunner.Start(t, backend.SetupState{})
+	path := writeConn(t, fr.Addr(), fr, "")
+	r, err := newRunner("s1", path, 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { r.cl.Close() }()
+	r.poll(10 * time.Second)
+	first := r.cl
+	r.poll(10 * time.Second)
+	if r.cl != first {
+		t.Fatal("a new client with the same files on disk")
+	}
+	fr.ClientFiles(t, filepath.Dir(path)) // a new pair over the old files
+	r.poll(10 * time.Second)
+	if r.cl == first {
+		t.Fatal("the client still holds the old certificate")
+	}
+	out := rendered(r)
+	wantLine(t, out, `tee_signer_up{runner="s1"} 1`)
+	wantLine(t, out, `tee_signer_health_errors_total{runner="s1"} 0`)
+	// One connection per certificate.
+	wantLine(t, out, `tee_signer_attestations_verified_total{runner="s1"} 2`)
+	if rttOf(t, out) < 0 {
+		t.Errorf("no rtt after the reload:\n%s", out)
+	}
+}
+
+// A pair on disk that makes no client leaves the one in use, and is tried
+// once for that content. A good pair after it is taken.
+func TestPollKeepsClientOnBadCertificate(t *testing.T) {
+	fr := fakerunner.Start(t, backend.SetupState{})
+	path := writeConn(t, fr.Addr(), fr, "")
+	r, err := newRunner("s1", path, 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { r.cl.Close() }()
+	r.poll(10 * time.Second)
+	first := r.cl
+	cert := filepath.Join(filepath.Dir(path), "client.pem")
+	if err := os.WriteFile(cert, []byte("not a certificate"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.poll(10 * time.Second)
+	r.poll(10 * time.Second)
+	if r.cl != first {
+		t.Fatal("a new client from a bad certificate file")
+	}
+	if r.refused == ([32]byte{}) {
+		t.Error("the bad pair was not noted")
+	}
+	out := rendered(r)
+	wantLine(t, out, `tee_signer_up{runner="s1"} 1`)
+	wantLine(t, out, `tee_signer_attestations_verified_total{runner="s1"} 1`)
+	fr.ClientFiles(t, filepath.Dir(path))
+	r.poll(10 * time.Second)
+	if r.cl == first {
+		t.Fatal("the good pair after the bad one was not taken")
+	}
+	wantLine(t, rendered(r), `tee_signer_up{runner="s1"} 1`)
+}
