@@ -681,3 +681,31 @@ func TestNTSCertificateClockWithoutCoarseTime(t *testing.T) {
 		t.Fatalf("certificate time with a coarse reading: %v", got)
 	}
 }
+
+// A server that drops queries without a kiss (it rotated its keys and
+// ignores old cookies) gets NTS-KE again after ntsKEAfterLost lost queries
+// in a row, not after all its cookies are spent.
+func TestNTSClockKeyExchangeAfterLostQueries(t *testing.T) {
+	fs := newServers(t, nil, "a", "b", "c", "d")
+	n := newNTS(fs, &coarseClock{})
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	fs[0].ntp.Set(opt(ntstest.NTPOptions{Drop: true}))
+	for range ntsKEAfterLost {
+		time.Sleep(60 * time.Millisecond)
+		_ = refresh(t, n)
+	}
+	if s := fs[0].ke.Sessions.Load(); s != 1 {
+		t.Fatalf("NTS-KE sessions with a while it drops: %d, want 1", s)
+	}
+	fs[0].ntp.Set(opt(ntstest.NTPOptions{}))
+	time.Sleep(60 * time.Millisecond)
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	p := n.Status().Peers["a"]
+	if s := fs[0].ke.Sessions.Load(); s != 2 || p.Stats.Samples != 2 {
+		t.Fatalf("after %d lost: NTS-KE sessions %d, want 2; samples %d", ntsKEAfterLost, s, p.Stats.Samples)
+	}
+}

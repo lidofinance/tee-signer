@@ -244,7 +244,10 @@ type ntsPeer struct {
 	disabled string // the kiss code that stopped the server, until reEnable
 	reEnable int64
 	lastErr  error
-	stats    NTSPeerStats
+	// lostInRow counts the queries in a row that got no answer and no
+	// kiss; at ntsKEAfterLost the next contact runs NTS-KE first.
+	lostInRow int
+	stats     NTSPeerStats
 	// contacted is the local time of the last contact under the shift
 	// schedule, 0 for none.
 	contacted int64
@@ -645,11 +648,20 @@ func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time, at int64) 
 	return n.record(p, s, err)
 }
 
-// keyExchange runs NTS-KE if p has no cookies left, and says whether p can
-// be queried.
+// ntsKEAfterLost is how many queries in a row may go unanswered before the
+// next contact runs NTS-KE again. A server that rotated its keys should
+// answer an old cookie with NTSN, but one that drops it would otherwise
+// cost all 8 cookies (8 contacts, 8 minutes on the 60 s grid) first.
+const ntsKEAfterLost = 3
+
+// keyExchange runs NTS-KE if p has no cookies left, or after ntsKEAfterLost
+// lost queries in a row once NTS-KE may run, and says whether p can be
+// queried.
 func (n *NTS) keyExchange(ctx context.Context, p *ntsPeer) bool {
 	now := n.local()
-	if p.assoc == nil || p.assoc.Cookies() == 0 {
+	stale := p.assoc != nil && p.lostInRow >= ntsKEAfterLost && now >= p.nextKE
+	if p.assoc == nil || p.assoc.Cookies() == 0 || stale {
+		p.lostInRow = 0
 		if p.assoc != nil {
 			p.assoc.Close()
 			p.assoc = nil
@@ -745,10 +757,12 @@ func (n *NTS) record(p *ntsPeer, s nts.Sample, err error) bool {
 		n.logf(slog.LevelWarn, "nts: kiss-o'-death", "operator", p.srv.Operator, "code", kiss.Code, "poll", p.poll)
 	case err != nil:
 		p.stats.Errors++
+		p.lostInRow++
 		p.lastErr = err
 		n.logf(slog.LevelWarn, "nts: query failed", "operator", p.srv.Operator, "err", err)
 	default:
 		p.stats.Samples++
+		p.lostInRow = 0
 		p.sample = &s
 		p.lastErr = nil
 		p.poll = max(p.poll/2, max(n.interval(), n.minPollD()))

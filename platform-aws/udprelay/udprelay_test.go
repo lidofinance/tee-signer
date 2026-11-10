@@ -517,3 +517,33 @@ func TestRelaySessionTimeouts(t *testing.T) {
 		t.Fatalf("busy session closed after %v, want about 400 ms", d)
 	}
 }
+
+// A DNS answer that points an allowed name at loopback, a private or
+// shared-space address does not turn the relay there, unless Nets holds
+// the address (the e2e tests name localhost and allow 127.0.0.1/32).
+func TestAllowlistRefusesLocalAnswers(t *testing.T) {
+	dns := &fakeDNS{table: map[string][]netip.Addr{
+		"lo.example":   addrs("127.0.0.1"),
+		"vpc.example":  addrs("10.0.0.5", "fd00::5"),
+		"cgn.example":  addrs("100.64.1.1"),
+		"both.example": addrs("10.0.0.6", "192.0.2.7"),
+	}}
+	a := &Allowlist{Names: []string{"lo.example", "vpc.example", "cgn.example", "both.example"}, Ports: []uint16{123}, Lookup: dns.lookup}
+	for _, dest := range []string{"lo.example:123", "vpc.example:123", "cgn.example:123"} {
+		if _, err := a.Check(context.Background(), dest); err == nil || !strings.Contains(err.Error(), "no usable address") {
+			t.Errorf("%s: %v", dest, err)
+		}
+	}
+	for _, dest := range []string{"127.0.0.1:123", "10.0.0.5:123", "[fd00::5]:123", "100.64.1.1:123", "10.0.0.6:123"} {
+		if _, err := a.Check(context.Background(), dest); err == nil || !strings.Contains(err.Error(), "not in the allowlist") {
+			t.Errorf("%s: %v", dest, err)
+		}
+	}
+	if ap, err := a.Check(context.Background(), "both.example:123"); err != nil || ap.String() != "192.0.2.7:123" {
+		t.Errorf("both.example: %v %v, want the public address", ap, err)
+	}
+	a.Nets = []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}
+	if ap, err := a.Check(context.Background(), "lo.example:123"); err != nil || ap.String() != "127.0.0.1:123" {
+		t.Errorf("lo.example with 127.0.0.1/32 in Nets: %v %v", ap, err)
+	}
+}

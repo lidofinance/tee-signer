@@ -166,6 +166,31 @@ func usable(ip netip.Addr) bool {
 	return ip.IsValid() && !ip.IsUnspecified() && !ip.IsMulticast() && !ip.IsLinkLocalUnicast()
 }
 
+// sharedSpace is the carrier-grade NAT block (RFC 6598).
+var sharedSpace = netip.MustParsePrefix("100.64.0.0/10")
+
+// public: not loopback, private (RFC 1918, fc00::/7) or shared space.
+func public(ip netip.Addr) bool {
+	return !ip.IsLoopback() && !ip.IsPrivate() && !sharedSpace.Contains(ip)
+}
+
+func (a *Allowlist) inNets(ip netip.Addr) bool {
+	for _, n := range a.Nets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// nameAddr: an address a name of the allowlist resolved to that a datagram
+// may go to. It must be public unless Nets holds it: a DNS answer that
+// points a catalog name at the parent itself or at the VPC must not turn
+// the relay toward them (the tests allow loopback with Nets).
+func (a *Allowlist) nameAddr(ip netip.Addr) bool {
+	return usable(ip) && (public(ip) || a.inNets(ip))
+}
+
 // Check returns the UDP address for dest, or why dest is refused (an error
 // whose text is the reason sent to the client).
 func (a *Allowlist) Check(ctx context.Context, dest string) (netip.AddrPort, error) {
@@ -183,14 +208,12 @@ func (a *Allowlist) Check(ctx context.Context, dest string) (netip.AddrPort, err
 		if ip.Zone() != "" || !usable(ip) {
 			return netip.AddrPort{}, refusal{"address " + host + " not allowed"}
 		}
-		for _, n := range a.Nets {
-			if n.Contains(ip) {
-				return netip.AddrPortFrom(ip, port), nil
-			}
+		if a.inNets(ip) {
+			return netip.AddrPortFrom(ip, port), nil
 		}
 		for _, name := range a.Names {
 			addrs, err := a.lookup(ctx, name)
-			if err == nil && slices.Contains(addrs, ip) {
+			if err == nil && public(ip) && slices.Contains(addrs, ip) {
 				return netip.AddrPortFrom(ip, port), nil
 			}
 		}
@@ -207,7 +230,7 @@ func (a *Allowlist) Check(ctx context.Context, dest string) (netip.AddrPort, err
 	// IPv4 first: the parent may have no IPv6 route.
 	for _, v4 := range []bool{true, false} {
 		for _, ip := range addrs {
-			if ip.Is4() == v4 && usable(ip) {
+			if ip.Is4() == v4 && a.nameAddr(ip) {
 				return netip.AddrPortFrom(ip, port), nil
 			}
 		}
