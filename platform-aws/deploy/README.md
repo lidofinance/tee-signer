@@ -857,7 +857,7 @@ key either. `test-client-ca.pem` is the root of a test PKI made by
 - The runner checks the validity dates of the client certificate, and of
   its chain, against the clock of its platform (the NTS clock, "NTS clock in
   the enclave"), not against the system clock that the parent sets. If that
-  clock has no time (no quorum, a bound over 100 ms, or samples over 60 s
+  clock has no time (no quorum, a bound over 100 ms, or samples over 90 s
   old), no client
   certificate is accepted until it has one. With `clock=system` the parent
   could move time and let an expired certificate through, but it would still

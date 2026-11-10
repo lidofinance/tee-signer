@@ -62,6 +62,10 @@ func ntsClockCheck() int {
 // as parameters, for the test.
 func ntsClockCheckWith(client *http.Client, dial nts.DialFunc, log *slog.Logger) int {
 	n, coarse, err := newNTSClock(client, dial, os.Getenv("RUNNER_NTS_REGION"), log)
+	if err == nil {
+		// The same count the runner refuses at start.
+		err = ntsEnoughServers(n)
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "runner:", err)
 		return 2

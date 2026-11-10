@@ -597,9 +597,9 @@ func TestNTSShiftSevenVersusEight(t *testing.T) {
 }
 
 // Below 7 operators every one is active, once per 60 s, and nothing hands
-// over: about 60 queries per operator per hour when healthy. A healthy run
-// and one wrong operator never block with 4 or 6; with 4, all 3 others
-// must agree.
+// over: about 60 queries per operator per hour when healthy. A healthy
+// run, one wrong operator and one lossy operator never block with 4 or 6;
+// with 6, two down or two wrong do not either.
 func TestNTSShiftSmallSets(t *testing.T) {
 	for _, c := range []int{4, 6} {
 		if got := ShiftActives(c); got != c {
@@ -609,11 +609,12 @@ func TestNTSShiftSmallSets(t *testing.T) {
 			r := runShiftScenario(t, sc)
 			checkMinGap(t, sc.name, r)
 			t.Logf("%d servers, %s: blocked %v (%.3f%%), longest %v, %.1f q/h, %+v", c, sc.name, r.blocked, r.blockedPct(), r.longest, r.queriesPerHour, r.counts)
-			switch sc.name {
-			case "healthy", "one operator wrong":
-				if r.blocked != 0 {
-					t.Errorf("%d servers, %s: blocked %v", c, sc.name, r.blocked)
-				}
+			// With 4, 3 must agree, so two down blocks by design; with 6
+			// two down leave 4 fresh, 3 of which must agree.
+			mustNot := sc.name == "healthy" || sc.name == "one operator wrong" || sc.name == "one active at 50% loss" ||
+				(c == 6 && (sc.name == "two actives down" || sc.name == "two wrong (smear plus one)"))
+			if mustNot && r.blocked != 0 {
+				t.Errorf("%d servers, %s: blocked %v", c, sc.name, r.blocked)
 			}
 			if sc.name == "healthy" && (r.counts.Handovers != 0 || r.queriesPerHour > 61*float64(c)) {
 				t.Errorf("%d servers, healthy: %.1f q/h, %+v", c, r.queriesPerHour, r.counts)

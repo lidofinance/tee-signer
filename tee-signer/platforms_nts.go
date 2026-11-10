@@ -281,10 +281,18 @@ const ntsMinServers = 4
 // active, each asked once per 60 s on the same grid, so a small set is not
 // asked more often than a large one. Fewer than ntsMinServers is an error.
 func ntsSchedule(n *clock.NTS, seed []byte) error {
+	if err := ntsEnoughServers(n); err != nil {
+		return err
+	}
+	n.Shifts, n.ScheduleSeed = true, seed
+	return nil
+}
+
+// ntsEnoughServers refuses fewer than ntsMinServers servers.
+func ntsEnoughServers(n *clock.NTS) error {
 	if len(n.Servers) < ntsMinServers {
 		return fmt.Errorf("nts clock: %d servers, at least %d", len(n.Servers), ntsMinServers)
 	}
-	n.Shifts, n.ScheduleSeed = true, seed
 	return nil
 }
 

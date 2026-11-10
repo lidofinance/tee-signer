@@ -222,7 +222,7 @@ func TestE2ENTSClockThroughRelay(t *testing.T) {
 
 // TestE2ENTSIgnoresHostClock: the host moves the system clock 1 h ahead
 // (clock_offset on the dev platform) and the runner signs on the NTS clock
-// of three test servers. HEALTH shows the servers' time, and a vote 4
+// of four test servers (the runner refuses fewer). HEALTH shows the servers' time, and a vote 4
 // epochs ahead of real time, long past for the moved clock, is refused.
 func TestE2ENTSIgnoresHostClock(t *testing.T) {
 	bin := runnerBinary(t, "aws-debug")
@@ -234,7 +234,7 @@ func TestE2ENTSIgnoresHostClock(t *testing.T) {
 	serverClock := func() time.Time { return start.Add(time.Duration(rawNow() - raw0)) }
 	var roots []byte
 	var servers []string
-	for _, name := range []string{"a", "b", "c"} {
+	for _, name := range []string{"a", "b", "c", "d"} {
 		host := "nts-" + name + ".test"
 		store := ntstest.NewStore()
 		ntp, err := ntstest.StartNTP(store, ntstest.NTPOptions{Clock: serverClock})
@@ -271,7 +271,7 @@ func TestE2ENTSIgnoresHostClock(t *testing.T) {
 	r.start()
 	cl := client(t, addr)
 	h := waitReady(t, cl)
-	if h.ClockSource != "nts(a,b,c)" || !h.ClockTrusted {
+	if h.ClockSource != "nts(a,b,c,d)" || !h.ClockTrusted {
 		t.Fatalf("clock %s trusted=%v", h.ClockSource, h.ClockTrusted)
 	}
 	if off := int64(h.ClockUnix) - serverClock().Unix(); off < -2 || off > 2 {
@@ -312,8 +312,8 @@ func coarseServers(t *testing.T, dir string) (urls, routes []string, caFile stri
 // servers: NTS-KE over TCP (where the enclave has vsock-proxy) and NTP
 // through udprelay with its default allowlist. Network: TCP 4460 and UDP
 // 123 and 4123 to those servers only (the coarse check uses loopback
-// servers). The default set has 6, so the clock polls every server
-// without the shift schedule. Runs only with NTS_INTEROP=1, for
+// servers). The default set has 6, all active on the 60 s schedule, each
+// asked once per 60 s. Runs only with NTS_INTEROP=1, for
 // NTS_INTEROP_FOR (default 150s).
 func TestE2ENTSRelayInterop(t *testing.T) {
 	if os.Getenv("NTS_INTEROP") != "1" {
@@ -409,7 +409,7 @@ func TestE2ENTSRelayInterop(t *testing.T) {
 	// The start round asks every server, so each default server must have
 	// answered at least once (peers: operator:samples/queries/keN,...), and
 	// the relay must have refused no destination: a missing NTP name would
-	// otherwise hide behind the 3 of 4 the quorum needs.
+	// otherwise hide behind the 4 of 6 the quorum needs.
 	_, peers, _ := strings.Cut(last, `peers="`)
 	peers, _, _ = strings.Cut(peers, `"`)
 	answered := map[string]bool{}
