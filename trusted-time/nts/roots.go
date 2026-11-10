@@ -46,7 +46,8 @@ import (
 //	ntp0.cam.ac.uk          leaf <- DigiCert Global G2 TLS RSA SHA256 2020 CA1 <- DigiCert Global Root G2
 //	ntp.obspm.fr            leaf <- GEANT TLS RSA 1 <- HARICA TLS RSA Root CA 2021, sent cross-signed by
 //	                        the Hellenic RootCA 2015, so both are pinned
-//	time1.mbix.ca, ntp1.wiktel.com, a.st1.ntp.br  <- ISRG Root X1
+//	time1.mbix.ca, a.st1.ntp.br  <- ISRG Root X1
+//	ntp1.wiktel.com         leaf <- Let's Encrypt YE1 <- ISRG Root YE <- ISRG Root X2 (cross-signed by X1)
 //
 // The Let's Encrypt operators get both ISRG roots, since Let's Encrypt moves
 // between them. A CA change by an operator outside its set makes NTS-KE to
@@ -74,8 +75,8 @@ type Server struct {
 	Roots    []string // files under roots/
 }
 
-// PublicServers are the NTS servers the runner uses: the entries of the
-// built-in catalog that are not withdrawn (trusted-time/ntscatalog).
+// PublicServers are the NTS servers the runner uses: the Default entries
+// of the built-in catalog that are not withdrawn (ntscatalog Dialed).
 var PublicServers = publicServers(ntscatalog.Builtin.Dialed())
 
 func publicServers(in []ntscatalog.NTSServer) []Server {

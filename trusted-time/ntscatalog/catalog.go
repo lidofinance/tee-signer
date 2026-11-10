@@ -29,7 +29,8 @@ import (
 type Status uint8
 
 const (
-	// Active: new setups may name it, the runner dials it.
+	// Active: new setups may name it; the runner dials it when it is
+	// Default or a setup names it.
 	Active Status = iota
 	// Retired: new setups may not name it, a runner whose setup names it
 	// still dials it. For an operator that stops its service: dialing it
