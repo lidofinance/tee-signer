@@ -291,11 +291,11 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
     us-east4, us-west1, southamerica-east1, asia-northeast1, asia-southeast1
     and australia-southeast1. `ForRegion` lists what a new setup for a
     region may name; signer-admin will suggest from it.
-  - Asia and Oceania have no NTS operator close enough of their own. Their
-    open set is the two anycast services, Cloudflare and Meta, under the
-    quorum's 3; a setup there needs `ask` operators (TimeNL's any.time.nl
-    is anycast) or one of the North American servers at the edge of the
-    bound.
+  - Open servers per region today: eu and na 7, sa 4 (Cloudflare, Meta,
+    Wiktel, NIC.br). Asia and Oceania have no NTS operator close enough of
+    their own. Their open set is the two anycast services, Cloudflare and
+    Meta, under the quorum's 3; a setup there needs `ask` operators
+    (TimeNL's any.time.nl is anycast; MBIX is at the edge of the bound).
   - `alt`: other hosts of the same operator (more sites, anycast). They count
     as the same operator and this image does not dial them.
   - `default`: dialed while setups cannot name servers. That is the four

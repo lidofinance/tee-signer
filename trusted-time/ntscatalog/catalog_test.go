@@ -130,11 +130,12 @@ func TestForRegion(t *testing.T) {
 	}
 }
 
-// What the built-in catalog offers each region with open terms only. Asia
-// and Oceania have no NTS operator close enough of their own: there the
-// open set is the two global anycast services, below the quorum's 3.
+// What the built-in catalog offers each region with open terms only. South
+// America has 4 (Cloudflare, Meta, Wiktel, NIC.br). Asia and Oceania have
+// no NTS operator close enough of their own: there the open set is the two
+// global anycast services, below the quorum's 3.
 func TestBuiltinOpenSetPerRegion(t *testing.T) {
-	for region, min := range map[string]int{RegionEU: 6, RegionNA: 6, RegionSA: 5} {
+	for region, min := range map[string]int{RegionEU: 6, RegionNA: 6, RegionSA: 4} {
 		if n := len(Builtin.ForRegion(region, false)); n < min {
 			t.Errorf("%s: %d open servers, want at least %d", region, n, min)
 		}

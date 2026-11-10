@@ -154,14 +154,14 @@
       "roots": ["isrg-root-x1.pem", "isrg-root-x2.pem"],
       "nitro_port": 8014,
       "status": "active",
-      "terms": "open",
-      "terms_url": "https://time1.mbix.ca/",
+      "terms": "ask",
+      "terms_url": "https://web.archive.org/web/20260616204831/http://www.mbix.ca/ntp-services/",
       "regions": ["eu", "na", "sa"],
       "alt": [
         {"host": "time2.mbix.ca"},
         {"host": "time3.mbix.ca"}
       ],
-      "note": "Manitoba Internet Exchange, Winnipeg, stratum 1 GPS. Public NTP pool member, NTS client config published, no limits stated. Steady -3 to -9 ms offset from far test points."
+      "note": "Manitoba Internet Exchange, Winnipeg, stratum 1 GPS. Its NTP page (archived 2026-06; the live site is down since 2026-10-21) says the cluster serves MBIX-connected networks and states no limits; time1.mbix.ca says it is in the public NTP pool and gives an NTS client config. Use outside MBIX networks is not stated, so ask. Steady -3 to -9 ms offset from far test points."
     },
     {
       "id": "wiktel",
