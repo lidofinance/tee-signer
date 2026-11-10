@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 
 	proto "github.com/lidofinance/tee-signer/signer-protocol"
+	"github.com/lidofinance/tee-signer/signer-protocol/wire"
 )
 
 // Results of one signer in a sign request.
@@ -25,6 +27,14 @@ const (
 // warnEvery is how often the same signer, request type and reason may log
 // a "signer did not sign" line.
 const warnEvery = 5 * time.Minute
+
+// maxWarnKeys caps the keys warnLimit keeps. The keys come from a small set,
+// so the cap only stops a growth it does not expect.
+const maxWarnKeys = 1024
+
+// unknownStatus is the limiter reason for every status code the gateway
+// has no name for, so a signer cycling codes stays under one limit.
+const unknownStatus = "unknown_status"
 
 // errBadPartial marks a partial signature that does not verify under the
 // share key.
@@ -67,6 +77,29 @@ func (e *SignError) LogAttr() slog.Attr {
 	}
 
 	return slog.Group("signers", attrs...)
+}
+
+// capDetail cuts the detail of a refusal to wire.MaxDetail bytes, the most
+// a signer may send, before any log line or error text has it. A refusal
+// over the limit comes back as a bare RefusedError with its code.
+func capDetail(err error) error {
+	var r *proto.RefusedError
+	if !errors.As(err, &r) || len(r.Detail) <= wire.MaxDetail {
+		return err
+	}
+
+	return &proto.RefusedError{Code: r.Code, Detail: strings.ToValidUTF8(r.Detail[:wire.MaxDetail], "")}
+}
+
+// limitReason is the reason warnLimit keys on: unknown status codes share
+// one.
+func limitReason(err error, reason string) string {
+	var r *proto.RefusedError
+	if errors.As(err, &r) && strings.HasPrefix(reason, "STATUS_") {
+		return unknownStatus
+	}
+
+	return reason
 }
 
 // outcomeOf turns a signer's answer into an Outcome.
@@ -121,7 +154,7 @@ func (s *Signers) outcomes(g group, parts []partial) []Outcome {
 // warnEvery.
 func (s *Signers) warnSigner(duty string, pubkey phase0.BLSPubKey, p partial) {
 	o := outcomeOf(s.names[p.share.node], p.err)
-	ok, suppressed := s.warns.allow(warnKey{signer: o.Signer, duty: duty, reason: o.Reason})
+	ok, suppressed := s.warns.allow(warnKey{signer: o.Signer, duty: duty, reason: limitReason(p.err, o.Reason)})
 	if !ok {
 		return
 	}
@@ -144,9 +177,11 @@ type warnState struct {
 }
 
 // warnLimit lets one line per key through per interval and counts the
-// rest. The keys are signer names, request types and reasons, a small set.
+// rest. The keys are signer names, request types and reasons, a small set;
+// past max keys it drops the stale ones, then the oldest.
 type warnLimit struct {
 	every time.Duration
+	max   int
 	now   func() time.Time
 
 	mu   sync.Mutex
@@ -154,7 +189,7 @@ type warnLimit struct {
 }
 
 func newWarnLimit(every time.Duration) *warnLimit {
-	return &warnLimit{every: every, now: time.Now, seen: map[warnKey]*warnState{}}
+	return &warnLimit{every: every, max: maxWarnKeys, now: time.Now, seen: map[warnKey]*warnState{}}
 }
 
 // allow reports whether to log k now, and how many lines for k it held
@@ -165,6 +200,9 @@ func (l *warnLimit) allow(k warnKey) (bool, int) {
 	defer l.mu.Unlock()
 	st, ok := l.seen[k]
 	if !ok {
+		if len(l.seen) >= l.max {
+			l.evict(now)
+		}
 		l.seen[k] = &warnState{last: now}
 
 		return true, 0
@@ -178,4 +216,24 @@ func (l *warnLimit) allow(k warnKey) (bool, int) {
 	st.last, st.suppressed = now, 0
 
 	return true, n
+}
+
+// evict drops the keys whose interval is over, or the oldest key when none
+// is. The caller holds mu.
+func (l *warnLimit) evict(now time.Time) {
+	var oldest warnKey
+	var oldestAt time.Time
+	for k, st := range l.seen {
+		if now.Sub(st.last) >= l.every {
+			delete(l.seen, k)
+
+			continue
+		}
+		if oldestAt.IsZero() || st.last.Before(oldestAt) {
+			oldest, oldestAt = k, st.last
+		}
+	}
+	if len(l.seen) >= l.max {
+		delete(l.seen, oldest)
+	}
 }

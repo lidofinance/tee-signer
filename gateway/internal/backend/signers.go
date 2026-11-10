@@ -197,7 +197,7 @@ func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, err
 			cctx, cancel := context.WithTimeout(ctx, s.timeout)
 			defer cancel()
 			keys, err := n.PublicKeys(cctx)
-			answers[i] = answer{keys, err}
+			answers[i] = answer{keys, capDetail(err)}
 		})
 	}
 	wg.Wait()
@@ -323,6 +323,7 @@ func (s *Signers) fanOut(ctx context.Context, pubkey phase0.BLSPubKey, g group, 
 	for _, sh := range g.shares {
 		wg.Go(func() {
 			sig, err := s.nodes[sh.node].Sign(callCtx, req)
+			err = capDetail(err)
 			p := partial{share: sh, sig: phase0.BLSSignature(sig), err: err}
 			if err == nil {
 				if verr := VerifyBLS(sh.pub, root, p.sig); verr != nil {

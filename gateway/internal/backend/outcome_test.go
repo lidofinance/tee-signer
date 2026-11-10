@@ -11,6 +11,7 @@ import (
 	"time"
 
 	proto "github.com/lidofinance/tee-signer/signer-protocol"
+	"github.com/lidofinance/tee-signer/signer-protocol/wire"
 )
 
 // syncBuf is a log sink the test reads while signer calls still write.
@@ -244,4 +245,61 @@ func TestWarnLimitKeys(t *testing.T) {
 func waitLog(t *testing.T, logs fmt.Stringer, s string) {
 	t.Helper()
 	waitFor(t, s, 2*time.Second, func() bool { return strings.Contains(logs.String(), s) })
+}
+
+// A signer that answers with a new unknown status each time stays under
+// one limit.
+func TestWarnLimitUnknownStatusOneBucket(t *testing.T) {
+	k := splitKey(t, 2, 3)
+	s, logs := newLoggedSigners(t, cluster([]*testKey{k}, 3))
+	for i := range 20 {
+		s.warnSigner("ATTESTATION", k.pk, partial{share: share{node: 0}, err: proto.Refused(proto.Status(60000+i), "odd")})
+	}
+	l := warnLines(logs.String())
+	if len(l) != 1 || !strings.Contains(l[0], "reason=STATUS_60000") {
+		t.Fatalf("want 1 line with the real code, got %v", l)
+	}
+}
+
+// The limiter keeps at most max keys.
+func TestWarnLimitCapped(t *testing.T) {
+	l := newWarnLimit(time.Minute)
+	l.max = 8
+	for i := range 100 {
+		l.allow(warnKey{signer: fmt.Sprint(i)})
+	}
+	if n := len(l.seen); n > 8 {
+		t.Fatalf("%d keys, cap 8", n)
+	}
+}
+
+// A refusal detail over wire.MaxDetail is cut before the error text and the
+// outcomes have it.
+func TestLongDetailCut(t *testing.T) {
+	k := splitKey(t, 2, 3)
+	fakes := cluster([]*testKey{k}, 3)
+	setRoot(fakes)
+	s, logs := newLoggedSigners(t, fakes)
+	long := strings.Repeat("x", 60000)
+	for _, f := range fakes[:2] {
+		f.set(func(f *fakeRunner) { f.err = proto.Refused(proto.StatusSlashTarget, "%s", long) })
+	}
+	_, err := signWith(t, s, k.pk)
+	var se *SignError
+	if !errors.As(err, &se) {
+		t.Fatalf("got %T %v", err, err)
+	}
+	for _, o := range se.Outcomes[:2] {
+		if len(o.Detail) != wire.MaxDetail {
+			t.Fatalf("%s: detail of %d bytes", o.Signer, len(o.Detail))
+		}
+	}
+	if n := len(err.Error()); n > 3*wire.MaxDetail {
+		t.Fatalf("error text of %d bytes", n)
+	}
+	// The third signer, refusing after the threshold was out of reach,
+	// may still warn; no log line may carry the whole detail.
+	if strings.Contains(logs.String(), long[:wire.MaxDetail+1]) {
+		t.Fatal("a log line has the whole detail")
+	}
 }
