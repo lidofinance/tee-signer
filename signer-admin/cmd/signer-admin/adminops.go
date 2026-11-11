@@ -31,17 +31,14 @@ import (
 
 // ---- probe ----
 
-// connectAdmin opens an attested connection to m for admin messages. A
-// connection file without setup_sha256 gets the setup built for m as its
-// pin, so probe and import work before pin and still check that the
-// signer runs that setup.
+// connectAdmin opens an attested connection to m for admin messages.
+// memberConn pins the setup built for m when the connection file has no
+// setup_sha256, so probe and import work before pin and still check that
+// the signer runs that setup.
 func connectAdmin(m *member, timeout time.Duration) (*runnerclient.Client, error) {
 	conn, err := memberConn(m)
 	if err != nil {
 		return nil, err
-	}
-	if conn.Attestation.SetupSHA256 == "" {
-		conn.Attestation.SetupSHA256 = fullHex(m.setupHash)
 	}
 	return conn.New(runnerclient.WithTimeout(timeout))
 }
@@ -613,11 +610,32 @@ func cmdImport(args []string, out io.Writer) error {
 		// The setup holds the image pin and the trust anchor of cloud.json
 		// to the approvers' list, as for a member. Without one only the dev
 		// verifier goes on.
+		// The order binds the share to that setup: it must name the setup's
+		// hash and cluster (checked below), and a runner of another setup
+		// refuses it.
 		switch {
 		case s != nil:
-			if err := admincluster.CheckConn(conn, s, *updatesPath, now()); err != nil {
+			if *updatesPath != "" {
+				if _, err := os.Stat(*updatesPath); err != nil {
+					return fmt.Errorf("-updates: %w", err)
+				}
+			}
+			v, err := admincluster.CheckConn(conn, s, *updatesPath, now())
+			if err != nil {
 				return fmt.Errorf("%s: %w", *connPath, err)
 			}
+			if conn.Attestation.Verifier != runnerclient.VerifierDev {
+				if *orderPath == "" {
+					return fmt.Errorf("%s: verifier %s: -conn needs -order, an import order for the -setup file, so the share goes to a runner of that setup only (refusing)",
+						*connPath, conn.Attestation.Verifier)
+				}
+				if *updatesPath == "" {
+					fprintf(out, "%s: checked against the setup's own list, locked version 0 (no -updates)\n", *connPath)
+				} else {
+					fprintf(out, "%s: the image pin is on the approved list of locked version %d\n", *connPath, v)
+				}
+			}
+			setup, clID = &gvrOfHash, s.ClusterID
 		case conn.Attestation.Verifier != runnerclient.VerifierDev:
 			return fmt.Errorf("%s: verifier %s: -conn needs -setup, the runner's setup file, to check the image that cloud.json pins against the approvers' list (refusing)",
 				*connPath, conn.Attestation.Verifier)

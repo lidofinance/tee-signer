@@ -28,6 +28,9 @@ type member struct {
 	setupRaw  []byte
 	setupHash [32]byte
 	updates   string // the updates folder of its cluster.json
+	// walked is the locked version the image check of memberConn reached
+	// in the updates folder.
+	walked uint64
 }
 
 type cluster struct {
@@ -100,8 +103,11 @@ func memberConn(m *member) (*runnerclient.Connection, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := admincluster.CheckConn(conn, m.setup, m.updates, now()); err != nil {
+	if m.walked, err = admincluster.CheckConn(conn, m.setup, m.updates, now()); err != nil {
 		return nil, fmt.Errorf("%s: %w", m.cloudPath, err)
+	}
+	if _, err := os.Stat(m.updates); m.setup.Platform.Platform != setupwire.PlatformDev && errors.Is(err, os.ErrNotExist) {
+		admincluster.WarnOnce(m.updates + " does not exist: the image check used the setup's own list")
 	}
 	return conn, nil
 }
@@ -123,6 +129,13 @@ func readState(ctx context.Context, m *member, conn *runnerclient.Connection, ti
 	st, cl, err := admincluster.ReadState(ctx, &admincluster.Member{Name: m.name, SetupHash: m.setupHash}, conn, timeout)
 	if err != nil {
 		return nil, nil, err
+	}
+	// A runner further along than the folder means the image check used
+	// an old list. The runner's word can only make this stricter, so it
+	// is a warning.
+	if v := st.State.Locked.Version; m.setup.Platform.Platform != setupwire.PlatformDev && v > m.walked {
+		fmt.Fprintf(os.Stderr, "warning: %s has locked version %d in force, the updates folder %s reaches version %d only: the image check used an older list; copy the missing signed updates there\n",
+			m.name, v, m.updates, m.walked)
 	}
 	return &signerState{state: st.State, health: st.Health, chain: st.Chain}, cl, nil
 }

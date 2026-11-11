@@ -177,7 +177,9 @@ Then:
    `allowed_image_measurements = gcp 0x...` and so on.
 2. `signer-admin draft -cluster cluster.json -group locked -out update.bin FILE`
    reads the active values from every member, prints the diff and
-   `activate_at`.
+   `activate_at`. Pick a `-margin` that covers the time to sign and push
+   (steps 3 to 6): `push` refuses an update whose `activate_at` is more
+   than 5 minutes earlier than now plus the wait.
 3. `signer-admin show update.bin`: each approver checks the values and
    notes the sha256 on the `signing message, direct form:` line, not
    `body_sha256`.
@@ -215,9 +217,11 @@ the old measurements listed until every signer has switched.
    - `signer-admin` and the tools that read its connection files: every
      copy of that signer's `cloud.json`. The tools check the pin: the
      new image must be on the approved list, so the signed file of the
-     step 3 update must be in the `updates` folder and its
-     `activate_at` must have passed. They refuse a pin that no list
-     names, and an image that a later update dropped
+     step 3 update must be in the `updates` folder, and 5 minutes must
+     have passed since its `activate_at` (`push` makes the update come
+     into force by then). They refuse a pin that no list names, and an
+     image that a later update dropped once that update's `activate_at`
+     has passed
      ([signer-admin/README.md](../signer-admin/README.md#image-pin),
      "Image pin").
    - The gateway: `signers.nodes[].attestation` of that signer in

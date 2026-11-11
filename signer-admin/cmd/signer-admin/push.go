@@ -67,12 +67,15 @@ func cmdPush(args []string, out io.Writer) error {
 		if err := checkRunningImages(c.members, states, b.Locked, splitNames(*drop)); err != nil {
 			return err
 		}
+		if err := checkActivateAt(c, states, b, ref{b.Version, hash}); err != nil {
+			return err
+		}
 	} else if *drop != "" {
 		return errors.New("-drop-running-image: an open update changes no image")
 	}
 	want := ref{b.Version, hash}
 	states := make([]*cloud.SetupState, len(c.members))
-	failed, kept := false, false
+	failed, took := false, false
 	for i, m := range c.members {
 		outcome, s, err := pushOne(m, raw, b, want, *cf.timeout)
 		if err != nil {
@@ -81,14 +84,15 @@ func cmdPush(args []string, out io.Writer) error {
 			continue
 		}
 		states[i] = s
+		took = true
 		fprintf(out, "%s %s: %s\n", m.name, outcome, pushLine(s, b.Group, want))
-		if !kept {
-			// A copy for the next draft: the runner has no message that
-			// returns the bodies of its updates.
-			if err := keep(c.updates, raw, b, hash); err != nil {
-				return err
-			}
-			kept = true
+	}
+	// A copy for the next draft: the runner has no message that returns
+	// the bodies of its updates. It goes in after the loop: the image
+	// check of the members still to push reads this folder.
+	if took {
+		if err := keep(c.updates, raw, b, hash); err != nil {
+			return err
 		}
 	}
 	if *raise {
@@ -98,6 +102,57 @@ func cmdPush(args []string, out io.Writer) error {
 	}
 	if failed {
 		return errReported
+	}
+	return nil
+}
+
+// checkActivateAt refuses a locked update whose activate_at is earlier than
+// now plus its wait, less setupwire.PushSlack, unless every signer has it
+// already. A runner brings an update into force at the later of
+// activate_at and its arrival plus the wait, so with this rule every
+// pushed update comes into force within PushSlack of its activate_at, and
+// the image check of the tools (setupwire.ApprovedImages) can count from
+// activate_at + PushSlack.
+func checkActivateAt(c *cluster, states []*signerState, b *setupwire.UpdateBody, want ref) error {
+	missing := false
+	for _, st := range states {
+		if activeRef(st.state.Locked) != want && pendingRef(st.state.Locked) != want {
+			missing = true
+		}
+	}
+	s := c.members[0].setup
+	if !missing || b.Matches(s) != nil {
+		return nil // pushOne does not send an update of another cluster
+	}
+	_, lim, err := clusterLimits(c, states)
+	if err != nil {
+		return err
+	}
+	// The group the update replaces: the setup's, or one in the updates
+	// folder. A prev_hash the tool does not know is the runners' to refuse.
+	active := &s.Locked
+	if v0, err := s.GroupHash(setupwire.GroupLocked); err != nil {
+		return err
+	} else if b.PrevHash != v0 {
+		arch, err := loadArchive(c.updates)
+		if err != nil {
+			return err
+		}
+		raw, ok := arch[b.PrevHash]
+		if !ok {
+			return nil
+		}
+		prev, err := setupwire.DecodeUpdateBody(raw)
+		if err != nil {
+			return err
+		}
+		active = prev.Locked
+	}
+	w := lim.Wait(&s.Chain, active, b)
+	t := uint64(max(now().Unix(), 0))
+	if earliest := setupwire.SatAdd(t, w); setupwire.SatAdd(b.ActivateAt, setupwire.PushSlack) < earliest {
+		return fmt.Errorf("activate_at %s is earlier than now plus the wait of %d s (%s), less %d s: the runners would bring it into force later than activate_at, and the image check counts from activate_at; draft it again with a -margin that covers the time to push",
+			when(b.ActivateAt), w, when(earliest), setupwire.PushSlack)
 	}
 	return nil
 }

@@ -2,6 +2,7 @@ package setupwire
 
 import (
 	"bytes"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -120,20 +121,49 @@ func TestApprovedImages(t *testing.T) {
 		t.Fatalf("two candidates: %v", err)
 	}
 
-	// An image the last update adds counts from its activate_at on; with
-	// no activate_at it does not count.
-	for _, at := range []uint64{future, 0} {
-		pend := imageUpdate(t, s, nil, 1, at, []Image{nitroImage(0x11), nitroImage(0x22)}, nil, []byte{1, 2}, nil)
-		a, err = ApprovedImages(s, files(t, pend), now)
+	// Copies of one update, with other signatures, are one step.
+	v1c := imageUpdate(t, s, nil, 1, past, []Image{nitroImage(0x11), nitroImage(0x22), az}, nil, []byte{1, 2, 3}, nil)
+	a, err = ApprovedImages(s, files(t, v1, v1c), now)
+	if err != nil || a.Version != 1 || len(a.Warnings) != 0 {
+		t.Fatalf("two copies: %+v, %v", a, err)
+	}
+
+	// An image an update adds counts from its activate_at plus the push
+	// slack on, and the image it drops until its activate_at. With no
+	// activate_at the added image never counts and the dropped one is off
+	// at once.
+	pend := imageUpdate(t, s, nil, 1, future, []Image{nitroImage(0x11), nitroImage(0x22)}, nil, []byte{1, 2}, nil)
+	for _, tc := range []struct {
+		at     uint64
+		images []Image
+	}{
+		{future - 1, []Image{nitroImage(0x11), az}},
+		{future, []Image{nitroImage(0x11)}},
+		{future + PushSlack - 1, []Image{nitroImage(0x11)}},
+		{future + PushSlack, []Image{nitroImage(0x11), nitroImage(0x22)}},
+	} {
+		a, err = ApprovedImages(s, files(t, pend), tc.at)
 		if err != nil || a.Version != 1 {
-			t.Fatalf("pending: %+v, %v", a, err)
+			t.Fatalf("at %d: %+v, %v", tc.at, a, err)
 		}
-		wantImages(t, "pending", a.Images, nitroImage(0x11))
-		wantImages(t, "pending", a.Pending, nitroImage(0x22))
+		wantImages(t, fmt.Sprintf("at activate_at %+d", int64(tc.at)-future), a.Images, tc.images...)
 	}
-	a, err = ApprovedImages(s, files(t, imageUpdate(t, s, nil, 1, future, []Image{nitroImage(0x11), nitroImage(0x22)}, nil, []byte{1, 2}, nil)), future)
-	if err != nil || len(a.Pending) != 0 {
-		t.Fatalf("at activate_at: %+v, %v", a, err)
+	noTime := imageUpdate(t, s, nil, 1, 0, []Image{nitroImage(0x11), nitroImage(0x22)}, nil, []byte{1, 2}, nil)
+	a, err = ApprovedImages(s, files(t, noTime), now)
+	if err != nil || a.Version != 1 {
+		t.Fatalf("no activate_at: %+v, %v", a, err)
 	}
-	wantImages(t, "at activate_at", a.Images, nitroImage(0x11), nitroImage(0x22))
+	wantImages(t, "no activate_at", a.Images, nitroImage(0x11))
+	wantImages(t, "no activate_at", a.Pending, nitroImage(0x22))
+
+	// An image an earlier update adds waits for that update's time, though
+	// a later update with a past activate_at lists it too.
+	early := imageUpdate(t, s, nil, 1, future, []Image{nitroImage(0x11), nitroImage(0x22), az}, nil, []byte{1, 2}, nil)
+	late := imageUpdate(t, s, early, 2, past, []Image{nitroImage(0x11), nitroImage(0x22), nitroImage(0x33), az}, nil, []byte{1, 2}, nil)
+	a, err = ApprovedImages(s, files(t, early, late), now)
+	if err != nil || a.Version != 2 {
+		t.Fatalf("earlier pending: %+v, %v", a, err)
+	}
+	wantImages(t, "earlier pending", a.Images, nitroImage(0x11), nitroImage(0x33), az)
+	wantImages(t, "earlier pending", a.Pending, nitroImage(0x22))
 }

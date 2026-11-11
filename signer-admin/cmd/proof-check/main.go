@@ -50,7 +50,10 @@
 // (signer-admin/cluster.CheckConn): the image it pins must be on the
 // approvers' list and its trust anchor the setup's. A mismatch fails the
 // check before any connection; pin in the file says "listed", or
-// "unchecked" without a setup file. The client certificate should be an
+// "unchecked" without a setup file, and pin_setup and pin_locked_version
+// name the setup (8 hex digits) and the locked version it checked
+// against. The check also pins that setup when cloud.json has no
+// setup_sha256. The client certificate should be an
 // attest-only one (docs/protocol.md, "Client roles"): HEALTH and IDENTITY
 // are all the check sends, and a signer gives an attest-only certificate 4
 // fresh attestations a minute. Run the tool in the network namespace that
@@ -133,7 +136,9 @@ type result struct {
 	// Pin is "listed" when the image pin and trust anchor of cloud.json
 	// passed the check against the setup in the signer's folder, and
 	// "unchecked" when the folder holds no setup.
-	Pin string `json:"pin,omitempty"`
+	Pin              string `json:"pin,omitempty"`
+	PinSetup         string `json:"pin_setup,omitempty"`
+	PinLockedVersion uint64 `json:"pin_locked_version,omitempty"`
 	// IdentityVersion is the IDENTITY version the check asked in, and
 	// SetupFormat the setup format of its runners. Both 0 when the check
 	// found no cloud.json.
@@ -302,8 +307,8 @@ func main() {
 		}
 		for _, r := range of.Signers {
 			if r.Enabled && r.LastAttemptUnix != 0 {
-				fmt.Printf("%s %s ok=%v rtt=%.0fms %s tls=%s config=%s identity=v%d pin=%s %s %s\n", time.Now().UTC().Format(time.RFC3339), r.Name, r.OK,
-					r.RoundTripMS, clockLine(r), r.TLSKey, r.Config, r.IdentityVersion, r.Pin, setupLine(r), r.Error)
+				fmt.Printf("%s %s ok=%v rtt=%.0fms %s tls=%s config=%s identity=v%d pin=%s pin_setup=%s pin_locked=v%d %s %s\n", time.Now().UTC().Format(time.RFC3339), r.Name, r.OK,
+					r.RoundTripMS, clockLine(r), r.TLSKey, r.Config, r.IdentityVersion, r.Pin, r.PinSetup, r.PinLockedVersion, setupLine(r), r.Error)
 			}
 		}
 		if *once {
@@ -376,7 +381,7 @@ func check(dir string, s topoSigner, timeout time.Duration) result {
 		return fail(fmt.Errorf("cloud.json: identity_version %d; this tool speaks IDENTITY v%d only", conn.IdentityVersion, identityVersion))
 	}
 	r.IdentityVersion, r.SetupFormat = identityVersion, setupFormat
-	if r.Pin, err = checkPin(folder, &conn.Connection); err != nil {
+	if err := checkPin(folder, &conn.Connection, &r); err != nil {
 		return fail(err)
 	}
 
@@ -396,24 +401,33 @@ func check(dir string, s topoSigner, timeout time.Duration) result {
 
 // checkPin holds conn to the setup file in the signer's folder and the
 // signed updates in its updates folder (admin/cluster.CheckConn). It
-// returns "listed" when the check passed, "unchecked" when the folder
-// holds no setup file.
-func checkPin(folder string, conn *runnerclient.Connection) (string, error) {
+// fills r.Pin with "listed" when the check passed, "unchecked" when the
+// folder holds no setup file, and r.PinSetup and r.PinLockedVersion with
+// the setup and the locked version it checked against.
+func checkPin(folder string, conn *runnerclient.Connection, r *result) error {
 	raw, err := os.ReadFile(filepath.Join(folder, "setup"))
 	if errors.Is(err, os.ErrNotExist) {
-		return "unchecked", nil
+		r.Pin = "unchecked"
+		return nil
 	}
 	if err != nil {
-		return "", err
+		return err
 	}
 	s, err := setupwire.DecodeSetup(raw)
 	if err != nil {
-		return "", fmt.Errorf("setup: %w", err)
+		return fmt.Errorf("setup: %w", err)
 	}
-	if err := admincluster.CheckConn(conn, s, filepath.Join(folder, "updates"), time.Now()); err != nil {
-		return "", fmt.Errorf("cloud.json: %w", err)
+	h, err := s.Hash()
+	if err != nil {
+		return fmt.Errorf("setup: %w", err)
 	}
-	return "listed", nil
+	r.PinSetup = hex.EncodeToString(h[:4])
+	v, err := admincluster.CheckConn(conn, s, filepath.Join(folder, "updates"), time.Now())
+	if err != nil {
+		return fmt.Errorf("cloud.json: %w", err)
+	}
+	r.Pin, r.PinLockedVersion = "listed", v
+	return nil
 }
 
 // imageOf is 8 hex digits of the measurement the verifier pins: the CCE

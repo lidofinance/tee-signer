@@ -28,7 +28,9 @@
 // -setup, the runner's setup file, and takes -updates, the folder of the
 // cluster's signed updates: the image the flags pin must be on the
 // approvers' list, and the trust anchor must be the setup's
-// (signer-admin/cluster.CheckConn). With -tls-cert and -tls-key the
+// (signer-admin/cluster.CheckConn). It also needs -order, an import order
+// for that setup, so a runner of another setup refuses the share. A
+// -updates folder that does not exist is refused. With -tls-cert and -tls-key the
 // tool also connects over mutual TLS and binds the connection to the
 // verified identity; -tls-key-pin adds a pin of the runner's TLS key.
 // A runner with a setup takes a share only under an import order that k
@@ -128,12 +130,13 @@ func run() error {
 		return errors.New("-commitments needs -order")
 	}
 	extra := &backend.SealedImportRequest{}
+	var o *importorder.Order
 	if *orderFile != "" {
 		raw, err := os.ReadFile(*orderFile)
 		if err != nil {
 			return err
 		}
-		o, err := importorder.Decode(raw)
+		o, err = importorder.Decode(raw)
 		if err != nil {
 			return fmt.Errorf("-order: %w", err)
 		}
@@ -171,8 +174,36 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("-setup: %w", err)
 		}
-		if err := admincluster.CheckConn(&runnerclient.Connection{Attestation: *att}, s, *updatesDir, time.Now()); err != nil {
+		if *updatesDir != "" {
+			if _, err := os.Stat(*updatesDir); err != nil {
+				return fmt.Errorf("-updates: %w", err)
+			}
+		}
+		// CheckConn also pins the setup's hash when -setup-sha256 is unset.
+		conn := runnerclient.Connection{Attestation: *att}
+		v, err := admincluster.CheckConn(&conn, s, *updatesDir, time.Now())
+		if err != nil {
 			return err
+		}
+		*att = conn.Attestation
+		// The order binds the share to the setup: a runner of another setup
+		// refuses it.
+		if att.Verifier != runnerclient.VerifierDev {
+			h, err := s.Hash()
+			if err != nil {
+				return err
+			}
+			switch {
+			case o == nil:
+				return fmt.Errorf("verifier %s needs -order, an import order for the -setup file (refusing)", att.Verifier)
+			case o.Body.Target != h || o.Body.ClusterID != s.ClusterID:
+				return fmt.Errorf("-order is an import order for setup %x, -setup is setup %x (refusing)", o.Body.Target[:4], h[:4])
+			}
+			if *updatesDir == "" {
+				fmt.Println("checked against the setup's own list, locked version 0 (no -updates)")
+			} else {
+				fmt.Printf("image pin on the approved list of locked version %d\n", v)
+			}
 		}
 	} else if att.Verifier != runnerclient.VerifierDev {
 		return fmt.Errorf("verifier %s needs -setup, the runner's setup file, to check the pinned image against the approvers' list (refusing)", att.Verifier)

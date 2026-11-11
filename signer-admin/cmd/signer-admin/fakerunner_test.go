@@ -106,8 +106,9 @@ func TestFlowFakeRunners(t *testing.T) {
 	fc := newFakeCluster(t)
 	cl := fc.cluster
 
-	// Before pin, the runners report a setup that no cloud.json pins.
-	wantIn(t, failTool(t, "status", "-cluster", cl), "no setup_sha256 is pinned")
+	// Before pin, the tool pins the setup built for each signer on the
+	// connection itself (cluster.CheckConn).
+	wantIn(t, mustTool(t, "status", "-cluster", cl), "s1 setup=")
 	out := mustTool(t, "pin", "-cluster", cl)
 	if count(out, `^s[123] pinned: setup_sha256 [0-9a-f]{64} in .*locked=v0/`) != 3 {
 		t.Fatalf("pin:\n%s", out)

@@ -1,12 +1,15 @@
 package main
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/lidofinance/tee-signer/governance/setupwire"
 )
 
 // With the signer's setup in its folder, proof-check holds the image pin
@@ -41,8 +44,12 @@ func TestCheckImagePin(t *testing.T) {
 	if r.OK || r.Pin != "" || !strings.Contains(r.Error, "allowed_image_measurements") {
 		t.Fatalf("unlisted pin: %+v", r)
 	}
+	h, err := setupwire.SetupHash(setup)
+	if err != nil {
+		t.Fatal(err)
+	}
 	r = check(dir, signer("listed", "11", true), time.Second)
-	if r.Pin != "listed" || strings.Contains(r.Error, "allowed_image_measurements") {
+	if r.Pin != "listed" || r.PinSetup != hex.EncodeToString(h[:4]) || r.PinLockedVersion != 0 || strings.Contains(r.Error, "allowed_image_measurements") {
 		t.Fatalf("listed pin: %+v", r)
 	}
 	if r = check(dir, signer("no-setup", "22", false), time.Second); r.Pin != "unchecked" {

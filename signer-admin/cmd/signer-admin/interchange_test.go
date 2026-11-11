@@ -116,8 +116,10 @@ func TestImportRefusesInterchangeOfAnotherChain(t *testing.T) {
 	conn := connFile(fc.runners["s1"], fc.hashes["s1"])
 	wantIn(t, failTool(t, byConn(conn, icFile(ours))...), "needs -setup")
 	wantIn(t, failTool(t, byConn(conn, icFile(other), "-setup", fc.path("setups/s1.setup"))...), refused)
-	// Another runner's setup, though of the same chain, is not this runner's.
-	wantIn(t, failTool(t, byConn(conn, icFile(ours), "-setup", fc.path("setups/s2.setup"))...), "the runner reports setup")
+	// Another runner's setup, though of the same chain, is not this runner's:
+	// cloud.json pins s1's setup, and with no pin the runner reports s1's.
+	wantIn(t, failTool(t, byConn(conn, icFile(ours), "-setup", fc.path("setups/s2.setup"))...), "pins setup_sha256 "+fc.hashes["s1"]+" already")
+	wantIn(t, failTool(t, byConn(connFile(fc.runners["s1"], ""), icFile(ours), "-setup", fc.path("setups/s2.setup"))...), "is not the pinned setup_sha256")
 	// The runner holds the share from the import above and may refuse it;
 	// the maxima line shows the chain checks passed.
 	out, _ := tool(t, byConn(conn, icFile(ours), "-setup", fc.path("setups/s1.setup"))...)
@@ -136,7 +138,7 @@ func TestImportRefusesInterchangeOfAnotherChain(t *testing.T) {
 	}
 	flagConn := connFile(fakerunner.Start(t, cloud.SetupState{SetupHash: sha256.Sum256(raw)}), "")
 	wantIn(t, failTool(t, byConn(flagConn, icFile(other), "-setup", cfgFile)...), refused)
-	wantIn(t, failTool(t, byConn(flagConn, icFile(ours), "-setup", fc.path("setups/s1.setup"))...), "the runner reports setup")
+	wantIn(t, failTool(t, byConn(flagConn, icFile(ours), "-setup", fc.path("setups/s1.setup"))...), "is not the pinned setup_sha256")
 	wantIn(t, mustTool(t, byConn(flagConn, icFile(ours), "-setup", cfgFile)...), passed)
 }
 

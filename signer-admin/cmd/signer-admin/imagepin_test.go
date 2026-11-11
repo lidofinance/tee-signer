@@ -10,8 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lidofinance/tee-signer/governance/importorder"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-admin/fakerunner"
+	cloud "github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
 	wireadmin "github.com/lidofinance/tee-signer/signer-protocol/wire/admin"
 )
@@ -126,23 +128,63 @@ func TestDealerRefusesUnlistedImagePin(t *testing.T) {
 	// The listed image: the check passes and the Nitro verifier refuses
 	// the fake runner's dev document.
 	p.writeConn(t, map[string]any{"nitro_pcrs": nitroPins("11")})
-	for _, args := range [][]string{
-		{"probe", "-cluster", p.cl},
-		{"import", "-conn", p.m.cloudPath, "-setup", p.setup, "-shares", p.shares},
-	} {
-		before := p.requests()
-		if out := failTool(t, args...); strings.Contains(out, want) {
-			t.Fatalf("a listed pin refused:\n%s", out)
-		}
-		if p.requests() == before {
-			t.Fatalf("%s: a listed pin did not reach the runner", args[0])
-		}
+	before := p.requests()
+	if out := failTool(t, "probe", "-cluster", p.cl); strings.Contains(out, want) {
+		t.Fatalf("a listed pin refused:\n%s", out)
+	}
+	if p.requests() == before {
+		t.Fatal("a listed pin did not reach the runner")
+	}
+}
+
+// orderFor writes a signed import order for the setup target of cluster
+// id. The tool reads the order before it dials; the runner would check
+// the signature.
+func orderFor(t *testing.T, dir string, target, id [32]byte) string {
+	t.Helper()
+	o := importorder.Order{
+		Body: importorder.Body{ClusterID: id, Target: target, NotAfter: 4_000_000_000, T: 2, N: 3, ShareIndex: 1,
+			Validators: []importorder.Entry{{Pubkey: cloud.Pubkey{0xa0}, CommitmentsHash: [32]byte{1}}}},
+		Approvals: []setupwire.Approval{{Position: 0}},
+	}
+	raw, err := o.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return writeFile(t, filepath.Join(dir, fmt.Sprintf("order-%x.signed", target[:4])), string(raw))
+}
+
+// import -conn binds the share to the -setup file: a cloud verifier needs
+// an import order, and the order must name that setup and its cluster.
+// cloud.json must pin that setup or none, and a named -updates folder
+// must exist.
+func TestConnImportNeedsOrderForSetup(t *testing.T) {
+	p := newImagePinFixture(t)
+	p.writeConn(t, map[string]any{"nitro_pcrs": nitroPins("11")})
+	args := func(extra ...string) []string {
+		return append([]string{"import", "-conn", p.m.cloudPath, "-setup", p.setup, "-shares", p.shares}, extra...)
+	}
+	wantIn(t, failTool(t, args()...), "-conn needs -order")
+	other := p.f.members[0].setupHash
+	missing := filepath.Join(p.f.dir, "no-commitments")
+	wantIn(t, failTool(t, args("-order", orderFor(t, p.f.dir, other, p.m.setup.ClusterID), "-commitments", missing)...), "is an import order for setup")
+	wantIn(t, failTool(t, args("-order", orderFor(t, p.f.dir, p.m.setupHash, [32]byte{9}), "-commitments", missing)...), "is an import order for setup")
+	// The order of this setup passes; the commitments file comes next.
+	wantIn(t, failTool(t, args("-order", orderFor(t, p.f.dir, p.m.setupHash, p.m.setup.ClusterID), "-commitments", missing)...), "no-commitments")
+	wantIn(t, failTool(t, args("-updates", filepath.Join(p.f.dir, "no-such-folder"))...), "-updates")
+
+	p.writeConn(t, map[string]any{"nitro_pcrs": nitroPins("11"), "setup_sha256": hex.EncodeToString(other[:])})
+	wantIn(t, failTool(t, args()...), "pins setup_sha256 "+hex.EncodeToString(other[:])+" already")
+	if n := p.requests(); n != 0 {
+		t.Fatalf("%d requests reached the runner", n)
 	}
 }
 
 // A signed locked update in the updates folder that lists the 0x22 image
-// and drops 0x11: 0x22 counts once the update's activate_at has passed,
-// and 0x11 is refused at once.
+// and drops 0x11: 0x22 counts once the update's activate_at plus the
+// push slack has passed, and 0x11 counts until its activate_at. So push, which
+// saves the update in the folder, does not lock out a member still on
+// 0x11 while it pushes to the others.
 func TestImagePinFollowsUpdates(t *testing.T) {
 	p := newImagePinFixture(t)
 	p.signLocked(t, "locked-v1", otherNitro(t))
@@ -156,25 +198,40 @@ func TestImagePinFollowsUpdates(t *testing.T) {
 		t.Fatalf("%d requests reached a runner whose image is still pending", n)
 	}
 
+	// Two members after push saved the update: the nitro one still on the
+	// dropped image, and the azure one, whose image the update keeps.
+	azure := p.f.members[0]
+	azure.updates = updates
+	writeJSONFile(t, azure.cloudPath, map[string]any{"address": "tcp:127.0.0.1:1", "client_cert": "c.pem", "client_key": "k.pem",
+		"attestation": map[string]any{"verifier": "azure-maa", "maa_host": "sharedneu.neu.attest.azure.net", "cce_policy_sha256": strings.Repeat("aa", 32)}})
+	p.writeConn(t, map[string]any{"nitro_pcrs": nitroPins("11")})
+	for _, m := range []*member{p.m, azure} {
+		if _, err := memberConn(m); err != nil {
+			t.Fatalf("%s before the update's time: %v", m.name, err)
+		}
+	}
+
 	later := time.Now().Add(30 * 24 * time.Hour)
 	now = func() time.Time { return later }
 	t.Cleanup(func() { now = time.Now })
+	if _, err := memberConn(azure); err != nil {
+		t.Fatalf("azure after the update's time: %v", err)
+	}
+	wantIn(t, failTool(t, "probe", "-cluster", p.cl), want, "locked version 1", strings.Repeat("11", 8))
+	if n := p.requests(); n != 0 {
+		t.Fatal("a pin of a dropped image reached the runner")
+	}
+	p.writeConn(t, map[string]any{"nitro_pcrs": nitroPins("22")})
 	for _, args := range [][]string{
 		{"probe", "-cluster", p.cl},
 		{"import", "-conn", p.m.cloudPath, "-setup", p.setup, "-updates", updates, "-shares", p.shares},
 	} {
 		if out := failTool(t, args...); strings.Contains(out, want) {
-			t.Fatalf("a pin the update lists refused after its activate_at:\n%s", out)
+			t.Fatalf("a pin the update lists refused after its time:\n%s", out)
 		}
 	}
 	if p.requests() == 0 {
 		t.Fatal("a pin the update lists did not reach the runner")
-	}
-	before := p.requests()
-	p.writeConn(t, map[string]any{"nitro_pcrs": nitroPins("11")})
-	wantIn(t, failTool(t, "probe", "-cluster", p.cl), want, "locked version 1", strings.Repeat("11", 8))
-	if p.requests() != before {
-		t.Fatal("a pin of a dropped image reached the runner")
 	}
 }
 
@@ -205,7 +262,10 @@ func TestImagePinAnchor(t *testing.T) {
 		want string // empty: passes
 	}{
 		{"azure", azure, azureAtt, ""},
+		{"azure MAA host in other case", azure, with(azureAtt, "maa_host", "SharedNEU.neu.attest.azure.net"), ""},
 		{"azure other MAA host", azure, with(azureAtt, "maa_host", "evil.example.com"), "maa_host"},
+		{"azure MAA host with a port", azure, with(azureAtt, "maa_host", "sharedneu.neu.attest.azure.net:8443"), "maa_host"},
+		{"azure pins another setup", azure, with(azureAtt, "setup_sha256", strings.Repeat("ab", 32)), "pins setup_sha256 " + strings.Repeat("ab", 32) + " already"},
 		{"azure cvm", azure, with(azureAtt, "compliance_status", "azure-compliant-cvm"), "compliance_status"},
 		{"azure unlisted", azure, with(azureAtt, "cce_policy_sha256", strings.Repeat("bb", 32)), "allowed_image_measurements"},
 		{"gcp", gcp, gcpAtt, ""},
@@ -217,10 +277,12 @@ func TestImagePinAnchor(t *testing.T) {
 		{"dev on nitro", nitro, map[string]any{"verifier": "dev"}, "on the nitro platform"},
 	} {
 		writeJSONFile(t, tc.m.cloudPath, map[string]any{"address": "tcp:127.0.0.1:1", "client_cert": "c.pem", "client_key": "k.pem", "attestation": tc.att})
-		_, err := memberConn(tc.m)
+		conn, err := memberConn(tc.m)
 		switch {
 		case tc.want == "" && err != nil:
 			t.Fatalf("%s: %v", tc.name, err)
+		case tc.want == "" && conn.Attestation.SetupSHA256 != fullHex(tc.m.setupHash):
+			t.Fatalf("%s: setup_sha256 %q, want the member's setup pinned", tc.name, conn.Attestation.SetupSHA256)
 		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
 			t.Fatalf("%s: %v, want %q", tc.name, err, tc.want)
 		}
