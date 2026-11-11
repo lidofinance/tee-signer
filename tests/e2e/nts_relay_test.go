@@ -288,6 +288,74 @@ func TestE2ENTSIgnoresHostClock(t *testing.T) {
 	t.Logf("host clock +1h, runner clock %s within 2 s of the servers: vote 4 epochs ahead refused: %v", h.ClockSource, rr)
 }
 
+// TestE2ENTSPlainNTPIgnoresHostClock: TestE2ENTSIgnoresHostClock with
+// -clock-protocol ntp against four plain NTP test servers, without NTS-KE.
+// The runner warns at start, and its clock source and HEALTH say ntp.
+func TestE2ENTSPlainNTPIgnoresHostClock(t *testing.T) {
+	bin := runnerBinary(t, "aws-debug")
+	if out, err := runnerCmd(bin, "-nts-selftest").CombinedOutput(); err != nil {
+		t.Fatalf("%s has no NTS library (build it with the tag nts): %v %s", bin, err, out)
+	}
+	dir := t.TempDir()
+	raw0, start := rawNow(), time.Now()
+	serverClock := func() time.Time { return start.Add(time.Duration(rawNow() - raw0)) }
+	var servers []string
+	var ntps []*ntstest.NTPServer
+	for _, name := range []string{"a", "b", "c", "d"} {
+		ntp, err := ntstest.StartPlainNTP(ntstest.NTPOptions{Clock: serverClock})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(ntp.Close)
+		ntps = append(ntps, ntp)
+		// No NTS-KE server: the KE address is a closed port, and the clock
+		// must not need it.
+		servers = append(servers, name+"=nts-"+name+".test@127.0.0.1:1#"+ntp.Addr)
+	}
+	// The debug build reads a roots file even for plain NTP.
+	_, ca, err := ntstest.CertificatePEM("unused.test", start.Add(-time.Hour), start.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootsFile := filepath.Join(dir, "nts-roots.pem")
+	if err := os.WriteFile(rootsFile, ca, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	coarse, _, caFile := coarseServers(t, dir)
+	t.Setenv("SSL_CERT_FILE", caFile)
+	t.Setenv("RUNNER_NTS_TEST_SERVERS", strings.Join(servers, ","))
+	t.Setenv("RUNNER_NTS_TEST_ROOTS", rootsFile)
+	t.Setenv("RUNNER_NTS_CLOCK", "")
+	t.Setenv("RUNNER_CLOCK_PROTOCOL", "")
+
+	c := newChain(t)
+	addr := fmt.Sprintf("tcp:127.0.0.1:%d", freePort(t))
+	r := newRunnerOn(t, bin, "runner-ntp-host-clock", c, addr, "-platform-opt", "clock_offset=1h",
+		"-nts-clock", "-clock-protocol", "ntp", "-nts-coarse-urls", strings.Join(coarse, ","), "-nts-wait", "30s")
+	r.start()
+	cl := client(t, addr)
+	h := waitReady(t, cl)
+	if h.ClockSource != "ntp(a,b,c,d)" || !h.ClockTrusted {
+		t.Fatalf("clock %s trusted=%v", h.ClockSource, h.ClockTrusted)
+	}
+	if off := int64(h.ClockUnix) - serverClock().Unix(); off < -2 || off > 2 {
+		t.Fatalf("runner clock %d s off the NTP servers' clock; the host clock is 1 h ahead", off)
+	}
+	if h.NTS == nil || h.NTS.Protocol != "ntp" || !h.NTS.Quorum {
+		t.Fatalf("health nts %+v", h.NTS)
+	}
+	for i, o := range h.NTS.Operators {
+		if o.KEOK != 0 || o.KEFail != 0 || ntps[i].Requests.Load() < 1 {
+			t.Fatalf("operator %+v: want plain queries and no NTS-KE", o)
+		}
+	}
+	logs := r.logText()
+	if !strings.Contains(logs, "level=WARN msg=\"plain NTP: the host can forge every answer") || !strings.Contains(logs, "protocol=ntp") {
+		t.Fatalf("runner log lacks the plain NTP warning:\n%s", logs)
+	}
+	t.Logf("host clock +1h, runner clock %s within 2 s of the servers, health protocol %s", h.ClockSource, h.NTS.Protocol)
+}
+
 // coarseServers starts three HTTPS-date servers on loopback and returns
 // their URLs, their proxy routes and a roots file for SSL_CERT_FILE.
 func coarseServers(t *testing.T, dir string) (urls, routes []string, caFile string) {

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/platform/cloudroots"
+	"github.com/lidofinance/tee-signer/trusted-time/clock"
 	"github.com/lidofinance/tee-signer/trusted-time/nts"
 )
 
@@ -26,7 +27,8 @@ import (
 //	                         it: the HTTPS-date coarse reading
 //	                         (RUNNER_NTS_COARSE_URLS; RUNNER_NTS_REGION fills
 //	                         in {region}), one NTS-KE and one query
-//	                         per public server, the quorum. Prints the status
+//	                         per public server (with RUNNER_CLOCK_PROTOCOL=ntp
+//	                         one plain NTP query, no NTS-KE), the quorum. Prints the status
 //	                         and exits 0 if a quorum formed with a bound under
 //	                         the limit. For a pre-flight from the network the
 //	                         runner will run in.
@@ -61,7 +63,15 @@ func ntsClockCheck() int {
 // ntsClockCheckWith is ntsClockCheck with the coarse client and the dialer
 // as parameters, for the test.
 func ntsClockCheckWith(client *http.Client, dial nts.DialFunc, log *slog.Logger) int {
-	n, coarse, err := newNTSClock(client, dial, os.Getenv("RUNNER_NTS_REGION"), log)
+	protocol, err := clockProtocol()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "runner:", err)
+		return 2
+	}
+	if protocol == clock.ProtocolNTP {
+		log.Warn(plainNTPWarning)
+	}
+	n, coarse, err := newNTSClock(client, dial, os.Getenv("RUNNER_NTS_REGION"), protocol, log)
 	if err == nil {
 		// The same count the runner refuses at start.
 		err = ntsEnoughServers(n)
@@ -81,7 +91,7 @@ func ntsClockCheckWith(client *http.Client, dial nts.DialFunc, log *slog.Logger)
 	}
 	rerr := n.Refresh(ctx)
 	st := n.Status()
-	fmt.Println(nts.Version())
+	fmt.Println(nts.Version(), "protocol="+string(protocol))
 	for _, s := range n.Servers {
 		p := st.Peers[s.Operator]
 		line := fmt.Sprintf("%-10s %-20s ke=%d queries=%d samples=%d", s.Operator, s.Host, p.Stats.KEOK, p.Stats.Queries, p.Stats.Samples)

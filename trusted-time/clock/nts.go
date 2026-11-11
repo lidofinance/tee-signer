@@ -3,6 +3,7 @@
 package clock
 
 import (
+	"cmp"
 	"context"
 	"crypto/x509"
 	"errors"
@@ -76,6 +77,10 @@ type NTSServer struct {
 	Roots    *x509.CertPool
 	// KEAddr is host:port of NTS-KE; empty means Host:4460.
 	KEAddr string
+	// NTPAddr is host:port of the server's plain NTP service, for
+	// ProtocolNTP; empty means Host:123. With NTS the NTS-KE server names
+	// the NTP host instead.
+	NTPAddr string
 }
 
 // NTS is a clock from NTS servers (RFC 8915) of distinct operators.
@@ -129,7 +134,15 @@ type NTSServer struct {
 //     the certificate-validity time of NTS-KE and the NTP era. If Coarse has
 //     no time, there is no NTS time either. There is no fallback to Coarse.
 //   - Now never goes back, as for Anchored.
+//   - With Protocol ProtocolNTP the clock asks each server's NTPAddr with
+//     plain NTP: no NTS-KE and no cookies, so the NTS-KE retries and the
+//     NTSN handling above do not apply. Nothing authenticates the answers,
+//     so the host can forge all of them; the quorum, the bound and the
+//     drift check then hold only against an honest host, and the coarse
+//     check is the one limit left. Everything else is as with NTS.
 type NTS struct {
+	// Protocol is ProtocolNTS (also "") or ProtocolNTP.
+	Protocol Protocol
 	Servers  []NTSServer
 	Coarse   interface{ Now() (time.Time, error) }
 	Interval time.Duration // 0: NTSInterval
@@ -314,6 +327,12 @@ func (n *NTS) maxSampleBound() time.Duration {
 }
 func (n *NTS) shiftMode() bool { return n.Shifts || n.ScheduleSeed != nil }
 
+// plain says whether the clock runs plain NTP (ProtocolNTP).
+func (n *NTS) plain() bool { return n.Protocol == ProtocolNTP }
+
+// protocol is Protocol with "" read as ProtocolNTS.
+func (n *NTS) protocol() Protocol { return cmp.Or(n.Protocol, ProtocolNTS) }
+
 // SetScheduleSeed switches the shift schedule from every operator to
 // ShiftActives(n) in the order seed gives, for a clock that starts before
 // its seed is known. Contacts made so far keep their minimum gap. No effect
@@ -431,13 +450,20 @@ func (n *NTS) Source() string {
 	for i, s := range n.Servers {
 		ops[i] = s.Operator
 	}
-	return "nts(" + strings.Join(ops, ",") + ")"
+	return string(n.protocol()) + "(" + strings.Join(ops, ",") + ")"
 }
 
+// Trusted is true for plain NTP too: the coarse check, over authenticated
+// HTTPS, still bounds the time against the host (Protocol).
 func (n *NTS) Trusted() bool { return true }
 
+// logf logs with protocol=ntp-unauthenticated on every line of a plain NTP
+// clock, so no log line passes for NTS.
 func (n *NTS) logf(level slog.Level, msg string, args ...any) {
 	if n.Log != nil {
+		if n.plain() {
+			args = append(args, "protocol", "ntp-unauthenticated")
+		}
 		n.Log.Log(context.Background(), level, msg, args...)
 	}
 }
@@ -447,6 +473,11 @@ func (n *NTS) Refresh(ctx context.Context) error {
 	n.init()
 	n.rmu.Lock()
 	defer n.rmu.Unlock()
+	if p := n.protocol(); p != ProtocolNTS && p != ProtocolNTP {
+		err := fmt.Errorf("clock: nts: protocol %q: want nts or ntp", p)
+		n.setErr(err)
+		return err
+	}
 	if n.joinAge() <= 0 {
 		err := fmt.Errorf("clock: nts: MaxAge %v is too short: no sample could join a quorum; it must be over %v (a tick of Run and the longest Refresh)",
 			n.maxAge(), n.maxAge()-n.joinAge())
@@ -661,7 +692,9 @@ func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time, at int64) 
 		s, err = n.testQuery(ctx, p.srv.Operator, at)
 		p.stats.Queries++
 	} else {
-		if !n.keyExchange(ctx, p) {
+		if n.plain() {
+			n.plainAddr(ctx, p)
+		} else if !n.keyExchange(ctx, p) {
 			return false
 		}
 		timeout := ntsExchangeTimeout
@@ -670,12 +703,40 @@ func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time, at int64) 
 		}
 		timeout = cmpOr(n.queryTimeout, timeout)
 		qctx, cancel := context.WithTimeout(ctx, timeout)
-		s, err = p.assoc.Query(qctx, p.ntpAddr, coarse, n.Dial)
+		if n.plain() {
+			s, err = nts.QueryPlain(qctx, p.ntpAddr, coarse, n.Dial)
+		} else {
+			s, err = p.assoc.Query(qctx, p.ntpAddr, coarse, n.Dial)
+		}
 		cancel()
 		p.stats.Queries++
-		p.stats.CookiesHeld = p.assoc.Cookies()
+		if p.assoc != nil {
+			p.stats.CookiesHeld = p.assoc.Cookies()
+		}
 	}
 	return n.record(p, s, err)
+}
+
+// plainAddr sets p.ntpAddr for plain NTP: NTPAddr, or Host:123. Under the
+// shift schedule with the default dialer it resolves the name once, as
+// keyExchange does at NTS-KE, and again once per streak of
+// ntsKEAfterLost lost queries, in case the name moved.
+func (n *NTS) plainAddr(ctx context.Context, p *ntsPeer) {
+	stale := p.ntpAddr != "" && p.lostInRow >= ntsKEAfterLost && !p.lostKE
+	if p.ntpAddr != "" && !stale {
+		return
+	}
+	if stale {
+		p.lostKE = true
+	}
+	addr := p.srv.NTPAddr
+	if addr == "" {
+		addr = net.JoinHostPort(p.srv.Host, "123")
+	}
+	if n.shifts != nil && (n.Dial == nil || n.resolveAnyDial) {
+		addr = n.resolve(ctx, addr)
+	}
+	p.ntpAddr = addr
 }
 
 // ntsKEAfterLost is how many queries in a row may go unanswered before the
@@ -1030,8 +1091,9 @@ func (n *NTS) Now() (time.Time, error) {
 
 // NTSStatus is a snapshot for logs and tests.
 type NTSStatus struct {
-	Members []string
-	Bound   time.Duration // of the last quorum, at its time
+	Protocol Protocol // ProtocolNTS, or ProtocolNTP (unauthenticated)
+	Members  []string
+	Bound    time.Duration // of the last quorum, at its time
 	// BoundNow is Bound grown by rho since the last quorum, AgeOfQuorum
 	// that time, SampleAge the age of its oldest sample. OffsetFromHost is the NTS time minus the host clock (for
 	// logs; the host clock is not used for anything else).
@@ -1083,7 +1145,7 @@ func (n *NTS) NTSSummary() NTSSummary {
 	n.init()
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	s := NTSSummary{MaxBound: n.maxBound(), MaxSampleAge: n.maxAge(), Refusals: n.refusals.Load(), DriftPPM: n.drift.ppm,
+	s := NTSSummary{Protocol: n.protocol(), MaxBound: n.maxBound(), MaxSampleAge: n.maxAge(), Refusals: n.refusals.Load(), DriftPPM: n.drift.ppm,
 		DriftErrPPM: n.drift.errPPM, DriftBaseline: n.drift.baseline, RhoViolations: n.violations, CoarseDiff: n.coarseDiff}
 	now := n.local()
 	s.BoundNow, s.SampleAge, s.Refused = n.check(now)
@@ -1125,7 +1187,7 @@ func (n *NTS) Status() NTSStatus {
 	defer n.rmu.Unlock()
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	st := NTSStatus{Refusals: n.refusals.Load(), Peers: map[string]NTSPeerStatus{}, DriftPPM: n.drift.ppm, DriftErrPPM: n.drift.errPPM,
+	st := NTSStatus{Protocol: n.protocol(), Refusals: n.refusals.Load(), Peers: map[string]NTSPeerStatus{}, DriftPPM: n.drift.ppm, DriftErrPPM: n.drift.errPPM,
 		DriftBaseline: n.drift.baseline, RhoViolations: n.violations, CoarseDiff: n.coarseDiff}
 	if r := n.result; r != nil {
 		now := n.local()

@@ -26,8 +26,34 @@ func (a *Association) Query(ctx context.Context, addr string, pivot time.Time, d
 		return Sample{}, err
 	}
 	defer req.Close()
+	return exchange(ctx, addr, packet, func(p []byte, t1, t4 int64) (Sample, error) { return req.Verify(p, t1, t4, pivot) }, dial)
+}
 
+// QueryPlain is Query with plain NTP (RFC 5905), no NTS: no key exchange,
+// no cookies, and nothing authenticates the answer. addr is host:port,
+// usually port 123. Anyone on the path who sees the request can answer it
+// with any time; the answer only has to echo the random transmit timestamp.
+func QueryPlain(ctx context.Context, addr string, pivot time.Time, dial DialFunc) (Sample, error) {
+	random := make([]byte, PlainRandomLen)
+	if _, err := rand.Read(random); err != nil {
+		return Sample{}, err
+	}
+	packet, req, err := NewPlainRequest(random)
+	if err != nil {
+		return Sample{}, err
+	}
+	defer req.Close()
+	return exchange(ctx, addr, packet, func(p []byte, t1, t4 int64) (Sample, error) { return req.Verify(p, t1, t4, pivot) }, dial)
+}
+
+// exchange sends packet to addr over UDP and passes each datagram that
+// comes back to verify, with the Monotonic times before the send (t1) and
+// after the receipt (t4). It reads on past a packet verify refuses with
+// CodeNTP, until one is accepted, a Kiss-o'-Death or another error comes,
+// or ctx ends.
+func exchange(ctx context.Context, addr string, packet []byte, verify func(p []byte, t1, t4 int64) (Sample, error), dial DialFunc) (Sample, error) {
 	var conn net.Conn
+	var err error
 	if dial != nil {
 		conn, err = dial(ctx, "udp", addr)
 	} else {
@@ -63,7 +89,7 @@ func (a *Association) Query(ctx context.Context, addr string, pivot time.Time, d
 			}
 			return Sample{}, fmt.Errorf("ntp %s: %w", addr, err)
 		}
-		s, err := req.Verify(buf[:n], t1, t4, pivot)
+		s, err := verify(buf[:n], t1, t4)
 		var e *Error
 		if errors.As(err, &e) && e.Code == CodeNTP {
 			last = err

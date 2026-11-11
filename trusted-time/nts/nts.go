@@ -25,6 +25,8 @@ import (
 const (
 	KeyLen            = C.SNTS_KEY_LEN
 	RequestRandomLen  = C.SNTS_REQUEST_RANDOM_LEN
+	PlainRandomLen    = C.SNTS_PLAIN_RANDOM_LEN
+	PlainRequestLen   = C.SNTS_PLAIN_REQUEST_LEN
 	KEMaxResponseLen  = C.SNTS_KE_MAX_RESPONSE_LEN
 	NTPMaxRequestLen  = C.SNTS_NTP_MAX_REQUEST_LEN
 	NTPMaxResponseLen = C.SNTS_NTP_MAX_RESPONSE_LEN
@@ -261,6 +263,12 @@ func (r *Request) Verify(packet []byte, t1, t4 int64, pivot time.Time) (Sample, 
 	var reason C.uint32_t
 	rc := C.snts_ntp_verify(r.a.p, r.p, ptr(packet), C.size_t(len(packet)), C.int64_t(t1), C.int64_t(t4),
 		C.int64_t(pivot.UnixNano()), &out, &reason)
+	return sampleOf(rc, &out, reason)
+}
+
+// sampleOf turns the outcome of snts_ntp_verify or snts_plain_verify into
+// a Sample, a *KissError or an *Error.
+func sampleOf(rc C.int, out *C.snts_sample, reason C.uint32_t) (Sample, error) {
 	if rc == codeKiss {
 		k := C.GoBytes(unsafe.Pointer(&out.kiss[0]), 4)
 		return Sample{CookiesHeld: int(out.cookies_held)}, &KissError{Code: string(k)}
@@ -281,6 +289,46 @@ func (r *Request) Verify(packet []byte, t1, t4 int64, pivot time.Time) (Sample, 
 		CookiesReceived: int(out.cookies_received),
 		CookiesHeld:     int(out.cookies_held),
 	}, nil
+}
+
+// PlainRequest is one plain NTP request (RFC 5905, no NTS) waiting for its
+// response. Nothing authenticates the response: anyone on the path who sees
+// the request can answer it with any time. Its methods are not safe for
+// concurrent use.
+type PlainRequest struct {
+	p *C.snts_plain
+}
+
+// NewPlainRequest builds a plain NTP request. random is PlainRandomLen
+// octets from a CSPRNG; it becomes the transmit timestamp.
+func NewPlainRequest(random []byte) ([]byte, *PlainRequest, error) {
+	out := make([]byte, PlainRequestLen)
+	var n C.size_t
+	var r *C.snts_plain
+	if err := check(C.snts_plain_request(ptr(random), C.size_t(len(random)), ptr(out), C.size_t(len(out)), &n, &r), 0); err != nil {
+		return nil, nil, err
+	}
+	return out[:n], &PlainRequest{p: r}, nil
+}
+
+// Close frees the request.
+func (r *PlainRequest) Close() {
+	C.snts_plain_free(r.p)
+	r.p = nil
+}
+
+// Verify checks a response to r with the header checks of Request.Verify
+// and measures it, with the same arguments and errors. The sample has no
+// cookie counts.
+func (r *PlainRequest) Verify(packet []byte, t1, t4 int64, pivot time.Time) (Sample, error) {
+	if r.p == nil {
+		return Sample{}, errors.New("nts: plain request closed")
+	}
+	var out C.snts_sample
+	var reason C.uint32_t
+	rc := C.snts_plain_verify(r.p, ptr(packet), C.size_t(len(packet)), C.int64_t(t1), C.int64_t(t4),
+		C.int64_t(pivot.UnixNano()), &out, &reason)
+	return sampleOf(rc, &out, reason)
 }
 
 // Interval is one server's measurement for the quorum.

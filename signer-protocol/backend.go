@@ -152,6 +152,12 @@ type Health struct {
 // NTS), measured inside the TEE when the answer is made. Durations are in
 // milliseconds.
 type ClockNTS struct {
+	// Protocol is how the clock asks its servers: "nts", or "ntp" for plain
+	// NTP. Plain NTP is not authenticated: the host can forge every answer,
+	// so against a hostile host the time is only as good as the coarse
+	// check (CoarseDiffMS within about -30 s to +31 s), whatever BoundNowMS
+	// says. Missing from older runners, which run NTS only.
+	Protocol string `json:"protocol,omitempty"`
 	// Quorum is true when the clock answers: a quorum that passed every
 	// check is in force, BoundNowMS is within MaxBoundMS and SampleAgeMS
 	// within MaxSampleAgeMS. With no quorum yet, BoundNowMS,

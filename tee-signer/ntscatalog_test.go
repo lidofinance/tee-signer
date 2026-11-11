@@ -37,6 +37,13 @@ func TestNTSNitroRoutingMatchesTheCatalog(t *testing.T) {
 	if want := ntscatalog.NTPHosts(eps); !slices.Equal(udprelay.DefaultNames, want) {
 		t.Errorf("udprelay allows %v, the catalog's NTP hosts are %v", udprelay.DefaultNames, want)
 	}
+	// The plain NTP hosts of Netnod and FER, which answer plain NTP only
+	// on those names.
+	for _, h := range []string{"ntp.se", "ntp.hr"} {
+		if !slices.Contains(udprelay.DefaultNames, h) {
+			t.Errorf("udprelay does not allow the plain NTP host %s", h)
+		}
+	}
 	var nets []netip.Prefix
 	for _, n := range ntscatalog.NTPNets(eps) {
 		nets = append(nets, netip.MustParsePrefix(n))

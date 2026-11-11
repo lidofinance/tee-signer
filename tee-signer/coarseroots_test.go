@@ -98,7 +98,7 @@ func TestNTSClockUsesCoarseClient(t *testing.T) {
 	t.Setenv("RUNNER_NTS_COARSE_URLS", "https://kms.{region}.amazonaws.com/,https://sts.{region}.amazonaws.com/,https://www.cloudflare.com/")
 	t.Setenv("RUNNER_NTS_MAX_BOUND", "")
 	tr := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: cloudroots.Pool(cloudroots.AWS)}}
-	_, coarse, err := newNTSClock(&http.Client{Transport: tr}, nil, "eu-central-1", nil)
+	_, coarse, err := newNTSClock(&http.Client{Transport: tr}, nil, "eu-central-1", clock.ProtocolNTS, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

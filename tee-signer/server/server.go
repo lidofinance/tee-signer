@@ -1523,7 +1523,8 @@ func (s *Server) health() (*backend.Health, error) {
 func healthNTS(s clock.NTSSummary) *backend.ClockNTS {
 	ms := func(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
 	out := &backend.ClockNTS{
-		Quorum: s.Quorum, Refused: s.Refused, BoundNowMS: ms(s.BoundNow), MaxBoundMS: ms(s.MaxBound), OffsetFromHostMS: ms(s.OffsetFromHost),
+		Protocol: string(s.Protocol),
+		Quorum:   s.Quorum, Refused: s.Refused, BoundNowMS: ms(s.BoundNow), MaxBoundMS: ms(s.MaxBound), OffsetFromHostMS: ms(s.OffsetFromHost),
 		Members: s.Members, QuorumAgeMS: ms(s.AgeOfQuorum), SampleAgeMS: ms(s.SampleAge), MaxSampleAgeMS: ms(s.MaxSampleAge),
 		Refusals: s.Refusals,
 		DriftPPM: s.DriftPPM, DriftErrPPM: s.DriftErrPPM, DriftBaselineS: s.DriftBaseline.Seconds(), RhoViolations: s.RhoViolations,
