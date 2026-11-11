@@ -4,10 +4,12 @@ package clock
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -291,6 +293,8 @@ func TestNTSSwapRefusal(t *testing.T) {
 	dup = append(dup, NTSServer{Host: "other.test", Operator: "op0"})
 	noOp := swapServers(opNames(7)...)
 	noOp[3].Operator = ""
+	longLabel := swapServers(opNames(7)...)
+	longLabel[5].Operator = strings.Repeat("x", nts.MaxOperatorLen+1)
 	for name, tc := range map[string]struct {
 		servers []NTSServer
 		min     int
@@ -301,6 +305,8 @@ func TestNTSSwapRefusal(t *testing.T) {
 		"operator twice":   {dup, 0},
 		"no operator":      {noOp, 0},
 		"none":             {nil, 0},
+		"over MaxServers":  {swapServers(opNames(nts.MaxServers + 1)...), 0},
+		"label too long":   {longLabel, 0},
 	} {
 		if err := n.SetServers(tc.servers, tc.min); err == nil {
 			t.Errorf("%s: taken", name)
@@ -315,22 +321,116 @@ func TestNTSSwapRefusal(t *testing.T) {
 	}
 }
 
-// A changed host is a new server: the operator gets a new peer.
+// Refresh refuses a start list nts.Quorum would refuse at every quorum.
+func TestNTSStartListRefused(t *testing.T) {
+	w := newFollowWorld(13)
+	for name, servers := range map[string][]NTSServer{
+		"over MaxServers": swapServers(opNames(nts.MaxServers + 1)...),
+		"label too long":  swapServers("op0", "op1", strings.Repeat("x", nts.MaxOperatorLen+1)),
+		"operator twice":  swapServers("op0", "op1", "op1"),
+	} {
+		n := &NTS{Coarse: w, Local: w.local, StartDelay: -1, testQuery: w.queryCtx, Servers: servers}
+		w.at(0)
+		if err := n.Refresh(context.Background()); err == nil || !strings.Contains(n.NTSSummary().Refused, err.Error()) {
+			t.Errorf("%s: Refresh gave %v", name, err)
+		}
+	}
+}
+
+// A changed host is a new server with a new peer, but the schedule keeps
+// the operator's last contact and gap.
 func TestNTSSwapChangedHostIsNewPeer(t *testing.T) {
+	const swapAt = 3 * time.Minute
 	w := newFollowWorld(7)
 	n := newFollowNTS(w, 8, []byte("swap-host"))
-	runSwapWorld(w, n, 0, 3*time.Minute, nil)
-	old := n.peers[2]
-	list := swapServers(opNames(8)...)
-	list[2].Host = "moved.test"
-	if err := n.SetServers(list, 0); err != nil {
-		t.Fatal(err)
+	var op string
+	var lastBefore int64
+	blocked := runSwapWorld(w, n, 0, 8*time.Minute, func(sec time.Duration) {
+		if sec != swapAt {
+			return
+		}
+		// An active operator moves to a new host.
+		op = n.NTSSummary().Actives[0]
+		i := slices.IndexFunc(n.peers, func(p *ntsPeer) bool { return p.srv.Operator == op })
+		old := n.peers[i]
+		c := contactsSince(w, op, 0)
+		lastBefore = c[len(c)-1]
+		list := swapServers(opNames(8)...)
+		list[i].Host = "moved.test"
+		if err := n.SetServers(list, 0); err != nil {
+			t.Fatal(err)
+		}
+		if n.peers[i] == old || n.peers[i].sample != nil || n.Status().Peers[op].Host != "moved.test" {
+			t.Fatalf("%s kept its peer after a host change", op)
+		}
+	})
+	if blocked != 0 {
+		t.Fatalf("blocked %d s", blocked)
 	}
-	if n.peers[2] == old || n.peers[2].sample != nil || n.peers[1] == nil || n.Status().Peers["op2"].Host != "moved.test" {
-		t.Fatal("op2 kept its peer after a host change")
+	// Its last contact carries over: the new host is asked at the next
+	// slot past the 60 s gap, not at the swap tick.
+	c := contactsSince(w, op, swapAt)
+	if len(c) == 0 || c[0] < lastBefore+int64(NTSShiftMinGap) || c[0] > lastBefore+int64(2*NTSShiftMinGap) {
+		t.Fatalf("%s: last asked at %v, after the swap at %v", op, time.Duration(lastBefore)-shiftBase, c)
 	}
-	if g, op := gapsOf(w); g < NTSShiftMinGap {
-		t.Fatalf("%s contacted twice %v apart", op, g)
+	if g, o := gapsOf(w); g < NTSShiftMinGap {
+		t.Fatalf("%s contacted twice %v apart", o, g)
+	}
+}
+
+// coarseSwitch is the world's coarse clock, or an error while fail is set.
+type coarseSwitch struct {
+	w    *shiftWorld
+	fail atomic.Bool
+}
+
+func (c *coarseSwitch) Now() (time.Time, error) {
+	if c.fail.Load() {
+		return time.Time{}, errors.New("coarse: down")
+	}
+	return c.w.Now()
+}
+
+// If the quorum cannot form again without a removed member, Now fails
+// until the next tick forms one: with too few samples left, and with no
+// coarse time at the swap.
+func TestNTSSwapRemovedMemberFailsClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		next       []string
+		coarseDown bool
+	}{
+		{"one sample left", []string{"op0", "op4", "op5", "op6"}, false},
+		{"no coarse time", []string{"op0", "op1", "op2", "op4"}, true},
+	} {
+		w := newFollowWorld(12)
+		c := &coarseSwitch{w: w}
+		n := &NTS{Coarse: c, Local: w.local, StartDelay: -1, testQuery: w.queryCtx, Servers: swapServers(opNames(4)...)}
+		ctx := context.Background()
+		for sec := time.Duration(0); sec < time.Minute; sec += testTick {
+			w.at(sec)
+			_ = n.Refresh(ctx)
+		}
+		if m := n.NTSSummary().Members; len(m) != 4 {
+			t.Fatalf("%s: members %v", tc.name, m)
+		}
+		c.fail.Store(tc.coarseDown)
+		if err := n.SetServers(swapServers(tc.next...), 0); err != nil {
+			t.Fatal(err)
+		}
+		s := n.NTSSummary()
+		if _, err := n.Now(); err == nil || s.Quorum || len(s.Members) != 0 || !strings.Contains(s.Refused, "removed operators") {
+			t.Fatalf("%s: served after the swap: members %v, refused %q", tc.name, s.Members, s.Refused)
+		}
+		t.Logf("%s: %s", tc.name, s.Refused)
+		c.fail.Store(false)
+		w.at(time.Minute)
+		if err := n.Refresh(ctx); err != nil {
+			t.Fatalf("%s: next Refresh: %v", tc.name, err)
+		}
+		if m := n.NTSSummary().Members; slices.Contains(m, "op3") || len(m) < 3 {
+			t.Fatalf("%s: members after the next Refresh %v", tc.name, m)
+		}
 	}
 }
 

@@ -273,17 +273,25 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
 - Server list swap (`clock.NTS.SetServers`, for setup format 6, where the
   approvers change the extra time servers with a fast config update). The
   running clock takes the new list without a restart. It refuses fewer
-  than 4 servers (or the caller's minimum, if higher), an empty operator
-  and an operator named twice, and then changes nothing. A Refresh in
+  than 4 servers (or the caller's minimum, if higher), more than
+  `nts.MaxServers`, an operator label outside 1 to `nts.MaxOperatorLen`
+  octets and an operator named twice, and then changes nothing. Refresh
+  refuses a start list with the last three faults too, since
+  `nts.Quorum` would refuse every quorum of it. A Refresh in
   flight finishes on the old list; SetServers waits for it, and the next
   tick uses the new one. An operator that stays with the same host,
   addresses and roots keeps everything: association and cookies, sample,
   poll interval, RATE gap, loss streak, health counters and last contact.
-  Any other operator, a changed host included, gets a new peer and is
-  asked at the next tick, as in the start round, then on the 60 s rule. A
-  removed operator's association is closed and its sample leaves the
-  quorum at once: if it was a member of the quorum in force, the quorum
-  forms again from the samples left. Under shifts the seed and the grid
+  A new operator gets a new peer and is asked at the next tick, as in the
+  start round, then on the 60 s rule. An operator whose host, addresses
+  or roots changed gets a new peer too (new NTS-KE, no sample), but under
+  shifts it keeps its last contact and gap, so it is asked at its next
+  slot past the gap, not at once. A removed operator's association is
+  closed. Its sample, and the old sample of a changed operator, leave the
+  quorum at once: if one was a member of the quorum in force, the quorum
+  forms again from the samples left. If that fails (too few samples, no
+  coarse time, a check refuses it), the clock serves no time until the
+  next tick forms a quorum. Under shifts the seed and the grid
   phase stay; the order and the active slots are drawn again for the new
   count (`ShiftActives`), so the handover position starts over. Operators
   that stay keep their last contact, gap and counts, and an operator

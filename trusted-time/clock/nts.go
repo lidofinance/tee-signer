@@ -420,39 +420,57 @@ func (n *NTS) newPeer(s NTSServer) *ntsPeer {
 // ntsMinServers. With 3, one slow server would stop the quorum.
 const ntsSwapMinServers = 4
 
-// SetServers replaces the server list of a running clock, for a config
-// update that changes the time servers. It refuses fewer than
-// max(minServers, 4) servers, an empty operator and an operator named
-// twice; on refusal nothing changes.
-//
-// It waits for a Refresh in flight, which finishes on the old list; the
-// next Refresh uses the new one. An operator that stays, with the same
-// Host, KEAddr, NTPAddr and Roots, keeps its peer state: association and
-// cookies, sample, poll interval, Kiss-o'-Death stop, loss streak, health
-// counters and last contact. Any other operator gets a new peer, asked at
-// the next tick. A removed operator's association is closed, and its
-// sample leaves the quorum at once: if it was a member of the quorum in
-// force, the quorum forms again from the samples left.
-//
-// Under the shift schedule the seed and the grid phase stay. The order and
-// the active slots are drawn again for the new set (ShiftActives of the
-// new count), so the handover position starts over. Operators that stay
-// keep their last contact, gap and counts, so the minimum gap holds across
-// the swap. An operator removed and added back keeps its last contact and
-// gap too. A new operator is asked at the next tick, as in the start round.
-func (n *NTS) SetServers(servers []NTSServer, minServers int) error {
-	if want := max(minServers, ntsSwapMinServers); len(servers) < want {
-		return fmt.Errorf("clock: nts: %d servers, want at least %d", len(servers), want)
+// checkServers refuses a list nts.Quorum would refuse at every quorum:
+// more than nts.MaxServers servers, an operator label outside 1 to
+// nts.MaxOperatorLen octets, or an operator named twice. It also refuses
+// fewer than min servers.
+func checkServers(servers []NTSServer, min int) error {
+	if len(servers) < min {
+		return fmt.Errorf("clock: nts: %d servers, want at least %d", len(servers), min)
+	}
+	if len(servers) > nts.MaxServers {
+		return fmt.Errorf("clock: nts: %d servers, at most %d", len(servers), nts.MaxServers)
 	}
 	seen := map[string]bool{}
 	for _, s := range servers {
-		if s.Operator == "" {
-			return fmt.Errorf("clock: nts: server %q has no operator", s.Host)
+		if len(s.Operator) == 0 || len(s.Operator) > nts.MaxOperatorLen {
+			return fmt.Errorf("clock: nts: server %q: operator label %q: 1 to %d octets", s.Host, s.Operator, nts.MaxOperatorLen)
 		}
 		if seen[s.Operator] {
 			return fmt.Errorf("clock: nts: operator %q named twice", s.Operator)
 		}
 		seen[s.Operator] = true
+	}
+	return nil
+}
+
+// SetServers replaces the server list of a running clock, for a config
+// update that changes the time servers. It refuses fewer than
+// max(minServers, 4) servers and the lists checkServers refuses; on
+// refusal nothing changes.
+//
+// It waits for a Refresh in flight, which finishes on the old list; the
+// next Refresh uses the new one. An operator that stays, with the same
+// Host, KEAddr, NTPAddr and Roots, keeps its peer state: association and
+// cookies, sample, poll interval, Kiss-o'-Death stop, loss streak, health
+// counters and last contact. Any other operator gets a new peer. A removed
+// operator's association is closed. Its sample, and the old sample of an
+// operator whose server changed, leave the quorum at once: if one was a
+// member of the quorum in force, the quorum forms again from the samples
+// left. If that fails (too few samples left, no coarse time, a check
+// refuses it), Now fails until the next tick forms a quorum.
+//
+// Under the shift schedule the seed and the grid phase stay. The order and
+// the active slots are drawn again for the new set (ShiftActives of the
+// new count), so the handover position starts over. Operators that stay
+// keep their last contact, gap and counts, so the minimum gap holds across
+// the swap. An operator whose server changed, and one removed and added
+// back, keep their last contact and gap too: they are asked at their next
+// slot (or fallback or burst) past the gap, not at once. A new operator
+// is asked at the next tick, as in the start round.
+func (n *NTS) SetServers(servers []NTSServer, minServers int) error {
+	if err := checkServers(servers, max(minServers, ntsSwapMinServers)); err != nil {
+		return err
 	}
 	n.init()
 	n.rmu.Lock()
@@ -500,11 +518,20 @@ func (n *NTS) SetServers(servers []NTSServer, minServers int) error {
 	n.logf(slog.LevelInfo, "nts: server list swapped", "operators", strings.Join(names, ","), "removed", strings.Join(removed, ","))
 	if again {
 		// A removed operator was in the quorum in force. Form it again
-		// without it. If that fails the old quorum stays until the next
-		// tick: it passed every check when it formed.
+		// without it, or serve no time until a quorum forms: the approvers
+		// took that operator out, so its sample must not count any more.
 		coarse, err := n.Coarse.Now()
-		if err == nil {
-			_ = n.combine(coarse, n.local())
+		if err != nil {
+			err = fmt.Errorf("clock: nts: no coarse time: %w", err)
+		} else {
+			err = n.combine(coarse, n.local())
+		}
+		if err != nil {
+			err = fmt.Errorf("clock: nts: no quorum without the removed operators %s: %w", strings.Join(removed, ","), err)
+			n.mu.Lock()
+			n.result, n.lastErr = nil, err
+			n.mu.Unlock()
+			n.logf(slog.LevelError, "nts: no quorum after the server swap", "removed", strings.Join(removed, ","), "err", err)
 		}
 	}
 	return nil
@@ -589,6 +616,12 @@ func (n *NTS) Refresh(ctx context.Context) error {
 	defer n.rmu.Unlock()
 	if p := n.protocol(); p != ProtocolNTS && p != ProtocolNTP {
 		err := fmt.Errorf("clock: nts: protocol %q: want nts or ntp", p)
+		n.setErr(err)
+		return err
+	}
+	// The same list checks as SetServers, without its minimum: a list
+	// nts.Quorum refuses would fail every quorum.
+	if err := checkServers(n.Servers, 0); err != nil {
 		n.setErr(err)
 		return err
 	}
