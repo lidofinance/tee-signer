@@ -163,7 +163,7 @@ func TestKeyReleaseStaysInTheRunnersProject(t *testing.T) {
 		k := testKMS(t, g)
 		k.Provider, k.Key = c.provider, c.key
 		store, _ := filestore.New(t.TempDir())
-		_, err := k.dataKey(ctx, store, [32]byte{1})
+		_, _, err := k.dataKey(ctx, store, [32]byte{1})
 		switch {
 		case c.err == "" && err != nil:
 			t.Errorf("%s: %v", c.name, err)
