@@ -558,15 +558,17 @@ func cmdImport(args []string, out io.Writer) error {
 	commPath := fs.String("commitments", "", "with -order: the split file of import-draft, for each validator's commitments")
 	skip := fs.Bool("skip-loaded", false, "leave out the shares whose validator the runner holds already")
 	icPath := fs.String("interchange", "", "EIP-3076 slashing protection file (format 5): each share goes in with its validator's maxima, so the runner refuses everything at or below them")
-	chainPath := fs.String("setup", "", "with -conn and -interchange: the runner's setup file, or the -config file of a runner without a setup; "+
-		"the runner must report its hash, and the file's genesis_validators_root must be the interchange file's (with -cluster it is the member's setup)")
+	chainPath := fs.String("setup", "", "with -conn: the runner's setup file, or with -interchange the -config file of a runner without a setup; "+
+		"required for any verifier but dev, and the image that cloud.json pins must be on its approved list; "+
+		"with -interchange the runner must report its hash, and the file's genesis_validators_root must be the interchange file's (with -cluster it is the member's setup)")
+	updatesPath := fs.String("updates", "", "with -setup: the folder of the cluster's signed updates, whose locked updates extend the approved image list")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	byCluster := *cf.path != "" || *target != ""
 	if fs.NArg() != 0 || *sharesPath == "" || byCluster == (*connPath != "") || byCluster && (*cf.path == "" || *target == "") ||
-		(*orderPath == "") != (*commPath == "") || *chainPath != "" && (byCluster || *icPath == "") {
-		return errors.New("usage: signer-admin import (-cluster cluster.json -signer NAME | -conn cloud.json [-setup FILE]) " +
+		(*orderPath == "") != (*commPath == "") || *chainPath != "" && byCluster || *updatesPath != "" && *chainPath == "" {
+		return errors.New("usage: signer-admin import (-cluster cluster.json -signer NAME | -conn cloud.json [-setup FILE [-updates DIR]]) " +
 			"[-order import.signed -commitments FILE] -shares FILE [-interchange FILE] [-skip-loaded]")
 	}
 	// The shares file is plaintext: no core dumps from here on.
@@ -599,21 +601,26 @@ func cmdImport(args []string, out io.Writer) error {
 			return err
 		}
 		name = conn.Address
-		if *icPath != "" {
-			if *chainPath == "" {
-				return errors.New("-conn with -interchange needs -setup: the runner's setup file, or its -config file if it runs without a setup")
-			}
-			var s *setupwire.Setup
+		if *icPath != "" && *chainPath == "" {
+			return errors.New("-conn with -interchange needs -setup: the runner's setup file, or its -config file if it runs without a setup")
+		}
+		var s *setupwire.Setup
+		if *chainPath != "" {
 			if gvr, gvrOfHash, s, err = chainOf(*chainPath); err != nil {
 				return err
 			}
-			// -setup names the runner's platform, so the dev verifier is
-			// held to a dev platform setup as it is for a member.
-			if s != nil {
-				if err := devPlatformOnly(conn, s); err != nil {
-					return fmt.Errorf("%s: %w", *connPath, err)
-				}
+		}
+		// The setup holds the image pin and the trust anchor of cloud.json
+		// to the approvers' list, as for a member. Without one only the dev
+		// verifier goes on.
+		switch {
+		case s != nil:
+			if err := admincluster.CheckConn(conn, s, *updatesPath, now()); err != nil {
+				return fmt.Errorf("%s: %w", *connPath, err)
 			}
+		case conn.Attestation.Verifier != runnerclient.VerifierDev:
+			return fmt.Errorf("%s: verifier %s: -conn needs -setup, the runner's setup file, to check the image that cloud.json pins against the approvers' list (refusing)",
+				*connPath, conn.Attestation.Verifier)
 		}
 		dial = func() (*runnerclient.Client, error) { return conn.New(runnerclient.WithTimeout(*cf.timeout)) }
 	}

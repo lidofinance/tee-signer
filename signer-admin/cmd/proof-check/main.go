@@ -44,7 +44,13 @@
 //
 // -proof-dir holds one folder per signer name with cloud.json (the connection:
 // address, client_cert, client_key, attestation, optionally identity_version)
-// and the two PEM files it names. The client certificate should be an
+// and the two PEM files it names. When the folder also holds the signer's
+// setup file (setup) and, optionally, the cluster's signed updates
+// (updates/), the check first holds cloud.json to them as signer-admin does
+// (signer-admin/cluster.CheckConn): the image it pins must be on the
+// approvers' list and its trust anchor the setup's. A mismatch fails the
+// check before any connection; pin in the file says "listed", or
+// "unchecked" without a setup file. The client certificate should be an
 // attest-only one (docs/protocol.md, "Client roles"): HEALTH and IDENTITY
 // are all the check sends, and a signer gives an attest-only certificate 4
 // fresh attestations a minute. Run the tool in the network namespace that
@@ -57,6 +63,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"math"
@@ -70,6 +77,7 @@ import (
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/verify"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
+	admincluster "github.com/lidofinance/tee-signer/signer-admin/cluster"
 	cloud "github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/remote"
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
@@ -122,6 +130,10 @@ type result struct {
 	// nil for a runner without the mark log.
 	Image string `json:"image,omitempty"`
 	Mark  *mark  `json:"mark,omitempty"`
+	// Pin is "listed" when the image pin and trust anchor of cloud.json
+	// passed the check against the setup in the signer's folder, and
+	// "unchecked" when the folder holds no setup.
+	Pin string `json:"pin,omitempty"`
 	// IdentityVersion is the IDENTITY version the check asked in, and
 	// SetupFormat the setup format of its runners. Both 0 when the check
 	// found no cloud.json.
@@ -290,8 +302,8 @@ func main() {
 		}
 		for _, r := range of.Signers {
 			if r.Enabled && r.LastAttemptUnix != 0 {
-				fmt.Printf("%s %s ok=%v rtt=%.0fms %s tls=%s config=%s identity=v%d %s %s\n", time.Now().UTC().Format(time.RFC3339), r.Name, r.OK,
-					r.RoundTripMS, clockLine(r), r.TLSKey, r.Config, r.IdentityVersion, setupLine(r), r.Error)
+				fmt.Printf("%s %s ok=%v rtt=%.0fms %s tls=%s config=%s identity=v%d pin=%s %s %s\n", time.Now().UTC().Format(time.RFC3339), r.Name, r.OK,
+					r.RoundTripMS, clockLine(r), r.TLSKey, r.Config, r.IdentityVersion, r.Pin, setupLine(r), r.Error)
 			}
 		}
 		if *once {
@@ -355,12 +367,18 @@ func check(dir string, s topoSigner, timeout time.Duration) result {
 	if err := json.Unmarshal(b, &conn); err != nil {
 		return fail(fmt.Errorf("cloud.json: %w", err))
 	}
+	if err := admincluster.StrictAttestation(b); err != nil {
+		return fail(fmt.Errorf("cloud.json: %w", err))
+	}
 	conn.ResolvePaths(folder)
 	r.Verifier = conn.Attestation.Verifier
 	if conn.IdentityVersion != 0 && conn.IdentityVersion != identityVersion {
 		return fail(fmt.Errorf("cloud.json: identity_version %d; this tool speaks IDENTITY v%d only", conn.IdentityVersion, identityVersion))
 	}
 	r.IdentityVersion, r.SetupFormat = identityVersion, setupFormat
+	if r.Pin, err = checkPin(folder, &conn.Connection); err != nil {
+		return fail(err)
+	}
 
 	cl, err := conn.New(runnerclient.WithTimeout(timeout))
 	if err != nil {
@@ -374,6 +392,28 @@ func check(dir string, s topoSigner, timeout time.Duration) result {
 		r.Image = imageOf(conn.Attestation)
 	}
 	return r
+}
+
+// checkPin holds conn to the setup file in the signer's folder and the
+// signed updates in its updates folder (admin/cluster.CheckConn). It
+// returns "listed" when the check passed, "unchecked" when the folder
+// holds no setup file.
+func checkPin(folder string, conn *runnerclient.Connection) (string, error) {
+	raw, err := os.ReadFile(filepath.Join(folder, "setup"))
+	if errors.Is(err, os.ErrNotExist) {
+		return "unchecked", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	s, err := setupwire.DecodeSetup(raw)
+	if err != nil {
+		return "", fmt.Errorf("setup: %w", err)
+	}
+	if err := admincluster.CheckConn(conn, s, filepath.Join(folder, "updates"), time.Now()); err != nil {
+		return "", fmt.Errorf("cloud.json: %w", err)
+	}
+	return "listed", nil
 }
 
 // imageOf is 8 hex digits of the measurement the verifier pins: the CCE

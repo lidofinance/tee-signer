@@ -24,7 +24,11 @@
 //	                     -gcp-service-account
 //
 // -verifier has no default and there is no way to skip the check. A setting
-// of one verifier is refused with another. With -tls-cert and -tls-key the
+// of one verifier is refused with another. Any verifier but dev needs
+// -setup, the runner's setup file, and takes -updates, the folder of the
+// cluster's signed updates: the image the flags pin must be on the
+// approvers' list, and the trust anchor must be the setup's
+// (signer-admin/cluster.CheckConn). With -tls-cert and -tls-key the
 // tool also connects over mutual TLS and binds the connection to the
 // verified identity; -tls-key-pin adds a pin of the runner's TLS key.
 // A runner with a setup takes a share only under an import order that k
@@ -55,6 +59,8 @@ import (
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
 	"github.com/lidofinance/tee-signer/governance/importorder"
+	"github.com/lidofinance/tee-signer/governance/setupwire"
+	admincluster "github.com/lidofinance/tee-signer/signer-admin/cluster"
 	remoteadmin "github.com/lidofinance/tee-signer/signer-admin/remote/admin"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-protocol"
@@ -107,6 +113,8 @@ func run() error {
 		commFile   = flag.String("commitments", "", "the validator's public commitments, one 0x-hex point per line (with -order)")
 		chainBuild = flag.String("allow-chain-build", "", "accept a runner of the non-prod build of this chain: hoodi, devnet or ci-test (governance time locks in minutes, that chain only; needs -tls-cert)")
 	)
+	setupFile := flag.String("setup", "", "the runner's setup file; required for any verifier but dev")
+	updatesDir := flag.String("updates", "", "with -setup: the folder of the cluster's signed updates, whose locked updates extend the approved image list")
 	att := runnerclient.Flags(flag.CommandLine)
 	flag.Parse()
 	if *addr == "" || *pubkeyHex == "" || *shareFile == "" {
@@ -151,6 +159,24 @@ func run() error {
 
 	// The verifier and the client come first: a wrong setting stops the tool
 	// before it reads the share.
+	if *updatesDir != "" && *setupFile == "" {
+		return errors.New("-updates needs -setup")
+	}
+	if *setupFile != "" {
+		raw, err := os.ReadFile(*setupFile)
+		if err != nil {
+			return err
+		}
+		s, err := setupwire.DecodeSetup(raw)
+		if err != nil {
+			return fmt.Errorf("-setup: %w", err)
+		}
+		if err := admincluster.CheckConn(&runnerclient.Connection{Attestation: *att}, s, *updatesDir, time.Now()); err != nil {
+			return err
+		}
+	} else if att.Verifier != runnerclient.VerifierDev {
+		return fmt.Errorf("verifier %s needs -setup, the runner's setup file, to check the pinned image against the approvers' list (refusing)", att.Verifier)
+	}
 	verify, err := att.NewVerifier()
 	if err != nil {
 		return err

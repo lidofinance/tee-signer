@@ -21,6 +21,15 @@ Module path `github.com/lidofinance/tee-signer/signer-admin`, with its own `go.m
 
 Test it on its own from the repo root: `scripts/test-modules.sh signer-admin`.
 
+## Image pin
+
+The verifier of a cloud runner trusts the image that the signer's `cloud.json` pins (`nitro_pcrs` PCR0 to PCR2, `cce_policy_sha256` or `gcp_image_digest`), signed by the key source the file names. Any runner image attests to its own measurement, and whoever hands over the file can name a key source of their own. So before the tools connect, they hold `cloud.json` to the signer's setup (`cluster.CheckConn`):
+
+- The pin must be on the approved list: the setup's `allowed_image_measurements`, or that of the last signed locked update in the `updates` folder. The tools walk the chain from the setup: each update names the one before as `prev_hash`, has a higher version, and carries the signatures of the approvers of the one before. An image that a later update drops is refused. An image that the last update adds counts once that update's `activate_at` has passed. Two updates that replace the same version stop the tools; remove the one that was not pushed. A file that does not decode or does not chain gets a warning, and the chain stops before it.
+- The trust anchor must be the setup's: the verifier of the setup's platform (`dev` only for a dev platform setup), `maa_host` equal to the setup's `maa_endpoint`, the default `compliance_status`, no `gcp_issuer` and no `gcp_jwks_file`, and `mainnet` set exactly when the setup's chain is a prod chain.
+
+Every command that reads a member of `cluster.json` runs the check. `import -conn` and `share-import` need `-setup`, the runner's setup file, for any verifier but `dev`, and take `-updates`, the cluster's `updates` folder. `proof-check` runs the check when the signer's folder holds the setup file (`setup`) and, optionally, an `updates` folder; its result says `pin: listed` or `pin: unchecked`. The tools read the attestation section of `cloud.json` strictly, so a misspelled key stops them. Keep the signed file of every locked update in the `updates` folder; `push` puts it there.
+
 ## Admin certificate
 
 An admin certificate that t signers accept can exit every key they hold, and nothing else gates an exit ([protocol.md](../signer-protocol/docs/protocol.md), "Client roles"). To protect it:

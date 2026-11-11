@@ -213,7 +213,13 @@ the old measurements listed until every signer has switched.
    `cce_policy_sha256` or `gcp_image_digest`. Set the new value now, in
    every place that holds it, on every machine:
    - `signer-admin` and the tools that read its connection files: every
-     copy of that signer's `cloud.json`.
+     copy of that signer's `cloud.json`. The tools check the pin: the
+     new image must be on the approved list, so the signed file of the
+     step 3 update must be in the `updates` folder and its
+     `activate_at` must have passed. They refuse a pin that no list
+     names, and an image that a later update dropped
+     ([signer-admin/README.md](../signer-admin/README.md#image-pin),
+     "Image pin").
    - The gateway: `signers.nodes[].attestation` of that signer in
      `gateway.yml`. The gateway does not read `cloud.json`, and reads
      `gateway.yml` at its start only, so start it again
