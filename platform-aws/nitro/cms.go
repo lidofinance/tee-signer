@@ -38,8 +38,21 @@ type tlv struct {
 
 var errBER = errors.New("cms: malformed BER")
 
+// maxBERDepth is the most constructed levels readTLV walks through
+// indefinite lengths, and octets through constructed OCTET STRINGs: both
+// recurse. An EnvelopedData nests about 9 levels and openssl splits an
+// OCTET STRING one level deep; without a bound, depth is limited only by
+// the input's length.
+const maxBERDepth = 32
+
+// errBERDepth: the element nests more than maxBERDepth levels.
+var errBERDepth = fmt.Errorf("%w: nested more than %d levels", errBER, maxBERDepth)
+
 // readTLV reads one element from b and returns it and the rest.
-func readTLV(b []byte) (tlv, []byte, error) {
+func readTLV(b []byte) (tlv, []byte, error) { return readTLVAt(b, 0) }
+
+// readTLVAt is readTLV inside depth indefinite-length elements.
+func readTLVAt(b []byte, depth int) (tlv, []byte, error) {
 	if len(b) < 2 {
 		return tlv{}, nil, errBER
 	}
@@ -68,6 +81,9 @@ func readTLV(b []byte) (tlv, []byte, error) {
 		if !t.constructed {
 			return tlv{}, nil, errBER
 		}
+		if depth >= maxBERDepth {
+			return tlv{}, nil, errBERDepth
+		}
 		start := i
 		rest := b[i:]
 		for {
@@ -76,7 +92,7 @@ func readTLV(b []byte) (tlv, []byte, error) {
 				return t, rest[2:], nil
 			}
 			var err error
-			if _, rest, err = readTLV(rest); err != nil {
+			if _, rest, err = readTLVAt(rest, depth+1); err != nil {
 				return tlv{}, nil, err
 			}
 		}
@@ -117,9 +133,15 @@ func (t tlv) children() ([]tlv, error) {
 }
 
 // octets returns the value of an OCTET STRING, joining BER chunks.
-func (t tlv) octets() ([]byte, error) {
+func (t tlv) octets() ([]byte, error) { return t.octetsAt(0) }
+
+// octetsAt is octets inside depth constructed OCTET STRINGs.
+func (t tlv) octetsAt(depth int) ([]byte, error) {
 	if !t.constructed {
 		return t.content, nil
+	}
+	if depth >= maxBERDepth {
+		return nil, errBERDepth
 	}
 	kids, err := t.children()
 	if err != nil {
@@ -127,7 +149,7 @@ func (t tlv) octets() ([]byte, error) {
 	}
 	var buf bytes.Buffer
 	for _, k := range kids {
-		v, err := k.octets()
+		v, err := k.octetsAt(depth + 1)
 		if err != nil {
 			return nil, err
 		}
