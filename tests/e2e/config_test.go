@@ -247,8 +247,11 @@ func TestE2EConfigUpdate(t *testing.T) {
 	// update again is known.
 	oh, _ := s.GroupHash(setupwire.GroupOpen)
 	epoch := (uint64(time.Now().Unix()) - s.Chain.GenesisTime) / (s.Chain.SecondsPerSlot * s.Chain.SlotsPerEpoch)
-	nextOpen := setupwire.Open{ForkSchedule: append(append([]setupwire.Fork(nil), s.Open.ForkSchedule...),
-		setupwire.Fork{Epoch: epoch + 10, Version: backend.Version{0x06, 0, 0, 0x10}}), GloasForkEpoch: s.Open.GloasForkEpoch}
+	// Every other open field stays as it is (dropping a revoked
+	// certificate would need every approver).
+	nextOpen := s.Open
+	nextOpen.ForkSchedule = append(append([]setupwire.Fork(nil), s.Open.ForkSchedule...),
+		setupwire.Fork{Epoch: epoch + 10, Version: backend.Version{0x06, 0, 0, 0x10}})
 	ob := &setupwire.UpdateBody{ClusterID: s.ClusterID, ChainHash: s.Chain.Hash(), Group: setupwire.GroupOpen, Version: 1,
 		PrevHash: oh, ActivateAt: uint64(time.Now().Unix()), Open: &nextOpen, Salts: e2eSalts(t, setupwire.NumOpenLeaves)}
 	openHash, _ := ob.Hash()
