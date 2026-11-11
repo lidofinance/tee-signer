@@ -270,6 +270,27 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
     cap refused. Fallbacks to an operator that often need NTS-KE mean its
     cookies expire while it idles; an operator can idle for about (n -
     ShiftActives(n)) x 15 minutes: 45 minutes with 7 or 8 operators.
+- Server list swap (`clock.NTS.SetServers`, for setup format 6, where the
+  approvers change the extra time servers with a fast config update). The
+  running clock takes the new list without a restart. It refuses fewer
+  than 4 servers (or the caller's minimum, if higher), an empty operator
+  and an operator named twice, and then changes nothing. A Refresh in
+  flight finishes on the old list; SetServers waits for it, and the next
+  tick uses the new one. An operator that stays with the same host,
+  addresses and roots keeps everything: association and cookies, sample,
+  poll interval, RATE gap, loss streak, health counters and last contact.
+  Any other operator, a changed host included, gets a new peer and is
+  asked at the next tick, as in the start round, then on the 60 s rule. A
+  removed operator's association is closed and its sample leaves the
+  quorum at once: if it was a member of the quorum in force, the quorum
+  forms again from the samples left. Under shifts the seed and the grid
+  phase stay; the order and the active slots are drawn again for the new
+  count (`ShiftActives`), so the handover position starts over. Operators
+  that stay keep their last contact, gap and counts, and an operator
+  removed and added back keeps its last contact and gap, so no operator
+  is asked twice within its gap across a swap. `NTSSummary.ServerSwaps`
+  counts the swaps. In the simulation swaps from 7 to 8, 8 to 7, 6 to 7
+  and 8 to 9 servers on a healthy set never stopped the time.
 - HEALTH `clock_nts.operators` has one entry per server the clock dials,
   with or without shifts, servers that never answered included:
   `operator`, `host`, `active`, `queries`, `answers`, `losses`, `wide`

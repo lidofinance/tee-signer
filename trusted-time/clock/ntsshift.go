@@ -106,6 +106,7 @@ type ntsShifts struct {
 	shift0     int // ticks added before dividing into shifts
 	startDelay time.Duration
 	rnd        *rand.Rand
+	seed       []byte // of the order; swap draws the order again from it
 	seeded     bool
 
 	started  bool
@@ -123,7 +124,13 @@ type ntsShifts struct {
 	// counts the fallbacks the cap refused.
 	fallbackAt []int
 	capped     int64
+	// left holds the last contact and gap of operators a swap removed,
+	// by name, so one added back keeps its minimum gap. An entry goes
+	// once it no longer limits anything (maxGap ticks).
+	left map[string]ntsLeft
 }
+
+type ntsLeft struct{ last, gap int }
 
 // newNTSShifts: n operators, a tick of tick. seed nil: a random seed for
 // the phase and the start delay, and every operator active until
@@ -177,6 +184,7 @@ func ShiftActives(n int) int {
 // setOrder draws the order, the grid phase and the shift phase from seed,
 // with every operator active.
 func (s *ntsShifts) setOrder(seed []byte, n int) {
+	s.seed = seed
 	s.rnd = rand.New(rand.NewChaCha8(sha256.Sum256(seed)))
 	s.order = s.rnd.Perm(n)
 	s.phase = s.rnd.IntN(s.gap)
@@ -206,6 +214,61 @@ func (s *ntsShifts) reseed(seed []byte) {
 	s.setSlots()
 	clear(s.incoming)
 	s.seeded = true
+}
+
+// swap moves the schedule to a new operator set: names are the new
+// operators, oldNames the old ones, keep[i] the old index of new operator
+// i or -1. Operators kept, and those added back (left), keep their last
+// contact, gap and counts. A new operator has no last contact, so the next
+// plan asks it. The order and the slots are drawn again from the same seed
+// for the new count; the grid and shift phases stay, so the slots of the
+// operators that stay active move as little as the new order allows. The
+// handover position starts over: no incoming carries over.
+func (s *ntsShifts) swap(oldNames, names []string, keep []int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.left == nil {
+		s.left = map[string]ntsLeft{}
+	}
+	kept := make([]bool, len(oldNames))
+	for _, j := range keep {
+		if j >= 0 {
+			kept[j] = true
+		}
+	}
+	for j, name := range oldNames {
+		if !kept[j] && s.last[j] != never {
+			s.left[name] = ntsLeft{s.last[j], s.gaps[j]}
+		}
+	}
+	n := len(names)
+	last, gaps := make([]int, n), make([]int, n)
+	missed, counts := make([]bool, n), make([]NTSOperatorCounts, n)
+	for i, j := range keep {
+		if j >= 0 {
+			last[i], gaps[i], missed[i], counts[i] = s.last[j], s.gaps[j], s.missed[j], s.counts[j]
+			continue
+		}
+		last[i], gaps[i] = never, s.gap
+		if l, ok := s.left[names[i]]; ok {
+			last[i], gaps[i] = l.last, l.gap
+			delete(s.left, names[i])
+		}
+	}
+	for name, l := range s.left {
+		if s.q-l.last >= s.maxGap {
+			delete(s.left, name)
+		}
+	}
+	s.last, s.gaps, s.missed, s.counts = last, gaps, missed, counts
+	s.incoming = make([]bool, n)
+	phase, shift0 := s.phase, s.shift0
+	s.setOrder(s.seed, n)
+	s.phase, s.shift0 = phase, shift0
+	if s.seeded {
+		s.actives = ShiftActives(n)
+	}
+	s.setSlots()
 }
 
 func mod(a, m int) int { return (a%m + m) % m }
@@ -246,6 +309,14 @@ func (s *ntsShifts) plan(now int64) []ntsAsk {
 		if s.q >= s.due(k, op) {
 			s.mark(op, s.q)
 			out = append(out, ntsAsk{op, roleActive})
+		}
+	}
+	// An operator a swap added gets its start-round contact now, active
+	// or not. Those with a slot were asked just above.
+	for op, l := range s.last {
+		if l == never {
+			s.mark(op, s.q)
+			out = append(out, ntsAsk{op, roleStart})
 		}
 	}
 	return out
