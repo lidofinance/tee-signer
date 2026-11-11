@@ -208,7 +208,9 @@ BOOT_DISK_TYPE=pd-balanced
 
 # ---- derived names ----------------------------------------------------------
 SERVICE_ACCOUNT="$SA_NAME@$PROJECT_ID.iam.gserviceaccount.com"
-KMS_KEY_RESOURCE="projects/$PROJECT_ID/locations/$REGION/keyRings/$KMS_RING/cryptoKeys/$KMS_KEY"
+# By project number: a runner whose setup has project_number refuses a key
+# named by project ID (platform-gcp/gcp/project.go).
+KMS_KEY_RESOURCE="projects/$PROJECT_NUMBER/locations/$REGION/keyRings/$KMS_RING/cryptoKeys/$KMS_KEY"
 WIF_POOL_RESOURCE="projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$WIF_POOL"
 WIF_PROVIDER_RESOURCE="//iam.googleapis.com/$WIF_POOL_RESOURCE/providers/$WIF_PROVIDER"
 # Every identity of the pool. The pool has one provider, whose attribute

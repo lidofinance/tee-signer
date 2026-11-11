@@ -81,7 +81,7 @@ func statementSetup(t testing.TB) *Setup {
 			SlashingLogStore:    Store{Bucket: "lido-signer-marks-gcp-1"},
 			EncryptedStateStore: &Store{Bucket: "lido-signer-state-gcp-1"},
 			SealingKeyRelease: KeyRelease{WIFProvider: "//iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/signer/providers/attest",
-				KMSKey: "projects/signer/locations/global/keyRings/signer/cryptoKeys/seal-gcp-1", AttestAudience: "signer-runner-identity",
+				KMSKey: "projects/123456789/locations/global/keyRings/signer/cryptoKeys/seal-gcp-1", AttestAudience: "signer-runner-identity",
 				ProjectNumber: 123456789}},
 		PlatformSalt: vsum("platform_salt gcp-1"),
 	}

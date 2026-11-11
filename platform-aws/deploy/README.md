@@ -871,7 +871,9 @@ in its attested identity. The parent can hand over a setup with its own CA.
 That runner shows another setup_hash and finds another, empty mark log, so it
 stops while this signer's shares are stored, and the shares do not open for
 it. Its KMS calls carry its own setup_hash, so it does not get the sealing
-key either. `test-client-ca.pem` is the root of a test PKI made by
+key either. The runner refuses a client certificate listed in the setup's
+`revoked_client_certs`, one of a listed public key, or one below a listed CA
+(`signer-protocol/docs/protocol.md`, "Client roles"). `test-client-ca.pem` is the root of a test PKI made by
 `scripts/make-test-ca.sh`. Its private key is not in the repo.
 
 ### Client certificates, the clock and the CA

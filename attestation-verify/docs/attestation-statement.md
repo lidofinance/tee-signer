@@ -93,8 +93,8 @@ Each leaf has its own 32-byte salt. A salt of 32 zero bytes is refused everywher
 | --- | --- | --- |
 | 0 | `fork_schedule` | count:u8 (0 to 16), then per fork epoch:u64 and version[4], ascending epochs, one fork per epoch |
 | 1 | `gloas_fork_epoch` | has:u8 (0 or 1), then u64 if has is 1; must be the epoch of a fork in `fork_schedule` |
-| 2 | `revoked_client_certs` | version:u8 (1), count:u8 (0 to 128), then SHA-256 hashes of DER client certificates (leaf, intermediate or CA) the runner refuses, sorted, none zero. An update adds entries with the usual count; dropping one needs every approver in force (section 4) |
-| 3 | `time_servers` | version:u8 (1), count:u8 (0 to 16), then per server a str: a catalog ID (1 to 32 of a-z, 0-9, '.', '-'), alone or with `@` and an alt host name; sorted by bytes, each ID once. The servers the clock dials besides the image's default set |
+| 2 | `revoked_client_certs` | version:u8 (1), count:u8 (0 to 128), then SHA-256 hashes the runner refuses, sorted, none zero: of the DER of a client certificate (leaf, intermediate or CA), which revokes that certificate, or of a DER SubjectPublicKeyInfo, which revokes every certificate of that key. An update adds entries with the usual count; dropping one needs every approver in force (section 4) |
+| 3 | `time_servers` | version:u8 (1), count:u8 (0 to 10), then per server a str: a catalog ID (1 to 32 of a-z, 0-9, '.', '-'), alone or with `@` and an alt host name; sorted by bytes, each ID once. The servers the clock dials besides the image's default set |
 
 Every list without an order of its own is sorted and holds no repeats, so one set of values has one encoding. An optional field keeps its leaf when absent: the value is the single byte 0. A leaf value that starts with a version byte (`time_policy`, `deposit_policy`, `exit_policy`, `revoked_client_certs`, `time_servers`) is read only at version 1 for now. A later image may read a higher version of a field, and a config update can then move the field to it without a new setup format.
 

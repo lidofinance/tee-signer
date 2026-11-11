@@ -1062,6 +1062,36 @@ request on the connection. Once the trusted clock passes the earliest
 the connection closes (ATTEST-ROLES-01). A client reconnects with a valid
 certificate.
 
+The runner refuses a client whose verified chain holds a revoked
+certificate. An entry of `revoked_client_certs` (open group) is one of
+two hashes:
+
+- the SHA-256 of a certificate's DER, which revokes that one certificate;
+- the SHA-256 of a DER SubjectPublicKeyInfo, which revokes every
+  certificate of that key.
+
+An entry may name a leaf, an intermediate or a CA, and a revoked CA
+refuses every certificate below it. A certificate hash is per
+certificate: a second certificate for the same key, such as a reissued
+leaf or a cross-signed intermediate, passes. For a compromised key, list
+its public key hash, or the hash of every certificate of it. The list in
+force is the open group's in force (version 0 is the setup's own list)
+plus the pending open update's, so a revocation applies as soon as the
+runner takes its CONFIG_UPDATE, before its effective time. An update
+that drops an entry of that list needs every approver in force, also an
+update that replaces a pending one and leaves out an entry only the
+pending one holds; the entry goes once that update is in force. The
+runner checks the list in the handshake and again before
+every request, HEALTH too: a revocation also closes the connections
+already open, with `FORBIDDEN` on their next request. For a handshake
+without trusted time the runner checks the chain it built without the
+dates, CA included. While the body of the open update in force, or of the
+pending one, is unreadable, the runner does not know every revocation. It
+keeps every entry it knew, and a TLS client gets `FORBIDDEN` for any
+request but HEALTH, IDENTITY, ATTEST and CONFIG_UPDATE until that update
+is sent again. IDENTITY stays because a client sends it first on each new
+connection (signer-protocol/remote), before the CONFIG_UPDATE.
+
 While the trusted clock gives no reading, the runner answers `HEALTH` and
 nothing else, so a watchdog or a client can see why: `clock_unix` is 0 and
 `ready` is false. Every other request gets `FORBIDDEN` and the connection

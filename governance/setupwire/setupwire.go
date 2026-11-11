@@ -168,8 +168,13 @@ const (
 	// example to make room once the list is full.
 	MaxRevokedClientCerts = 128
 	// MaxTimeServers caps time_servers, the servers a setup adds to the
-	// image's default set.
-	MaxTimeServers = 16
+	// image's default set. The runner dials at most nts.MaxServers (16, the
+	// Rust quorum's limit) in all, the default set (6 today) included, so
+	// this must stay at most nts.MaxServers minus the size of the default
+	// set: a longer list would pass here and fail only at start. Governance
+	// does not import trusted-time; tee-signer's
+	// TestMaxTimeServersFitsTheQuorum ties the numbers together.
+	MaxTimeServers = 10
 	// MaxTimeServerSpec is the longest time_servers entry: an ID of up to
 	// 32 octets (ntscatalog.MaxLabel), '@' and a host name.
 	MaxTimeServerSpec = 255

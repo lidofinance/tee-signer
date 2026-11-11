@@ -35,8 +35,11 @@ type durableCopy struct {
 	// that fails the check; else the runner logs a warning.
 	lockDays    uint32
 	requireLock bool
-	log         *slog.Logger
-	store       *statestore.Store
+	// projectNumber is the setup's GCP project_number: the copy's bucket
+	// must be in that project (checkStoreProject). 0: no check.
+	projectNumber uint64
+	log           *slog.Logger
+	store         *statestore.Store
 }
 
 func newDurableCopy(spec, signer string, create bool, log *slog.Logger) (*durableCopy, error) {
@@ -62,6 +65,9 @@ func (d *durableCopy) open(ctx context.Context, p *platform.Platform) (platform.
 		return p.Store, nil
 	}
 	if err := d.checkStore(ctx, l, true); err != nil {
+		return nil, err
+	}
+	if err := checkStoreProject(ctx, l, d.projectNumber, "-state-store"); err != nil {
 		return nil, err
 	}
 	opt := statestore.Options{SetupHash: d.setupHash, AllowCreate: d.create, Log: d.log}

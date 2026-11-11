@@ -111,6 +111,9 @@ type Server struct {
 	// Subscription, if set, is the Azure container's subscription: the
 	// management plane answers 404 for any other, as Azure does.
 	Subscription string
+	// ProjectNumber, if set, is the GCS bucket's projectNumber in its
+	// metadata. Unset: the metadata has no projectNumber.
+	ProjectNumber string
 
 	mu       sync.Mutex
 	objects  map[string][]*version // name -> versions, oldest first
@@ -658,12 +661,15 @@ func (s *Server) serveGCS(w http.ResponseWriter, r *http.Request, body []byte) {
 		}
 		gcsErr(w, http.StatusNotFound, "No such object")
 	case r.Method == http.MethodGet && r.URL.Path == "/storage/v1/b/"+s.Bucket:
-		if s.lock.None {
-			_, _ = io.WriteString(w, "{}")
-			return
+		b := map[string]any{}
+		if !s.lock.None {
+			b["retentionPolicy"] = map[string]any{
+				"retentionPeriod": strconv.Itoa(s.lock.Days * 86400), "effectiveTime": "2026-10-01T00:00:00Z", "isLocked": s.lock.Compliance}
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"retentionPolicy": map[string]any{
-			"retentionPeriod": strconv.Itoa(s.lock.Days * 86400), "effectiveTime": "2026-10-01T00:00:00Z", "isLocked": s.lock.Compliance}})
+		if s.ProjectNumber != "" {
+			b["projectNumber"] = s.ProjectNumber
+		}
+		_ = json.NewEncoder(w).Encode(b)
 	default:
 		gcsErr(w, http.StatusNotImplemented, "not implemented")
 	}

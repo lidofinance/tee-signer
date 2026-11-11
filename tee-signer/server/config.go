@@ -81,6 +81,9 @@ type UpdatesOptions struct {
 	// when NewUpdates is called; ClockPolicy nil: the setup's values.
 	ClockServers []string
 	ClockPolicy  *setupwire.TimePolicy
+	// OnRevoked, if set, gets the revoked client certificates of each view
+	// (revoked.go, UseRevoked sets it).
+	OnRevoked func(list [][32]byte, complete bool)
 }
 
 // logTimeout bounds the log writes of one CONFIG_UPDATE.
@@ -437,6 +440,7 @@ func (u *Updates) reconcileLocked(now uint64) {
 	u.lastNow = now
 	u.logSt = u.opt.Log.State()
 	u.view = u.compute(u.logSt, now)
+	u.publishRevokedLocked()
 	next := nextDue(u.view.state)
 	if next < u.next && u.signer != nil {
 		// TS-TIME-01: guards taken so far end at the old next time.
@@ -748,6 +752,8 @@ func refusedAs(err error, what string) error {
 // the group's state in force; the change rules (setupwire Update.Decide):
 // k signatures of the approvers in force, for a rotation every key of the
 // new set, and the wait of the path the signatures allow; for an open
+// update that drops a revocation in force or pending, every approver
+// (Decide, checkPendingRevocations); for an open
 // update that changes time_servers, a list the clock takes
 // (CheckTimeServers); activate_at within the wait plus the activation
 // horizon; the core's checks of the values, for an open update the fork
@@ -848,6 +854,11 @@ func (u *Updates) Accept(ctx context.Context, raw []byte) (uint8, backend.SetupS
 	d, err := upd.Decide(&u.opt.Setup.Chain, v.locked, v.open)
 	if err != nil {
 		return 0, none, backend.Refused(backend.StatusBadRequest, "config update: %v", err)
+	}
+	// Decide compares with the revocations in force; the pending ones count
+	// too (revoked.go).
+	if err := checkPendingRevocations(upd, &v, &d); err != nil {
+		return 0, none, err
 	}
 	if b.Group == setupwire.GroupOpen && !slices.Equal(b.Open.TimeServers, v.open.TimeServers) {
 		// The clock must take the list when the update comes into force.

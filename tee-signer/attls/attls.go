@@ -25,6 +25,7 @@ import (
 	"math/big"
 	"net"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -132,7 +133,10 @@ func ServerConfig(caPEM []byte, now func() (time.Time, error), opts ...Option) (
 			if err != nil {
 				return fmt.Errorf("attls: no trusted time to check the client certificate: %w", err)
 			}
-			return CheckDates(&cs, t)
+			if err := CheckDates(&cs, t); err != nil {
+				return err
+			}
+			return o.revoked.Check(cs.VerifiedChains)
 		},
 	}
 	// Without trusted time at ClientHello: the chain check without dates,
@@ -140,10 +144,11 @@ func ServerConfig(caPEM []byte, now func() (time.Time, error), opts ...Option) (
 	noTime := cfg.Clone()
 	noTime.ClientAuth = tls.RequireAnyClientCert
 	noTime.VerifyConnection = func(cs tls.ConnectionState) error {
-		if err := verifyUndated(undatedRoots, cs.PeerCertificates); err != nil {
+		chains, err := verifyUndated(undatedRoots, cs.PeerCertificates)
+		if err != nil {
 			return fmt.Errorf("attls: no trusted time, and the client certificate chain fails even without its dates: %w", err)
 		}
-		return nil
+		return o.revoked.Check(chains)
 	}
 	cfg.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
 		if _, err := now(); err != nil {
@@ -169,17 +174,43 @@ func undated(c *x509.Certificate) *x509.Certificate {
 // verifyUndated is the chain check of crypto/tls without the dates: certs
 // (leaf first) must chain to a CA of roots, an undated copy of the CA
 // file, with clientAuth allowed at every step. It gives x509 a fixed
-// nonzero time, never the system clock.
-func verifyUndated(roots *x509.CertPool, certs []*x509.Certificate) error {
+// nonzero time, never the system clock. The chains it returns hold the
+// undated copies, whose DER is the original's.
+func verifyUndated(roots *x509.CertPool, certs []*x509.Certificate) ([][]*x509.Certificate, error) {
 	if len(certs) == 0 {
-		return errors.New("attls: no client certificate")
+		return nil, errors.New("attls: no client certificate")
 	}
 	opts := x509.VerifyOptions{Roots: roots, Intermediates: x509.NewCertPool(), CurrentTime: noTrustedTime, KeyUsages: clientAuth}
 	for _, c := range certs[1:] {
 		opts.Intermediates.AddCert(undated(c))
 	}
-	_, err := undated(certs[0]).Verify(opts)
-	return err
+	return undated(certs[0]).Verify(opts)
+}
+
+// UndatedRoots is the pool of undated copies of the CA certificates in
+// caPEM, the roots the handshake without trusted time checks against.
+func UndatedRoots(caPEM []byte) (*x509.CertPool, error) {
+	_, cas, err := parseCAs(caPEM)
+	if err != nil {
+		return nil, err
+	}
+	p := x509.NewCertPool()
+	for _, c := range cas {
+		p.AddCert(undated(c))
+	}
+	return p, nil
+}
+
+// UndatedChains is the chain check of a handshake without trusted time:
+// the chains of peer (leaf first) to roots (UndatedRoots) without their
+// dates. The server keeps them to check the CA certificates of such a
+// connection against the revoked set before its chain is checked with its
+// dates. Their certificates have the original DER.
+func UndatedChains(roots *x509.CertPool, peer []*x509.Certificate) ([][]*x509.Certificate, error) {
+	if roots == nil {
+		return nil, errors.New("attls: no client CA to check the certificate against")
+	}
+	return verifyUndated(roots, peer)
 }
 
 // VerifyAt checks the client certificates of a connection whose handshake
@@ -215,7 +246,137 @@ func VerifyAt(roots *x509.CertPool, peer []*x509.Certificate, t time.Time) ([][]
 type Option func(*options)
 
 type options struct {
-	chain []byte
+	chain   []byte
+	revoked *Revoked
+}
+
+// WithRevoked refuses, in the handshake, a client whose verified chain
+// holds a certificate of r. r may change after ServerConfig returns: each
+// handshake reads the set in force then.
+func WithRevoked(r *Revoked) Option {
+	return func(o *options) { o.revoked = r }
+}
+
+// Revoked is the set of client certificates the runner refuses (the
+// setup's revoked_client_certs). An entry is the SHA-256 of the DER of a
+// leaf, intermediate or CA certificate, which revokes that certificate, or
+// the SHA-256 of a DER SubjectPublicKeyInfo, which revokes every
+// certificate of that key. A config update can change it while the
+// runner runs, so Update and Check may run at the same time. A nil or zero
+// Revoked refuses nothing.
+type Revoked struct {
+	mu  sync.Mutex // orders Update
+	set atomic.Pointer[revokedSet]
+}
+
+type revokedSet struct {
+	m          map[[32]byte]bool
+	incomplete bool
+}
+
+// Set replaces the set with the union of lists: Update with complete set.
+func (r *Revoked) Set(lists ...[][32]byte) {
+	var all [][32]byte
+	for _, l := range lists {
+		all = append(all, l...)
+	}
+	r.Update(all, true)
+}
+
+// Update sets the revoked certificates in force. complete: list is the
+// whole set in force, and replaces the old one, so a dropped entry goes.
+// Not complete: a body that may hold more revocations is unreadable. The
+// set is then the old set plus list, never smaller, and Incomplete reports
+// true until a complete Update.
+func (r *Revoked) Update(list [][32]byte, complete bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := &revokedSet{m: map[[32]byte]bool{}, incomplete: !complete}
+	if old := r.set.Load(); old != nil && !complete {
+		for h := range old.m {
+			n.m[h] = true
+		}
+	}
+	for _, h := range list {
+		n.m[h] = true
+	}
+	r.set.Store(n)
+}
+
+// Incomplete reports whether the last Update was not complete: the runner
+// does not know every revocation in force.
+func (r *Revoked) Incomplete() bool {
+	if r == nil {
+		return false
+	}
+	s := r.set.Load()
+	return s != nil && s.incomplete
+}
+
+// Len is the number of revoked certificates in force.
+func (r *Revoked) Len() int {
+	if r == nil {
+		return 0
+	}
+	if s := r.set.Load(); s != nil {
+		return len(s.m)
+	}
+	return 0
+}
+
+// Check refuses chains if a certificate of any of them is revoked
+// (CheckHashes of CertHashes).
+func (r *Revoked) Check(chains [][]*x509.Certificate) error {
+	return r.CheckHashes(CertHashes(chains))
+}
+
+// CheckHashes refuses hs if one of them is revoked. A revoked CA refuses
+// every certificate below it. A revoked leaf is in every chain of its
+// client.
+func (r *Revoked) CheckHashes(hs []CertHash) error {
+	if r == nil {
+		return nil
+	}
+	s := r.set.Load()
+	if s == nil || len(s.m) == 0 {
+		return nil
+	}
+	for _, h := range hs {
+		switch {
+		case s.m[h.Cert]:
+			return fmt.Errorf("attls: certificate %q (sha256 %x) is revoked (revoked_client_certs)", h.Name, h.Cert[:8])
+		case s.m[h.Key]:
+			return fmt.Errorf("attls: the key of certificate %q (public key sha256 %x) is revoked (revoked_client_certs)", h.Name, h.Key[:8])
+		}
+	}
+	return nil
+}
+
+// CertHash names one certificate for the revocation check: Cert is the
+// SHA-256 of its DER, Key that of its DER SubjectPublicKeyInfo, Name its
+// common name for errors.
+type CertHash struct {
+	Cert, Key [32]byte
+	Name      string
+}
+
+// CertHashes are the hashes of every certificate of chains, each
+// certificate once. A server computes them once per connection and checks
+// them at every frame (CheckHashes).
+func CertHashes(chains [][]*x509.Certificate) []CertHash {
+	var out []CertHash
+	seen := map[[32]byte]bool{}
+	for _, chain := range chains {
+		for _, c := range chain {
+			h := sha256.Sum256(c.Raw)
+			if seen[h] {
+				continue
+			}
+			seen[h] = true
+			out = append(out, CertHash{Cert: h, Key: sha256.Sum256(c.RawSubjectPublicKeyInfo), Name: c.Subject.CommonName})
+		}
+	}
+	return out
 }
 
 // WithChain names the chain the runner signs for in its TLS certificate:

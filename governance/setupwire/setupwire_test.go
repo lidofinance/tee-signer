@@ -143,7 +143,7 @@ func TestDecodeSetupBytes(t *testing.T) {
 		{"revoked_client_certs version 2", set(revokedAt, 2), "revoked_client_certs version 2, want 1"},
 		{"revoked count 129", set(revokedAt+1, 129), "129 revoked_client_certs, at most 128"},
 		{"time_servers version 2", set(serversAt, 2), "time_servers version 2, want 1"},
-		{"time_servers count 17", set(serversAt+1, 17), "17 time_servers, at most 16"},
+		{"time_servers count 11", set(serversAt+1, 11), "11 time_servers, at most 10"},
 		{"empty time server", set(serversAt+2, 0), "time_servers entry is empty"},
 		{"empty signer name", set(o.private, 0), "signer_name is empty"},
 		{"oversize", append(slices.Clone(b), make([]byte, MaxSetup)...), "at most 65536"},

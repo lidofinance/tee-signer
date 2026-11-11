@@ -197,7 +197,7 @@ func samples(t testing.TB) map[string]*Setup {
 			SlashingLogStore:    Store{Bucket: "signer-marks-gcp"},
 			EncryptedStateStore: &Store{Bucket: "signer-state_gcp"},
 			SealingKeyRelease: KeyRelease{WIFProvider: "//iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/signer/providers/attest",
-				KMSKey: "projects/p/locations/global/keyRings/signer/cryptoKeys/seal", AttestAudience: "signer-runner-identity"}})
+				KMSKey: "projects/123456789/locations/global/keyRings/signer/cryptoKeys/seal", AttestAudience: "signer-runner-identity"}})
 		g.Locked.AllowedImageMeasurements = nil
 		g.Locked.AllowedFeeRecipients = nil
 		g.Locked.DepositPolicy.AllowedDepositAmounts = nil
