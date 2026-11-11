@@ -1,51 +1,60 @@
 package server
 
-import (
-	"github.com/lidofinance/tee-signer/governance/setupwire"
-)
+import "github.com/lidofinance/tee-signer/tee-signer/attls"
 
 // Revoked client certificates (revoked_client_certs, open group). The
-// runner refuses a TLS client whose verified chain holds a revoked leaf,
+// runner refuses a TLS client whose chain holds a revoked leaf,
 // intermediate or CA certificate: at the handshake (attls.WithRevoked) and
 // at every frame (stillValid), so a revocation also closes the connections
 // already open.
 //
-// The set in force is the union of the setup's list, the active open
-// update's and the pending one's. A pending revocation thus applies as soon
-// as the runner takes the update, before its effective time. Revocations
-// only add entries, except that an update may drop the entry of a
-// certificate that has expired; such an entry stays in the union until
-// the drop is in force and the set is refreshed, which refuses only a
-// certificate that no longer works.
+// The set in force is the list of the open group in force (version 0 is
+// the setup's own list) plus the pending open update's. A pending
+// revocation thus applies as soon as the runner takes the update, before
+// its effective time. An update that drops an entry needs every approver
+// in force (setupwire Update.Decide); the entry goes once that update is
+// in force. Updates gives the set to Revoked at each view it computes
+// (reconcileLocked calls publishRevokedLocked): at start, after each
+// CONFIG_UPDATE, at each effective time, and after a failed record write.
+//
+// While the open body in force or the pending one is unreadable, the set
+// is not complete: Revoked keeps every hash it held and adds what is
+// readable, so it never shrinks, and the server serves TLS clients HEALTH
+// and CONFIG_UPDATE only (stillValid) until the body is back.
 
-// RevokedClientCerts is the union of the revoked_client_certs of the
-// setup, of the open update in force and of the pending one.
-func (u *Updates) RevokedClientCerts() [][32]byte {
+// UseRevoked makes u give r the revoked certificates of each view, and
+// gives it those of the view now. Call it once, after StartConfig.
+func (u *Updates) UseRevoked(r *attls.Revoked) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	return revokedOf(u.opt.Setup, &u.view)
+	u.opt.OnRevoked = r.Update
+	u.publishRevokedLocked()
 }
 
-func revokedOf(s *setupwire.Setup, v *view) [][32]byte {
-	var out [][32]byte
-	if s != nil {
-		out = append(out, s.Open.RevokedClientCerts...)
+// publishRevokedLocked gives the revoked certificates of the view to
+// OnRevoked. u.mu is held.
+func (u *Updates) publishRevokedLocked() {
+	if u.opt.OnRevoked != nil {
+		u.opt.OnRevoked(revokedOf(&u.view))
 	}
-	for _, o := range []*setupwire.Open{v.open, v.newest} {
-		if o != nil {
-			out = append(out, o.RevokedClientCerts...)
+}
+
+// revokedOf is the revoked certificates of view v: the open values in
+// force and the pending open update's. complete is false when either body
+// is unreadable.
+func revokedOf(v *view) (list [][32]byte, complete bool) {
+	complete = true
+	if v.open != nil {
+		list = append(list, v.open.RevokedClientCerts...)
+	} else {
+		complete = false
+	}
+	if p := v.state.Open.Pending; p != nil {
+		if v.newest != nil && v.newestRef == (updateRef{p.Version, p.Hash}) {
+			list = append(list, v.newest.RevokedClientCerts...)
+		} else {
+			complete = false
 		}
 	}
-	return out
-}
-
-// RefreshRevokedClientCerts sets Revoked to the list of the config in
-// force (Updates.RevokedClientCerts). The runner calls it at start and the
-// server after each accepted CONFIG_UPDATE. Without Updates or Revoked it
-// does nothing.
-func (s *Server) RefreshRevokedClientCerts() {
-	if s.Updates == nil || s.Revoked == nil {
-		return
-	}
-	s.Revoked.Set(s.Updates.RevokedClientCerts())
+	return list, complete
 }

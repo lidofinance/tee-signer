@@ -73,6 +73,9 @@ type UpdatesOptions struct {
 	Clock    platform.Clock
 	AnyClock bool
 	Logger   *slog.Logger
+	// OnRevoked, if set, gets the revoked client certificates of each view
+	// (revoked.go, UseRevoked sets it).
+	OnRevoked func(list [][32]byte, complete bool)
 }
 
 // logTimeout bounds the log writes of one CONFIG_UPDATE.
@@ -405,6 +408,7 @@ func (u *Updates) reconcileLocked(now uint64) {
 	u.lastNow = now
 	u.logSt = u.opt.Log.State()
 	u.view = u.compute(u.logSt, now)
+	u.publishRevokedLocked()
 	next := nextDue(u.view.state)
 	if next < u.next && u.signer != nil {
 		// TS-TIME-01: guards taken so far end at the old next time.

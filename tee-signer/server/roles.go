@@ -47,8 +47,10 @@ type client struct {
 	// that check.
 	undated bool
 	peer    []*x509.Certificate
-	// chains are the verified chains, for the revocation check of each
-	// frame (stillValid). nil while undated.
+	// chains are the chains for the revocation check of each frame
+	// (stillValid): the verified chains, or while undated the chains the
+	// handshake checked without their dates (attls.UndatedChains), CA
+	// certificates included.
 	chains [][]*x509.Certificate
 }
 
@@ -64,13 +66,23 @@ var localAllows = func() map[wire.MsgType]grant {
 	return m
 }()
 
-// clientOf is the client of a TLS connection after its handshake.
-func clientOf(cs *tls.ConnectionState) *client {
+// clientOf is the client of a TLS connection after its handshake. For a
+// handshake without trusted time it checks the chain without its dates
+// against UndatedRoots once more, to keep the chains with their CA
+// certificates; without UndatedRoots, or if that check fails, it keeps the
+// certificates the client sent.
+func (s *Server) clientOf(cs *tls.ConnectionState) *client {
 	cl := &client{role: attls.RoleOf(cs), notAfter: attls.NotAfter(cs), chains: cs.VerifiedChains}
 	if len(cs.PeerCertificates) > 0 {
 		cl.cert = sha256.Sum256(cs.PeerCertificates[0].Raw)
 		if len(cs.VerifiedChains) == 0 {
 			cl.undated, cl.peer = true, cs.PeerCertificates
+			cl.chains = [][]*x509.Certificate{cs.PeerCertificates}
+			if s.UndatedRoots != nil {
+				if chains, err := attls.UndatedChains(s.UndatedRoots, cs.PeerCertificates); err == nil {
+					cl.chains = chains
+				}
+			}
 		}
 	}
 	return cl
@@ -87,19 +99,24 @@ func clientOf(cs *tls.ConnectionState) *client {
 // the first request that has a reading (checkUndated). A local client has
 // no certificate.
 //
-// Every frame, HEALTH too, also checks the chain against the revoked
+// Every frame, HEALTH too, also checks the chains against the revoked
 // certificates in force (Revoked), so a revocation that a config update
-// brings closes the connections already open.
+// brings closes the connections already open. While an open update body
+// is unreadable the runner does not know every revocation
+// (Revoked.Incomplete): a TLS client may then send HEALTH and
+// CONFIG_UPDATE only. CONFIG_UPDATE stays, as sending the update again
+// restores its body, and its authority is the approvers' signatures, not
+// the client certificate.
 func (s *Server) stillValid(cl *client, t wire.MsgType) error {
 	if cl == nil || cl.local {
 		return nil
 	}
-	chains := cl.chains
-	if cl.undated {
-		chains = [][]*x509.Certificate{cl.peer}
-	}
-	if err := s.Revoked.Check(chains); err != nil {
+	if err := s.Revoked.Check(cl.chains); err != nil {
 		return backend.Refused(backend.StatusForbidden, "%v", err)
+	}
+	if s.Revoked.Incomplete() && t != wire.TypeHealth && t != wireadmin.TypeConfigUpdate {
+		return backend.Refused(backend.StatusForbidden,
+			"an open config update body is unreadable, so the revoked client certificates in force are unknown; send that update again to restore its body")
 	}
 	now, err := s.certNow()
 	if err != nil {

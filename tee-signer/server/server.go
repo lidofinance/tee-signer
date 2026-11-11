@@ -78,6 +78,12 @@ type Server struct {
 	// time has its chain checked against it once the clock has a reading
 	// (roles.go). nil: such a connection gets HEALTH only.
 	ClientCAs *x509.CertPool
+	// UndatedRoots are the same CAs without their dates
+	// (attls.UndatedRoots). For a handshake without trusted time the server
+	// keeps the chains to them, CA certificates included, for the
+	// revocation check of each frame (roles.go). nil: it keeps the
+	// certificates the client sent.
+	UndatedRoots *x509.CertPool
 	// Revoked is the set of revoked client certificates in force
 	// (revoked.go), the one the TLS configuration refuses at the handshake
 	// (attls.WithRevoked). Every frame of a TLS client checks it again.
@@ -740,7 +746,7 @@ func (s *Server) handleConn(ctx context.Context, c net.Conn) {
 			return
 		}
 		cs := tc.ConnectionState()
-		cl = clientOf(&cs)
+		cl = s.clientOf(&cs)
 		if cl.undated {
 			s.Log.Warn("tls handshake without trusted time: HEALTH only until the clock has a reading", "remote", c.RemoteAddr().String(),
 				"cert_sha256", hex.EncodeToString(cl.cert[:8]))
@@ -1013,7 +1019,6 @@ func (s *Server) configUpdate(ctx context.Context, p []byte) ([]byte, error) {
 		s.Log.Warn("config update refused", "err", err)
 		return nil, err
 	}
-	s.RefreshRevokedClientCerts()
 	return wireadmin.EncodeConfigUpdateResponse(outcome, &st), nil
 }
 

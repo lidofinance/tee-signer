@@ -25,6 +25,7 @@ import (
 	"math/big"
 	"net"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -186,6 +187,32 @@ func verifyUndated(roots *x509.CertPool, certs []*x509.Certificate) ([][]*x509.C
 	return undated(certs[0]).Verify(opts)
 }
 
+// UndatedRoots is the pool of undated copies of the CA certificates in
+// caPEM, the roots the handshake without trusted time checks against.
+func UndatedRoots(caPEM []byte) (*x509.CertPool, error) {
+	_, cas, err := parseCAs(caPEM)
+	if err != nil {
+		return nil, err
+	}
+	p := x509.NewCertPool()
+	for _, c := range cas {
+		p.AddCert(undated(c))
+	}
+	return p, nil
+}
+
+// UndatedChains is the chain check of a handshake without trusted time:
+// the chains of peer (leaf first) to roots (UndatedRoots) without their
+// dates. The server keeps them to check the CA certificates of such a
+// connection against the revoked set before its chain is checked with its
+// dates. Their certificates have the original DER.
+func UndatedChains(roots *x509.CertPool, peer []*x509.Certificate) ([][]*x509.Certificate, error) {
+	if roots == nil {
+		return nil, errors.New("attls: no client CA to check the certificate against")
+	}
+	return verifyUndated(roots, peer)
+}
+
 // VerifyAt checks the client certificates of a connection whose handshake
 // had no trusted time (ServerConfig) at the trusted reading t: the chain
 // check crypto/tls makes in a handshake with trusted time, against roots
@@ -233,21 +260,55 @@ func WithRevoked(r *Revoked) Option {
 // Revoked is the set of client certificates the runner refuses: the
 // SHA-256 of the DER of a leaf, intermediate or CA certificate (the
 // setup's revoked_client_certs). A config update can change it while the
-// runner runs, so Set and Check may run at the same time. A nil or zero
+// runner runs, so Update and Check may run at the same time. A nil or zero
 // Revoked refuses nothing.
 type Revoked struct {
-	set atomic.Pointer[map[[32]byte]bool]
+	mu  sync.Mutex // orders Update
+	set atomic.Pointer[revokedSet]
 }
 
-// Set replaces the set with the union of lists.
+type revokedSet struct {
+	m          map[[32]byte]bool
+	incomplete bool
+}
+
+// Set replaces the set with the union of lists: Update with complete set.
 func (r *Revoked) Set(lists ...[][32]byte) {
-	m := map[[32]byte]bool{}
+	var all [][32]byte
 	for _, l := range lists {
-		for _, h := range l {
-			m[h] = true
+		all = append(all, l...)
+	}
+	r.Update(all, true)
+}
+
+// Update sets the revoked certificates in force. complete: list is the
+// whole set in force, and replaces the old one, so a dropped entry goes.
+// Not complete: a body that may hold more revocations is unreadable. The
+// set is then the old set plus list, never smaller, and Incomplete reports
+// true until a complete Update.
+func (r *Revoked) Update(list [][32]byte, complete bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := &revokedSet{m: map[[32]byte]bool{}, incomplete: !complete}
+	if old := r.set.Load(); old != nil && !complete {
+		for h := range old.m {
+			n.m[h] = true
 		}
 	}
-	r.set.Store(&m)
+	for _, h := range list {
+		n.m[h] = true
+	}
+	r.set.Store(n)
+}
+
+// Incomplete reports whether the last Update was not complete: the runner
+// does not know every revocation in force.
+func (r *Revoked) Incomplete() bool {
+	if r == nil {
+		return false
+	}
+	s := r.set.Load()
+	return s != nil && s.incomplete
 }
 
 // Len is the number of revoked certificates in force.
@@ -255,8 +316,8 @@ func (r *Revoked) Len() int {
 	if r == nil {
 		return 0
 	}
-	if m := r.set.Load(); m != nil {
-		return len(*m)
+	if s := r.set.Load(); s != nil {
+		return len(s.m)
 	}
 	return 0
 }
@@ -268,13 +329,13 @@ func (r *Revoked) Check(chains [][]*x509.Certificate) error {
 	if r == nil {
 		return nil
 	}
-	m := r.set.Load()
-	if m == nil || len(*m) == 0 {
+	s := r.set.Load()
+	if s == nil || len(s.m) == 0 {
 		return nil
 	}
 	for _, chain := range chains {
 		for _, c := range chain {
-			if h := sha256.Sum256(c.Raw); (*m)[h] {
+			if h := sha256.Sum256(c.Raw); s.m[h] {
 				return fmt.Errorf("attls: certificate %q (sha256 %x) is revoked (revoked_client_certs)", c.Subject.CommonName, h[:8])
 			}
 		}

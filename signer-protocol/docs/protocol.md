@@ -1066,13 +1066,18 @@ The runner refuses a client whose verified chain holds a revoked
 certificate: one whose SHA-256 of the DER is in `revoked_client_certs`
 (open group). The entry may name a leaf, an intermediate or a CA, and a
 revoked CA refuses every certificate below it. The list in force is the
-union of the setup's list, the active open update's and the pending one's,
-so a revocation applies as soon as the runner takes its CONFIG_UPDATE,
-before its effective time. The runner checks the list in the handshake and
-again before every request, HEALTH too: a revocation also closes the
-connections already open, with `FORBIDDEN` on their next request. An
-update can drop only the entry of a certificate that has expired; the
-runner may keep refusing it until the next start.
+open group's in force (version 0 is the setup's own list) plus the
+pending open update's, so a revocation applies as soon as the runner
+takes its CONFIG_UPDATE, before its effective time. An update that drops
+an entry needs every approver in force; the entry goes once that update
+is in force. The runner checks the list in the handshake and again before
+every request, HEALTH too: a revocation also closes the connections
+already open, with `FORBIDDEN` on their next request. For a handshake
+without trusted time the runner checks the chain it built without the
+dates, CA included. While the body of the open update in force, or of the
+pending one, is unreadable, the runner does not know every revocation. It
+keeps every entry it knew, and a TLS client gets `FORBIDDEN` for any
+request but HEALTH and CONFIG_UPDATE until that update is sent again.
 
 While the trusted clock gives no reading, the runner answers `HEALTH` and
 nothing else, so a watchdog or a client can see why: `clock_unix` is 0 and

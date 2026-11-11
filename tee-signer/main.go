@@ -317,17 +317,18 @@ func run() (err error) {
 		// Shares are sealed under setup_hash and the log's log_id. IDENTITY,
 		// ATTEST and HEALTH carry setup_hash and the config state in force.
 		srv.SetupHash, srv.LogID = boot.setup.SHA256, claimed.logID
+		// The revoked client certificates in force (server/revoked.go):
+		// the config updates keep them current, else the setup's list.
+		srv.Revoked = &attls.Revoked{}
+		srv.Revoked.Set(boot.setup.Wire.Open.RevokedClientCerts)
 		if updates != nil {
+			updates.UseRevoked(srv.Revoked)
 			updates.Attach(signer)
 			srv.Updates, srv.State = updates, updates.SetupState
 			go updates.Run(ctx, configSyncEvery)
 			go claimed.log.RefreshLoop(ctx, markRefreshEvery)
 		}
 		srv.KeyReleaseHash, srv.KeyLock, srv.KeyLockWhy = rule.Hash, rule.Lock, rule.Why
-		// The revoked client certificates in force (server/revoked.go).
-		srv.Revoked = &attls.Revoked{}
-		srv.Revoked.Set(boot.setup.Wire.Open.RevokedClientCerts)
-		srv.RefreshRevokedClientCerts()
 	}
 	applyPlainImport(srv)
 	if *sealedImport {
@@ -351,6 +352,9 @@ func run() (err error) {
 			return err
 		}
 		srv.ClientCAs = tlsCfg.ClientCAs
+		if srv.UndatedRoots, err = attls.UndatedRoots(caPEM); err != nil {
+			return err
+		}
 	}
 	// A sealing key from a stored blob seals nothing until every stored
 	// share opens under it (AWS-KMS-02, server.ProveSealingKey).

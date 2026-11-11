@@ -101,4 +101,13 @@ func TestRevokedNilAndZero(t *testing.T) {
 	if r.Len() != 3 {
 		t.Fatalf("union of two lists: %d entries, want 3", r.Len())
 	}
+	// Incomplete: never smaller, and Incomplete until a complete Update.
+	r.Update([][32]byte{{4}}, false)
+	if r.Len() != 4 || !r.Incomplete() {
+		t.Fatalf("incomplete update: %d entries, incomplete %v", r.Len(), r.Incomplete())
+	}
+	r.Update([][32]byte{{4}}, true)
+	if r.Len() != 1 || r.Incomplete() {
+		t.Fatalf("complete update: %d entries, incomplete %v", r.Len(), r.Incomplete())
+	}
 }
