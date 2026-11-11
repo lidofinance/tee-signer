@@ -96,12 +96,15 @@ func sampleLocked() Locked {
 		BuilderGasLimitMin:                  30_000_000,
 		BuilderGasLimitMax:                  60_000_000,
 		BuilderRegistrationMaxFutureSeconds: 3600,
-		MinActivationBalance:                32 * eth,
-		MaxEffectiveBalance:                 2048 * eth,
-		WithdrawalCredentials:               credentials(0x02, 0x42),
-		AllowedDepositAmounts:               []uint64{eth / 2, 32 * eth},
 		BareRootDomains:                     1<<2 | 1<<6,
 		AllowedBuilderRequestAuthDataRoots:  []backend.Root{{0x51}, {0x52}},
+		TimePolicy:                          TimePolicy{Protocol: ClockNTS, MaxBoundMs: 100, MaxSampleBoundMs: 200},
+		DepositPolicy: DepositPolicy{
+			WithdrawalCredentials: []backend.Root{credentials(0x01, 0x41), credentials(0x02, 0x42)},
+			AllowedDepositAmounts: []uint64{eth / 2, 32 * eth},
+			MinActivationBalance:  32 * eth,
+			MaxEffectiveBalance:   2048 * eth,
+		},
 	}
 }
 
@@ -112,7 +115,9 @@ func sampleOpen() Open {
 			{Epoch: 10, Version: backend.Version{0x02, 0, 0, 0x10}},
 			{Epoch: 20, Version: backend.Version{0x03, 0, 0, 0x10}},
 		},
-		GloasForkEpoch: u64p(20),
+		GloasForkEpoch:     u64p(20),
+		RevokedClientCerts: [][32]byte{{0x71}, {0x72}},
+		TimeServers:        []string{"netnod-sth", "ptb@ptbtime2.ptb.de"},
 	}
 }
 
@@ -182,6 +187,7 @@ func samples(t testing.TB) map[string]*Setup {
 		EncryptedStateStore: &azState,
 		SealingKeyRelease:   KeyRelease{MAAEndpoint: "sharedeus.eus.attest.azure.net", AKVEndpoint: "signer-kv.vault.azure.net", KID: "signer-key"}})
 	azure.Open.GloasForkEpoch = nil
+	azure.Locked.TimePolicy = TimePolicy{Protocol: ClockNTP, MaxBoundMs: 150, MaxSampleBoundMs: 150}
 	// Two slot time changes: 4 s slots from epoch 100000, 3 s from 200000.
 	azure.Locked.SlotTimeChanges = []SlotTimeChange{{Epoch: 100_000, SecondsPerSlot: 4}, {Epoch: 200_000, SecondsPerSlot: 3}}
 	gcpOf := func(name string, id byte) *Setup {
@@ -192,7 +198,8 @@ func samples(t testing.TB) map[string]*Setup {
 				KMSKey: "projects/p/locations/global/keyRings/signer/cryptoKeys/seal", AttestAudience: "signer-runner-identity"}})
 		g.Locked.AllowedImageMeasurements = nil
 		g.Locked.AllowedFeeRecipients = nil
-		g.Locked.AllowedDepositAmounts = nil
+		g.Locked.DepositPolicy.AllowedDepositAmounts = nil
+		g.Locked.DepositPolicy.WithdrawalCredentials = g.Locked.DepositPolicy.WithdrawalCredentials[1:]
 		g.Locked.BareRootDomains = 0
 		g.Locked.AllowedBuilderRequestAuthDataRoots = nil
 		g.Locked.AllowUnverifiedNonslashableSigning = true
@@ -200,6 +207,7 @@ func samples(t testing.TB) map[string]*Setup {
 		return g
 	}
 	gcp := gcpOf("signer-3", 1)
+	gcp.Platform.SealingKeyRelease.ProjectNumber = 123456789
 	// gcp-single: a single-node GCP signer of its own cluster, which needs
 	// the approvers' acceptance of the risk in the setup.
 	gcpSingle := gcpOf("signer-solo", 5)

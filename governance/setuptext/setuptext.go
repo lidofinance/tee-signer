@@ -33,9 +33,10 @@ import (
 // level have dotted keys (slashing_mark_prewrite.block_slots,
 // slashing_log_store.bucket). A key that is unknown, set twice, written in
 // another case, or that does not apply to the platform is refused, and so
-// is a missing one, except change_delay_seconds and gloas_fork_epoch,
-// which are optional, and the encrypted_state_store part, present when any
-// of its keys is.
+// is a missing one, except change_delay_seconds, gloas_fork_epoch and the
+// time_policy keys, which are optional, and the encrypted_state_store part,
+// present when any of its keys is. exit_policy has no keys: it is empty in
+// this version.
 //
 // A list field repeats its key, one value per line. The approver list
 // keeps the order of its lines; the parser sorts the other lists, which is
@@ -309,11 +310,12 @@ func parseAddress(s string) (backend.Address, error) {
 
 // The enum names of setupwire, indexed by value.
 var (
-	presetNames      = setupwire.PresetNames()
-	signingModeNames = setupwire.SigningModeNames()
-	groupNames       = setupwire.GroupNames()
-	imageNames       = setupwire.ImageKindNames()
-	rootDomainNames  = setupwire.RootDomainNames()
+	presetNames        = setupwire.PresetNames()
+	signingModeNames   = setupwire.SigningModeNames()
+	groupNames         = setupwire.GroupNames()
+	imageNames         = setupwire.ImageKindNames()
+	rootDomainNames    = setupwire.RootDomainNames()
+	clockProtocolNames = setupwire.ClockProtocolNames()
 )
 
 func enumValue(names []string, s string) (uint8, bool) {
@@ -688,6 +690,19 @@ func (p *parser) platform(c *setupwire.PlatformConfig) {
 	if t := optional(p, "sealing_key_release.kms_key_creation_date", parseTime); t != nil {
 		c.SealingKeyRelease.KMSKeyCreationDate = *t
 	}
+	if n := optional(p, "sealing_key_release.project_number", parsePositive); n != nil {
+		c.SealingKeyRelease.ProjectNumber = *n
+	}
+}
+
+// parsePositive reads a decimal number above 0: 0 is the binary form's
+// "absent", so the text form leaves the key out instead.
+func parsePositive(s string) (uint64, error) {
+	v, err := parseU64(s)
+	if err == nil && v == 0 {
+		return 0, fmt.Errorf("%q: want 1 or more, or leave the key out", s)
+	}
+	return v, err
 }
 
 func (p *parser) locked(l *setupwire.Locked) {
@@ -700,10 +715,6 @@ func (p *parser) locked(l *setupwire.Locked) {
 	l.BuilderGasLimitMin = scalar(p, "builder_gas_limit_min", parseU64)
 	l.BuilderGasLimitMax = scalar(p, "builder_gas_limit_max", parseU64)
 	l.BuilderRegistrationMaxFutureSeconds = scalar(p, "builder_registration_max_future_seconds", parseU64)
-	l.MinActivationBalance = scalar(p, "min_activation_balance", parseAmount)
-	l.MaxEffectiveBalance = scalar(p, "max_effective_balance", parseAmount)
-	l.WithdrawalCredentials = scalar(p, "withdrawal_credentials", parseRoot)
-	l.AllowedDepositAmounts = sortedSet(p, "allowed_deposit_amounts", listOf(p, "allowed_deposit_amounts", parseAmount), cmp.Compare[uint64])
 	l.AllowUnverifiedNonslashableSigning = scalar(p, "allow_unverified_nonslashable_signing", parseBool)
 	domains := sortedSet(p, "bare_root_domains", listOf(p, "bare_root_domains",
 		enumParser(rootDomainNames, "randao, selection_proof, aggregate_and_proof, sync_committee, sync_committee_selection_proof or contribution_and_proof")),
@@ -714,12 +725,44 @@ func (p *parser) locked(l *setupwire.Locked) {
 	l.SlotTimeChanges = sortedSet(p, "slot_time_changes", listOf(p, "slot_time_changes", parseSlotTime),
 		func(a, b setupwire.SlotTimeChange) int { return cmp.Compare(a.Epoch, b.Epoch) })
 	l.AllowedBuilderRequestAuthDataRoots = sortedSet(p, "allowed_builder_request_auth_data_roots",
-		listOf(p, "allowed_builder_request_auth_data_roots", parseRoot), func(a, b backend.Root) int { return bytes.Compare(a[:], b[:]) })
+		listOf(p, "allowed_builder_request_auth_data_roots", parseRoot), compareRoots)
+	p.timePolicy(&l.TimePolicy)
+	d := &l.DepositPolicy
+	d.WithdrawalCredentials = sortedSet(p, "deposit_policy.withdrawal_credentials",
+		listOf(p, "deposit_policy.withdrawal_credentials", parseRoot), compareRoots)
+	d.AllowedDepositAmounts = sortedSet(p, "deposit_policy.allowed_deposit_amounts",
+		listOf(p, "deposit_policy.allowed_deposit_amounts", parseAmount), cmp.Compare[uint64])
+	d.MinActivationBalance = scalar(p, "deposit_policy.min_activation_balance", parseAmount)
+	d.MaxEffectiveBalance = scalar(p, "deposit_policy.max_effective_balance", parseAmount)
+	// exit_policy has no keys: it is always empty in this version.
+}
+
+func compareRoots(a, b backend.Root) int { return bytes.Compare(a[:], b[:]) }
+
+// timePolicy reads time_policy. Each key is optional: protocol nts,
+// max_bound_ms 100 and max_sample_bound_ms max_bound_ms by default, the
+// runner's defaults before format 6.
+func (p *parser) timePolicy(t *setupwire.TimePolicy) {
+	t.Protocol = setupwire.ClockNTS
+	if v := optional(p, "time_policy.protocol", enumParser(clockProtocolNames, "nts or ntp")); v != nil {
+		t.Protocol = setupwire.ClockProtocol(*v)
+	}
+	t.MaxBoundMs = setupwire.DefaultMaxBoundMs
+	if v := optional(p, "time_policy.max_bound_ms", parseUint(16)); v != nil {
+		t.MaxBoundMs = uint16(*v)
+	}
+	t.MaxSampleBoundMs = t.MaxBoundMs
+	if v := optional(p, "time_policy.max_sample_bound_ms", parseUint(16)); v != nil {
+		t.MaxSampleBoundMs = uint16(*v)
+	}
 }
 
 func (p *parser) open(o *setupwire.Open) {
 	o.ForkSchedule = sortedSet(p, "fork_schedule", listOf(p, "fork_schedule", parseFork), func(a, b setupwire.Fork) int { return cmp.Compare(a.Epoch, b.Epoch) })
 	o.GloasForkEpoch = optional(p, "gloas_fork_epoch", parseU64)
+	o.RevokedClientCerts = sortedSet(p, "revoked_client_certs", listOf(p, "revoked_client_certs", parse32),
+		func(a, b [32]byte) int { return bytes.Compare(a[:], b[:]) })
+	o.TimeServers = sortedSet(p, "time_servers", listOf(p, "time_servers", parseText), strings.Compare)
 }
 
 func (p *parser) body() *setupwire.UpdateBody {
@@ -859,6 +902,10 @@ func formatPlatform(w *printer, p *setupwire.PlatformConfig, prod bool) {
 		}
 		w.kv("sealing_key_release.kms_key_creation_date", unixNote(k.KMSKeyCreationDate))
 	}
+	if k.ProjectNumber != 0 {
+		w.note("the number of the Google Cloud project that holds the stores")
+		w.kv("sealing_key_release.project_number", k.ProjectNumber)
+	}
 	if k.NoLockAccepted {
 		w.note("Cloud KMS has no lock on the key rule; this setup accepts that, and a mainnet runner starts anyway")
 		w.kv("sealing_key_release.no_lock_accepted", true)
@@ -878,7 +925,7 @@ func formatStore(w *printer, pl setupwire.Platform, prefix string, s *setupwire.
 }
 
 func formatLocked(w *printer, l *setupwire.Locked) {
-	w.note("locked: public; a change waits out the change delay")
+	w.note("locked: public; a loosening change waits out the change delay")
 	for _, k := range l.Approvers.Keys {
 		w.kv("approvers", hexOf(k[:]))
 	}
@@ -903,12 +950,6 @@ func formatLocked(w *printer, l *setupwire.Locked) {
 	w.kv("builder_gas_limit_min", l.BuilderGasLimitMin)
 	w.kv("builder_gas_limit_max", l.BuilderGasLimitMax)
 	w.kv("builder_registration_max_future_seconds", l.BuilderRegistrationMaxFutureSeconds)
-	w.kv("min_activation_balance", formatAmount(l.MinActivationBalance))
-	w.kv("max_effective_balance", formatAmount(l.MaxEffectiveBalance))
-	w.kv("withdrawal_credentials", hexOf(l.WithdrawalCredentials[:]))
-	for _, a := range l.AllowedDepositAmounts {
-		w.kv("allowed_deposit_amounts", formatAmount(a))
-	}
 	w.kv("allow_unverified_nonslashable_signing", l.AllowUnverifiedNonslashableSigning)
 	for bit, name := range rootDomainNames {
 		if name != "" && l.BareRootDomains&(1<<bit) != 0 {
@@ -929,6 +970,26 @@ func formatLocked(w *printer, l *setupwire.Locked) {
 	for _, r := range l.AllowedBuilderRequestAuthDataRoots {
 		w.kv("allowed_builder_request_auth_data_roots", hexOf(r[:]))
 	}
+	t := &l.TimePolicy
+	if t.Protocol == setupwire.ClockNTP {
+		w.note("time_policy: the clock asks its servers by plain NTP, which is unauthenticated: only as good as the coarse check")
+	} else {
+		w.note("time_policy: the clock asks its servers by NTS; the servers are time_servers in the open group")
+	}
+	w.kv("time_policy.protocol", t.Protocol)
+	w.kv("time_policy.max_bound_ms", t.MaxBoundMs)
+	w.kv("time_policy.max_sample_bound_ms", t.MaxSampleBoundMs)
+	d := &l.DepositPolicy
+	w.note("deposit_policy: in place for deposits, which come back later; the runner does not use it yet")
+	for _, wc := range d.WithdrawalCredentials {
+		w.kv("deposit_policy.withdrawal_credentials", hexOf(wc[:]))
+	}
+	for _, a := range d.AllowedDepositAmounts {
+		w.kv("deposit_policy.allowed_deposit_amounts", formatAmount(a))
+	}
+	w.kv("deposit_policy.min_activation_balance", formatAmount(d.MinActivationBalance))
+	w.kv("deposit_policy.max_effective_balance", formatAmount(d.MaxEffectiveBalance))
+	w.note("exit_policy: empty; exit approvals are not in this version")
 }
 
 func formatOpen(w *printer, o *setupwire.Open) {
@@ -938,6 +999,20 @@ func formatOpen(w *printer, o *setupwire.Open) {
 	}
 	if o.GloasForkEpoch != nil {
 		w.kv("gloas_fork_epoch", *o.GloasForkEpoch)
+	}
+	if len(o.RevokedClientCerts) > 0 {
+		w.note("revoked_client_certs: SHA-256 of client certificates (DER) the runner refuses; an update cannot drop one")
+	}
+	for _, h := range o.RevokedClientCerts {
+		w.kv("revoked_client_certs", hexOf(h[:]))
+	}
+	if len(o.TimeServers) == 0 {
+		w.note("time_servers absent: the clock dials the image's default set only")
+	} else {
+		w.note("time_servers: catalog IDs (ID or ID@HOST) the clock dials besides the image's default set; signing confirms the operators' terms")
+	}
+	for _, s := range o.TimeServers {
+		w.kv("time_servers", s)
 	}
 }
 

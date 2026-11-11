@@ -176,9 +176,9 @@ func TestUpdateRefusals(t *testing.T) {
 		}, "approver 0 does not verify"},
 		{"salt missing", func() *Update {
 			u := signedUpdate(t, s, lockedBody(s), []byte{0, 1}, nil)
-			u.Body.Salts = u.Body.Salts[:15]
+			u.Body.Salts = u.Body.Salts[:14]
 			return u
-		}, "update: 15 salts"},
+		}, "update: 14 salts"},
 	}
 	for _, c := range cases {
 		u := c.u()
@@ -244,10 +244,11 @@ func TestDecodeUpdateBytes(t *testing.T) {
 		{"trailing", append(slices.Clone(b), 0), false, "trailing"},
 		{"body trailing", append(slices.Clone(body), 0), true, "trailing"},
 		{"kind", set(b, 0, 'B'), false, "not a config update"},
-		{"version", set(b, 1, 2), false, "version 2"},
+		{"version 1 (setup format 5)", set(b, 1, 1), false, "config update version 1, want 2"},
+		{"version 3", set(b, 1, 3), false, "config update version 3, want 2"},
 		{"body kind", set(body, 0, 'U'), true, "not a config update body"},
-		{"body version", set(body, 1, 2), true, "version 2"},
-		{"body zero salt", append(slices.Clone(body[:len(body)-32]), make([]byte, 32)...), true, "update: salt 15 is zero"},
+		{"body version 1 (setup format 5)", set(body, 1, 1), true, "config update body version 1, want 2"},
+		{"body zero salt", append(slices.Clone(body[:len(body)-32]), make([]byte, 32)...), true, "update: salt 14 is zero"},
 		{"body length too large", set(b, 2, 0x7f), false, "at most 65536"},
 		{"oversize", make([]byte, MaxUpdate+1), false, "at most 65536"},
 		{"group 0", set(body, 66, 0), true, "unknown group 0"},
