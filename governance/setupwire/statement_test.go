@@ -74,7 +74,7 @@ func statementSetup(t testing.TB) *Setup {
 				AllowedDepositAmounts: []uint64{32 * eth}, MinActivationBalance: 32 * eth, MaxEffectiveBalance: 2048 * eth},
 		},
 		Open: Open{ForkSchedule: []Fork{{0, ver("50000910")}, {2048, ver("60000910")}, {50688, ver("70000910")}, {132352, ver("80000910")}},
-			GloasForkEpoch: &gloas, TimeServers: []string{"ptb"}},
+			GloasForkEpoch: &gloas, TimeServers: []string{"obspm"}},
 		PolicySalts: PolicySalts{Public: vsalts("public", NumPublicLeaves), Locked: vsalts("locked", NumLockedLeaves), Open: vsalts("open", NumOpenLeaves)},
 		SignerName:  "gcp-1",
 		Platform: PlatformConfig{Platform: PlatformGCP, AllowedClientCA: [][]byte{goldenCA(t)},

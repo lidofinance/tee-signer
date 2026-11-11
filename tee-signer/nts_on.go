@@ -31,7 +31,12 @@ import (
 //	                         one plain NTP query, no NTS-KE), the quorum. Prints the status
 //	                         and exits 0 if a quorum formed with a bound under
 //	                         the limit. For a pre-flight from the network the
-//	                         runner will run in.
+//	                         runner will run in. It reads no setup: the
+//	                         protocol, the bounds and the extra servers come
+//	                         from the variables (RUNNER_CLOCK_PROTOCOL,
+//	                         RUNNER_NTS_MAX_BOUND, RUNNER_NTS_MAX_SAMPLE_BOUND,
+//	                         RUNNER_NTS_TERMS_CONFIRMED), so set them to the
+//	                         setup's time_policy and time_servers.
 //
 // Builds without the tag have neither this file nor the flags.
 func init() {

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/lidofinance/tee-signer/governance/setupwire"
@@ -73,6 +74,9 @@ type UpdatesOptions struct {
 	Clock    platform.Clock
 	AnyClock bool
 	Logger   *slog.Logger
+	// Time is the clock that takes the time values in force (configtime.go);
+	// nil for none. It runs on the setup's values when NewUpdates is called.
+	Time TimeSink
 }
 
 // logTimeout bounds the log writes of one CONFIG_UPDATE.
@@ -156,6 +160,19 @@ type Updates struct {
 	// retry: the core could not read the clock while taking values of the
 	// log; nothing is signed until a later reconcile takes them.
 	retry error
+
+	// clockServers and clockPolicy are the time values the clock runs on
+	// (applyTimeLocked), under writeMu. timeErr: the clock refused the
+	// values in force; nothing is signed until it takes them.
+	clockServers []string
+	clockPolicy  setupwire.TimePolicy
+	timeErr      error
+	// paths holds the path of each update Accept took in this run. seen is
+	// the update in force per group when notePathsLocked last looked, and
+	// lastPath the path of the newest update that came into force (HEALTH).
+	paths    map[bodyID]setupwire.Path
+	seen     map[setupwire.Group]updateRef
+	lastPath *backend.UpdatePath
 }
 
 // NewUpdates returns the config updates of a runner with a setup. Call
@@ -171,7 +188,9 @@ func NewUpdates(o UpdatesOptions) (*Updates, error) {
 		// Only a handover writes the order slot, and this image has none.
 		return nil, fmt.Errorf("config updates: the mark log holds a handover order (kind %d, %x); this image takes no handover", ord.Kind, ord.Hash[:8])
 	}
-	return &Updates{opt: o, bodies: map[bodyID]*setupwire.Update{}, coreLocked: unknownRef, coreOpen: unknownRef}, nil
+	return &Updates{opt: o, bodies: map[bodyID]*setupwire.Update{}, coreLocked: unknownRef, coreOpen: unknownRef,
+		clockServers: o.Setup.Open.TimeServers, clockPolicy: o.Setup.Locked.TimePolicy,
+		paths: map[bodyID]setupwire.Path{}, seen: map[setupwire.Group]updateRef{}}, nil
 }
 
 // policyOf is the core's signing policy of a locked group.
@@ -215,7 +234,8 @@ func unix(t time.Time) uint64 { return uint64(max(t.Unix(), 0)) }
 // open schedule whose body is readable. A value whose body is unreadable
 // keeps base's; the runner then signs nothing until the body is back. A
 // pending update whose effective time passed while the runner was down is in
-// force at once.
+// force at once. The clock, which runs on the setup's time values, switches
+// to those in force before StartConfig returns.
 func (u *Updates) StartConfig(base core.Config) (core.Config, error) {
 	var now uint64
 	if t, err := u.opt.Clock.Now(); err == nil {
@@ -223,6 +243,9 @@ func (u *Updates) StartConfig(base core.Config) (core.Config, error) {
 	} else {
 		u.opt.Logger.Warn("config: no clock at start; the updates due by now come into force once it answers", "err", err)
 	}
+	u.writeMu.Lock()
+	defer u.writeMu.Unlock()
+	defer u.applyTimeLocked()
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.reconcileLocked(now)
@@ -411,6 +434,7 @@ func (u *Updates) reconcileLocked(now uint64) {
 		u.signer.Invalidate()
 	}
 	u.next = next
+	u.notePathsLocked()
 	u.pruneLocked()
 	if u.signer == nil || u.stuck != nil {
 		return
@@ -475,6 +499,11 @@ func (u *Updates) pruneLocked() {
 			delete(u.bodies, id)
 		}
 	}
+	for id := range u.paths {
+		if !keep[id] {
+			delete(u.paths, id)
+		}
+	}
 }
 
 // blockedLocked is why the runner signs nothing now, or nil.
@@ -487,6 +516,9 @@ func (u *Updates) blockedLocked() error {
 	}
 	if u.view.missing != nil {
 		return backend.Refused(backend.StatusStorage, "config: the values in force are unknown, so nothing is signed: %v (send that update again to restore its body)", u.view.missing)
+	}
+	if u.timeErr != nil {
+		return backend.Refused(backend.StatusClock, "config: %v; send an update with time values the clock takes", u.timeErr)
 	}
 	return nil
 }
@@ -568,9 +600,9 @@ func (u *Updates) reconcile() {
 	}
 }
 
-// Sync brings the core to the config in force now and, once every body it
-// needs is readable, writes a record that shows it: the updates that came
-// into force and what a rotation dropped.
+// Sync brings the core and the clock to the config in force now and, once
+// every body it needs is readable, writes a record that shows it: the
+// updates that came into force and what a rotation dropped.
 func (u *Updates) Sync(ctx context.Context) error {
 	t, err := u.opt.Clock.Now()
 	if err != nil {
@@ -589,6 +621,7 @@ func (u *Updates) Sync(ctx context.Context) error {
 	st, old := u.view.state.Clone(), u.logSt
 	write := u.view.missing == nil && !st.Equal(old)
 	u.mu.Unlock()
+	u.applyTimeLocked()
 	if !write {
 		return nil
 	}
@@ -619,6 +652,7 @@ func (u *Updates) Run(ctx context.Context, every time.Duration) {
 		}
 		if time.Now().Before(wait) {
 			u.reconcile()
+			u.applyTime()
 			continue
 		}
 		sctx, cancel := context.WithTimeout(ctx, logTimeout)
@@ -697,15 +731,21 @@ func refusedAs(err error, what string) error {
 // keys, approvals_needed > n/2, change delay cap, withdrawal credentials,
 // gas limits, slot time changes); the cluster and the chain; the trusted clock; the again paths below;
 // for a new locked update the change delay floor of the chain; version and prev_hash against
-// the group's state in force; k signatures of the approvers in force, and
-// for a rotation every key of the new set; activate_at within the wait plus
-// the activation horizon; the core's checks of the values, for an open
-// update the fork rule, for a locked one the slot time rule. Then it writes the body, then a record with the
-// update pending, and answers with the effective state. The wait is the
-// active time lock for locked (never below the chain's floor on a prod
-// chain, at least the images minimum when the allowed list gains an
-// entry), 0 for open; the update is in force at the later of
-// activate_at and its arrival plus the wait. A higher version replaces the
+// the group's state in force; the change rules (setupwire Update.Decide):
+// k signatures of the approvers in force, for a rotation every key of the
+// new set, and the wait of the path the signatures allow; for an open
+// update that changes time_servers, a list the clock takes
+// (CheckTimeServers); activate_at within the wait plus the activation
+// horizon; the core's checks of the values, for an open update the fork
+// rule, for a locked one the slot time rule. Then it writes the body, then
+// a record with the update pending, and answers with the effective state.
+// The wait is 0 for an open update and for a locked one whose changes all
+// tighten, or that came by break-glass (every approver in force) or
+// emergency removal (every approver but the removed one). Otherwise it is
+// the active time lock (never below the chain's floor on a prod chain, at
+// least the images minimum when the allowed list gains an entry). The
+// update is in force at the later of activate_at and its arrival plus the
+// wait. A higher version replaces the
 // group's pending update with a wait of its own. The same update again
 // writes its body again if no readable copy is left and answers
 // wireadmin.ConfigKnown.
@@ -790,10 +830,18 @@ func (u *Updates) Accept(ctx context.Context, raw []byte) (uint8, backend.SetupS
 		// update, and a record written on it would drop that update too.
 		return 0, none, backend.Refused(backend.StatusStorage, "config update: the values in force are unknown, so no record is written: %v (send that update again first)", v.missing)
 	}
-	if err := upd.Verify(&v.locked.Approvers); err != nil {
+	// The change rules: the signatures and the wait (setupwire changes.go).
+	d, err := upd.Decide(&u.opt.Setup.Chain, v.locked, v.open)
+	if err != nil {
 		return 0, none, backend.Refused(backend.StatusBadRequest, "config update: %v", err)
 	}
-	wait := setupwire.Wait(&u.opt.Setup.Chain, v.locked, b)
+	if b.Group == setupwire.GroupOpen && !slices.Equal(b.Open.TimeServers, v.open.TimeServers) {
+		// The clock must take the list when the update comes into force.
+		if err := CheckTimeServers(b.Open.TimeServers); err != nil {
+			return 0, none, backend.Refused(backend.StatusBadRequest, "config update: open version %d: %v", b.Version, err)
+		}
+	}
+	wait := d.Wait
 	if err := setupwire.CheckActivateAt(b.ActivateAt, now, wait); err != nil {
 		return 0, none, backend.Refused(backend.StatusBadRequest, "config update: %v", err)
 	}
@@ -868,15 +916,27 @@ func (u *Updates) Accept(ctx context.Context, raw []byte) (uint8, backend.SetupS
 		return 0, none, backend.Refused(backend.StatusStorage, "config update: record not written to the mark log: %v", err)
 	}
 	u.bodies[bodyID{b.Group, ref}] = upd
+	u.paths[bodyID{b.Group, ref}] = d.Path
 	u.reconcileLocked(now)
 	st := u.stateLocked()
 	u.mu.Unlock()
+	var changed []string
+	for _, c := range d.Changes {
+		changed = append(changed, c.Field+":"+c.Class.String())
+	}
 	args := []any{"group", b.Group.String(), "version", b.Version, "hash", fmt.Sprintf("%x", hash[:8]),
+		"path", d.Path.String(), "changes", strings.Join(changed, ","),
 		"wait_s", wait, "effective_at", at, "rotation", b.IsRotation(&v.locked.Approvers)}
 	if replaced != nil {
 		args = append(args, "replaces", replaced.Version)
 	}
-	u.opt.Logger.Info("config update accepted", args...)
+	if d.Path != setupwire.PathNormal {
+		u.opt.Logger.Warn("config update accepted by "+d.Path.String()+", with no change delay", args...)
+	} else {
+		u.opt.Logger.Info("config update accepted", args...)
+	}
+	// An update in force at once switches the clock before the answer.
+	u.applyTimeLocked()
 	return wireadmin.ConfigAccepted, st, nil
 }
 

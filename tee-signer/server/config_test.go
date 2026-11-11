@@ -148,6 +148,8 @@ type env struct {
 	pk     backend.Pubkey
 	// tamper goes to the log of every start (flakyLog.tamper).
 	tamper func(g setupwire.Group, v uint64, raw []byte) []byte
+	// time is the clock the updates give the time values (nil: none).
+	time TimeSink
 }
 
 // newEnv starts a runner with the dev sample setup: approvers 1 to 3 with
@@ -205,7 +207,7 @@ func (e *env) start() {
 		t.Fatal(err)
 	}
 	e.log = &flakyLog{MarkLog: m, tamper: e.tamper}
-	if e.upd, err = NewUpdates(UpdatesOptions{Setup: e.setup, SetupHash: e.hash, Log: e.log, Clock: e.clock, Logger: quiet}); err != nil {
+	if e.upd, err = NewUpdates(UpdatesOptions{Setup: e.setup, SetupHash: e.hash, Log: e.log, Clock: e.clock, Logger: quiet, Time: e.time}); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := e.upd.StartConfig(baseConfig(e.setup))
@@ -522,6 +524,7 @@ func TestConfigUpdateNoTimeLock(t *testing.T) {
 	d := newEnv(t, nil)
 	t0 = d.now()
 	b = d.body(locked, 1, d.groupHash(locked), t0)
+	b.Locked.AllowedFeeRecipients = append(b.Locked.AllowedFeeRecipients, x)
 	if st := d.mustSend(signed(t, b, first2, nil), wireadmin.ConfigAccepted); st.Locked.Pending.EffectiveAt != t0+setupwire.DefaultTimeLock {
 		t.Fatalf("default time lock: %+v", st.Locked)
 	}
@@ -648,11 +651,12 @@ func TestConfigUpdateSupersede(t *testing.T) {
 	wantCode(t, e.register(x), backend.StatusPolicyFeeRecipient, "")
 	wantCode(t, e.register(y), backend.StatusPolicyFeeRecipient, "")
 
-	// Cancel: the values in force, a higher version.
+	// Cancel: the values in force, a higher version. Nothing loosens, so it
+	// is in force at once.
 	e.clock.add(500)
 	b3 := e.body(locked, 3, gh, t0)
 	h3 := hashOf(t, b3)
-	if st := e.mustSend(signed(t, b3, first2, nil), wireadmin.ConfigAccepted); st.Locked.Pending != pending(3, h3, t0+4100+3600) {
+	if st := e.mustSend(signed(t, b3, first2, nil), wireadmin.ConfigAccepted); st.Locked != (backend.ConfigGroup{Version: 3, Hash: h3}) {
 		t.Fatalf("cancel: %+v", st.Locked)
 	}
 	e.clock.add(1000) // past version 2's time
@@ -660,10 +664,6 @@ func TestConfigUpdateSupersede(t *testing.T) {
 	for _, raw := range [][]byte{raw1, signed(t, b2, first2, nil)} {
 		_, _, err := e.send(raw)
 		wantCode(t, err, backend.StatusBadRequest, "want above 3")
-	}
-	e.clock.add(2600)
-	if st := e.srv.SetupState(); st.Locked != (backend.ConfigGroup{Version: 3, Hash: h3}) {
-		t.Fatalf("after the cancel: %+v", st.Locked)
 	}
 	wantCode(t, e.register(x), backend.StatusPolicyFeeRecipient, "")
 	if err := e.register(e.setup.Locked.AllowedFeeRecipients[0]); err != nil {
@@ -792,7 +792,8 @@ func TestConfigUpdateRotationDropsHeldScheduleLate(t *testing.T) {
 
 // A locked update whose allowed list gains an image waits at least the
 // image's minimum, whatever the time lock; one that only removes an image
-// waits the time lock. activate_at may reach the minimum plus the horizon.
+// tightens and is in force at once. activate_at may reach the minimum plus
+// the horizon.
 func TestConfigUpdateAllowedImages(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -824,9 +825,8 @@ func TestConfigUpdateAllowedImages(t *testing.T) {
 			rm.Locked.AllowedImageMeasurements = rm.Locked.AllowedImageMeasurements[:1]
 			h := hashOf(t, rm)
 			st := e.mustSend(signed(t, rm, first2, nil), wireadmin.ConfigAccepted)
-			if c.lock == 0 && st.Locked != (backend.ConfigGroup{Version: 3, Hash: h}) ||
-				c.lock != 0 && st.Locked.Pending != pending(3, h, t0+c.lock) {
-				t.Fatalf("a removed image waits the time lock: %+v", st.Locked)
+			if st.Locked != (backend.ConfigGroup{Version: 3, Hash: h}) {
+				t.Fatalf("a removed image tightens, in force at once: %+v", st.Locked)
 			}
 		})
 	}
@@ -1058,6 +1058,7 @@ func TestConfigUpdateSlotTimesCountPendingFork(t *testing.T) {
 func TestConfigUpdateAgain(t *testing.T) {
 	e := newEnv(t, u64(3600))
 	b := e.body(locked, 1, e.groupHash(locked), e.now())
+	b.Locked.AllowedFeeRecipients = append(b.Locked.AllowedFeeRecipients, x) // loosens: pending
 	raw := signed(t, b, first2, nil)
 	st := e.mustSend(raw, wireadmin.ConfigAccepted)
 	_, version := e.log.Mark()

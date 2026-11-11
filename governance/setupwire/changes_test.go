@@ -147,7 +147,7 @@ func TestClassifyOpen(t *testing.T) {
 		field  string
 	}{
 		"revocation added":    {func(o *Open) { o.RevokedClientCerts = append(o.RevokedClientCerts, [32]byte{0x73}) }, "revoked_client_certs"},
-		"time server added":   {func(o *Open) { o.TimeServers = append(o.TimeServers, "sth2") }, "time_servers"},
+		"time server added":   {func(o *Open) { o.TimeServers = append([]string{"fer"}, o.TimeServers...) }, "time_servers"},
 		"time server dropped": {func(o *Open) { o.TimeServers = o.TimeServers[1:] }, "time_servers"},
 		"fork added":          {func(o *Open) { o.ForkSchedule = append(o.ForkSchedule, Fork{Epoch: 30}) }, "fork_schedule"},
 	} {

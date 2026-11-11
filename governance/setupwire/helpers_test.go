@@ -117,7 +117,9 @@ func sampleOpen() Open {
 		},
 		GloasForkEpoch:     u64p(20),
 		RevokedClientCerts: [][32]byte{{0x71}, {0x72}},
-		TimeServers:        []string{"netnod-sth", "ptb@ptbtime2.ptb.de"},
+		// Entries the runner's catalog check takes: not in the default
+		// set, and an alt host only with a Nitro port.
+		TimeServers: []string{"obspm", "time.nl@any.time.nl"},
 	}
 }
 

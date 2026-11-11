@@ -141,7 +141,9 @@ type NTSServer struct {
 //     drift check then hold only against an honest host, and the coarse
 //     check is the one limit left. Everything else is as with NTS.
 type NTS struct {
-	// Protocol is ProtocolNTS (also "") or ProtocolNTP.
+	// Protocol is ProtocolNTS (also "") or ProtocolNTP. Protocol, MaxBound
+	// and MaxSampleBound are set before the first Refresh; SetPolicy
+	// changes them on a running clock.
 	Protocol Protocol
 	Servers  []NTSServer
 	Coarse   interface{ Now() (time.Time, error) }
@@ -630,12 +632,7 @@ func (n *NTS) SetServers(servers []NTSServer, minServers int) error {
 		if err != nil {
 			err = fmt.Errorf("clock: nts: no quorum without the removed operators %s: %w", strings.Join(removed, ","), err)
 			n.setErr(err)
-			// Back to the start state until a quorum forms: the start
-			// retries (NTSShiftStartRetry, NTS-KE after 12 to 20 s) apply.
-			n.served.Store(false)
-			if n.shifts != nil {
-				n.shifts.cold()
-			}
+			n.cold()
 			n.logf(slog.LevelError, "nts: no quorum after the server swap", "removed", strings.Join(removed, ","), "err", err)
 		}
 	}
@@ -652,6 +649,97 @@ func sameServer(a, b NTSServer) bool {
 		return a.Roots == b.Roots
 	}
 	return a.Roots.Equal(b.Roots)
+}
+
+// SetPolicy sets the protocol and both bounds of a running clock, for a
+// config update of the setup's time_policy. It refuses a protocol other
+// than ProtocolNTS and ProtocolNTP, a maxBound of 0 or less, and a
+// maxSampleBound below maxBound or above nts.MaxSampleBound; on refusal
+// nothing changes. Like SetServers, it waits for a Refresh in flight.
+//
+// The bounds apply at once. Now checks the quorum in force against the new
+// maxBound at its next call. A lower maxSampleBound also drops each sample
+// over it, and if one was a member of the quorum in force, that quorum
+// stops serving and forms again from the samples left, or Now fails until
+// a Refresh forms one (as SetServers after a removal).
+//
+// A new protocol starts the clock over, failing closed: every association
+// is closed, every sample and the quorum in force are dropped, and so is
+// the drift history, which the other protocol's answers made. Now fails
+// until a Refresh forms a quorum on the new protocol, and the start
+// retries apply until then. What limits the contacts stays: the schedule
+// seed, the grid, each server's last contact and gap, its poll interval and
+// its DENY or RSTR stop. Now still never goes back.
+func (n *NTS) SetPolicy(protocol Protocol, maxBound, maxSampleBound time.Duration) error {
+	protocol = cmp.Or(protocol, ProtocolNTS)
+	if protocol != ProtocolNTS && protocol != ProtocolNTP {
+		return fmt.Errorf("clock: nts: protocol %q: want nts or ntp", protocol)
+	}
+	if maxBound <= 0 || maxSampleBound < maxBound || maxSampleBound > nts.MaxSampleBound {
+		return fmt.Errorf("clock: nts: max bound %v and max sample bound %v: want a max bound over 0 and a sample bound from it to %v",
+			maxBound, maxSampleBound, nts.MaxSampleBound)
+	}
+	n.init()
+	n.rmu.Lock()
+	defer n.rmu.Unlock()
+	restart := protocol != n.protocol()
+	var dropped []string
+	for _, p := range n.peers {
+		switch {
+		case restart:
+			if p.assoc != nil {
+				p.assoc.Close()
+				p.assoc = nil
+			}
+			p.sample, p.ntpAddr = nil, ""
+			p.nextKE, p.keWait, p.lostInRow, p.lostKE = 0, 0, 0, false
+		case p.sample != nil && p.sample.Bound > maxSampleBound:
+			p.sample = nil
+			dropped = append(dropped, p.srv.Operator)
+		}
+	}
+	n.mu.Lock()
+	// Every read of the three fields holds rmu or mu.
+	n.Protocol, n.MaxBound, n.MaxSampleBound = protocol, maxBound, maxSampleBound
+	again := n.result != nil && slices.ContainsFunc(n.result.members, func(m string) bool { return slices.Contains(dropped, m) })
+	if restart || again {
+		n.result = nil
+	}
+	if restart {
+		n.hist, n.drift = nil, ntsDrift{}
+		n.lastErr = fmt.Errorf("clock: nts: protocol changed to %s; no quorum on it yet", protocol)
+	}
+	n.mu.Unlock()
+	if restart {
+		n.cold()
+		n.logf(slog.LevelWarn, "nts: protocol changed; no time until a quorum forms on it", "max_bound", maxBound, "max_sample_bound", maxSampleBound)
+		return nil
+	}
+	n.logf(slog.LevelInfo, "nts: bounds changed", "max_bound", maxBound, "max_sample_bound", maxSampleBound, "dropped", strings.Join(dropped, ","))
+	if again {
+		coarse, err := n.Coarse.Now()
+		if err != nil {
+			err = fmt.Errorf("clock: nts: no coarse time: %w", err)
+		} else {
+			err = n.combine(coarse, n.local())
+		}
+		if err != nil {
+			err = fmt.Errorf("clock: nts: no quorum under the max sample bound %v: %w", maxSampleBound, err)
+			n.setErr(err)
+			n.cold()
+			n.logf(slog.LevelError, "nts: no quorum after the bounds changed", "err", err)
+		}
+	}
+	return nil
+}
+
+// cold puts the clock back in its start state until a quorum forms: the
+// start retries (NTSShiftStartRetry, NTS-KE after 12 to 20 s) apply.
+func (n *NTS) cold() {
+	n.served.Store(false)
+	if n.shifts != nil {
+		n.shifts.cold()
+	}
 }
 
 // startWait is the wait of the first Refresh before it contacts anyone: a

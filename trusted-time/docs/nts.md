@@ -227,7 +227,7 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   restart, and the host sees where each query goes, so after one round of
   handovers (n times 15 minutes) it knows the next active sets. The
   catalog's default set has 6 servers, all active; with one more from
-  the image's command (`-nts-terms-confirmed`) they hand over.
+  the setup's `time_servers` they hand over.
   It asks public servers less
   often and keeps the quorum alive when operators fail:
   - Time is counted in ticks of 4 s since the start round. The start round
@@ -307,6 +307,24 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   handover position starts over. `NTSSummary.ServerSwaps`
   counts the swaps. In the simulation swaps from 7 to 8, 8 to 7, 6 to 7
   and 8 to 9 servers on a healthy set never stopped the time.
+- Policy change (`clock.NTS.SetPolicy`, for a config update of the setup's
+  `time_policy`). It refuses a protocol other than nts and ntp, a max
+  bound of 0 or less, and a sample cap below the max bound or over 1 s,
+  and then changes nothing. Like SetServers it waits for a Refresh in
+  flight. The bounds apply at once: `Now` checks the quorum in force
+  against the new max bound at its next call, so a lower bound can stop
+  the time at once and a higher one serve the same quorum again. A lower
+  sample cap drops each sample over it; if one was a member of the quorum
+  in force, that quorum forms again from the samples left, or the clock
+  serves no time until a Refresh forms one. A new protocol fails closed:
+  every association is closed, every sample, the quorum in force and the
+  drift history (made of the other protocol's answers) are dropped, and
+  the clock is back in its start state until a quorum forms on the new
+  protocol. The schedule seed, the grid, each server's last contact and
+  gap, its poll interval and its DENY or RSTR stop stay, so no server is
+  asked within its gap. `Now` still never goes back. In the simulation the
+  next tick formed the new quorum, with a burst to the servers past their
+  gap.
 - HEALTH `clock_nts.operators` has one entry per server the clock dials,
   with or without shifts, servers that never answered included:
   `operator`, `host`, `active`, `queries`, `answers`, `losses`, `wide`
@@ -325,10 +343,12 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   a coarse time there is no NTS time, so a host that fails or lags matters
   as much as an NTS server.
 - `tee-signer/platforms_nts.go`: `-nts-clock` (or `RUNNER_NTS_CLOCK=1`) gives a
-  tagged runner the NTS clock, with `-nts-coarse-urls`, `-nts-wait` and
-  `-nts-max-bound` (or their variables; a set flag wins). The runner
-  refuses a max bound over 250 ms: a sample's bound is about half its round
-  trip, so that leaves room for servers about 400 ms away. With no quorum
+  tagged runner the NTS clock, with `-nts-coarse-urls` and `-nts-wait` (or
+  their variables; a set flag wins). The protocol, the bounds and the
+  servers next to the default set come from the setup ("Time values from
+  the setup" below). The runner refuses a max bound over 250 ms: a
+  sample's bound is about half its round trip, so that leaves room for
+  servers about 400 ms away. With no quorum
   within `-nts-wait` (90 s by default) the start fails and the runner exits
   with the peers' status in its error line, which goes to the host on
   Nitro. The supervisor starts it again: `restartPolicy` `OnFailure` on
@@ -382,15 +402,15 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
     and Wiktel. Earlier images dialed Cloudflare, Netnod, PTB and TimeNL;
     TimeNL left the set for its terms, FER for failing NTS-KE in a live run.
     The six are all active, each asked once per 60 s. A deployment adds
-    operators whose terms it confirmed with `-nts-terms-confirmed` in the
-    image's measured command (for example `time.nl@any.time.nl`, TimeNL's
-    anycast host); from seven servers they hand over in shifts. Outside eu and na this set gives fewer close servers (Asia
+    operators in the setup's `time_servers` (open group), and the
+    approvers' signature confirms the terms of `ask` operators (for
+    example `time.nl@any.time.nl`, TimeNL's anycast host); from seven
+    servers they hand over in shifts. Outside eu and na this set gives fewer close servers (Asia
     and Oceania: Cloudflare and Meta only), so a deployment there adds more.
     Where no NTS server is close, the samples of distant ones are wide
-    (about half the round trip): such a deployment raises `-nts-max-bound`
-    and `-nts-max-sample-bound` in its image command, up to 250 ms, which
-    fits round trips up to about 500 ms.
-    Once setups can name servers, the same choice moves into the setup.
+    (about half the round trip): such a deployment raises `max_bound_ms`
+    and `max_sample_bound_ms` in the setup's `time_policy` (locked group),
+    up to 250 ms, which fits round trips up to about 500 ms.
   - `alt` hosts with a `nitro_port` can be chosen in place of the entry's
     host (`id@host`). The Nitro parent routes every entry and every such alt
     host (`Endpoints`), and its UDP relay allows their NTP host names, since
@@ -398,7 +418,7 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   - `ntp_names`: NTP host names an NTS-KE server names other than its own
     (Meta's names time.meta.com). The Nitro UDP relay allows them.
   - `plain_ntp_host` (optional): the host plain NTP asks on port 123
-    (`-clock-protocol ntp`) when the operator answers plain NTP on another
+    (`time_policy` protocol ntp) when the operator answers plain NTP on another
     name (Netnod: `ntp.se`, FER: `ntp.hr`). A host name, not the entry's
     own, once in the catalog like every host. The Nitro UDP relay allows it.
 
@@ -600,16 +620,58 @@ cloud builds link `trusted-time/nts` and the dev builds do not, and
 `build-runner.sh` that only the cloud builds hold the library and the
 `-nts-*` flags, and only their debug builds the test server variables.
 
+## Time values from the setup
+
+A setup (format 6) holds the clock's values in two fields:
+
+- `time_policy`, in the locked group: the protocol (nts or ntp),
+  `max_bound_ms` (1 to 250) and `max_sample_bound_ms` (from the max bound
+  to 1000);
+- `time_servers`, in the open group: the catalog entries dialed next to the
+  image's default set, `id` or `id@alt-host`.
+
+The runner builds the server list with `ntscatalog.WithConfirmed`: the
+default set always, plus `time_servers`. It refuses an entry the catalog
+does not have, has withdrawn or cannot route (an alt host without a Nitro
+port), an entry of the default set, and fewer than 4 servers in all.
+
+Start order. Key release needs the clock, and the config log, which says
+which config updates are in force, is read only after key release. So the
+clock starts on the setup's own values (version 0 of each group). Once the
+config log is read, the runner switches the clock once to the values in
+force (`server.Updates.StartConfig`): `time_servers` through
+`clock.NTS.SetServers`, `time_policy` through `clock.NTS.SetPolicy`.
+
+Live changes. After that, each config update that comes into force
+switches the clock again, within the 1 s config sync. A `time_servers`
+update is an open update and needs no wait; the runner refuses one whose
+list the catalog refuses before it stores it, so no such list comes into
+force. A `time_policy` update is a locked update: lower bounds and NTP back
+to NTS tighten and come into force at once; NTS to NTP and higher bounds
+wait the change delay, or come into force at once when every approver
+signs (break-glass). If the clock still refuses values in force (an image
+whose catalog withdrew an entry), the runner signs nothing and keeps taking
+config updates, so the approvers can send values it takes.
+
+The flags. With a setup, `-clock-protocol`, `-nts-max-bound`,
+`-nts-max-sample-bound` and `-nts-terms-confirmed` do not count. On a cloud
+platform the runner refuses to start when one of them or its variable
+(`RUNNER_CLOCK_PROTOCOL`, `RUNNER_NTS_MAX_BOUND`,
+`RUNNER_NTS_MAX_SAMPLE_BOUND`, `RUNNER_NTS_TERMS_CONFIRMED`) is set; the
+dev platform logs a warning. Without a setup (the dev platform, and the
+flag path of debug builds) they work as before, and so does
+`-nts-clock-check`, which reads no setup: set its variables to the setup's
+values for a pre-flight.
+
 ## Plain NTP (unauthenticated)
 
-`-clock-protocol ntp` (or `RUNNER_CLOCK_PROTOCOL=ntp`) runs the same clock
-with plain NTP (RFC 5905) in place of NTS. `-nts-clock` still turns the
-clock on; `-clock-protocol` only picks how it asks the servers. The default
-is `nts`, and any other value stops the runner at start, also with the
-clock off. `-nts-clock-check` reads `RUNNER_CLOCK_PROTOCOL` too (see the
-release rule below). For now
-the image command carries the choice; setup format 6 will move it into the
-setup's locked group. No cloud image sets it today, so they all run NTS.
+`time_policy` protocol ntp runs the same clock with plain NTP (RFC 5905) in
+place of NTS (without a setup: `-clock-protocol ntp` or
+`RUNNER_CLOCK_PROTOCOL=ntp`). `-nts-clock` still turns the clock on; the
+protocol only picks how it asks the servers. The default is `nts`, and any
+other value stops the runner at start, also with the clock off.
+`-nts-clock-check` reads `RUNNER_CLOCK_PROTOCOL` too (see the release rule
+below).
 
 It is a fallback for a deployment where NTS does not work, for example a
 path that blocks NTS-KE on TCP 4460. It is not a second kind of NTS.
@@ -655,9 +717,10 @@ whoever answers DNS for an NTP name (the runner's resolver on Azure and
 GCP, the Nitro parent's relay) receives the request and can forge the
 answer. Against an honest host and path, plain NTP is as precise as NTS.
 
-In a release build only the measured `-clock-protocol` flag picks the
-protocol: `RUNNER_CLOCK_PROTOCOL` stops the runner at start, except on the
-dev platform. Debug builds and `-nts-clock-check` take the variable.
+With a setup, only the setup picks the protocol. Without one, in a
+release build only the `-clock-protocol` flag picks it:
+`RUNNER_CLOCK_PROTOCOL` stops the runner at start, except on the dev
+platform. Debug builds and `-nts-clock-check` take the variable.
 
 What changes against NTS: no NTS-KE, no cookies, no TLS to the time
 servers. The NTS-KE retries, the NTS-KE after lost queries and the NTSN
@@ -665,7 +728,7 @@ kiss do not apply. Each server is asked on UDP port 123 at the catalog
 entry's `plain_ntp_host` (Netnod: `ntp.se`, FER: `ntp.hr`), else at its
 first `ntp_names` entry when its NTS-KE server names another NTP host
 (Meta: `time.meta.com`), else at the entry's host. Operators pick servers from
-the same catalog as for NTS: the default set plus `-nts-terms-confirmed`.
+the same catalog as for NTS: the default set plus `time_servers`.
 The Nitro relay already allows those names and port 123. Everything else
 is the same: the 60 s schedule and its shifts, the quorum (at least 3
 agree, `nts.QuorumWrong`), the sample cap, the coarse check, the drift
@@ -704,22 +767,20 @@ cannot turn it off or point it elsewhere:
 | Azure | `platform-azure/deploy/aci-template.json` command (CCE policy hash) | `login.microsoftonline.com`, `management.azure.com`, `www.cloudflare.com` | ACI's default outbound access, direct |
 | GCP | `platform-gcp/deploy/Dockerfile` entrypoint (image digest) | `cloudkms.googleapis.com`, `sts.googleapis.com`, `www.cloudflare.com` | the VM's external address, direct (implied allow-all egress) |
 
-A sample whose own bound is over `-nts-max-sample-bound` joins no
+A sample whose own bound is over the setup's `max_sample_bound_ms` joins no
 quorum (`clock.NTS.MaxSampleBound`). At receipt it counts as a lost answer,
 so a fallback may follow, and HEALTH counts it in `wide`. A sample that was
 under the cap at receipt leaves the quorum once its bound, aged by rho as
-the quorum ages it, passes the cap. The default is `-nts-max-bound`; it may
-be raised up to 1 s, where the cap is off, but not set below the max
-bound. Why: a host that delays the one honest answer of a small fresh set
+the quorum ages it, passes the cap. It is at least `max_bound_ms` and may
+be raised up to 1 s, where the cap is off. Why: a host that delays the one honest answer of a small fresh set
 widens its bound, and two wrong servers can then place the time anywhere
 inside it while the quorum's bound looks small. The bound is a
 half-width, and the host's delay can put the true time at either edge, so
 the error is up to twice the cap: about 200 ms at the default 100 ms,
 against about 1 s each way without the cap (RFC 5905 MAXDIST, beyond
-which the core refuses a sample). An image that raises the sample cap
-above `-nts-max-bound` gives part of that back. The images name both
-flags, so a far deployment raises both, and that error grows with them
-(about 500 ms at 250 ms).
+which the core refuses a sample). A setup that raises the sample cap
+above `max_bound_ms` gives part of that back. A far deployment raises
+both, and that error grows with them (about 500 ms at 250 ms).
 
 The coarse URLs are hosts the platform's egress already allows. Each is
 an entry of the `coarse` list in `trusted-time/ntscatalog/catalog.json`,
@@ -733,12 +794,14 @@ a debug build takes others (the tests' servers) with the platform's roots
 and the NTS operators'. `www.cloudflare.com` chained to ISRG Root X1 on
 2026-11-11; Cloudflare's edge certificates also come from Google Trust
 Services and SSL.com, so its entry has the ISRG, SSL.com and Google roots.
-Each command also sets `-nts-wait 90s` , `-nts-max-bound 100ms` and `-nts-max-sample-bound 100ms` (the
-defaults), so no environment variable of the host or the launcher can
-change them. The build scripts check the flags (`nitro-eif.sh`,
+Each command also sets `-nts-wait 90s` (the default), so no environment
+variable of the host or the launcher can change it. The protocol, the
+bounds and the extra servers come from the setup, and no command names
+them. The build scripts check the flags (`nitro-eif.sh`,
 `gcp/build-image.sh`, `azure/deploy.sh render`), refuse a command without
-`-nts-clock`, `-nts-wait`, `-nts-max-bound` or `-nts-max-sample-bound`, and refuse one that has
-`-clock`. The runner itself refuses to start on a cloud platform whose
+`-nts-clock` or `-nts-wait`, and refuse one that has `-clock`,
+`-clock-protocol`, `-nts-max-bound`, `-nts-max-sample-bound` or
+`-nts-terms-confirmed`. The runner itself refuses to start on a cloud platform whose
 clock the host can set (`checkClock` in `tee-signer/main.go`). Only the
 dev platform and debug builds may run on the system clock.
 

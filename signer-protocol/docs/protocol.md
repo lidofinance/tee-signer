@@ -149,7 +149,7 @@ A refusal caused by the restart floor carries
 
 | Type | Name | Request payload | OK body |
 | --- | --- | --- | --- |
-| 0x01 | HEALTH | empty | JSON of `backend.Health`; `setup` holds the setup state, `key_lock` the key rule lock and `single_key` the single-key acceptance and `signing_mode` the setup's signing mode ("Key rule lock"), `image` the image check ("Image check"), all unattested |
+| 0x01 | HEALTH | empty | JSON of `backend.Health`; `setup` holds the setup state, `key_lock` the key rule lock and `single_key` the single-key acceptance and `signing_mode` the setup's signing mode ("Key rule lock"), `image` the image check ("Image check"), `last_update_path` how the newest config update in force since the start came in (`normal`, `break-glass` or `emergency-removal`, with its group and version), all unattested |
 | 0x02 | PUBLIC_KEYS | empty | `count:u32` then `count` x key |
 | 0x03 | SIGN | `pubkey[48] kind:u8 domain[32] message`; kind 5: `pubkey[48] kind:u8 message` | `signature[96]` |
 | 0x04 | ATTEST | `nonce_len:u16 nonce version:u8` (nonce at most 1024 bytes, version 1) | `version:u8 setup_state attestation`, see below |

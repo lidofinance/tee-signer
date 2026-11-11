@@ -324,6 +324,20 @@ type Options struct {
 	// (GCP only): on mainnet a key rule without a lock passes
 	// (CheckNoLock).
 	NoLockAccepted bool
+	// Time holds the setup's time values (version 0 of its config groups),
+	// nil without a setup. The NTS clock starts on them (tee-signer, -tags
+	// nts).
+	Time *TimeValues
+}
+
+// TimeValues are a setup's time_policy and time_servers.
+type TimeValues struct {
+	Protocol       string // "nts" or "ntp"
+	MaxBound       time.Duration
+	MaxSampleBound time.Duration
+	// Servers are the catalog IDs (trusted-time/ntscatalog) the clock dials
+	// besides the image's default set: "id" or "id@alt-host".
+	Servers []string
 }
 
 // UseDurable calls o.Durable if set and returns the store to use.

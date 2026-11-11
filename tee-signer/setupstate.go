@@ -29,8 +29,13 @@ const (
 // platform, which protects nothing, takes an update on an untrusted clock.
 func newConfigUpdates(st *setup.Setup, l server.UpdateLog, clk platform.Clock, platformName string, log *slog.Logger) (*server.Updates, error) {
 	return server.NewUpdates(server.UpdatesOptions{Setup: st.Wire, SetupHash: st.SHA256, Log: l, Clock: clk,
-		AnyClock: platformName == "dev", Logger: log})
+		AnyClock: platformName == "dev", Logger: log, Time: timeSinkOf(clk)})
 }
+
+// timeSinkOf is the clock as the config updates drive it with the time
+// values in force: the NTS clock in a build with -tags nts
+// (platforms_nts.go), nil for any other clock.
+var timeSinkOf = func(platform.Clock) server.TimeSink { return nil }
 
 // keyRule is the key release self-check (docs/protocol.md, "Key rule
 // lock"): the platform constructor read

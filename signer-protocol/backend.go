@@ -123,9 +123,13 @@ type Health struct {
 	// Ready is then false; the next refresh that succeeds clears it. Empty
 	// otherwise, and from runners before it.
 	StateCopyFailed string `json:"state_copy_failed,omitempty"`
-	ClockSource     string `json:"clock_source"`
-	ClockTrusted    bool   `json:"clock_trusted"` // the platform claims the clock resists the host
-	ClockUnix       uint64 `json:"clock_unix"`    // whole seconds
+	// LastUpdatePath says how the newest config update that came into
+	// force since the runner started got there. Nil before one did, and
+	// from runners before it.
+	LastUpdatePath *UpdatePath `json:"last_update_path,omitempty"`
+	ClockSource    string      `json:"clock_source"`
+	ClockTrusted   bool        `json:"clock_trusted"` // the platform claims the clock resists the host
+	ClockUnix      uint64      `json:"clock_unix"`    // whole seconds
 	// ClockUnixMS is the same reading in milliseconds. Runners before it
 	// leave it out (zero).
 	ClockUnixMS uint64 `json:"clock_unix_ms,omitempty"`
@@ -146,6 +150,18 @@ type Health struct {
 	// Stats are the signer core's counters since the start, when the
 	// backend has them. Counts only: no key, root or signature.
 	Stats *SignerStats `json:"stats,omitempty"`
+}
+
+// UpdatePath is the way a config update came into force (governance
+// setupwire, Update.Decide).
+type UpdatePath struct {
+	Group   string `json:"group"` // "locked" or "open"
+	Version uint64 `json:"version"`
+	// Path is "normal" (approvals_needed signatures, and the change delay
+	// when the update loosens), "break-glass" (every approver in force, no
+	// delay) or "emergency-removal" (every approver in force except the
+	// one it removes, no delay).
+	Path string `json:"path"`
 }
 
 // ClockNTS is what HEALTH reports of the runner's NTS clock (trusted-time/clock

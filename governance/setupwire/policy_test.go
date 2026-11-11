@@ -145,7 +145,7 @@ func TestPolicySplit(t *testing.T) {
 		{"time_policy", true, func(s *Setup) { s.Locked.TimePolicy.MaxSampleBoundMs++ }},
 		{"deposit_policy", true, func(s *Setup) { s.Locked.DepositPolicy.MaxEffectiveBalance++ }},
 		{"revoked_client_certs", true, func(s *Setup) { s.Open.RevokedClientCerts = [][32]byte{{1}} }},
-		{"time_servers", true, func(s *Setup) { s.Open.TimeServers = []string{"ptb"} }},
+		{"time_servers", true, func(s *Setup) { s.Open.TimeServers = []string{"fer"} }},
 		{"a locked salt", true, func(s *Setup) { s.PolicySalts.Locked[14][0]++ }},
 		{"an open salt", true, func(s *Setup) { s.PolicySalts.Open[3][0]++ }},
 		{"project_number", false, func(s *Setup) { s.Platform.SealingKeyRelease.ProjectNumber++ }},

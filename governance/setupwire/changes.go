@@ -49,8 +49,8 @@ import (
 // and with fewer signers Decide refuses the update. The minimum number of
 // time servers is the runner's check, since it needs the image's catalog.
 //
-// The runner's config Accept does not call Decide yet: it still checks
-// with Verify and waits Wait for every locked update, the slower path.
+// The runner's config Accept calls Decide for every update it has not
+// seen (tee-signer/server, Updates.Accept).
 
 // ChangeClass is the class of a changed field.
 type ChangeClass uint8

@@ -1473,6 +1473,7 @@ func (s *Server) health() (*backend.Health, error) {
 	if s.Updates != nil {
 		w := s.Updates.SetupWire()
 		h.SingleKey, h.SigningMode = singleKey(&w.Platform), w.SigningMode.String()
+		h.LastUpdatePath = s.Updates.lastUpdatePath()
 	}
 	st := s.Signer.Stats()
 	h.Stats = &backend.SignerStats{

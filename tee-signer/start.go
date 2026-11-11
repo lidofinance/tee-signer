@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"time"
 
@@ -233,8 +234,9 @@ func startPlatform(ctx context.Context, a *startArgs, newPlatform platformFunc, 
 	}
 	opts := platform.Options{StateDir: a.stateDir, Params: s.params, Prod: s.prod, NoLockAccepted: s.noLockAccepted}
 	if s.setup != nil {
-		// Every key-release call carries setup_hash.
-		opts.SetupHash = s.setup.SHA256
+		// Every key-release call carries setup_hash. The NTS clock starts on
+		// the setup's time values.
+		opts.SetupHash, opts.Time = s.setup.SHA256, timeValues(s.setup.Wire)
 	}
 	var copyStore *durableCopy
 	if s.stateSpec != "" && s.stateSpec != "none" && !a.clockCheck {
@@ -265,9 +267,10 @@ func startPlatform(ctx context.Context, a *startArgs, newPlatform platformFunc, 
 // what chain.json held on the flag path, with the slot time changes of
 // version 0. The floor margin follows from max_sign_epochs_ahead_of_clock
 // (state.DefaultFloorMargin). The cloud runner does not use the board-only
-// values of locked yet (deposit_policy, bare_root_domains), nor time_policy
-// and the open group's revoked_client_certs and time_servers, nor the
-// approvers, change delay and allowed images, which config updates use.
+// values of locked yet (deposit_policy, bare_root_domains), nor the open
+// group's revoked_client_certs, nor the approvers, change delay and allowed
+// images, which config updates use. time_policy and time_servers go to the
+// clock (timeValues).
 func chainConfig(s *setupwire.Setup) (core.Config, error) {
 	ch, sf, l, o := &s.Chain, &s.Safety, &s.Locked, &s.Open
 	c := core.Config{
@@ -299,4 +302,16 @@ func chainConfig(s *setupwire.Setup) (core.Config, error) {
 		c.GloasForkEpoch = &e
 	}
 	return c, c.Validate()
+}
+
+// timeValues are the setup's time_policy and time_servers (version 0) for
+// the clock. Once the config log is read, the config updates switch the
+// clock to the values in force (server.Updates.StartConfig).
+func timeValues(s *setupwire.Setup) *platform.TimeValues {
+	return timeValuesOf(s.Locked.TimePolicy, s.Open.TimeServers)
+}
+
+func timeValuesOf(p setupwire.TimePolicy, servers []string) *platform.TimeValues {
+	return &platform.TimeValues{Protocol: p.Protocol.String(), MaxBound: time.Duration(p.MaxBoundMs) * time.Millisecond,
+		MaxSampleBound: time.Duration(p.MaxSampleBoundMs) * time.Millisecond, Servers: slices.Clone(servers)}
 }
