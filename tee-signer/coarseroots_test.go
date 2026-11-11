@@ -7,6 +7,8 @@ import (
 	"crypto/x509"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -114,16 +116,32 @@ func TestNTSClockUsesCoarseClient(t *testing.T) {
 	}
 }
 
-// Every coarse URL the images name is in the catalog, and every root file
-// a coarse entry names is pinned.
+// Every coarse URL the image commands name is in the catalog (a release
+// runner on a cloud refuses any other and does not start), and every root
+// file a coarse entry names is pinned.
 func TestCoarseCatalogCoversTheImages(t *testing.T) {
-	for _, u := range []string{
-		"https://kms.{region}.amazonaws.com/", "https://sts.{region}.amazonaws.com/", "https://www.cloudflare.com/",
-		"https://cloudkms.googleapis.com/", "https://sts.googleapis.com/",
-		"https://login.microsoftonline.com/", "https://management.azure.com/",
+	flag := regexp.MustCompile(`"-nts-coarse-urls",\s*"([^"]*)"`)
+	for _, f := range []string{
+		"../platform-aws/deploy/enclave/Dockerfile",
+		"../platform-gcp/deploy/Dockerfile",
+		"../platform-azure/deploy/aci-template.json",
 	} {
-		if _, ok := ntscatalog.Builtin.CoarseFor(u); !ok {
-			t.Errorf("%s is not in the coarse catalog", u)
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := flag.FindAllSubmatch(b, -1)
+		if len(m) != 1 {
+			t.Fatalf("%s: %d -nts-coarse-urls flags, want 1", f, len(m))
+		}
+		urls := strings.Split(string(m[0][1]), ",")
+		if len(urls) < 3 {
+			t.Errorf("%s: %d coarse URLs, want 3 or more", f, len(urls))
+		}
+		for _, u := range urls {
+			if _, ok := ntscatalog.Builtin.CoarseFor(strings.TrimSpace(u)); !ok {
+				t.Errorf("%s: %s is not in the coarse catalog", f, u)
+			}
 		}
 	}
 	for _, e := range ntscatalog.Builtin.Coarse {

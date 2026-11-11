@@ -33,6 +33,18 @@ func TestNTSCoarseURLsRegion(t *testing.T) {
 	if _, err := ntsCoarseURLs(""); err == nil || !strings.Contains(err.Error(), "{region}") {
 		t.Fatalf("no region: %v", err)
 	}
+	// A region that would change the host is refused.
+	for _, r := range []string{"evil.example/", "x@evil.example", "eu-central-1.evil.example", "eu:1", "EU-CENTRAL-1"} {
+		if _, err := ntsCoarseURLs(r); err == nil || !strings.Contains(err.Error(), "not a region name") {
+			t.Errorf("region %q: %v", r, err)
+		}
+	}
+	// One URL named twice would count twice in the coarse quorum.
+	t.Setenv("RUNNER_NTS_COARSE_URLS", "https://www.cloudflare.com/,https://www.cloudflare.com/,https://www.cloudflare.com/")
+	if _, err := ntsCoarseURLs("eu-central-1"); err == nil || !strings.Contains(err.Error(), "twice") {
+		t.Fatalf("a URL three times: %v", err)
+	}
+	t.Setenv("RUNNER_NTS_COARSE_URLS", "https://kms.{region}.amazonaws.com/,https://sts.{region}.amazonaws.com/,https://www.cloudflare.com/")
 	// URLs without the placeholder stay as they are (Azure, GCP, old images).
 	t.Setenv("RUNNER_NTS_COARSE_URLS", "https://a.example/,https://b.example/,https://c.example/")
 	if urls, err := ntsCoarseURLs("eu-central-1"); err != nil || urls[0].url != "https://a.example/" || urls[0].ok {

@@ -51,8 +51,8 @@ func init() {
 
 func ntsClockCheck() int {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	// The coarse check trusts what a cloud runner's does: the clouds' roots
-	// and the NTS operators' (coarseClient).
+	// A pinned pool, as a cloud runner's client has: each coarse source then
+	// trusts its catalog entry's roots only (coarseClient).
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.TLSClientConfig = &tls.Config{RootCAs: cloudroots.Pool(cloudroots.AWS, cloudroots.Google, cloudroots.Azure)}
 	return ntsClockCheckWith(&http.Client{Transport: t}, nil, log)

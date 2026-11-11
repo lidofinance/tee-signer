@@ -251,6 +251,19 @@ func coarseClient(c *http.Client, u coarseURL) (*http.Client, error) {
 	return &cc, nil
 }
 
+// validRegion: 1 to 32 of a-z, 0-9 and '-', as cloud region names are.
+func validRegion(r string) bool {
+	if r == "" || len(r) > 32 {
+		return false
+	}
+	for _, c := range []byte(r) {
+		if !('a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
 // cloudRootSet maps a catalog cloud_roots value to its cloudroots set.
 func cloudRootSet(name string) (cloudroots.Provider, error) {
 	switch name {
@@ -275,15 +288,24 @@ func ntsCoarseURLs(region string) ([]coarseURL, error) {
 		list = os.Getenv("RUNNER_NTS_COARSE_URLS")
 	}
 	var urls []coarseURL
+	seen := map[string]bool{}
 	for _, u := range strings.Split(list, ",") {
 		if u = strings.TrimSpace(u); u == "" {
 			continue
 		}
+		// One host named twice would count twice in the coarse quorum.
+		if seen[u] {
+			return nil, fmt.Errorf("nts clock: coarse URL %s named twice", u)
+		}
+		seen[u] = true
 		c := coarseURL{named: u, url: u}
 		c.entry, c.ok = ntscatalog.Builtin.CoarseFor(u)
 		if strings.Contains(u, "{region}") {
-			if region == "" {
-				return nil, fmt.Errorf("nts clock: coarse URL %s names {region}, and the platform has no region option", u)
+			// The catalog entry is looked up before the region goes in, so
+			// the region must not change the host: a cloud region name
+			// only (no '/', '?', '#', '@', ':' or '.').
+			if !validRegion(region) {
+				return nil, fmt.Errorf("nts clock: coarse URL %s names {region}, and the platform's region option %q is not a region name (a-z, 0-9, '-')", u, region)
 			}
 			c.url = strings.ReplaceAll(u, "{region}", region)
 		}
