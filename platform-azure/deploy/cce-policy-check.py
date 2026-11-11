@@ -236,7 +236,9 @@ def check(policy, template, images, stdio):
     for c in got:
         g, w = comparable(c), comparable(want_by[c["name"]])
         for k in sorted(set(g) | set(w)):
-            if g.get(k) != w.get(k):
+            # Compared as JSON text: in Python 0 == False and 1 == True,
+            # but the policy language reads 0 as true.
+            if json.dumps(g.get(k), sort_keys=True) != json.dumps(w.get(k), sort_keys=True):
                 problems.append(f"container {c['name']}: {k} is {short(g.get(k))}, want {short(w.get(k))}")
     if problems:
         raise Refused("\n".join(problems))

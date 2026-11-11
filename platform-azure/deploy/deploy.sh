@@ -316,6 +316,9 @@ policy_for() {
   ensure_images
   check_confcom
   dir="$(signer_dir "$n")"
+  # acipolicygen writes the policy into template.json. The check reads the
+  # template as rendered, and confcom may change nothing but ccePolicy.
+  cp "$dir/template.json" "$dir/template.rendered.json"
   : >"$dir/policy.log"
   policy_images "$dir"
   # -y approves the wildcard rule for the parameters without a default
@@ -331,7 +334,10 @@ policy_for() {
     base64 -d >"$dir/policy.rego"
   check="$(sha256sum <"$dir/policy.rego" | cut -d' ' -f1)"
   [ "$check" = "$hash" ] || die "printed hash $hash is not the SHA-256 of the policy in the template ($check)"
-  python3 -I "$AZ_DIR/cce-policy-check.py" check "$dir/policy.rego" "$dir/template.json" "$dir/policy-images.json" "$STDIO" ||
+  local nopol='.resources[0].properties.confidentialComputeProperties.ccePolicy = ""'
+  cmp -s <(jq -S "$nopol" "$dir/template.rendered.json") <(jq -S "$nopol" "$dir/template.json") ||
+    die "signer $n: az confcom changed the template beyond ccePolicy (compare $dir/template.rendered.json with $dir/template.json)"
+  python3 -I "$AZ_DIR/cce-policy-check.py" check "$dir/policy.rego" "$dir/template.rendered.json" "$dir/policy-images.json" "$STDIO" ||
     die "signer $n: the CCE policy is not the one this tree expects; nothing pinned (compare with: python3 -I $AZ_DIR/cce-policy-check.py render $dir/template.json $dir/policy-images.json $STDIO)"
   echo "$hash" >"$dir/policy.sha256"
   echo "$hash"

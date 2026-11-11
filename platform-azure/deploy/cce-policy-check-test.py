@@ -75,6 +75,10 @@ class CheckTests(unittest.TestCase):
     def test_stdio_setting_must_match(self):
         self.refused(GOOD, "allow_stdio_access", stdio="disable")
 
+    def test_number_for_bool_refused(self):
+        self.refused(edit_runner(lambda c: c.update(allow_elevated=0)), "container runner: allow_elevated")
+        self.refused(edit_runner(lambda c: c.update(allow_stdio_access=1)), "container runner: allow_stdio_access")
+
     def test_exec_process_refused(self):
         self.refused(edit_runner(lambda c: c.update(exec_processes=[{"command": ["/bin/sh"], "signals": []}])),
                      "container runner: exec_processes")
