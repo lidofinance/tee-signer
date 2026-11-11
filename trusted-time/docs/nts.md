@@ -149,18 +149,19 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   so it stays under 60 s until the next quorum can replace the one it
   joins; the clock refuses a `MaxAge` that leaves no room for that), ages
   the bound by rho, and fails `Now` over 100 ms. `Now` also fails once the
-  oldest sample of the quorum in force is over 60 s old on the local
-  clock. The host sets that clock's rate: if it blocks the servers and runs
+  oldest sample of the quorum in force is over `MaxAge` old on the local
+  clock (90 s under the 60 s schedule, 60 s without it). The host sets that clock's rate: if it blocks the servers and runs
   the clock fast, the bound ages too slowly, and only this limit keeps the
-  time a quorum in force serves within 60 s of real time. A new quorum can
-  get further ahead on a counter the host can set: a drift refusal starts a
-  new history, so the next quorum is checked against the refused one only,
-  and against the coarse clock, which ages on the same counter and can
-  itself run up to 75 s ahead (`Anchored.MaxAdvance`). After one refusal a
-  time 75 + 30 + 1 s, about 106 s, ahead of real time can be served. Nitro
-  is not affected: the host cannot set `CLOCK_MONOTONIC_RAW` there. The
-  restart floor's one epoch (384 s on mainnet) covers 106 s
-  (signer-core/README.md, "Restart floor"). The other direction has no such limit: a
+  time a quorum in force serves within `MaxAge` of real time. So on a
+  counter the host can set, the lead is at most the sample age limit plus
+  the bound: about 90 s under the 60 s schedule. A drift refusal and the
+  coarse clock do not add to this. Each quorum is made of authenticated
+  samples, so its time is real time at its samples plus the counter's
+  advance since then, and `Now` stops at the age limit. (With plain NTP
+  the samples are the host's, and the coarse window is the only limit; see
+  "Plain NTP".) Nitro is not affected: the host cannot set
+  `CLOCK_MONOTONIC_RAW` there. The restart floor's one epoch (384 s on
+  mainnet) covers 90 s (signer-core/README.md, "Restart floor"). The other direction has no such limit: a
   host that runs the clock slow makes the samples look young and the polls
   rare, so the time served falls behind real time without a bound until
   the drift check sees new samples. On a platform without a host-proof
@@ -285,8 +286,8 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
     shifts does, so a sample joins a quorum while it is at most 76 s old
     (90 s minus the 4 s tick and the 10 s) and stays under 90 s until the
     next quorum. On a counter the host can set, the fast-counter lead is
-    up to 90 s instead of 60 s; the 106 s case above does not depend on
-    it, and the restart floor's 384 s epoch covers both.
+    up to 90 s instead of 60 s, and the restart floor's 384 s epoch
+    covers it.
   - The quorum is the majority rule over the fresh samples, so 5 actives
     give a time with 2 of them wrong or missing, and 4 actives with 1.
   - Consecutive quorums share most members, so a jump of the local
