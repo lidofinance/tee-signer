@@ -213,12 +213,19 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   burst (`NTSShiftBurstBelow`), so that gap does not leave a quorum of 3
   that one wrong operator stops; in the simulation this adds about one
   burst per handover. Seeded with an HMAC of the sealing
-  key (`platform.ScheduleSeed`), which the host does not know, so it cannot
-  plan ahead. It can learn the order: the order stays the same after a
-  restart, and the host sees where each query goes, so after one round of
-  handovers (n times 15 minutes) it knows the next active sets. The
-  catalog's default set has 6 servers, all active; with one more from
-  the image's command (`-nts-terms-confirmed`) they hand over.
+  key (`platform.ScheduleSeed`), which the host does not know, so the
+  order cannot be computed ahead from public data, and signers with other
+  keys spread over the operators in other orders. It does not keep the
+  order from the host. The order stays the same after a restart, and the
+  host sees where each query goes, so after one round of handovers (n
+  times 15 minutes) it knows the next active sets. Every start also
+  begins at the same window, so a host that restarts the signer within
+  each shift keeps the same actives for as long as it likes, and by timing
+  a restart chooses which window is active when. That gives it nothing it
+  does not have already: a host that drops answers chooses which servers
+  form the quorum, and 3 must still agree. The catalog's default set has
+  6 servers, all active; with one more from the image's command
+  (`-nts-terms-confirmed`) they hand over.
   It asks public servers less
   often and keeps the quorum alive when operators fail:
   - Time is counted in ticks of 4 s since the start round. The start round
@@ -239,8 +246,18 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
     drawn from the seed. The outgoing leaves on time; its last sample stays
     until it ages out. An incoming that does not answer is not replaced.
   - A lost answer of an active gets one fallback at once to a random
-    operator not asked in 60 s, at most 120 per hour. With fewer than 4
-    fresh samples, every operator not asked in 60 s is asked (a burst).
+    operator not asked in 60 s that can be asked (not stopped by DENY or
+    RSTR, not in an NTS-KE backoff), at most 120 per hour. With fewer than
+    4 fresh samples, every such operator not asked in 60 s is asked (a
+    burst), until the 120 are used up. A set under 7 has no operator for a
+    fallback: there, and wherever none is free, a lost answer gets one
+    retry of the same operator 20 s later (`NTSShiftStartRetry`), after
+    the first quorum, within the same 120 per hour. Its next slot stays 60 s
+    after the lost contact, so a lost answer costs at most one more query.
+    In a simulation of 4 servers, 30 % loss blocked signing 18 % of the
+    time without the retry and under 1 % with it; one server down and 10 %
+    loss on the others, 17 % and 1 %. A wide answer and a RATE get no
+    retry: the server answered.
   - NTP queries time out after 1 s; the NTP host is resolved once at
     NTS-KE (default dialer only). NTS-KE keeps 5 s.
   - `MaxAge` is 90 s. Each tick ends within 10 s, as a refresh without
@@ -257,8 +274,8 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
     the lead the age limit allows anyway.
   - `NTSSummary` adds the active operators, per-operator counts (queries,
     answers, losses, fallbacks, bursts, RATE answers, handovers, failed
-    handovers, fallbacks that needed NTS-KE first) and the fallbacks the
-    cap refused. Fallbacks to an operator that often need NTS-KE mean its
+    handovers, fallbacks that needed NTS-KE first, retries of a lost
+    answer) and the fallbacks the cap refused. Fallbacks to an operator that often need NTS-KE mean its
     cookies expire while it idles; an operator can idle for about (n -
     ShiftActives(n)) x 15 minutes: 45 minutes with 7 or 8 operators.
 - HEALTH `clock_nts.operators` has one entry per server the clock dials,
@@ -266,11 +283,15 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   `operator`, `host`, `active`, `queries`, `answers`, `losses`, `wide`
   (losses that were answers over the sample cap), `ke_ok`,
   `ke_fail`, `last_answer_age_ms` (-1: no answer yet), `off` (a DENY or
-  RSTR stop), `last_error`, and under shifts `fallbacks`, `bursts`,
-  `rates`, `handovers`, `failed_handovers` and `fallback_ke`.
+  RSTR stop), `last_error` (cut at 256 octets), and under shifts
+  `fallbacks`, `bursts`, `rates`, `handovers`, `failed_handovers`,
+  `fallback_ke` and `retries`.
   `clock_nts.fallbacks_capped` counts the fallbacks the hourly cap refused.
-  A server with queries and no answers is dead from this signer's network
-  before it costs a refusal.
+  A server with no answers and either queries or `ke_fail` is dead from
+  this signer's network before it costs a refusal: `queries` counts NTP
+  queries only, so a server whose NTS-KE fails (TCP 4460 blocked, a bad
+  certificate) shows `queries` 0 and `ke_fail` growing. A query that the
+  tick's 10 s deadline cut counts as no loss.
   `clock_nts.coarse` has one entry per HTTPS-date host of the coarse
   check: `source`, `queries`, `answers`, `failures`, `last_answer_age_ms`
   (-1: no answer yet), `last_diff_ms` (its Date minus the coarse quorum's
@@ -301,7 +322,10 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   the first quorum.
   The clock dials through the platform (`platform.Platform.Dial`; nil is
   the default dialer). `runner -nts-clock-check`
-  queries the servers once, with no start wait, and prints the result. A debug build (tag debugimport) can name
+  runs the start round of the runner's schedule once (every server, the
+  1 s query timeout of the shift schedule), with no start wait, and prints
+  the result, so a server that answers in 1 to 5 s fails the check as it
+  would fail the runner. A debug build (tag debugimport) can name
   test servers instead of the public ones (`RUNNER_NTS_TEST_SERVERS`,
   `RUNNER_NTS_TEST_ROOTS`, `nts_servers_debug.go`); a release build cannot.
 - `trusted-time/nts/ntstest`: a loopback NTS-KE and NTP server for the tests,
@@ -562,20 +586,24 @@ cannot turn it off or point it elsewhere:
 
 A sample whose own bound is over `-nts-max-sample-bound` joins no
 quorum (`clock.NTS.MaxSampleBound`). At receipt it counts as a lost answer,
-so a fallback may follow, and HEALTH counts it in `wide`. A sample that was
-under the cap at receipt leaves the quorum once its bound, aged by rho as
-the quorum ages it, passes the cap. The default is `-nts-max-bound`; it may
+so a fallback may follow, and HEALTH counts it in `wide`; it ends a loss
+streak (the cookies work) and gets no start retry. A sample under the cap
+at receipt joins for its whole join age (76 s): its bound, aged by rho as
+the quorum ages it, may pass the cap by that aging, at most 38 ms. Without
+that allowance a sample with bound B would join for only 2 x (cap - B)
+seconds, 30 s at 85 ms, and leave before its operator's next contact 60 s
+later. The default is `-nts-max-bound`; it may
 be raised up to 1 s, where the cap is off, but not set below the max
 bound. Why: a host that delays the one honest answer of a small fresh set
 widens its bound, and two wrong servers can then place the time anywhere
 inside it while the quorum's bound looks small. The bound is a
 half-width, and the host's delay can put the true time at either edge, so
-the error is up to twice the cap: about 200 ms at the default 100 ms,
-against about 1 s each way without the cap (RFC 5905 MAXDIST, beyond
-which the core refuses a sample). An image that raises the sample cap
-above `-nts-max-bound` gives part of that back. The images name both
-flags, so a far deployment raises both, and that error grows with them
-(about 500 ms at 250 ms).
+the error is up to twice the aged cap: about 2 x (100 + 38) ms, 276 ms,
+at the default 100 ms, against about 1 s each way without the cap (RFC
+5905 MAXDIST, beyond which the core refuses a sample). An image that
+raises the sample cap above `-nts-max-bound` gives part of that back. The
+images name both flags, so a far deployment raises both, and that error
+grows with them (about 2 x (250 + 38) ms, 576 ms, at 250 ms).
 
 The coarse URLs are hosts the platform's egress already allows. Each is
 an entry of the `coarse` list in `trusted-time/ntscatalog/catalog.json`,

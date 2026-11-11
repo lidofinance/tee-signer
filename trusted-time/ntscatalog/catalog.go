@@ -141,7 +141,8 @@ func (e NTSServer) altEndpoint(a AltHost) Endpoint {
 	if len(roots) == 0 {
 		roots = e.Roots
 	}
-	return Endpoint{ID: e.ID, Operator: e.Operator, Host: a.Host, Roots: roots, NTPNames: e.NTPNames, NTPNets: e.NTPNets, NitroPort: a.NitroPort}
+	return Endpoint{ID: e.ID, Operator: e.Operator, Host: a.Host, Roots: slices.Clone(roots), NTPNames: slices.Clone(e.NTPNames),
+		NTPNets: slices.Clone(e.NTPNets), NitroPort: a.NitroPort}
 }
 
 // Terms of an operator, as its own published pages state them.
@@ -394,6 +395,12 @@ func parseStatus(s string) (Status, error) {
 // the Rust core refuses longer operator labels (MAX_OPERATOR_LEN).
 const MaxLabel = 32
 
+// MaxServers is the most servers a runner may dial: the Rust core's
+// quorum refuses more (MAX_SERVERS), so a larger set would fail every
+// quorum. An nts-tagged test in trusted-time/nts ties both numbers to the
+// core's.
+const MaxServers = 16
+
 // NTPHosts are the NTP host names a runner that dials endpoints can be
 // sent to: each host, which the client uses when NTS-KE names no NTP
 // server (RFC 8915 section 4.1.7), then its NTPNames. The Nitro UDP relay
@@ -426,10 +433,21 @@ func (c *Catalog) Dialed() []NTSServer {
 	var out []NTSServer
 	for _, e := range c.NTS {
 		if e.Default && e.Status != Withdrawn {
-			out = append(out, e)
+			out = append(out, e.clone())
 		}
 	}
 	return out
+}
+
+// clone is e with its own slices, so a caller that changes them does not
+// change the catalog.
+func (e NTSServer) clone() NTSServer {
+	e.Roots, e.NTPNets, e.NTPNames, e.Regions = slices.Clone(e.Roots), slices.Clone(e.NTPNets), slices.Clone(e.NTPNames), slices.Clone(e.Regions)
+	e.Alt = slices.Clone(e.Alt)
+	for i := range e.Alt {
+		e.Alt[i].Roots = slices.Clone(e.Alt[i].Roots)
+	}
+	return e
 }
 
 // WithConfirmed is the Dialed set plus the entries ids names, in catalog
@@ -473,11 +491,15 @@ func (c *Catalog) WithConfirmed(specs []string) ([]Endpoint, error) {
 	for id := range want {
 		return nil, fmt.Errorf("ntscatalog: no entry %q", id)
 	}
+	if len(out) > MaxServers {
+		return nil, fmt.Errorf("ntscatalog: %d servers with the confirmed ones, at most %d", len(out), MaxServers)
+	}
 	return out, nil
 }
 
 func (e NTSServer) endpoint() Endpoint {
-	return Endpoint{ID: e.ID, Operator: e.Operator, Host: e.Host, Roots: e.Roots, NTPNames: e.NTPNames, NTPNets: e.NTPNets, NitroPort: e.NitroPort}
+	return Endpoint{ID: e.ID, Operator: e.Operator, Host: e.Host, Roots: slices.Clone(e.Roots), NTPNames: slices.Clone(e.NTPNames),
+		NTPNets: slices.Clone(e.NTPNets), NitroPort: e.NitroPort}
 }
 
 // ForRegion are the active entries a new setup for region may name, in
@@ -521,7 +543,9 @@ func checkRegions(rs []string) error {
 }
 
 // validID: 1 to MaxLabel of a-z, 0-9, '.' and '-'. Setups will list IDs,
-// so an ID holds no separator, space or upper case.
+// so an ID holds no separator, space or upper case. Operator labels follow
+// the same rule: "ptb" and "PTB " must not count as two operators, and the
+// status line lists them comma-separated.
 func validID(id string) bool {
 	if id == "" || len(id) > MaxLabel {
 		return false
@@ -534,12 +558,39 @@ func validID(id string) bool {
 	return true
 }
 
+// validHost: a DNS name in lower case, without a trailing dot, of a-z,
+// 0-9, '.' and '-', so one host cannot appear twice in two spellings.
+func validHost(h string) bool {
+	if h == "" || len(h) > 253 || strings.HasPrefix(h, ".") || strings.HasSuffix(h, ".") || strings.Contains(h, "..") {
+		return false
+	}
+	for _, c := range []byte(h) {
+		if !('a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '.' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+// checkRoots: .pem file names under trusted-time/nts/roots, none empty.
+// Whether each is pinned, the nts-tagged TestPinnedRoots checks.
+func checkRoots(roots []string) error {
+	for _, r := range roots {
+		if !strings.HasSuffix(r, ".pem") || len(r) == len(".pem") || strings.ContainsAny(r, `/\ `) {
+			return fmt.Errorf("root %q: a .pem file name", r)
+		}
+	}
+	return nil
+}
+
 // Check is the catalog's own consistency: valid unique IDs, one
-// NTS server per operator, a known status and terms, a terms URL for open
-// terms, host and roots set, every host (alt hosts too) once in the
-// catalog, known regions (RegionGlobal alone), NTP nets that parse, and a
-// distinct Nitro vsock port for every server. Parse runs it on every catalog it
-// reads.
+// NTS server per operator, operator labels of the ID rule, a known status
+// and terms, a terms URL for open terms, host and roots set, hosts in lower
+// case and every host (alt hosts too) once in the catalog, root file names,
+// known regions (RegionGlobal alone), NTP nets that parse, a distinct Nitro
+// vsock port for every server, and a default set of 1 to MaxServers. Parse
+// runs it on every catalog it reads, so an empty catalog ("{}", null) is
+// refused too.
 func (c *Catalog) Check() error {
 	ids := map[string]bool{}
 	ops := map[string]string{}
@@ -555,6 +606,15 @@ func (c *Catalog) Check() error {
 		ids[e.ID] = true
 		if e.Host == "" || len(e.Roots) == 0 || e.Operator == "" || len(e.Operator) > MaxLabel {
 			return fmt.Errorf("ntscatalog: NTS server %s: host, roots and an operator of 1 to %d octets required", e.ID, MaxLabel)
+		}
+		if !validID(e.Operator) {
+			return fmt.Errorf("ntscatalog: NTS server %s: operator %q: a-z, 0-9, '.' and '-'", e.ID, e.Operator)
+		}
+		if !validHost(e.Host) {
+			return fmt.Errorf("ntscatalog: NTS server %s: host %q: a lower-case DNS name", e.ID, e.Host)
+		}
+		if err := checkRoots(e.Roots); err != nil {
+			return fmt.Errorf("ntscatalog: NTS server %s: %w", e.ID, err)
 		}
 		if e.Status > Withdrawn {
 			return fmt.Errorf("ntscatalog: NTS server %s: %v", e.ID, e.Status)
@@ -578,6 +638,12 @@ func (c *Catalog) Check() error {
 		for _, a := range e.Alt {
 			if a.Host == "" {
 				return fmt.Errorf("ntscatalog: NTS server %s: alt host empty", e.ID)
+			}
+			if !validHost(a.Host) {
+				return fmt.Errorf("ntscatalog: NTS server %s: alt host %q: a lower-case DNS name", e.ID, a.Host)
+			}
+			if err := checkRoots(a.Roots); err != nil {
+				return fmt.Errorf("ntscatalog: NTS server %s: alt host %s: %w", e.ID, a.Host, err)
 			}
 			if prev, dup := hosts[a.Host]; dup {
 				return fmt.Errorf("ntscatalog: host %s in %s and %s", a.Host, prev, e.ID)
@@ -615,7 +681,15 @@ func (c *Catalog) Check() error {
 			ports[a.NitroPort] = e.ID + "@" + a.Host
 		}
 	}
-	return c.checkCoarse()
+	if err := c.checkCoarse(); err != nil {
+		return err
+	}
+	// A runner with no default server, or more than the quorum takes, could
+	// never form a quorum.
+	if d := len(c.Dialed()); d == 0 || d > MaxServers {
+		return fmt.Errorf("ntscatalog: %d default servers (not withdrawn), want 1 to %d", d, MaxServers)
+	}
+	return nil
 }
 
 // checkCoarse: valid unique IDs and URLs, https URLs with no user, query
@@ -644,6 +718,9 @@ func (c *Catalog) checkCoarse() error {
 		}
 		if e.CloudRoots == "" && len(e.Roots) == 0 {
 			return fmt.Errorf("ntscatalog: coarse %s: no roots", e.ID)
+		}
+		if err := checkRoots(e.Roots); err != nil {
+			return fmt.Errorf("ntscatalog: coarse %s: %w", e.ID, err)
 		}
 	}
 	return nil

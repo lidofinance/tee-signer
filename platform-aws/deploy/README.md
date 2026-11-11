@@ -261,7 +261,11 @@ SETUP=signer-2.bin platform-aws/deploy/parent-run.sh               # on the pare
   catalog's hosts (8005 to 8018, trusted-time/ntscatalog Endpoints): the
   parent cannot see which of them the enclave's command chose.
   `hostagent -setup FILE -proxy-routes` prints them; `parent-run.sh` starts
-  one vsock-proxy per line and writes the allowlist. The coarse-time URLs
+  one vsock-proxy per line and writes the allowlist. A line of an NTS-KE
+  host outside the default set ends in `optional`: if its proxy exits at
+  start (vsock-proxy resolves its host then), the script warns and goes
+  on, so a DNS failure of a host the default runner never dials does not
+  stop the parent. The coarse-time URLs
   name `{region}`; the runner fills in the setup's region.
 - The setup's mark log is the clone protection (see "Clone protection"). The S3
   writer credentials stay at `record/writer-credentials.kms` on the parent.
@@ -695,7 +699,13 @@ sends to the first public address, IPv4 first. An address must lie in `194.58.20
 allowed names resolves to now (cached 5 minutes, a failed lookup 30 s).
 Public means global unicast, not private (RFC 1918, fc00::/7) and not
 shared space, NAT64, 6to4 or another special block, so a DNS answer that
-points a catalog name at the parent or the VPC gets no datagram.
+points a catalog name at a private or special address (the VPC's IPv4
+space, the parent's private address, loopback) gets no datagram. The relay
+cannot tell a public address of the VPC or the parent (an Elastic IP, the
+VPC's global IPv6 block) from an NTP server's, so a DNS answer that names
+one is sent to. That answer comes from the parent's resolver, which the
+host runs, and the host can send datagrams there itself. An address the
+enclave names directly that is not public is refused before any lookup.
 Nothing else goes out and no other name is resolved. The block is for
 Netnod: each IPv4 address of `nts.netnod.se` names a different NTP server by
 address, port 4123, in `194.58.203.x` to `194.58.207.x`, and none of them is

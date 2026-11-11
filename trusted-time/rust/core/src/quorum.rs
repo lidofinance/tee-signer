@@ -89,7 +89,7 @@ pub enum QuorumError {
 impl fmt::Display for QuorumError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TooFew => f.write_str("too few servers for the quorum rule"),
+            Self::TooFew => f.write_str("too few servers: at least 3, and over twice the number allowed wrong"),
             Self::TooMany => write!(f, "more than {MAX_SERVERS} servers"),
             Self::BadOperator => write!(f, "operator label empty or over {MAX_OPERATOR_LEN} octets"),
             Self::DuplicateOperator => f.write_str("two servers of one operator"),
@@ -409,6 +409,14 @@ mod tests {
                     agreed += 1;
                     assert_eq!(covered.first(), Some(&r.lo_ns));
                     assert_eq!(covered.last(), Some(&r.hi_ns));
+                    // The result lies within the (f+1)-th lowest lower end and
+                    // the (f+1)-th highest upper end, and its bound holds it.
+                    let mut lows: Vec<i64> = v.iter().map(|s| s.offset_ns - s.bound_ns).collect();
+                    let mut highs: Vec<i64> = v.iter().map(|s| s.offset_ns + s.bound_ns).collect();
+                    lows.sort_unstable();
+                    highs.sort_unstable_by(|a, b| b.cmp(a));
+                    assert!(lows[f] <= r.lo_ns && r.hi_ns <= highs[f]);
+                    assert!(r.offset_ns - r.bound_ns <= r.lo_ns && r.hi_ns <= r.offset_ns + r.bound_ns);
                 }
                 Err(e) => {
                     refused += 1;

@@ -236,8 +236,9 @@ safety. No clock at the load refuses the validator (`SC_ERR_CLOCK`).
 That condition limits the epoch length. A trusted clock that reads up to
 60 s ahead before a restart and correct after it reads one epoch lower only
 if an epoch is longer than that error. The NTS clock allows up to about
-61 s on Nitro (its 60 s age limit plus its bound), where the host cannot
-set the counter it ages on. On a platform whose counter the host can set,
+90 s on Nitro (the 90 s sample age limit of the shift schedule, which
+every runner runs, plus its bound), where the host cannot set the counter
+it ages on. On a platform whose counter the host can set,
 a drift refusal resets the clock's history and the coarse clock can itself
 run 75 s ahead, so the lead can reach about 106 s
 (trusted-time/docs/nts.md). The floor holds for epochs longer than that.

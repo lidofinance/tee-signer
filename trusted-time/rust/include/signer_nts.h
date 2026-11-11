@@ -95,7 +95,7 @@ typedef struct {
   int64_t hi_ns;
 } snts_quorum_result;
 
-/* The name and version of the library, for example "signer-nts 0.0.3".
+/* The name and version of the library, for example "signer-nts 0.0.4".
  * NUL-terminated, valid for the life of the program. Do not free it. */
 const char *snts_version(void);
 

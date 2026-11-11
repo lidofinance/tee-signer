@@ -47,7 +47,8 @@ for tool in hostagent forwarder udprelay; do
 done
 [ -n "${SETUP:-}" ] || { echo "set SETUP to the signer's binary setup (signer-admin setup, or signer-admin/cmd/setup-tool encode)" >&2; exit 1; }
 SETUP="$(cd "$(dirname "$SETUP")" && pwd)/$(basename "$SETUP")"
-# The routes of the setup, one "PORT HOST HOSTPORT" line each. The agent
+# The routes of the setup, one "PORT HOST HOSTPORT" line each, with
+# "optional" after the NTS-KE hosts outside the default set. The agent
 # refuses a setup the runner would refuse, and one for another platform.
 ROUTES="$("$HERE/hostagent" -setup "$SETUP" -proxy-routes)" || { echo "$SETUP: refused (see above)" >&2; exit 1; }
 echo "setup $SETUP, proxy routes:"
@@ -59,14 +60,28 @@ for p in hostagent forwarder udprelay vsock-proxy; do
 done
 # start LOG CMD... runs CMD in the background. check_started fails if any
 # of them has exited after a second, for example on a port in use.
+# start_optional is start for an optional route: check_started only warns
+# when it has exited. vsock-proxy checks its remote host against the
+# allowlist when it starts, which resolves the name, and exits when that
+# fails (as far as the aws-nitro-enclaves-cli source shows; not checked on
+# every release). A DNS failure of one catalog host that the default set
+# does not dial must not stop the parent. A deployment that confirmed that host
+# (-nts-terms-confirmed) then lacks one NTS server until this script runs
+# again; its clock goes on with the others.
 STARTED=()
+OPTIONAL=()
 start() { local log="$1"; shift; nohup "$@" >"$log" 2>&1 & STARTED+=("$! $log"); }
+start_optional() { local log="$1"; shift; nohup "$@" >"$log" 2>&1 & OPTIONAL+=("$! $log"); }
 check_started() {
   sleep 1
   local s
   for s in "${STARTED[@]}"; do
     kill -0 "${s%% *}" 2>/dev/null || { echo "a background process exited: see ${s#* }" >&2; exit 1; }
   done
+  for s in ${OPTIONAL[@]+"${OPTIONAL[@]}"}; do
+    kill -0 "${s%% *}" 2>/dev/null || echo "warning: the proxy of an optional NTS-KE route exited, going on: see ${s#* }" >&2
+  done
+  OPTIONAL=()
 }
 
 # 1. Nitro CLI and allocator (AWS docs: nitro-enclave-cli-install.html).
@@ -87,12 +102,14 @@ sudo systemctl enable --now nitro-enclaves-allocator.service
 {
   echo "# Written by parent-run.sh from the setup's routes (hostagent -proxy-routes)."
   echo "allowlist:"
-  while read -r port host hostport; do
+  while read -r port host hostport opt; do
     echo "- {address: $host, port: $hostport}"
   done <<<"$ROUTES"
 } | sudo tee /etc/nitro_enclaves/vsock-proxy.yaml >/dev/null
-while read -r port host hostport; do
-  start "/tmp/vsock-proxy-$port.log" \
+while read -r port host hostport opt; do
+  run=start
+  [ "$opt" != optional ] || run=start_optional
+  "$run" "/tmp/vsock-proxy-$port.log" \
     vsock-proxy "$port" "$host" "$hostport" --config /etc/nitro_enclaves/vsock-proxy.yaml
 done <<<"$ROUTES"
 

@@ -28,9 +28,14 @@ import (
 //     not replaced) and counts as a failed handover.
 //   - A lost answer of an active is followed at once by one query to a
 //     random non-active operator not asked within its minimum gap, up to
-//     NTSShiftFallbackCap per hour.
+//     NTSShiftFallbackCap per hour. If no such operator can be asked (a
+//     set under NTSShiftMinServers has none), the same operator is asked
+//     once more NTSShiftStartRetry after the lost contact, after the first
+//     quorum only, within the same cap. Its next slot stays where it was.
+//     A wide answer (over MaxSampleBound) and a RATE get no such retry.
 //   - With fewer than NTSShiftBurstBelow fresh samples after the tick's
-//     queries, every operator past its minimum gap is asked.
+//     queries, every operator past its minimum gap is asked, until the
+//     fallback cap is reached.
 //   - Each operator's minimum gap is NTSShiftMinGap; a Kiss-o'-Death RATE
 //     doubles it (up to 1024 s), each answer halves it back.
 //   - Two contacts with one operator start at least its gap apart (see
@@ -56,7 +61,8 @@ const (
 	// operator that has not answered yet (and sent no RATE). The start
 	// round asks every operator; without this a failed start round (a
 	// relay that comes up late) would be retried only after 60 s, once in
-	// the runner's start wait.
+	// the runner's start wait. After the first quorum it is the wait of
+	// the one retry of a lost answer that found no fallback.
 	NTSShiftStartRetry   = 20 * time.Second
 	NTSShiftLength       = 15 * time.Minute
 	NTSShiftMaxAge       = 90 * time.Second
@@ -65,6 +71,9 @@ const (
 	// NTSShiftBurstBelow: fewer fresh samples than this start a burst. At
 	// 3 fresh all 3 must agree (nts.QuorumWrong), so one wrong operator
 	// would stop the quorum in the gap after a handover; the burst fills it.
+	// A set under NTSShiftMinServers has every operator on the grid, so a
+	// burst finds no one past the gap; there the retry of a lost answer
+	// (NTSShiftStartRetry) fills the gap.
 	NTSShiftBurstBelow = 4
 	// NTSShiftFallbackCap caps the fallbacks per hour. A host that drops
 	// answers of actives can force fallbacks; past the cap a lost answer
@@ -82,6 +91,9 @@ const (
 	roleActive
 	roleFallback
 	roleBurst
+	// roleRetry asks an active again NTSShiftStartRetry after its lost
+	// answer, when no fallback could be asked.
+	roleRetry
 )
 
 type ntsAsk struct {
@@ -106,7 +118,7 @@ type ntsShifts struct {
 	shift0     int // ticks added before dividing into shifts
 	startDelay time.Duration
 	rnd        *rand.Rand
-	seeded     bool
+	seeded     bool // tests
 
 	started  bool
 	warm     bool  // a quorum formed in this run
@@ -118,6 +130,7 @@ type ntsShifts struct {
 	gaps     []int  // minimum gap per operator, in ticks
 	incoming []bool // came in at a handover, no answer since
 	missed   []bool // asked and got no answer (start retries)
+	retryAt  []int  // tick of the retry of a lost answer, never for none
 	counts   []NTSOperatorCounts
 	// fallbackAt holds the ticks of the fallbacks of the last hour; capped
 	// counts the fallbacks the cap refused.
@@ -128,7 +141,12 @@ type ntsShifts struct {
 // newNTSShifts: n operators, a tick of tick. seed nil: a random seed for
 // the phase and the start delay, and every operator active until
 // reseed. The seed should be fixed per signer, the same after a restart,
-// and unknown to the host (the runner derives it from the released key).
+// and unknown to the host (the runner derives it from the released key),
+// so the order cannot be computed ahead from public data. It does not keep
+// the order from a host that watches: one cycle of NTS-KE and NTP traffic
+// shows it, and every start begins at the same window, so a host that
+// restarts the signer can keep the first window active. That gives it no
+// more than dropping answers already does.
 func newNTSShifts(n int, seed []byte, tick time.Duration) *ntsShifts {
 	ceilTicks := func(d time.Duration) int { return int((d + tick - 1) / tick) }
 	s := &ntsShifts{
@@ -142,10 +160,11 @@ func newNTSShifts(n int, seed []byte, tick time.Duration) *ntsShifts {
 		gaps:     make([]int, n),
 		incoming: make([]bool, n),
 		missed:   make([]bool, n),
+		retryAt:  make([]int, n),
 		counts:   make([]NTSOperatorCounts, n),
 	}
 	for i := range s.last {
-		s.last[i], s.gaps[i] = never, s.gap
+		s.last[i], s.gaps[i], s.retryAt[i] = never, s.gap, never
 	}
 	if seed == nil {
 		seed = make([]byte, 32)
@@ -218,12 +237,16 @@ func (s *ntsShifts) idle(now int64) {
 }
 
 // tick moves to the tick of local time now: one more than the last, or
-// the whole ticks since the start round if that is more.
+// the whole ticks since the start round if that is more, but never more
+// than one tick ahead of local time. Calls that come faster than a tick
+// (a Run whose ticker fired during the start delay) then do not move the
+// schedule ahead of local time, where waitGap would refuse its contacts.
 func (s *ntsShifts) tick(now int64) {
 	if !s.started {
 		return
 	}
-	s.q = max(s.q+1, int((now-s.t0)/s.tickNs))
+	e := int((now - s.t0) / s.tickNs)
+	s.q = max(s.q, min(max(s.q+1, e), e+1))
 	s.handover()
 }
 
@@ -247,6 +270,19 @@ func (s *ntsShifts) plan(now int64) []ntsAsk {
 			s.mark(op, s.q)
 			out = append(out, ntsAsk{op, roleActive})
 		}
+	}
+	for op, at := range s.retryAt {
+		if at == never || s.q < at {
+			continue
+		}
+		s.retryAt[op] = never
+		if s.last[op] == s.q {
+			continue // asked on its slot at this tick
+		}
+		// Not marked: the next slot stays a gap after the lost contact.
+		s.counts[op].Queries++
+		s.counts[op].Retries++
+		out = append(out, ntsAsk{op, roleRetry})
 	}
 	return out
 }
@@ -323,8 +359,9 @@ func (s *ntsShifts) quorum() {
 
 // result records the answer (or not) of a contact. rate: the answer was a
 // Kiss-o'-Death RATE, which doubles the operator's gap; an answer halves it
-// back towards the base.
-func (s *ntsShifts) result(a ntsAsk, ok, rate bool) {
+// back towards the base. wide: an answer too wide to use; it counts as a
+// loss, but the operator did answer, so it gets no start retry.
+func (s *ntsShifts) result(a ntsAsk, ok, rate, wide bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c := &s.counts[a.op]
@@ -336,10 +373,14 @@ func (s *ntsShifts) result(a ntsAsk, ok, rate bool) {
 		c.Losses++
 		c.Rates++
 		s.gaps[a.op] = min(2*s.gaps[a.op], s.maxGap)
+		if a.role == roleRetry {
+			// The doubled gap runs from this contact, not the lost one.
+			s.last[a.op] = max(s.last[a.op], s.q)
+		}
 	default:
 		c.Losses++
 	}
-	s.missed[a.op] = !ok
+	s.missed[a.op] = !ok && !wide
 	if s.incoming[a.op] {
 		s.incoming[a.op] = false
 		if !ok {
@@ -348,28 +389,42 @@ func (s *ntsShifts) result(a ntsAsk, ok, rate bool) {
 	}
 }
 
-// fallback picks a random non-active operator past its gap, for a contact
-// after ticks after the start of this tick (at least 1). None once
-// NTSShiftFallbackCap fallbacks went out in the last hour.
-func (s *ntsShifts) fallback(after int) (int, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// capFull drops the fallbacks older than an hour and says whether
+// NTSShiftFallbackCap of them are left.
+func (s *ntsShifts) capFull() bool {
 	i := 0
 	for i < len(s.fallbackAt) && s.q-s.fallbackAt[i] >= s.hour {
 		i++
 	}
 	s.fallbackAt = s.fallbackAt[i:]
-	if len(s.fallbackAt) >= NTSShiftFallbackCap {
+	return len(s.fallbackAt) >= NTSShiftFallbackCap
+}
+
+// fallback picks a random non-active operator past its gap that can be
+// asked now (can, by operator: not stopped by DENY or RSTR, not waiting
+// out an NTS-KE backoff), for a contact after ticks after the start of
+// this tick (at least 1), for the active lost whose answer was lost. None once
+// NTSShiftFallbackCap fallbacks and retries went out in the last hour. If
+// there is no such operator and retry is set, lost is asked again
+// NTSShiftStartRetry later (plan), once, after the first quorum only.
+func (s *ntsShifts) fallback(lost, after int, retry bool, can []bool) (int, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.capFull() {
 		s.capped++
 		return 0, false
 	}
 	var cand []int
 	for op := range s.last {
-		if !slices.Contains(s.slots, op) && s.eligible(op) {
+		if !slices.Contains(s.slots, op) && s.eligible(op) && can[op] {
 			cand = append(cand, op)
 		}
 	}
 	if len(cand) == 0 {
+		if retry && s.warm && s.retryAt[lost] == never {
+			s.retryAt[lost] = s.last[lost] + s.retry
+			s.fallbackAt = append(s.fallbackAt, s.q)
+		}
 		return 0, false
 	}
 	op := cand[s.rnd.IntN(len(cand))]
@@ -386,14 +441,20 @@ func (s *ntsShifts) fallbackKE(op int) {
 	s.counts[op].FallbackKE++
 }
 
-// burst returns every operator past its gap, for a contact after ticks
-// after the start of this tick (at least 1).
-func (s *ntsShifts) burst(after int) []ntsAsk {
+// burst returns every operator past its gap that can be asked now (can,
+// as for fallback), for a contact after ticks after the start of this
+// tick (at least 1). None while the fallback cap is full: a host that
+// keeps the fresh samples low by dropping answers then gets no more
+// queries out of the clock than the slots.
+func (s *ntsShifts) burst(after int, can []bool) []ntsAsk {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.capFull() {
+		return nil
+	}
 	var out []ntsAsk
 	for op := range s.last {
-		if s.eligible(op) {
+		if s.eligible(op) && can[op] {
 			s.mark(op, s.q+after)
 			s.counts[op].Bursts++
 			out = append(out, ntsAsk{op, roleBurst})

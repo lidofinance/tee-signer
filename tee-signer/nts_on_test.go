@@ -54,4 +54,10 @@ func TestNTSClockCheckContactsServersAtOnce(t *testing.T) {
 	if d := time.Since(start); d > 2*time.Second {
 		t.Fatalf("five checks took %v: the check waits before it contacts the servers", d)
 	}
+	// It runs the runner's schedule (the shift schedule's 1 s query
+	// timeout), with no seed and no start wait.
+	n, _, err := ntsCheckClock(client, nil, slog.New(slog.DiscardHandler))
+	if err != nil || !n.Shifts || n.ScheduleSeed != nil || n.StartDelay >= 0 {
+		t.Fatalf("check clock: err %v, shifts %v, seed %v, start delay %v", err, n.Shifts, n.ScheduleSeed, n.StartDelay)
+	}
 }
