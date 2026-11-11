@@ -133,7 +133,8 @@ type NTSServer struct {
 //     reading on the same local clock (Anchored.Local = nts.Monotonic), or a
 //     slewed Go monotonic clock adds its error. Coarse also gives
 //     the certificate-validity time of NTS-KE and the NTP era. If Coarse has
-//     no time, there is no NTS time either. There is no fallback to Coarse.
+//     no time, there is no NTS time either. Now has no fallback to Coarse;
+//     CoarseNow reads it for a caller that allows its error.
 //   - Now never goes back, as for Anchored.
 //   - With Protocol ProtocolNTP the clock asks each server's NTPAddr with
 //     plain NTP: no NTS-KE and no cookies, so the NTS-KE retries and the
@@ -816,6 +817,18 @@ func (n *NTS) Source() string {
 // Trusted is true for plain NTP too: the coarse check, over authenticated
 // HTTPS, still bounds the time against the host (Protocol).
 func (n *NTS) Trusted() bool { return true }
+
+// CoarseNow is the reading of Coarse, the HTTPS-date quorum, also while
+// Now fails, for a caller whose checks allow its error of about 30 s
+// (NTSMaxCoarseDiff and NTSCoarseResolution): the runner's config updates,
+// whose change delays are days (tee-signer/server, Updates.readNow).
+// Signing never uses it.
+func (n *NTS) CoarseNow() (time.Time, error) {
+	if n.Coarse == nil {
+		return time.Time{}, errors.New("clock: nts: no coarse clock")
+	}
+	return n.Coarse.Now()
+}
 
 // logf logs with protocol=ntp-unauthenticated on every line of a plain NTP
 // clock, so no log line passes for NTS.

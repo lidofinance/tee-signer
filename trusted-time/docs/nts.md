@@ -194,7 +194,12 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   plus the Date header's 1 s resolution; a refusal stops `Now` until a
   quorum passes, as a drift refusal does), the certificate clock of NTS-KE
   (no reading: NTS-KE is refused) and the NTP era. Its `Anchored` clock ages on `CLOCK_MONOTONIC_RAW` too.
-  There is no fallback to it.
+  The NTS time has no fallback to it. The runner's config updates read it
+  while the NTS clock has no quorum (`NTS.CoarseNow`; signer-protocol
+  protocol.md, CONFIG_UPDATE, step 3), and so does the start fallback to
+  the config log's time values, which takes an update only once the
+  coarse time has passed its `activate_at` plus its wait
+  (`tee-signer/starttime.go`). Signing never reads it.
 
   Residual: the HTTPS-date sources' own TLS checks their certificates
   against the system clock, because the platform HTTP clients set no
@@ -679,7 +684,11 @@ each start runs the clock on the setup's own values (version 0 of each
 group) until the config log is read. Then the runner switches the clock
 once to the values in force (`server.Updates.StartConfig`):
 `time_servers` through `clock.NTS.SetServers`, `time_policy` through
-`clock.NTS.SetPolicy`.
+`clock.NTS.SetPolicy`. A switch to the other protocol drops every sample,
+so the start then waits for a quorum on the values in force, up to
+`-nts-wait` again, before the core is built and the shares load
+(`server.Updates.WaitClock`); with none the start fails, as at the first
+quorum. A share load needs the clock for its restart floor.
 
 If no quorum forms on the setup's values within `-nts-wait`, for example
 because an update moved the deployment to NTP or to wider bounds, the
@@ -687,17 +696,24 @@ clock tries once more on the newest values that a chain of signed updates
 from the setup reaches in the config log (`tee-signer/starttime.go`). It
 reads the update bodies from the log's store before the mark log is
 claimed and checks each update's signatures against the approvers before
-it; that needs no time. It does not read effective times, so these values
-can be those of an update still pending; StartConfig then switches to the
-values really in force. The log line `nts: clock started on the time
+it: a locked update against the set before it, an open one against the
+last set of that locked chain only. It reads no record, so it takes an
+update only once the coarse clock's time has passed its `activate_at`
+plus the wait its signatures allow; one whose `activate_at` lies before
+its arrival can still count up to that much early. StartConfig then
+switches to the values really in force. The log line `nts: clock started on the time
 values of ...` names the values the clock started on. If no quorum forms
 on those either, the start fails as before: without trusted time the
 runner could not check a config update anyway.
 
 The window before the switch. Time read before StartConfig switches comes
 from the starting values. The coarse check bounds it (at most about 31 s
-ahead of real time), and it stays as the clock's floor, since `Now` never
-goes back. A pending update can therefore come into force up to that much
+ahead of real time) on NTS. A host can force the fallback, by blocking
+NTS-KE at a restart and showing the store without a later body, so the
+starting values may be the weakest signed values past their wait. On
+plain NTP where the host sets the counter, the window is that of plain
+NTP: about 196 s ahead (see "Plain NTP"). The time stays as the clock's
+floor, since `Now` never goes back. A pending update can therefore come into force up to that much
 early at this start. Nothing is signed in this window: the core is built
 after the switch, and the runner signs only while the clock runs on the
 time values in force (`Updates.blockedLocked`).

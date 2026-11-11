@@ -27,8 +27,15 @@ import (
 // wait when every active approver except the removed one signs.
 //
 // Every other loosening change has only the normal path. In particular
-// lowering change_delay_seconds or approvals_needed, and adding, replacing
-// or reordering approvers, always wait.
+// adding, replacing or reordering approvers always waits.
+//
+// Some changes that do less still wait, as a loosening does, because the
+// usual count could otherwise stop the cluster at once with no way back
+// but a change that waits: any change of approvals_needed or
+// change_delay_seconds, up or down (raised to every approver and the
+// longest delay, governance freezes), and an update that leaves
+// allowed_image_measurements empty (no runner may sign). The other
+// approvers then have the change delay to replace the update.
 //
 // Where 0 or an empty list turns a check off, moving to it loosens and
 // moving away from it tightens (tightenLimit): builder_registration_max_
@@ -122,13 +129,16 @@ func loosens(cs []FieldChange) bool {
 //
 // The fastest path the signatures allow wins: no wait when every change
 // tightens, else emergency removal, else break-glass, else the normal
-// path with Wait.
-func (u *Update) Decide(c *Chain, active *Locked, open *Open) (Decision, error) {
+// path with Wait. h is what the signer's state says about earlier updates:
+// within one change delay after an approver removal, break-glass is not a
+// path (History.BreakGlassHeld).
+func (u *Update) Decide(c *Chain, active *Locked, open *Open, h History) (Decision, error) {
 	if err := u.Verify(&active.Approvers); err != nil {
 		return Decision{}, err
 	}
 	b := &u.Body
 	d := Decision{Path: PathNormal, Removed: -1}
+	held, until := h.BreakGlassHeld(c, active)
 	if b.Group == GroupOpen {
 		if open == nil {
 			return Decision{}, errors.New("update: the open values in force are unknown")
@@ -139,6 +149,10 @@ func (u *Update) Decide(c *Chain, active *Locked, open *Open) (Decision, error) 
 			if len(u.Approvals) != len(active.Approvers.Keys) {
 				return Decision{}, fmt.Errorf("update: open: dropping an entry of revoked_client_certs needs every approver in force (%d), %d signed",
 					len(active.Approvers.Keys), len(u.Approvals))
+			}
+			if held {
+				return Decision{}, fmt.Errorf("update: open: dropping an entry of revoked_client_certs is break-glass, which waits until %d, one change delay after the approver removal in force at %d",
+					until, h.RemovedAt)
 			}
 			d.Path = PathBreakGlass
 		}
@@ -164,12 +178,50 @@ func (u *Update) Decide(c *Chain, active *Locked, open *Open) (Decision, error) 
 			return d, nil
 		}
 	}
-	if BreakGlassOnly(d.Changes) && len(signed) == len(active.Approvers.Keys) {
+	if BreakGlassOnly(d.Changes) && len(signed) == len(active.Approvers.Keys) && !held {
 		d.Path = PathBreakGlass
 		return d, nil
 	}
 	d.Wait = Wait(c, active, b)
 	return d, nil
+}
+
+// History is what the signer's state says about earlier updates, for
+// Decide. The runner keeps it in its mark log records
+// (markstore.ConfigState). A tool that does not know it passes the zero
+// value, and may then name a faster path than the runner takes.
+type History struct {
+	// RemovedAt is the effective time of the newest locked update in force
+	// that removed one approver (RemovesOne, on any path), 0 for none.
+	RemovedAt uint64
+	// Now is the trusted time of the check.
+	Now uint64
+}
+
+// BreakGlassHeld reports whether break-glass is not a path at h.Now, and
+// until when: within one change delay of active (ChangeDelayOn) after the
+// approver removal at h.RemovedAt. With approvals_needed = n-1, every
+// approver but one is the usual count, so k keys could remove the one
+// honest approver at once; the smaller set is then every approver, and
+// break-glass would skip every wait. The delay gives the removed approver
+// the time to react that a loosening change gives. A locked break-glass
+// change then takes the normal path and waits; an open one (a dropped
+// revocation), which has no other path, is refused.
+func (h History) BreakGlassHeld(c *Chain, active *Locked) (bool, uint64) {
+	if h.RemovedAt == 0 {
+		return false, 0
+	}
+	until := SatAdd(h.RemovedAt, active.ChangeDelayOn(c))
+	return h.Now < until, until
+}
+
+// RemovesOne reports whether next's approvers are prev's with one removed
+// and no other change loosens: an emergency removal in shape, whatever path
+// it took. The runner records the effective time of each such update in
+// force (History.RemovedAt).
+func RemovesOne(prev, next *Locked) bool {
+	_, ok := EmergencyRemoval(prev, next, ClassifyLocked(prev, next))
+	return ok
 }
 
 // BreakGlassOnly reports whether cs loosens and every loosening change in
@@ -232,17 +284,19 @@ func ClassifyLocked(active, next *Locked) []FieldChange {
 // the caller knows the field changed.
 func lockedClass(name string, a, n *Locked) ChangeClass {
 	switch name {
-	case "approvals_needed":
-		return tightenIf(n.Approvers.ApprovalsNeeded > a.Approvers.ApprovalsNeeded)
-	case "change_delay_seconds":
-		// Equal delays with another presence count as loosening: the
-		// default is the build's, not the setup's.
-		return tightenIf(n.ChangeDelay() > a.ChangeDelay())
+	case "approvals_needed", "change_delay_seconds":
+		// Up or down: raised at once by the usual count, they would freeze
+		// governance (see the package comment).
+		return ChangeLoosen
 	case "allowed_image_measurements":
-		if subset(n.AllowedImageMeasurements, a.AllowedImageMeasurements, compareImages) {
-			return ChangeTighten
+		if !subset(n.AllowedImageMeasurements, a.AllowedImageMeasurements, compareImages) {
+			return ChangeBreakGlass
 		}
-		return ChangeBreakGlass
+		if len(n.AllowedImageMeasurements) == 0 {
+			// No image left: no runner signs.
+			return ChangeLoosen
+		}
+		return ChangeTighten
 	case "allowed_fee_recipients":
 		return tightenIf(subset(n.AllowedFeeRecipients, a.AllowedFeeRecipients, func(x, y backend.Address) int { return bytes.Compare(x[:], y[:]) }))
 	case "builder_gas_limit_min":

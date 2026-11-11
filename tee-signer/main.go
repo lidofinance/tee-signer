@@ -290,6 +290,11 @@ func run() (err error) {
 		if cfg, err = updates.StartConfig(cfg); err != nil {
 			return fmt.Errorf("config in force: %w", err)
 		}
+		// StartConfig may have switched the clock to other time values;
+		// the shares load only once it has time on them.
+		if err := updates.WaitClock(ctx, startClockWait(), time.Second); err != nil {
+			return err
+		}
 	}
 
 	signer, err := core.NewSigner(cfg, boot.maxValidators, 64, hooks)
@@ -495,7 +500,10 @@ func setupMarkLog(ctx context.Context, plat *platform.Platform, hooks *state.Hoo
 		if opts.Setup, err = markstore.SetupOf(st.Wire, st.SHA256); err != nil {
 			return markClaim{}, err
 		}
-		opts.Clock = plat.Clock.Now
+		// The NTS time, or the coarse time while it has no quorum, so a
+		// config update the coarse clock checked is stored too
+		// (server.ConfigTime).
+		opts.Clock = server.ConfigTime(plat.Clock)
 		if platformName != "dev" {
 			lctx, lcancel := context.WithTimeout(ctx, 60*time.Second)
 			err := markstore.CheckLock(lctx, l, st.Wire.SlashingLogMinLockDays)

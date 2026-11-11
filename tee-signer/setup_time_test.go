@@ -113,8 +113,8 @@ func TestNTSStartWithFallback(t *testing.T) {
 	}
 	var logs bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logs, nil))
-	o := platform.Options{Time: setupTV, TimeFallback: func(*platform.Platform) (*platform.TimeValues, error) { return logTV, nil }}
-	n, started, err := ntsStartWithFallback(start, s0, o, &platform.Platform{}, log)
+	o := platform.Options{Time: setupTV, TimeFallback: func(*platform.Platform, time.Time) (*platform.TimeValues, error) { return logTV, nil }}
+	n, started, err := ntsStartWithFallback(start, coarseOK, s0, o, &platform.Platform{}, log)
 	if err != nil || n == nil || started != logTV || len(tried) != 2 {
 		t.Fatalf("clock %v, started %+v, %v, tried %d", n, started, err, len(tried))
 	}
@@ -128,22 +128,27 @@ func TestNTSStartWithFallback(t *testing.T) {
 	o.Time = logTV
 	tried = nil
 	s1, _ := ntsSetupSettings(logTV)
-	if _, started, err := ntsStartWithFallback(start, s1, o, &platform.Platform{}, log); err != nil || started != logTV || len(tried) != 1 {
+	if _, started, err := ntsStartWithFallback(start, coarseOK, s1, o, &platform.Platform{}, log); err != nil || started != logTV || len(tried) != 1 {
 		t.Fatalf("started %+v, %v, tried %d", started, err, len(tried))
 	}
 	// No signed values, or none that help: the start fails.
 	o.Time = setupTV
-	for _, fb := range []func(*platform.Platform) (*platform.TimeValues, error){
-		func(*platform.Platform) (*platform.TimeValues, error) { return nil, nil },
-		func(*platform.Platform) (*platform.TimeValues, error) { return nil, errors.New("store down") },
-		func(*platform.Platform) (*platform.TimeValues, error) { return setupTV, nil },
+	for _, fb := range []func(*platform.Platform, time.Time) (*platform.TimeValues, error){
+		func(*platform.Platform, time.Time) (*platform.TimeValues, error) { return nil, nil },
+		func(*platform.Platform, time.Time) (*platform.TimeValues, error) {
+			return nil, errors.New("store down")
+		},
+		func(*platform.Platform, time.Time) (*platform.TimeValues, error) { return setupTV, nil },
 	} {
 		o.TimeFallback = fb
-		if _, _, err := ntsStartWithFallback(start, s0, o, &platform.Platform{}, log); err == nil {
+		if _, _, err := ntsStartWithFallback(start, coarseOK, s0, o, &platform.Platform{}, log); err == nil {
 			t.Fatal("started without a quorum")
 		}
 	}
 }
+
+// coarseOK is a coarse clock that reads.
+func coarseOK() (time.Time, error) { return time.Unix(1_800_000_000, 0), nil }
 
 // With a setup, a cloud platform refuses each of the four flags and their
 // variables; the dev platform warns and takes the setup's values.

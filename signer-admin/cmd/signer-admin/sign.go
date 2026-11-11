@@ -111,6 +111,13 @@ func cmdShow(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if body.Group == setupwire.GroupOpen {
+		var activeOpen *setupwire.Open
+		if a != nil {
+			activeOpen = a.open
+		}
+		checkTimeServersNote(out, activeOpen, body.Open)
+	}
 	if a == nil {
 		fprintf(out, "no active values (%s): no diff and no signature check\n", path)
 	} else {

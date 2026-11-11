@@ -14,10 +14,12 @@ import (
 
 // configModel plays the config updates of a runner with a setup
 // (tee-signer/server/config.go) on
-// this machine's clock: the checks in the runner's order, the waits,
-// supersede and the rotation rule. It does not run the fork rule or the
-// core's value checks; the dev runner test of signer-admin covers the real
-// runner.
+// this machine's clock: the checks in the runner's order, the change rules
+// of setupwire Decide (paths, waits under the build's limits, the hold on
+// break-glass after an approver removal), supersede and the rotation rule.
+// It does not run the fork rule, the core's value checks, the time_servers
+// catalog check or the runner's pending and carried revocation check; the
+// dev runner test of signer-admin covers the real runner.
 type configModel struct {
 	setup *setupwire.Setup
 	hash  [32]byte
@@ -25,6 +27,9 @@ type configModel struct {
 	groups [3]groupModel
 	// limits are the governance times of the build it plays.
 	limits runnerchain.Limits
+	// removedAt is the effective time of the newest locked update in force
+	// that removed one approver (setupwire.History).
+	removedAt uint64
 }
 
 type groupModel struct {
@@ -66,6 +71,13 @@ func (c *configModel) locked() *setupwire.Locked {
 	return &c.setup.Locked
 }
 
+func (c *configModel) open() *setupwire.Open {
+	if b := c.groups[setupwire.GroupOpen].body; b != nil {
+		return b.Open
+	}
+	return &c.setup.Open
+}
+
 func (c *configModel) activate(g setupwire.Group) {
 	gm := &c.groups[g]
 	p := gm.pending
@@ -82,7 +94,11 @@ func (c *configModel) reconcile(now uint64) {
 	}
 	if lp != nil && lp.at <= now {
 		rotation := len(lp.update.NewSet) > 0
+		prev := c.locked()
 		c.activate(setupwire.GroupLocked)
+		if setupwire.RemovesOne(prev, c.locked()) {
+			c.removedAt = lp.at
+		}
 		if rotation {
 			c.groups[setupwire.GroupOpen].pending = nil
 		}
@@ -152,10 +168,15 @@ func (c *configModel) accept(raw []byte, now uint64) (uint8, error) {
 	if b.PrevHash != gm.hash {
 		return 0, badRequest("prev_hash %x is not the %s update in force (version %d, %x)", b.PrevHash[:8], b.Group, gm.version, gm.hash[:8])
 	}
-	if err := u.Verify(&c.locked().Approvers); err != nil {
+	d, err := u.Decide(&c.setup.Chain, c.locked(), c.open(), setupwire.History{RemovedAt: c.removedAt, Now: now})
+	if err != nil {
 		return 0, badRequest("%v", err)
 	}
-	wait := c.limits.Wait(&c.setup.Chain, c.locked(), b)
+	// Decide says whether the path waits; the wait is the build's.
+	var wait uint64
+	if d.Wait > 0 {
+		wait = c.limits.Wait(&c.setup.Chain, c.locked(), b)
+	}
 	if err := c.limits.CheckActivateAt(b.ActivateAt, now, wait); err != nil {
 		return 0, badRequest("%v", err)
 	}

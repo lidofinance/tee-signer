@@ -165,6 +165,14 @@ func init() {
 	for name, f := range platforms {
 		platforms[name] = ntsSwitch(name, f)
 	}
+	startClockWait = func() time.Duration {
+		// Checked when the clock started.
+		w, err := ntsDuration(*ntsWaitFlag, "RUNNER_NTS_WAIT", 90*time.Second)
+		if err != nil {
+			return 90 * time.Second
+		}
+		return w
+	}
 	timeSinkOf = func(c platform.Clock) server.TimeSink {
 		if n, ok := c.(*clock.NTS); ok {
 			return ntsTime{n}
@@ -327,7 +335,21 @@ func withNTSClock(f platformFunc, s ntsSettings) platformFunc {
 		start := func(s ntsSettings) (*clock.NTS, error) {
 			return startNTSClock(context.Background(), p.HTTPClient, dial, o.Param("region", ""), p.NTSScheduleSeed, s, log)
 		}
-		n, started, err := ntsStartWithFallback(start, s, o, p, log)
+		// The coarse clock of the start fallback: the HTTPS-date quorum the
+		// NTS clock checks against, read once.
+		coarse := func() (time.Time, error) {
+			_, c, err := newNTSClockWith(p.HTTPClient, dial, o.Param("region", ""), s, log)
+			if err != nil {
+				return time.Time{}, err
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := c.Refresh(ctx); err != nil {
+				return time.Time{}, err
+			}
+			return c.Now()
+		}
+		n, started, err := ntsStartWithFallback(start, coarse, s, o, p, log)
 		if err != nil {
 			// main never gets this platform, so it cannot report the
 			// error to the host (Nitro: the enclave has no console).
@@ -346,12 +368,12 @@ func withNTSClock(f platformFunc, s ntsSettings) platformFunc {
 
 // ntsStartWithFallback starts the clock on s. With a setup (o.Time), if no
 // quorum forms, it starts once more on the newest signed time values of
-// the config log (o.TimeFallback; starttime.go), when they differ from the
-// setup's. A clock without a quorum cannot check a config update either
-// (Updates.Accept needs trusted time), so a second failure ends the start.
+// the config log that are in force by the coarse clock's time (coarse;
+// o.TimeFallback; starttime.go), when they differ from the setup's. The
+// runner cannot start without a quorum, so a second failure ends the start.
 // started are the values the clock runs on (nil without a setup).
-func ntsStartWithFallback(start func(ntsSettings) (*clock.NTS, error), s ntsSettings, o platform.Options, p *platform.Platform,
-	log *slog.Logger) (*clock.NTS, *platform.TimeValues, error) {
+func ntsStartWithFallback(start func(ntsSettings) (*clock.NTS, error), coarse func() (time.Time, error), s ntsSettings, o platform.Options,
+	p *platform.Platform, log *slog.Logger) (*clock.NTS, *platform.TimeValues, error) {
 	n, err := start(s)
 	if o.Time == nil {
 		return n, nil, err
@@ -364,7 +386,12 @@ func ntsStartWithFallback(start func(ntsSettings) (*clock.NTS, error), s ntsSett
 		return nil, nil, err
 	}
 	log.Error("nts: no quorum on the setup's time values; trying the newest signed ones of the config log", "err", err)
-	tv, ferr := o.TimeFallback(p)
+	now, cerr := coarse()
+	if cerr != nil {
+		log.Error("nts: no coarse time to tell which signed updates are in force", "err", cerr)
+		return nil, nil, err
+	}
+	tv, ferr := o.TimeFallback(p, now)
 	switch {
 	case ferr != nil:
 		log.Error("nts: the config log's time values are unreadable", "err", ferr)

@@ -154,6 +154,25 @@ type env struct {
 	time         TimeSink
 	clockServers []string
 	clockPolicy  *setupwire.TimePolicy
+	// coarse, if set, is the updates' clock in place of clock: clock with a
+	// coarse reading (coarseClock).
+	coarse *coarseFake
+}
+
+// coarseFake is fakeClock with a coarse reading that holds while Now
+// fails: the NTS clock without a quorum, its HTTPS-date quorum still up.
+type coarseFake struct {
+	*fakeClock
+	off bool // no coarse reading either
+}
+
+func (c *coarseFake) CoarseNow() (time.Time, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.off {
+		return time.Time{}, errClockDown
+	}
+	return c.t, nil
 }
 
 // newEnv starts a runner with the dev sample setup: approvers 1 to 3 with
@@ -203,7 +222,11 @@ func (e *env) start() {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, err := markstore.New(fl, e.setup.SignerName, dev.NewDevKeys("config test"), markstore.Options{Setup: ms, Clock: e.clock.Now, Log: quiet})
+	markClock := e.clock.Now
+	if e.coarse != nil {
+		markClock = ConfigTime(e.coarse)
+	}
+	m, err := markstore.New(fl, e.setup.SignerName, dev.NewDevKeys("config test"), markstore.Options{Setup: ms, Clock: markClock, Log: quiet})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +234,11 @@ func (e *env) start() {
 		t.Fatal(err)
 	}
 	e.log = &flakyLog{MarkLog: m, tamper: e.tamper}
-	if e.upd, err = NewUpdates(UpdatesOptions{Setup: e.setup, SetupHash: e.hash, Log: e.log, Clock: e.clock, Logger: quiet, Time: e.time,
+	var updClock platform.Clock = e.clock
+	if e.coarse != nil {
+		updClock = e.coarse
+	}
+	if e.upd, err = NewUpdates(UpdatesOptions{Setup: e.setup, SetupHash: e.hash, Log: e.log, Clock: updClock, Logger: quiet, Time: e.time,
 		ClockServers: e.clockServers, ClockPolicy: e.clockPolicy}); err != nil {
 		t.Fatal(err)
 	}

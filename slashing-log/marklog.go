@@ -1114,6 +1114,12 @@ func (m *MarkLog) SetState(ctx context.Context, st ConfigState) error {
 			return fmt.Errorf("markstore: %s pending version %d is not above the active %d", g, ns.Pending.Version, ns.Version)
 		}
 	}
+	if err := st.checkCarried(); err != nil {
+		return fmt.Errorf("markstore: %w", err)
+	}
+	if err := st.checkPaths(); err != nil {
+		return fmt.Errorf("markstore: %w", err)
+	}
 	if o := st.Order; o != nil {
 		// No handover writes an order in this image.
 		return fmt.Errorf("markstore: order kind %d: this image writes no order", o.Kind)

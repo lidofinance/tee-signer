@@ -45,6 +45,11 @@ func newConfigUpdates(st *setup.Setup, l server.UpdateLog, plat *platform.Platfo
 // (platforms_nts.go), nil for any other clock.
 var timeSinkOf = func(platform.Clock) server.TimeSink { return nil }
 
+// startClockWait is how long the start waits for the clock on the time
+// values in force (server.Updates.WaitClock). The nts build sets it to the
+// wait of the first quorum (-nts-wait).
+var startClockWait = func() time.Duration { return 90 * time.Second }
+
 // keyRule is the key release self-check (docs/protocol.md, "Key rule
 // lock"): the platform constructor read
 // the rule of the key that releases the sealing key before it released

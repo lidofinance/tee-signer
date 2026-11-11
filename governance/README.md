@@ -10,7 +10,7 @@ Chain configs the setups and image builds use are in [chains/](chains). The real
 
 ## Setup format changes
 
-A runner image reads one setup format (`setupwire.FormatVersion`). Format 5 added `sealing_key_release.kms_key_creation_date`; every setup must be encoded again and approved again. Steps: [docs/upgrade.md](../docs/upgrade.md#a-new-setup-format), "A new setup format".
+A runner image reads one setup format (`setupwire.FormatVersion`), now 6. Format 6 moved the deposit fields into `deposit_policy` (with a list of withdrawal credentials), added `time_policy`, `deposit_policy` and `exit_policy` to the locked group, `revoked_client_certs` and `time_servers` to the open group, and `project_number` to the GCP key release. CONFIG_UPDATE went to version 2, and the change rules (`setupwire.Update.Decide`, changes.go) pick a fast path or the wait per changed field. Format 5 had added `sealing_key_release.kms_key_creation_date`. Each format change means every setup is encoded again and approved again. Steps: [docs/upgrade.md](../docs/upgrade.md#a-new-setup-format), "A new setup format".
 
 Module path `github.com/lidofinance/tee-signer/governance`, with its own `go.mod`. It uses other modules of this repo only through their public packages (`scripts/check-imports.sh`).
 

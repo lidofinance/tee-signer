@@ -337,10 +337,12 @@ type Options struct {
 	// nts).
 	Time *TimeValues
 	// TimeFallback, if set, returns the newest time values that signed
-	// config updates in the config log give, or nil when none changes
-	// them. The NTS clock calls it once, with the built platform, when no
-	// quorum forms on Time within its start wait.
-	TimeFallback func(p *Platform) (*TimeValues, error)
+	// config updates in the config log give and that are in force by now,
+	// or nil when none changes them. The NTS clock calls it once, with the
+	// built platform and the coarse clock's time (its HTTPS-date quorum,
+	// about 30 s off at most), when no quorum forms on Time within its start
+	// wait.
+	TimeFallback func(p *Platform, now time.Time) (*TimeValues, error)
 }
 
 // TimeValues are a setup's time_policy and time_servers.

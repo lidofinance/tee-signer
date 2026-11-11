@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"time"
 
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-protocol"
@@ -119,6 +120,36 @@ func (u *Updates) applyTimeLocked() {
 	}
 }
 
+// WaitClock waits until the clock answers, reading it every interval, for
+// at most wait. main calls it after StartConfig, before the core is built
+// and the shares load: StartConfig switches the clock to the time values
+// in force, and a switch to the other protocol drops every sample, so the
+// clock has no time until a quorum forms on the new values, and a share
+// load reads it for its restart floor. With no answer in wait it fails, as
+// the first start does without a quorum.
+func (u *Updates) WaitClock(ctx context.Context, wait, interval time.Duration) error {
+	if _, err := u.opt.Clock.Now(); err == nil {
+		return nil
+	}
+	u.opt.Logger.Warn("config: the clock has no time on the time values in force yet; the start waits for it before the shares load", "wait", wait)
+	deadline := time.Now().Add(wait)
+	for {
+		_, err := u.opt.Clock.Now()
+		if err == nil {
+			u.opt.Logger.Info("config: the clock has time on the time values in force")
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("config: no clock time on the time values in force after %v: %w", wait, err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(interval):
+		}
+	}
+}
+
 // timeAppliedLocked reports whether the clock runs on the time values of
 // the view. Call it with mu held.
 func (u *Updates) timeAppliedLocked() bool {
@@ -139,8 +170,12 @@ func (u *Updates) applyTime() {
 }
 
 // notePathsLocked records, for HEALTH and the log, how an update that came
-// into force in the view got there, when Accept took it in this run.
+// into force in the view got there: the path the state holds for it
+// (markstore.ConfigState.Paths, written when Accept took it). At start
+// both groups' updates in force count as new; a fast path then wins over
+// the normal one for HEALTH, and the warning is logged again.
 func (u *Updates) notePathsLocked() {
+	var fast bool
 	for _, g := range []setupwire.Group{setupwire.GroupLocked, setupwire.GroupOpen} {
 		gs, _ := u.view.state.Group(g)
 		r := refOf(*gs)
@@ -148,10 +183,11 @@ func (u *Updates) notePathsLocked() {
 			continue
 		}
 		u.seen[g] = r
-		p, ok := u.paths[bodyID{g, r}]
-		if !ok {
+		p := u.view.state.Path(g, false)
+		if p == 0 || fast && p == setupwire.PathNormal {
 			continue
 		}
+		fast = p != setupwire.PathNormal
 		u.lastPath = &backend.UpdatePath{Group: g.String(), Version: r.version, Path: p.String()}
 		if p != setupwire.PathNormal {
 			u.opt.Logger.Warn("config: update in force by "+p.String()+", with no change delay", "group", g.String(), "version", r.version,

@@ -918,10 +918,18 @@ order (the status of each refusal in brackets):
    and above n/2), time lock at most 30 days, withdrawal credentials, gas
    limits.
 2. `cluster_id` and the chain hash are the setup's.
-3. The clock is trusted and answers: the NTS clock with a quorum
-   (`SC_ERR_CLOCK` otherwise). The dev platform takes its untrusted clock.
-   The clock comes before the version checks because it decides which
-   pending update is in force already.
+3. The clock is trusted and answers: the NTS clock with a quorum, or
+   while it has none its coarse clock, the HTTPS-date quorum over pinned
+   TLS, within about -30 s to +31 s of the true time (`SC_ERR_CLOCK` when
+   neither reads). The dev platform takes its untrusted clock. The clock
+   comes before the version checks because it decides which pending
+   update is in force already. The coarse clock's error is small against
+   change delays of days, and an update may come into force up to that
+   much early. Without it, a time update the NTS clock cannot meet (a
+   bound below what its servers give, NTS where NTS-KE is blocked) would
+   stop every later update, the one that undoes it included. An update
+   that changes the slot times or the fork schedule still waits for the
+   NTS quorum, as the core's rules read it, and every signature needs it.
 4. The core exists (`NOT_READY` otherwise). The group's pending or active update sent again skips to
    its signatures (pending) or straight to the body write (active), and
    answers `outcome` 2. This comes before the floor of step 5, so an
@@ -1077,16 +1085,20 @@ leaf or a cross-signed intermediate, passes. For a compromised key, list
 its public key hash, or the hash of every certificate of it. The list in
 force is the open group's in force (version 0 is the setup's own list)
 plus the pending open update's, so a revocation applies as soon as the
-runner takes its CONFIG_UPDATE, before its effective time. An update
-that drops an entry of that list needs every approver in force, also an
-update that replaces a pending one and leaves out an entry only the
-pending one holds; the entry goes once that update is in force. The
+runner takes its CONFIG_UPDATE, before its effective time. A rotation
+that comes into force drops a pending open update, but not its
+revocations: the runner keeps them in its mark log records and enforces
+them until the next open update comes into force. An update that drops
+an entry of these lists needs every approver in force, also an update
+that replaces a pending one and leaves out an entry only the pending one
+or the kept list holds; the entry goes once that update is in force. The
 runner checks the list in the handshake and again before
 every request, HEALTH too: a revocation also closes the connections
 already open, with `FORBIDDEN` on their next request. For a handshake
 without trusted time the runner checks the chain it built without the
-dates, CA included. While the body of the open update in force, or of the
-pending one, is unreadable, the runner does not know every revocation. It
+dates, CA included. While a body the config in force needs is unreadable
+(the open update in force, the pending one, a locked one coming into
+force), the runner does not know every revocation. It
 keeps every entry it knew, and a TLS client gets `FORBIDDEN` for any
 request but HEALTH, IDENTITY, ATTEST and CONFIG_UPDATE until that update
 is sent again. IDENTITY stays because a client sends it first on each new

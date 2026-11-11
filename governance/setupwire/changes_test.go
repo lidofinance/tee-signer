@@ -71,9 +71,13 @@ func TestClassifyLocked(t *testing.T) {
 		{"sample bound raised", base, func(l *Locked) { l.TimePolicy.MaxSampleBoundMs = 1000 }, "time_policy", ChangeBreakGlass},
 		{"fee recipient removed", base, func(l *Locked) { l.AllowedFeeRecipients = l.AllowedFeeRecipients[:1] }, "allowed_fee_recipients", ChangeTighten},
 		{"fee recipient added", base, func(l *Locked) { l.AllowedFeeRecipients = append(l.AllowedFeeRecipients, backend.Address{0x45}) }, "allowed_fee_recipients", ChangeLoosen},
-		{"approvals_needed raised", base, func(l *Locked) { l.Approvers.ApprovalsNeeded = 3 }, "approvals_needed", ChangeTighten},
+		// Up or down, approvals_needed and the change delay wait: raised at
+		// once, the usual count could freeze governance.
+		{"approvals_needed raised", base, func(l *Locked) { l.Approvers.ApprovalsNeeded = 3 }, "approvals_needed", ChangeLoosen},
 		{"approvals_needed lowered", k3, func(l *Locked) { l.Approvers.ApprovalsNeeded = 2 }, "approvals_needed", ChangeLoosen},
-		{"change delay raised", delay, func(l *Locked) { l.ChangeDelaySeconds = u64p(200) }, "change_delay_seconds", ChangeTighten},
+		{"change delay raised", delay, func(l *Locked) { l.ChangeDelaySeconds = u64p(200) }, "change_delay_seconds", ChangeLoosen},
+		// No image left: no runner signs, so it waits.
+		{"last images removed", base, func(l *Locked) { l.AllowedImageMeasurements = nil }, "allowed_image_measurements", ChangeLoosen},
 		{"change delay lowered", delay, func(l *Locked) { l.ChangeDelaySeconds = u64p(10) }, "change_delay_seconds", ChangeLoosen},
 		{"change delay to the default", base, func(l *Locked) { l.ChangeDelaySeconds = u64p(DefaultTimeLock) }, "change_delay_seconds", ChangeLoosen},
 		{"approver added", k3, func(l *Locked) { l.Approvers.Keys = append(l.Approvers.Keys, approverPub(4)) }, "approvers", ChangeLoosen},
@@ -203,7 +207,11 @@ func TestDecide(t *testing.T) {
 	}{
 		{"tightening, usual count", s3, func(l *Locked) { l.AllowedFeeRecipients = nil }, []byte{0, 1}, nil, PathNormal, 0, -1},
 		{"no change", s3, func(l *Locked) {}, []byte{0, 1}, nil, PathNormal, 0, -1},
-		{"approvals_needed raised", s3, func(l *Locked) { l.Approvers.ApprovalsNeeded = 3 }, []byte{0, 1}, []byte{1, 2, 3}, PathNormal, 0, -1},
+		{"approvals_needed raised", s3, func(l *Locked) { l.Approvers.ApprovalsNeeded = 3 }, []byte{0, 1}, []byte{1, 2, 3}, PathNormal, normal, -1},
+		{"approvals_needed raised, every approver", s3, func(l *Locked) { l.Approvers.ApprovalsNeeded = 3 }, []byte{0, 1, 2}, []byte{1, 2, 3}, PathNormal, normal, -1},
+		{"change delay raised, every approver", s3, func(l *Locked) { l.ChangeDelaySeconds = u64p(normal + 1) }, []byte{0, 1, 2}, nil, PathNormal, normal, -1},
+		{"every image removed, every approver", s3, func(l *Locked) { l.AllowedImageMeasurements = nil }, []byte{0, 1, 2}, nil, PathNormal, normal, -1},
+		{"one image removed", s3, func(l *Locked) { l.AllowedImageMeasurements = l.AllowedImageMeasurements[1:] }, []byte{0, 1}, nil, PathNormal, 0, -1},
 		{"loosening, usual count", s3, func(l *Locked) { l.BuilderGasLimitMax++ }, []byte{0, 1}, nil, PathNormal, normal, -1},
 		{"loosening, every approver", s3, func(l *Locked) { l.BuilderGasLimitMax++ }, []byte{0, 1, 2}, nil, PathNormal, normal, -1},
 		{"image added, usual count", s3, addImage, []byte{0, 2}, nil, PathNormal, images, -1},
@@ -251,7 +259,7 @@ func TestDecide(t *testing.T) {
 	}
 	for _, c := range cases {
 		u := signedUpdate(t, c.s, changeBody(c.s, c.mutate), c.signers, c.newKeys)
-		d, err := u.Decide(&c.s.Chain, &c.s.Locked, &c.s.Open)
+		d, err := u.Decide(&c.s.Chain, &c.s.Locked, &c.s.Open, History{})
 		if err != nil {
 			t.Errorf("%s: %v", c.name, err)
 			continue
@@ -262,7 +270,7 @@ func TestDecide(t *testing.T) {
 	}
 	// Every path needs the usual count first: one approver alone fails.
 	u := signedUpdate(t, s3, changeBody(s3, addImage), []byte{0}, nil)
-	if _, err := u.Decide(&s3.Chain, &s3.Locked, &s3.Open); err == nil || !strings.Contains(err.Error(), "approvals_needed is 2") {
+	if _, err := u.Decide(&s3.Chain, &s3.Locked, &s3.Open, History{}); err == nil || !strings.Contains(err.Error(), "approvals_needed is 2") {
 		t.Errorf("one signature: %v", err)
 	}
 }
@@ -282,7 +290,7 @@ func TestDecideOpen(t *testing.T) {
 		o.TimeServers = nil
 		o.RevokedClientCerts = append(o.RevokedClientCerts, [32]byte{0x7f})
 	}), []byte{0, 1}, nil)
-	d, err := u.Decide(&s.Chain, &s.Locked, &s.Open)
+	d, err := u.Decide(&s.Chain, &s.Locked, &s.Open, History{})
 	want := []FieldChange{{"revoked_client_certs", ChangeOpen}, {"time_servers", ChangeOpen}}
 	if err != nil || d.Path != PathNormal || d.Wait != 0 || !reflect.DeepEqual(d.Changes, want) {
 		t.Fatalf("open: %+v, %v", d, err)
@@ -291,15 +299,70 @@ func TestDecideOpen(t *testing.T) {
 	// approver, no wait; the usual count is refused.
 	drop := body(func(o *Open) { o.RevokedClientCerts = o.RevokedClientCerts[1:] })
 	u = signedUpdate(t, s, drop, []byte{0, 1, 2}, nil)
-	d, err = u.Decide(&s.Chain, &s.Locked, &s.Open)
+	d, err = u.Decide(&s.Chain, &s.Locked, &s.Open, History{})
 	if err != nil || d.Path != PathBreakGlass || d.Wait != 0 || !reflect.DeepEqual(d.Changes, []FieldChange{{"revoked_client_certs", ChangeBreakGlass}}) {
 		t.Fatalf("revocation dropped by every approver: %+v, %v", d, err)
 	}
 	short := signedUpdate(t, s, drop, []byte{0, 2}, nil)
-	if _, err := short.Decide(&s.Chain, &s.Locked, &s.Open); err == nil || !strings.Contains(err.Error(), "needs every approver in force (3), 2 signed") {
+	if _, err := short.Decide(&s.Chain, &s.Locked, &s.Open, History{}); err == nil || !strings.Contains(err.Error(), "needs every approver in force (3), 2 signed") {
 		t.Fatalf("revocation dropped with the usual count: %v", err)
 	}
-	if _, err := u.Decide(&s.Chain, &s.Locked, nil); err == nil {
+	if _, err := u.Decide(&s.Chain, &s.Locked, nil, History{}); err == nil {
 		t.Fatal("open update without the open values in force")
+	}
+}
+
+// rv-pb4.3: with approvals_needed = n-1, k keys can remove the one other
+// approver at once, and the smaller set is then every approver. Within
+// one change delay after that removal break-glass is no path: a locked
+// break-glass change takes the normal path and waits, an open one (a
+// dropped revocation) is refused. Once the delay passed, break-glass is
+// back; the normal path and the other fast paths do not change.
+func TestDecideAfterRemoval(t *testing.T) {
+	s3 := setWith(t, 3, 2)
+	// The set after the removal of approver 3: keys 1 and 2, k = 2.
+	s2 := setWith(t, 2, 2)
+	if !RemovesOne(&s3.Locked, &s2.Locked) || RemovesOne(&s2.Locked, &s3.Locked) || RemovesOne(&s3.Locked, &s3.Locked) {
+		t.Fatal("RemovesOne")
+	}
+	delay := s2.Locked.ChangeDelayOn(&s2.Chain)
+	images := max(delay, ImagesMinTimeLock)
+	const removed = 1_800_000_000
+	held := History{RemovedAt: removed, Now: removed + delay - 1}
+	after := History{RemovedAt: removed, Now: removed + delay}
+	if h, until := held.BreakGlassHeld(&s2.Chain, &s2.Locked); !h || until != removed+delay {
+		t.Fatalf("held: %v until %d", h, until)
+	}
+	every := []byte{0, 1}
+	for _, c := range []struct {
+		name   string
+		mutate func(l *Locked)
+		h      History
+		path   Path
+		wait   uint64
+	}{
+		{"image added within the delay", addImage, held, PathNormal, images},
+		{"NTS to NTP within the delay", func(l *Locked) { l.TimePolicy.Protocol = ClockNTP }, held, PathNormal, delay},
+		{"bound raised within the delay", func(l *Locked) { l.TimePolicy.MaxBoundMs = 200 }, held, PathNormal, delay},
+		{"image added after the delay", addImage, after, PathBreakGlass, 0},
+		{"tightening within the delay", func(l *Locked) { l.AllowedFeeRecipients = nil }, held, PathNormal, 0},
+		{"loosening within the delay", func(l *Locked) { l.BuilderGasLimitMax++ }, held, PathNormal, delay},
+		{"no removal in force", addImage, History{Now: removed}, PathBreakGlass, 0},
+	} {
+		u := signedUpdate(t, s2, changeBody(s2, c.mutate), every, nil)
+		d, err := u.Decide(&s2.Chain, &s2.Locked, &s2.Open, c.h)
+		if err != nil || d.Path != c.path || d.Wait != c.wait {
+			t.Errorf("%s: path %s, wait %d, %v; want %s, %d", c.name, d.Path, d.Wait, err, c.path, c.wait)
+		}
+	}
+	prev, _ := s2.GroupHash(GroupOpen)
+	o := s2.Open
+	o.RevokedClientCerts = o.RevokedClientCerts[1:]
+	drop := signedUpdate(t, s2, UpdateBody{Group: GroupOpen, Version: 1, PrevHash: prev, ActivateAt: removed, Open: &o}, every, nil)
+	if _, err := drop.Decide(&s2.Chain, &s2.Locked, &s2.Open, held); err == nil || !strings.Contains(err.Error(), "one change delay after the approver removal") {
+		t.Errorf("revocation drop within the delay: %v, want refused", err)
+	}
+	if d, err := drop.Decide(&s2.Chain, &s2.Locked, &s2.Open, after); err != nil || d.Path != PathBreakGlass {
+		t.Errorf("revocation drop after the delay: %+v, %v", d, err)
 	}
 }

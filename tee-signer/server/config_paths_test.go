@@ -21,6 +21,8 @@ type fakeTime struct {
 	servers  [][]string
 	policies []setupwire.TimePolicy
 	refuse   error
+	// onPolicy, if set, runs after a policy is taken.
+	onPolicy func(setupwire.TimePolicy)
 }
 
 func (f *fakeTime) SetServers(specs []string) error {
@@ -40,6 +42,9 @@ func (f *fakeTime) SetPolicy(p setupwire.TimePolicy) error {
 		return f.refuse
 	}
 	f.policies = append(f.policies, p)
+	if f.onPolicy != nil {
+		f.onPolicy(p)
+	}
 	return nil
 }
 

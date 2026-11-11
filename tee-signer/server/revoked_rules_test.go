@@ -184,7 +184,7 @@ func TestReplacingPendingKeepsItsRevocation(t *testing.T) {
 	e.mustSend(signed(t, openWith(e, 1, e.groupHash(open), t0+600, withBase(e, h)...), first2, nil), wireadmin.ConfigAccepted)
 	without := openWith(e, 2, e.groupHash(open), t0+600, withBase(e)...)
 	_, _, err := e.send(signed(t, without, first2, nil))
-	if refusedWith(err) != backend.StatusBadRequest || !strings.Contains(err.Error(), "pending open version 1") {
+	if refusedWith(err) != backend.StatusBadRequest || !strings.Contains(err.Error(), "pending or carried") {
 		t.Fatalf("a replacement without the pending revocation, 2 of 3: %v, want BAD_REQUEST", err)
 	}
 	if r.Len() != base+1 {

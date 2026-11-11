@@ -239,8 +239,8 @@ func startPlatform(ctx context.Context, a *startArgs, newPlatform platformFunc, 
 		opts.SetupHash, opts.Time = s.setup.SHA256, timeValues(s.setup.Wire)
 		if s.markSpec != "" && s.markSpec != "none" && !a.clockCheck {
 			st, spec, name := s.setup, s.markSpec, a.platformName
-			opts.TimeFallback = func(p *platform.Platform) (*platform.TimeValues, error) {
-				return logTimeValues(ctx, p, name, spec, st, log)
+			opts.TimeFallback = func(p *platform.Platform, now time.Time) (*platform.TimeValues, error) {
+				return logTimeValues(ctx, p, name, spec, st, now, log)
 			}
 		}
 	}

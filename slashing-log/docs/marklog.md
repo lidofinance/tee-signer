@@ -23,7 +23,7 @@ enough.
 
 | Field | Bytes | Meaning |
 | --- | --- | --- |
-| magic | 6 | `SMARK2`: `SMARK` and the format version, 2 (the runner reads `SMARK1` records too: they end before the share set) |
+| magic | 6 | `SMARK3`: `SMARK` and the format version, 3 (the runner reads `SMARK2` records, which end before the config history, and `SMARK1` records, which end before the share set) |
 | setup hash | 32 | `setup_hash` of the signer's setup |
 | signer | 1 + up to 128 | the signer's name (`signer_name`) |
 | version | 8 | the version the name carries |
@@ -41,6 +41,9 @@ enough.
 | exits | 1 | presence byte, always 0. An image with exit approvals wrote the day's exits here; this image refuses a record that holds them |
 | source gate | 1, or 9 | presence byte, then the source floor epoch (see "Source gate") |
 | share set | 1, 34 or 66 | presence byte, then the current root (32), a presence byte and the pending root (32) (see "Share set") |
+| removal time | 1, or 9 | presence byte, then the effective time of the newest locked update in force that removed one approver (never 0); break-glass waits one change delay after it (`setupwire.History`) |
+| carried revocations | 1 + 32 each | count (0 to 128), then the `revoked_client_certs` entries of a pending open update that a rotation dropped, sorted, without repeats, none zero; the runner refuses them until the next open update comes into force |
+| update paths | 4 | the path each update the state names came by (1 normal, 2 break-glass, 3 emergency removal; 0 unknown), for locked active, locked pending, open active, open pending; 0 where the state names no update |
 | signature | 64 | Ed25519 over the context `signer-mark-v1` and the fields above |
 
 Each group is the active version (8), the hash of the update that set it
@@ -51,11 +54,13 @@ time (8), copy number (4) and copy time (8). Version 0 has no body, so its
 copy number and time are zero.
 
 The reader refuses any record that does not read back to the same bytes
-under its own magic (an `SMARK1` record as `SMARK1`):
+under its own magic (an `SMARK1` record as `SMARK1`, an `SMARK2` one as `SMARK2`):
 a presence byte other than 0 or 1, trailing bytes, a log ID that is zero
 in a later record or set in a first one, a target on a record that is not
 a tombstone, a pending update at or below the active version, a body past
-version 0 without a copy, or an order of an unknown kind.
+version 0 without a copy, an order of an unknown kind, a removal time of 0
+with its presence byte, or carried revocations out of order, repeated or
+zero.
 
 Fail-closed reader rule. A record the reader refuses is skipped, unless
 its start (magic `SMARK` and a digit of 1 or more, setup hash, signer,
@@ -64,7 +69,7 @@ this setup, signer and version with a key blob the runner's key release
 opens, and its last 64 bytes are an Ed25519 signature under the key inside
 that blob, with the context `signer-mark-v1`, over every byte before them.
 Then a runner under this key release signed it, most likely a newer image
-with a field this one does not know (a digit above 2). The rule runs in
+with a field this one does not know (a digit above 3). The rule runs in
 three places. At start, on the versions at and above the newest valid
 record and in the chain walk below it, down to the record it links to: the
 runner refuses to start (`markstore.ErrUnreadable`). On a write, when the
