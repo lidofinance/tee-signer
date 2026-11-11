@@ -280,14 +280,16 @@ type ClockNTSOperator struct {
 	LastError string `json:"last_error,omitempty"`
 	// Shift schedule only: contacts made as a fallback or in a recovery
 	// burst, RATE answers, shifts it came in at and those where it then
-	// did not answer, and fallbacks that ran NTS-KE first (cookies that
-	// expired while it was idle).
+	// did not answer, fallbacks that ran NTS-KE first (cookies that
+	// expired while it was idle), and retries: this operator asked again
+	// 20 s after a lost answer that found no fallback (sets under 7).
 	Fallbacks       int64 `json:"fallbacks,omitempty"`
 	Bursts          int64 `json:"bursts,omitempty"`
 	Rates           int64 `json:"rates,omitempty"`
 	Handovers       int64 `json:"handovers,omitempty"`
 	FailedHandovers int64 `json:"failed_handovers,omitempty"`
 	FallbackKE      int64 `json:"fallback_ke,omitempty"`
+	Retries         int64 `json:"retries,omitempty"`
 }
 
 // SignerStats are the counters of the signer core (sc_signer_stats).

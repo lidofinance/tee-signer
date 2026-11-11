@@ -46,7 +46,9 @@ BACKOFF_RESET="${BACKOFF_RESET:-600}"
 START_WAIT="${START_WAIT:-10}"
 RUN_DIR="${RUNTIME_DIRECTORY:-/run/signer-runner}"
 TOOLS=(hostagent forwarder udprelay vsock-proxy)
-export STATE_DIR
+# parent-run.sh writes the PIDs of the optional routes' proxies here.
+OPTIONAL_PIDS="$RUN_DIR/optional-pids"
+export STATE_DIR OPTIONAL_PIDS
 
 say() { echo "parent-service: $*"; }
 
@@ -68,6 +70,7 @@ terminate_owned() {
 }
 
 PIDS=()
+WATCH=()
 stop_tools() {
   local p n
   for p in "${PIDS[@]}"; do kill "${p%% *}" 2>/dev/null || true; done
@@ -95,13 +98,22 @@ stop_now() {
 # Waits SECONDS, or less on SIGTERM.
 pause() { sleep "$1" & wait $! || true; }
 
-# PIDS: "PID NAME" of each parent tool of this user. Fails if one is missing.
+# PIDS: "PID NAME" of each parent tool of this user, which a stop ends.
+# WATCH: those the watch loop needs running, all but the proxies of optional
+# routes that parent-run.sh listed in OPTIONAL_PIDS: one of those may end
+# (its host did not resolve) without a restart. Fails if a tool is missing.
 collect_pids() {
   local t p found=0
   PIDS=()
+  WATCH=()
   for t in "${TOOLS[@]}"; do
     found=0
-    for p in $(pgrep -x -u "$(id -u)" "$t" || true); do PIDS+=("$p $t"); found=1; done
+    for p in $(pgrep -x -u "$(id -u)" "$t" || true); do
+      PIDS+=("$p $t")
+      if [ -f "$OPTIONAL_PIDS" ] && grep -q -x -F -- "$p" "$OPTIONAL_PIDS"; then continue; fi
+      WATCH+=("$p $t")
+      found=1
+    done
     [ "$found" = 1 ] || { say "$t is not running after parent-run.sh"; return 1; }
   done
 }
@@ -163,6 +175,7 @@ cmd_run() {
     fi
   done
   : >"$RUN_DIR/owned"
+  rm -f "$OPTIONAL_PIDS"
   date +%s >"$RUN_DIR/started"
 
   bash "$HERE/parent-run.sh" &
@@ -178,7 +191,7 @@ cmd_run() {
   [ "$stopping" = 0 ] || stop_now
   wait_tools
   collect_pids || failed "a parent tool did not start"
-  say "running: ${PIDS[*]}"
+  say "running: ${WATCH[*]}"
 
   while :; do
     pause "$WATCH_INTERVAL"
@@ -192,7 +205,7 @@ cmd_run() {
       [ "$(running_count "$out")" -gt 0 ] || reason="the enclave ended"
     fi
     if [ -z "$reason" ]; then
-      for t in "${PIDS[@]}"; do
+      for t in "${WATCH[@]}"; do
         kill -0 "${t%% *}" 2>/dev/null || { reason="${t#* } (pid ${t%% *}) ended"; break; }
       done
     fi

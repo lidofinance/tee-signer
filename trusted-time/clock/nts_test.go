@@ -747,6 +747,73 @@ func TestNTSClockFailedLostKeyExchangeKeepsCookies(t *testing.T) {
 	}
 }
 
+// Refresh refuses a server list every quorum would refuse (more than
+// nts.MaxServers, a bad or repeated operator) and an empty schedule seed,
+// before it contacts anyone.
+func TestNTSRefreshRefusesBadListsAndSeeds(t *testing.T) {
+	many := make([]NTSServer, nts.MaxServers+1)
+	for i := range many {
+		many[i] = NTSServer{Host: "h.example", Operator: string(rune('a' + i))}
+	}
+	for name, tc := range map[string]struct {
+		n    *NTS
+		want string
+	}{
+		"17 servers":     {&NTS{Servers: many}, "at most 16"},
+		"empty operator": {&NTS{Servers: []NTSServer{{Host: "a"}}}, "operator label"},
+		"repeated":       {&NTS{Servers: []NTSServer{{Host: "a", Operator: "x"}, {Host: "b", Operator: "x"}}}, "named twice"},
+		"empty seed":     {&NTS{Servers: many[:4], ScheduleSeed: []byte{}}, "empty schedule seed"},
+		"long operator":  {&NTS{Servers: []NTSServer{{Host: "a", Operator: strings.Repeat("o", nts.MaxOperatorLen+1)}}}, "operator label"},
+	} {
+		tc.n.Coarse, tc.n.StartDelay = &coarseClock{}, -1
+		if err := refresh(t, tc.n); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: %v, want %q", name, err, tc.want)
+		}
+	}
+	n := &NTS{Shifts: true}
+	if err := n.SetScheduleSeed(nil); err == nil {
+		t.Fatal("SetScheduleSeed(nil) accepted")
+	}
+}
+
+// The NTS-KE of a loss streak that the caller's deadline cuts short is not
+// used up: the next contact tries it again.
+func TestNTSClockLostKeyExchangeCutByDeadline(t *testing.T) {
+	fs := newServers(t, nil, "a", "b", "c", "d")
+	n := newNTS(fs, &coarseClock{})
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	p := n.peers[0]
+	p.lostInRow = ntsKEAfterLost
+	n.Dial = func(ctx context.Context, _, _ string) (net.Conn, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if !n.keyExchange(ctx, p) {
+		t.Fatal("the old cookies are not usable after a cut NTS-KE")
+	}
+	if p.lostKE || p.stats.KEFail != 0 {
+		t.Fatalf("after a cut NTS-KE: lostKE %v, KE failures %d", p.lostKE, p.stats.KEFail)
+	}
+}
+
+// A wide answer is authenticated, so it ends a loss streak: the next lost
+// query does not run NTS-KE early.
+func TestNTSWideAnswerEndsLossStreak(t *testing.T) {
+	n := &NTS{MaxSampleBound: 100 * time.Millisecond}
+	p := &ntsPeer{lostInRow: ntsKEAfterLost, lostKE: true, stats: NTSPeerStats{Kisses: map[string]int{}}}
+	if n.record(p, nts.Sample{Bound: 200 * time.Millisecond}, nil) {
+		t.Fatal("a wide answer counts as a sample")
+	}
+	var w *wideSampleError
+	if p.lostInRow != 0 || p.lostKE || !errors.As(p.lastErr, &w) || p.stats.Wide != 1 {
+		t.Fatalf("after a wide answer: lost in a row %d, lostKE %v, err %v", p.lostInRow, p.lostKE, p.lastErr)
+	}
+}
+
 // A sample wider than MaxSampleBound (default MaxBound) joins no quorum:
 // a host that delays the one honest answer cannot widen it past what
 // signing accepts. MaxSampleBound raised to 1 s takes it again.
@@ -779,23 +846,31 @@ func TestNTSClockRefusesWideSamples(t *testing.T) {
 	}
 }
 
-// A sample under the cap at receipt leaves the quorum once its bound, aged
-// by rho (500 ppm), passes the cap.
+// A sample under the cap at receipt joins for its whole join age: its
+// bound, aged by rho (500 ppm), may pass the cap by up to the aging of the
+// join age (38 ms at 76 s). One over the cap at receipt never joins.
 func TestNTSJoinsAgedBound(t *testing.T) {
 	n := &NTS{MaxSampleBound: 100 * time.Millisecond}
 	p := &ntsPeer{sample: &nts.Sample{Bound: 99 * time.Millisecond, T4: 1}}
-	maxAge := int64(time.Minute)
-	if !n.joins(p, 1+int64(time.Second), maxAge) {
-		t.Fatal("99 ms aged 1 s (99.5 ms) refused")
+	maxAge := int64(76 * time.Second)
+	for _, age := range []time.Duration{time.Second, 3 * time.Second, 60 * time.Second, 76 * time.Second} {
+		if !n.joins(p, 1+int64(age), maxAge) {
+			t.Fatalf("99 ms aged %v (%v) refused", age, 99*time.Millisecond+nts.Drift(age))
+		}
 	}
-	if n.joins(p, 1+int64(3*time.Second), maxAge) {
-		t.Fatal("99 ms aged 3 s (100.5 ms) joins")
+	p.sample.Bound = 100 * time.Millisecond
+	if !n.joins(p, 1+maxAge, maxAge) {
+		t.Fatal("a sample at the cap refused at the join age")
+	}
+	p.sample.Bound = 100*time.Millisecond + 1
+	if n.joins(p, 1, maxAge) {
+		t.Fatal("a sample over the cap at receipt joins")
 	}
 	p.sample.Bound = 50 * time.Millisecond
-	if !n.joins(p, 1+int64(50*time.Second), maxAge) {
-		t.Fatal("50 ms aged 50 s (75 ms) refused")
-	}
 	if n.joins(p, 2+maxAge, maxAge) {
 		t.Fatal("a sample over maxAge joins")
+	}
+	if d := nts.Drift(76 * time.Second); d != 38*time.Millisecond {
+		t.Fatalf("aging of 76 s: %v, the docs say 38 ms", d)
 	}
 }

@@ -548,3 +548,22 @@ func TestAllowlistRefusesLocalAnswers(t *testing.T) {
 		t.Errorf("lo.example with 127.0.0.1/32 in Nets: %v %v", ap, err)
 	}
 }
+
+// An address outside Nets that is not public is refused before the relay
+// looks up any allowed name: it could never pass, and the lookups of the
+// whole catalog would delay the answer.
+func TestAllowlistRefusesLocalAddressesWithoutLookups(t *testing.T) {
+	dns := &fakeDNS{table: map[string][]netip.Addr{"a.example": addrs("192.0.2.1")}}
+	a := &Allowlist{Names: []string{"a.example", "b.example", "c.example"}, Ports: []uint16{123}, Lookup: dns.lookup}
+	for _, dest := range []string{"10.0.0.5:123", "127.0.0.1:123", "[fd00::5]:123", "100.64.1.1:123"} {
+		if _, err := a.Check(context.Background(), dest); err == nil || !strings.Contains(err.Error(), "not in the allowlist") {
+			t.Errorf("%s: %v", dest, err)
+		}
+	}
+	if n := dns.calls.Load(); n != 0 {
+		t.Fatalf("%d lookups for addresses that cannot pass", n)
+	}
+	if _, err := a.Check(context.Background(), "192.0.2.1:123"); err != nil || dns.calls.Load() == 0 {
+		t.Fatalf("a public address of an allowed name: %v, %d lookups", err, dns.calls.Load())
+	}
+}

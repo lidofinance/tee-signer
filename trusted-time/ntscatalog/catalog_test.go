@@ -223,21 +223,75 @@ func TestCheckRefuses(t *testing.T) {
 		"bad net":          {func(c *Catalog) { c.NTS[1].NTPNets = []string{"192.0.2.1/24"} }, "masked CIDR"},
 		"ntp name is host": {func(c *Catalog) { c.NTS[0].NTPNames = []string{"a.example"} }, "NTP name"},
 		"ntp name port":    {func(c *Catalog) { c.NTS[0].NTPNames = []string{"ntp.a.example:123"} }, "NTP name"},
+		"ntp name case":    {func(c *Catalog) { c.NTS[0].NTPNames = []string{"NTP.a.example."} }, "NTP name"},
 		"plain is host":    {func(c *Catalog) { c.NTS[0].PlainNTP = "a.example" }, "plain_ntp_host"},
 		"plain with port":  {func(c *Catalog) { c.NTS[0].PlainNTP = "ntp.a.example:123" }, "plain_ntp_host"},
 		"plain with space": {func(c *Catalog) { c.NTS[0].PlainNTP = "ntp a.example" }, "plain_ntp_host"},
+		"plain case":       {func(c *Catalog) { c.NTS[0].PlainNTP = "NTP.a.example." }, "plain_ntp_host"},
 		"plain is a host":  {func(c *Catalog) { c.NTS[1].PlainNTP = "a.example" }, "host a.example"},
 		"plain is an alt":  {func(c *Catalog) { c.NTS[1].PlainNTP = "a2.example" }, "host a2.example"},
 		"plain in two":     {func(c *Catalog) { c.NTS[0].PlainNTP = "ntp.example"; c.NTS[1].PlainNTP = "ntp.example" }, "host ntp.example"},
 		"no port":          {func(c *Catalog) { c.NTS[0].NitroPort = 0 }, "no vsock port"},
 		"shared port":      {func(c *Catalog) { c.NTS[1].NitroPort = 9001 }, "vsock port 9001"},
 		"alt shares port":  {func(c *Catalog) { c.NTS[0].Alt[0].NitroPort = 9002 }, "vsock port 9002"},
+		// One operator in two spellings would get two quorum votes.
+		"operator case":  {func(c *Catalog) { c.NTS[1].Operator = "OP-A" }, "operator \"OP-A\""},
+		"operator space": {func(c *Catalog) { c.NTS[1].Operator = "op-a " }, "operator \"op-a \""},
+		"operator comma": {func(c *Catalog) { c.NTS[1].Operator = "x,y" }, "operator \"x,y\""},
+		"host case":      {func(c *Catalog) { c.NTS[1].Host = "A.Example" }, "lower-case DNS name"},
+		"host dot":       {func(c *Catalog) { c.NTS[1].Host = "a.example." }, "lower-case DNS name"},
+		"host port":      {func(c *Catalog) { c.NTS[1].Host = "b.example:4460" }, "lower-case DNS name"},
+		"alt host case":  {func(c *Catalog) { c.NTS[0].Alt[0].Host = "A2.example" }, "lower-case DNS name"},
+		"empty root":     {func(c *Catalog) { c.NTS[0].Roots = []string{""} }, "root \"\""},
+		"root path":      {func(c *Catalog) { c.NTS[0].Roots = []string{"../r.pem"} }, "root \"../r.pem\""},
+		"alt empty root": {func(c *Catalog) { c.NTS[0].Alt[0].Roots = []string{""} }, "root \"\""},
+		"coarse root":    {func(c *Catalog) { c.Coarse = []Coarse{{ID: "x", URL: "https://x.example/", Roots: []string{""}}} }, "root \"\""},
+		"no default":     {func(c *Catalog) { c.NTS[0].Default, c.NTS[1].Default = false, false }, "0 default servers"},
+		"default withdrawn": {func(c *Catalog) {
+			c.NTS[0].Status, c.NTS[1].Status = Withdrawn, Withdrawn
+		}, "0 default servers"},
+		"empty":            {func(c *Catalog) { c.NTS = nil }, "0 default servers"},
+		"too many default": {func(c *Catalog) { *c = bigCatalog(MaxServers + 1) }, "17 default servers"},
 	} {
 		c := okCatalog()
 		tc.edit(&c)
 		if err := c.Check(); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: %v, want %q", name, err, tc.want)
 		}
+	}
+}
+
+// bigCatalog has n default entries and one more that is not default.
+func bigCatalog(n int) Catalog {
+	var c Catalog
+	for i := range n + 1 {
+		c.NTS = append(c.NTS, NTSServer{ID: fmt.Sprintf("s%d", i), Host: fmt.Sprintf("s%d.example", i), Operator: fmt.Sprintf("op%d", i),
+			Roots: []string{"r.pem"}, NitroPort: uint32(9000 + i), Terms: Ask, Regions: []string{"eu"}, Default: i < n})
+	}
+	return c
+}
+
+// A catalog whose default set the quorum could hold passes; one more
+// confirmed server than MaxServers is refused at WithConfirmed.
+func TestMaxServers(t *testing.T) {
+	c := bigCatalog(MaxServers)
+	if err := c.Check(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.WithConfirmed([]string{fmt.Sprintf("s%d", MaxServers)}); err == nil || !strings.Contains(err.Error(), "at most 16") {
+		t.Fatalf("17 with the confirmed one: %v", err)
+	}
+}
+
+// Dialed and Endpoints hand out copies: changing them leaves the catalog.
+func TestDialedDoesNotAlias(t *testing.T) {
+	c := okCatalog()
+	d := c.Dialed()
+	d[0].Roots[0], d[0].Alt[0].Host = "x.pem", "x.example"
+	e := c.Endpoints()
+	e[0].Roots[0] = "y.pem"
+	if c.NTS[0].Roots[0] != "r.pem" || c.NTS[0].Alt[0].Host != "a2.example" {
+		t.Fatalf("catalog changed through a copy: %+v", c.NTS[0])
 	}
 }
 
@@ -361,6 +415,11 @@ func TestParseRefuses(t *testing.T) {
 		"check fails":        {`{"nts":[` + entry + `,` + entry + `]}`, "twice"},
 		"not an object":      {`[]`, "ntscatalog"},
 		"wrong type":         {`{"nts":[{"id":"a","roots":"r.pem"}]}`, "ntscatalog"},
+		// An empty catalog decodes to zero entries; Check refuses it.
+		"null":      {`null`, "0 default servers"},
+		"empty":     {`{}`, "0 default servers"},
+		"nts null":  {`{"nts":null}`, "0 default servers"},
+		"null root": {`{"nts":[{"id":"a","host":"a.example","operator":"op-a","roots":[null],"nitro_port":9001,"status":"active","terms":"open","terms_url":"https://a.example/","regions":["eu"],"default":true}]}`, "root \"\""},
 	} {
 		if _, err := Parse([]byte(tc.in)); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: %v, want %q", name, err, tc.want)

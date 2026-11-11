@@ -12,6 +12,7 @@
 #   start     a start with nothing running starts parent-run.sh once: one
 #             enclave and one set of parent tools (the boot path); hostagent
 #             starts 1 s after parent-run.sh returns, and run waits for it
+#   optional  the proxy of an optional route (OPTIONAL_PIDS) ends: run goes on
 #   crash     the enclave ends with a line in last-exit.txt: run exits 1
 #             with that line, the tools are stopped, the failure count is 1;
 #             the next run waits BACKOFF_BASE, a later one twice that, up to
@@ -111,6 +112,9 @@ cat >"$work/opt/parent-run.sh" <<'X'
 set -euo pipefail
 T="$(dirname "$FAKE")/tools"
 for p in 8000 8001; do nohup "$T/vsock-proxy" 1000 >/dev/null 2>&1 & done
+# The proxy of an optional route, listed as parent-run.sh lists it.
+nohup "$T/vsock-proxy" 1000 >/dev/null 2>&1 &
+echo "$!" >>"$OPTIONAL_PIDS"
 nohup "$T/udprelay" 1000 >/dev/null 2>&1 &
 [ -n "${NO_HOSTAGENT:-}" ] || nohup "$T/late-start" 1000 >/dev/null 2>&1 &
 nitro-cli run-enclave --eif-path x.eif --cpu-count 1 --memory 512 --enclave-cid 16
@@ -140,12 +144,20 @@ done
 reset
 svc_bg "$work/run1.log"
 if wait_for '[ -f "$work/fake/enclave" ] && [ "$(tools_up)" = 4 ]'; then
-  [ "$(wc -l <"$work/fake/starts")" = 1 ] && [ "$(pgrep -x -u "$(id -u)" vsock-proxy | wc -l)" = 2 ] &&
+  [ "$(wc -l <"$work/fake/starts")" = 1 ] && [ "$(pgrep -x -u "$(id -u)" vsock-proxy | wc -l)" = 3 ] &&
     ok "start: one enclave and the parent tools" || bad "start: $(cat "$work/fake/starts")"
 else
   bad "start: not running: $(cat "$work/run1.log")"
 fi
 sleep 0.5
+# An optional route's proxy ends: no restart.
+wait_for '[ -s "$work/run/optional-pids" ]' && kill "$(cat "$work/run/optional-pids")"
+sleep 1
+if kill -0 "$pid" 2>/dev/null && ! has "ended" "$(cat "$work/run1.log")" && [ "$(pgrep -x -u "$(id -u)" vsock-proxy | wc -l)" = 2 ]; then
+  ok "optional: its proxy ends, run goes on"
+else
+  bad "optional: $(cat "$work/run1.log")"
+fi
 echo "2026-11-04T10:00:00Z runner: setup: image measurement not allowed" >"$work/state/last-exit.txt"
 rm -f "$work/fake/enclave"
 rc=0
