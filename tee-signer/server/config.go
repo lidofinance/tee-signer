@@ -75,8 +75,12 @@ type UpdatesOptions struct {
 	AnyClock bool
 	Logger   *slog.Logger
 	// Time is the clock that takes the time values in force (configtime.go);
-	// nil for none. It runs on the setup's values when NewUpdates is called.
+	// nil for none.
 	Time TimeSink
+	// ClockServers and ClockPolicy are the time values the clock runs on
+	// when NewUpdates is called; ClockPolicy nil: the setup's values.
+	ClockServers []string
+	ClockPolicy  *setupwire.TimePolicy
 }
 
 // logTimeout bounds the log writes of one CONFIG_UPDATE.
@@ -162,8 +166,9 @@ type Updates struct {
 	retry error
 
 	// clockServers and clockPolicy are the time values the clock runs on
-	// (applyTimeLocked), under writeMu. timeErr: the clock refused the
-	// values in force; nothing is signed until it takes them.
+	// (applyTimeLocked): written with writeMu and mu held, read under
+	// either. timeErr: the clock refused the values in force; nothing is
+	// signed until it takes them.
 	clockServers []string
 	clockPolicy  setupwire.TimePolicy
 	timeErr      error
@@ -188,9 +193,13 @@ func NewUpdates(o UpdatesOptions) (*Updates, error) {
 		// Only a handover writes the order slot, and this image has none.
 		return nil, fmt.Errorf("config updates: the mark log holds a handover order (kind %d, %x); this image takes no handover", ord.Kind, ord.Hash[:8])
 	}
-	return &Updates{opt: o, bodies: map[bodyID]*setupwire.Update{}, coreLocked: unknownRef, coreOpen: unknownRef,
+	u := &Updates{opt: o, bodies: map[bodyID]*setupwire.Update{}, coreLocked: unknownRef, coreOpen: unknownRef,
 		clockServers: o.Setup.Open.TimeServers, clockPolicy: o.Setup.Locked.TimePolicy,
-		paths: map[bodyID]setupwire.Path{}, seen: map[setupwire.Group]updateRef{}}, nil
+		paths: map[bodyID]setupwire.Path{}, seen: map[setupwire.Group]updateRef{}}
+	if o.ClockPolicy != nil {
+		u.clockServers, u.clockPolicy = slices.Clone(o.ClockServers), *o.ClockPolicy
+	}
+	return u, nil
 }
 
 // policyOf is the core's signing policy of a locked group.
@@ -519,6 +528,11 @@ func (u *Updates) blockedLocked() error {
 	}
 	if u.timeErr != nil {
 		return backend.Refused(backend.StatusClock, "config: %v; send an update with time values the clock takes", u.timeErr)
+	}
+	if u.opt.Time != nil && !u.timeAppliedLocked() {
+		// An update came into force and the clock still runs on the time
+		// values before it, which may be looser.
+		return backend.Refused(backend.StatusClock, "config: the clock does not run on the time values in force yet; signing waits for the switch")
 	}
 	return nil
 }

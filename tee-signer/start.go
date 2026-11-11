@@ -237,6 +237,12 @@ func startPlatform(ctx context.Context, a *startArgs, newPlatform platformFunc, 
 		// Every key-release call carries setup_hash. The NTS clock starts on
 		// the setup's time values.
 		opts.SetupHash, opts.Time = s.setup.SHA256, timeValues(s.setup.Wire)
+		if s.markSpec != "" && s.markSpec != "none" && !a.clockCheck {
+			st, spec, name := s.setup, s.markSpec, a.platformName
+			opts.TimeFallback = func(p *platform.Platform) (*platform.TimeValues, error) {
+				return logTimeValues(ctx, p, name, spec, st, log)
+			}
+		}
 	}
 	var copyStore *durableCopy
 	if s.stateSpec != "" && s.stateSpec != "none" && !a.clockCheck {
@@ -308,7 +314,9 @@ func chainConfig(s *setupwire.Setup) (core.Config, error) {
 // the clock. Once the config log is read, the config updates switch the
 // clock to the values in force (server.Updates.StartConfig).
 func timeValues(s *setupwire.Setup) *platform.TimeValues {
-	return timeValuesOf(s.Locked.TimePolicy, s.Open.TimeServers)
+	v := timeValuesOf(s.Locked.TimePolicy, s.Open.TimeServers)
+	v.From = "the setup (version 0)"
+	return v
 }
 
 func timeValuesOf(p setupwire.TimePolicy, servers []string) *platform.TimeValues {

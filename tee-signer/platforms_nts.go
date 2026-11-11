@@ -262,7 +262,12 @@ func ntsSettingsFor(name string, t *platform.TimeValues, log *slog.Logger) (ntsS
 		}
 		log.Warn("nts: the setup gives the clock's protocol, bounds and servers; these flags and variables do not count", "set", strings.Join(set, ","))
 	}
-	return ntsSetupSettings(t)
+	s, err := ntsSetupSettings(t)
+	if err != nil {
+		return ntsSettings{}, err
+	}
+	s.confirmed = ntsUsableServers(s.confirmed, log)
+	return s, nil
 }
 
 // ntsSwitch runs f, and adds the NTS clock when it is on. The flags are
@@ -317,7 +322,10 @@ func withNTSClock(f platformFunc, s ntsSettings) platformFunc {
 		if p.Dial != nil {
 			dial = p.Dial
 		}
-		n, err := startNTSClock(context.Background(), p.HTTPClient, dial, o.Param("region", ""), p.NTSScheduleSeed, s, log)
+		start := func(s ntsSettings) (*clock.NTS, error) {
+			return startNTSClock(context.Background(), p.HTTPClient, dial, o.Param("region", ""), p.NTSScheduleSeed, s, log)
+		}
+		n, started, err := ntsStartWithFallback(start, s, o, p, log)
 		if err != nil {
 			// main never gets this platform, so it cannot report the
 			// error to the host (Nitro: the enclave has no console).
@@ -329,9 +337,75 @@ func withNTSClock(f platformFunc, s ntsSettings) platformFunc {
 			}
 			return nil, err
 		}
-		p.Clock = n
+		p.Clock, p.TimeStarted = n, started
 		return p, nil
 	}
+}
+
+// ntsStartWithFallback starts the clock on s. With a setup (o.Time), if no
+// quorum forms, it starts once more on the newest signed time values of
+// the config log (o.TimeFallback; starttime.go), when they differ from the
+// setup's. A clock without a quorum cannot check a config update either
+// (Updates.Accept needs trusted time), so a second failure ends the start.
+// started are the values the clock runs on (nil without a setup).
+func ntsStartWithFallback(start func(ntsSettings) (*clock.NTS, error), s ntsSettings, o platform.Options, p *platform.Platform,
+	log *slog.Logger) (*clock.NTS, *platform.TimeValues, error) {
+	n, err := start(s)
+	if o.Time == nil {
+		return n, nil, err
+	}
+	if err == nil {
+		log.Info("nts: clock started on the time values of " + o.Time.From)
+		return n, o.Time, nil
+	}
+	if o.TimeFallback == nil {
+		return nil, nil, err
+	}
+	log.Error("nts: no quorum on the setup's time values; trying the newest signed ones of the config log", "err", err)
+	tv, ferr := o.TimeFallback(p)
+	switch {
+	case ferr != nil:
+		log.Error("nts: the config log's time values are unreadable", "err", ferr)
+		return nil, nil, err
+	case tv == nil:
+		log.Error("nts: no signed config update changes the time values; nothing else to try")
+		return nil, nil, err
+	}
+	s2, serr := ntsSetupSettings(tv)
+	if serr != nil {
+		log.Error("nts: the config log's time values are refused", "err", serr)
+		return nil, nil, err
+	}
+	s2.confirmed = ntsUsableServers(s2.confirmed, log)
+	s2.serversFrom = "time_servers of " + tv.From
+	n, err2 := start(s2)
+	if err2 != nil {
+		return nil, nil, fmt.Errorf("%w; on the time values of %s: %w", err, tv.From, err2)
+	}
+	log.Warn("nts: clock started on the time values of "+tv.From+"; the config in force switches it once the config log is read",
+		"protocol", tv.Protocol, "max_bound", tv.MaxBound, "max_sample_bound", tv.MaxSampleBound, "servers", strings.Join(tv.Servers, ","))
+	return n, tv, nil
+}
+
+// ntsUsableServers are the entries of specs this image's catalog takes, in
+// order. At start the clock skips an entry the catalog refuses (unknown,
+// withdrawn, in the default set, an alt host without a Nitro port) with a
+// warning, so a setup made for an older catalog still starts; the start
+// still needs ntsMinServers in all. A config update with such an entry is
+// refused (server.CheckTimeServers).
+func ntsUsableServers(specs []string, log *slog.Logger) []string {
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
+	var out []string
+	for _, spec := range specs {
+		if _, err := ntscatalog.Builtin.WithConfirmed([]string{spec}); err != nil {
+			log.Warn("nts: time_servers entry skipped: this image's catalog refuses it", "entry", spec, "err", err)
+			continue
+		}
+		out = append(out, spec)
+	}
+	return out
 }
 
 // newNTSClock is newNTSClockWith on the values of the flags, protocol

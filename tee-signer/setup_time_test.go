@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"log/slog"
 	"slices"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/governance/setupwire"
+	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/trusted-time/clock"
 )
 
@@ -69,15 +71,77 @@ func TestNTSClockTakesTheSetup(t *testing.T) {
 			t.Fatalf("%s: servers %+v", name, n.Servers)
 		}
 	}
-	// An entry the catalog refuses stops the clock from being built.
+	// At start an entry this image's catalog refuses (unknown, in the
+	// default set, an alt host without a Nitro port) is skipped with a
+	// warning; the valid ones are dialed.
 	bad := timeSetup()
-	bad.Open.TimeServers = []string{"nosuch"}
-	s, err := ntsSettingsFor("nitro", timeValues(bad), nil)
+	bad.Open.TimeServers = []string{"fer", "nosuch", "ptb", "time.nl@ntppool2.time.nl"}
+	var logs bytes.Buffer
+	s, err := ntsSettingsFor("nitro", timeValues(bad), slog.New(slog.NewTextHandler(&logs, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := newNTSClockWith(nil, nil, "", s, nil); err == nil || !strings.Contains(err.Error(), "the setup's time_servers") {
-		t.Fatalf("unknown entry: %v", err)
+	if !slices.Equal(s.confirmed, []string{"fer"}) || strings.Count(logs.String(), "entry skipped") != 3 {
+		t.Fatalf("confirmed %v, log %q", s.confirmed, logs.String())
+	}
+	n, _, err := newNTSClockWith(nil, nil, "", s, nil)
+	if err != nil || len(n.Servers) != len(def)+1 {
+		t.Fatalf("%v, %d servers", err, len(n.Servers))
+	}
+}
+
+// No quorum on the setup's time values: the clock starts once more on the
+// newest signed values of the config log, and says so. Without such
+// values, or with no quorum on them either, the start fails.
+func TestNTSStartWithFallback(t *testing.T) {
+	setupTV := timeValues(timeSetup())
+	setupTV.Protocol = "nts"
+	logTV := timeValuesOf(setupwire.TimePolicy{Protocol: setupwire.ClockNTP, MaxBoundMs: 200, MaxSampleBoundMs: 400}, []string{"fer"})
+	logTV.From = "the config log (signed locked version 1, open version 0)"
+	s0, err := ntsSetupSettings(setupTV)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tried []ntsSettings
+	// The servers answer plain NTP only.
+	start := func(s ntsSettings) (*clock.NTS, error) {
+		tried = append(tried, s)
+		if s.protocol != clock.ProtocolNTP {
+			return nil, errors.New("nts clock: no quorum")
+		}
+		return &clock.NTS{Protocol: s.protocol}, nil
+	}
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	o := platform.Options{Time: setupTV, TimeFallback: func(*platform.Platform) (*platform.TimeValues, error) { return logTV, nil }}
+	n, started, err := ntsStartWithFallback(start, s0, o, &platform.Platform{}, log)
+	if err != nil || n == nil || started != logTV || len(tried) != 2 {
+		t.Fatalf("clock %v, started %+v, %v, tried %d", n, started, err, len(tried))
+	}
+	if s := tried[1]; s.maxBound != 200*time.Millisecond || s.maxSample != 400*time.Millisecond || !slices.Equal(s.confirmed, []string{"fer"}) {
+		t.Fatalf("second start on %+v", s)
+	}
+	if !strings.Contains(logs.String(), "clock started on the time values of the config log") {
+		t.Fatalf("log %q", logs.String())
+	}
+	// A quorum on the setup's values: no fallback.
+	o.Time = logTV
+	tried = nil
+	s1, _ := ntsSetupSettings(logTV)
+	if _, started, err := ntsStartWithFallback(start, s1, o, &platform.Platform{}, log); err != nil || started != logTV || len(tried) != 1 {
+		t.Fatalf("started %+v, %v, tried %d", started, err, len(tried))
+	}
+	// No signed values, or none that help: the start fails.
+	o.Time = setupTV
+	for _, fb := range []func(*platform.Platform) (*platform.TimeValues, error){
+		func(*platform.Platform) (*platform.TimeValues, error) { return nil, nil },
+		func(*platform.Platform) (*platform.TimeValues, error) { return nil, errors.New("store down") },
+		func(*platform.Platform) (*platform.TimeValues, error) { return setupTV, nil },
+	} {
+		o.TimeFallback = fb
+		if _, _, err := ntsStartWithFallback(start, s0, o, &platform.Platform{}, log); err == nil {
+			t.Fatal("started without a quorum")
+		}
 	}
 }
 

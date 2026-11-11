@@ -15,11 +15,15 @@ import (
 // The time values of the config groups: time_servers of the open group and
 // time_policy of the locked group. The NTS clock starts with the setup's
 // (version 0 of each group), since the clock is needed before the mark log
-// can be read. StartConfig then switches it once to the values in force,
-// and after that each update that comes into force switches it again: a
+// can be read, or, when those get no quorum, on the newest signed values of
+// the config log (tee-signer, starttime.go; UpdatesOptions.ClockPolicy).
+// StartConfig then switches it once to the values in force, and after
+// that each update that comes into force switches it again: a
 // time_servers update through NTS.SetServers, a time_policy update through
 // NTS.SetPolicy. Accept refuses a time_servers list the clock would refuse,
-// so an update comes into force only with a list the clock takes. If the
+// so an update comes into force only with a list the clock takes. While
+// the clock runs on other time values than those in force, nothing is
+// signed (blockedLocked), so no signature uses looser values. If the
 // clock still refuses values in force (an image whose catalog withdrew an
 // entry), the runner signs nothing until values it takes are in force, and
 // keeps taking config updates meanwhile.
@@ -84,7 +88,9 @@ func (u *Updates) applyTimeLocked() {
 		if err := sink.SetServers(servers); err != nil {
 			errs = append(errs, fmt.Errorf("the clock refused time_servers %v of open version %d: %w", servers, sv, err))
 		} else {
+			u.mu.Lock()
 			u.clockServers = servers
+			u.mu.Unlock()
 			u.opt.Logger.Info("config: time_servers in force", "open_version", sv, "servers", servers)
 		}
 	}
@@ -96,7 +102,9 @@ func (u *Updates) applyTimeLocked() {
 			if policy.Protocol != u.clockPolicy.Protocol {
 				level, msg = slog.LevelWarn, "config: time_policy in force with another protocol; the clock gives no time until a quorum forms on it"
 			}
+			u.mu.Lock()
 			u.clockPolicy = *policy
+			u.mu.Unlock()
 			u.opt.Logger.Log(context.Background(), level, msg, "locked_version", pv, "protocol", policy.Protocol.String(),
 				"max_bound_ms", policy.MaxBoundMs, "max_sample_bound_ms", policy.MaxSampleBoundMs)
 		}
@@ -109,6 +117,18 @@ func (u *Updates) applyTimeLocked() {
 	if err != nil && changed {
 		u.opt.Logger.Error("config: "+err.Error()+"; nothing is signed until time values the clock takes are in force", "err", err)
 	}
+}
+
+// timeAppliedLocked reports whether the clock runs on the time values of
+// the view. Call it with mu held.
+func (u *Updates) timeAppliedLocked() bool {
+	if o := u.view.open; o != nil && !slices.Equal(o.TimeServers, u.clockServers) {
+		return false
+	}
+	if l := u.view.locked; l != nil && l.TimePolicy != u.clockPolicy {
+		return false
+	}
+	return true
 }
 
 // applyTime is applyTimeLocked with writeMu taken.

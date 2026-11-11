@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/hex"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/lidofinance/tee-signer/platform"
@@ -27,9 +28,16 @@ const (
 // record says so) and the pending one, and the hash of the approver set in
 // force. The server adds key_release_hash and the key origin. Only the dev
 // platform, which protects nothing, takes an update on an untrusted clock.
-func newConfigUpdates(st *setup.Setup, l server.UpdateLog, clk platform.Clock, platformName string, log *slog.Logger) (*server.Updates, error) {
-	return server.NewUpdates(server.UpdatesOptions{Setup: st.Wire, SetupHash: st.SHA256, Log: l, Clock: clk,
-		AnyClock: platformName == "dev", Logger: log, Time: timeSinkOf(clk)})
+// The clock's time values are those it started on (plat.TimeStarted), the
+// setup's when it says none.
+func newConfigUpdates(st *setup.Setup, l server.UpdateLog, plat *platform.Platform, platformName string, log *slog.Logger) (*server.Updates, error) {
+	o := server.UpdatesOptions{Setup: st.Wire, SetupHash: st.SHA256, Log: l, Clock: plat.Clock,
+		AnyClock: platformName == "dev", Logger: log, Time: timeSinkOf(plat.Clock)}
+	if v := plat.TimeStarted; v != nil {
+		p := timePolicyOf(v)
+		o.ClockServers, o.ClockPolicy = slices.Clone(v.Servers), &p
+	}
+	return server.NewUpdates(o)
 }
 
 // timeSinkOf is the clock as the config updates drive it with the time

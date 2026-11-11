@@ -631,19 +631,45 @@ A setup (format 6) holds the clock's values in two fields:
   image's default set, `id` or `id@alt-host`.
 
 The runner builds the server list with `ntscatalog.WithConfirmed`: the
-default set always, plus `time_servers`. It refuses an entry the catalog
-does not have, has withdrawn or cannot route (an alt host without a Nitro
-port), an entry of the default set, and fewer than 4 servers in all.
+default set always, plus `time_servers`. A config update is refused when
+its list names an entry the catalog does not have, has withdrawn or cannot
+route (an alt host without a Nitro port), or an entry of the default set,
+or when the list gives fewer than 4 servers in all. At start such an entry
+of the starting values is skipped with a warning, so a setup made for an
+older catalog still starts; the start still needs 4 servers.
 
 Start order. Key release needs the clock, and the config log, which says
-which config updates are in force, is read only after key release. So the
-clock starts on the setup's own values (version 0 of each group). Once the
-config log is read, the runner switches the clock once to the values in
-force (`server.Updates.StartConfig`): `time_servers` through
-`clock.NTS.SetServers`, `time_policy` through `clock.NTS.SetPolicy`.
+which config updates are in force, is read only after key release. So
+each start runs the clock on the setup's own values (version 0 of each
+group) until the config log is read. Then the runner switches the clock
+once to the values in force (`server.Updates.StartConfig`):
+`time_servers` through `clock.NTS.SetServers`, `time_policy` through
+`clock.NTS.SetPolicy`.
+
+If no quorum forms on the setup's values within `-nts-wait`, for example
+because an update moved the deployment to NTP or to wider bounds, the
+clock tries once more on the newest values that a chain of signed updates
+from the setup reaches in the config log (`tee-signer/starttime.go`). It
+reads the update bodies from the log's store before the mark log is
+claimed and checks each update's signatures against the approvers before
+it; that needs no time. It does not read effective times, so these values
+can be those of an update still pending; StartConfig then switches to the
+values really in force. The log line `nts: clock started on the time
+values of ...` names the values the clock started on. If no quorum forms
+on those either, the start fails as before: without trusted time the
+runner could not check a config update anyway.
+
+The window before the switch. Time read before StartConfig switches comes
+from the starting values. The coarse check bounds it (at most about 31 s
+ahead of real time), and it stays as the clock's floor, since `Now` never
+goes back. A pending update can therefore come into force up to that much
+early at this start. Nothing is signed in this window: the core is built
+after the switch, and the runner signs only while the clock runs on the
+time values in force (`Updates.blockedLocked`).
 
 Live changes. After that, each config update that comes into force
-switches the clock again, within the 1 s config sync. A `time_servers`
+switches the clock again, within the 1 s config sync. Until it has, the
+runner signs nothing, so no signature uses the values before the update. A `time_servers`
 update is an open update and needs no wait; the runner refuses one whose
 list the catalog refuses before it stores it, so no such list comes into
 force. A `time_policy` update is a locked update: lower bounds and NTP back

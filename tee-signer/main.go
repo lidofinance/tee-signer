@@ -284,7 +284,7 @@ func run() (err error) {
 	// force by the log's state and the clock, not the setup's first values.
 	var updates *server.Updates
 	if boot.setup != nil && claimed.log != nil {
-		if updates, err = newConfigUpdates(boot.setup, claimed.log, plat.Clock, *platformName, log); err != nil {
+		if updates, err = newConfigUpdates(boot.setup, claimed.log, plat, *platformName, log); err != nil {
 			return err
 		}
 		if cfg, err = updates.StartConfig(cfg); err != nil {

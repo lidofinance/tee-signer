@@ -174,6 +174,10 @@ type Platform struct {
 	// it only orders the schedule. nil (dev): every server is active on the
 	// 60 s grid, with a random phase.
 	NTSScheduleSeed []byte
+	// TimeStarted holds the time values the NTS clock started on: the
+	// setup's, or those of Options.TimeFallback. nil without a setup or
+	// without the NTS clock.
+	TimeStarted *TimeValues
 }
 
 // KeyRule is the rule of the key that releases the sealing key, as the
@@ -328,6 +332,11 @@ type Options struct {
 	// nil without a setup. The NTS clock starts on them (tee-signer, -tags
 	// nts).
 	Time *TimeValues
+	// TimeFallback, if set, returns the newest time values that signed
+	// config updates in the config log give, or nil when none changes
+	// them. The NTS clock calls it once, with the built platform, when no
+	// quorum forms on Time within its start wait.
+	TimeFallback func(p *Platform) (*TimeValues, error)
 }
 
 // TimeValues are a setup's time_policy and time_servers.
@@ -338,6 +347,8 @@ type TimeValues struct {
 	// Servers are the catalog IDs (trusted-time/ntscatalog) the clock dials
 	// besides the image's default set: "id" or "id@alt-host".
 	Servers []string
+	// From says where the values come from, for the logs.
+	From string
 }
 
 // UseDurable calls o.Durable if set and returns the store to use.

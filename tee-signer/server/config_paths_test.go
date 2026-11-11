@@ -239,3 +239,68 @@ func TestConfigTimeRefusedStopsSigning(t *testing.T) {
 		t.Fatalf("after the fix: %v", err)
 	}
 }
+
+// An update that comes into force while nothing switches the clock stops
+// signing until the clock runs on its time values: no signature uses the
+// values before it.
+func TestConfigTimeSignsOnlyOnTheValuesInForce(t *testing.T) {
+	e, ft := newTimeEnv(t, nil)
+	fee := e.setup.Locked.AllowedFeeRecipients[0]
+	b := e.body(open, 1, e.groupHash(open), e.now()+100)
+	b.Open.TimeServers = []string{"fer"}
+	e.mustSend(signed(t, b, first2, nil), wireadmin.ConfigAccepted)
+	if err := e.register(fee); err != nil {
+		t.Fatalf("before the effective time: %v", err)
+	}
+	e.clock.add(100)
+	// In force now; the clock switches at the next Sync.
+	wantCode(t, e.register(fee), backend.StatusClock, "does not run on the time values in force")
+	if e.ready() {
+		t.Fatal("ready before the switch")
+	}
+	if err := e.upd.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if srv, _ := ft.got(); len(srv) != 1 || !slices.Equal(srv[0], b.Open.TimeServers) {
+		t.Fatalf("the clock got %v", srv)
+	}
+	if err := e.register(fee); err != nil {
+		t.Fatalf("after the switch: %v", err)
+	}
+}
+
+// A clock that started on newer signed values than the setup's (the start
+// fallback) switches at start to the values really in force, and signs
+// only once it has.
+func TestConfigTimeStartsOnFallbackValues(t *testing.T) {
+	e, ft := newTimeEnv(t, nil)
+	ntp := setupwire.TimePolicy{Protocol: setupwire.ClockNTP, MaxBoundMs: 200, MaxSampleBoundMs: 400}
+	// The log holds no update: the clock started on looser values than
+	// those in force and goes back to the setup's at start.
+	e.clockPolicy, e.clockServers = &ntp, []string{"fer"}
+	e.restart()
+	srv, pol := ft.got()
+	if len(pol) != 1 || pol[0] != e.setup.Locked.TimePolicy || len(srv) != 1 || len(srv[0]) != 0 {
+		t.Fatalf("the clock got servers %v, policies %+v", srv, pol)
+	}
+	if err := e.register(e.setup.Locked.AllowedFeeRecipients[0]); err != nil {
+		t.Fatal(err)
+	}
+
+	// The loosened policy in force, by break-glass: a restart that starts
+	// the clock on it needs no switch.
+	b := e.body(locked, 1, e.groupHash(locked), e.now())
+	b.Locked.TimePolicy = ntp
+	e.mustSend(signed(t, b, all3, nil), wireadmin.ConfigAccepted)
+	if _, pol := ft.got(); len(pol) != 2 || pol[1] != ntp {
+		t.Fatalf("policies %+v", pol)
+	}
+	e.clockServers = nil
+	e.restart()
+	if _, pol := ft.got(); len(pol) != 2 {
+		t.Fatalf("a switch with the clock on the values in force: %+v", pol)
+	}
+	if err := e.register(e.setup.Locked.AllowedFeeRecipients[0]); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -148,8 +148,12 @@ type env struct {
 	pk     backend.Pubkey
 	// tamper goes to the log of every start (flakyLog.tamper).
 	tamper func(g setupwire.Group, v uint64, raw []byte) []byte
-	// time is the clock the updates give the time values (nil: none).
-	time TimeSink
+	// time is the clock the updates give the time values (nil: none), and
+	// clockServers and clockPolicy the values it starts on (nil: the
+	// setup's).
+	time         TimeSink
+	clockServers []string
+	clockPolicy  *setupwire.TimePolicy
 }
 
 // newEnv starts a runner with the dev sample setup: approvers 1 to 3 with
@@ -207,7 +211,8 @@ func (e *env) start() {
 		t.Fatal(err)
 	}
 	e.log = &flakyLog{MarkLog: m, tamper: e.tamper}
-	if e.upd, err = NewUpdates(UpdatesOptions{Setup: e.setup, SetupHash: e.hash, Log: e.log, Clock: e.clock, Logger: quiet, Time: e.time}); err != nil {
+	if e.upd, err = NewUpdates(UpdatesOptions{Setup: e.setup, SetupHash: e.hash, Log: e.log, Clock: e.clock, Logger: quiet, Time: e.time,
+		ClockServers: e.clockServers, ClockPolicy: e.clockPolicy}); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := e.upd.StartConfig(baseConfig(e.setup))
