@@ -102,6 +102,17 @@ CHAIN=<chain> CHAIN_JSON=chain.json SETUP_FILE=signer-3.bin CONFIRM=yes platform
   start stops and names the shares that did not open. A planted blob next
   to junk under `shares/` fails this; a runner's own blob and shares
   pass, so signers already in service keep their key on upgrade.
+- These two checks stop only a blob planted without a matching share.
+  They do not stop a holder of encrypt alone who also writes a forged
+  state copy commit with one share sealed under the planted key: the
+  state copy's object keys are KMS encrypts under a public AAD too, and
+  the log_id in the share's AAD is public on a signer in service (before
+  the first start the holder can write the first mark log record itself).
+  Such a holder needs object create on the state copy bucket, and for the
+  first start on the mark log bucket. Cloud KMS symmetric keys give no
+  secret that the encrypt role cannot produce, so the runner cannot tell
+  this case apart: keep encrypt, like decrypt, with the WIF principal set,
+  and keep the buckets' write access with it too.
 - As on AWS, any object under `shares/` that does not open under the
   current sealing key and the mark log's log_id (a leftover from an
   earlier mark log, a foreign object) now stops the start, where before it

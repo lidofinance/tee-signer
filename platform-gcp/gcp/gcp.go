@@ -345,6 +345,12 @@ func sealingAAD(setup [32]byte) []byte { return setupwire.CtxGCPSealing.Message(
 // came from the stored blob: the runner then uses it only once every
 // stored share opens under it, and seals no new share before
 // (platform.Platform.SealingKeyStored).
+//
+// Both checks stop only a blob planted without a matching share. A holder
+// of useToEncrypt that can also write the state copy (and, before the
+// first start, the mark log) can forge a commit with a share sealed under
+// its key, since those object keys are KMS encrypts under public AADs
+// too; the runner cannot tell that apart (platform-gcp/deploy/README.md).
 func (k *KMS) dataKey(ctx context.Context, store platform.Store, setup [32]byte) (key []byte, stored bool, err error) {
 	aad := sealingAAD(setup)
 	shares, err := store.List(sharePrefix)
