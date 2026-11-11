@@ -77,6 +77,7 @@ type NTSPeerHealth struct {
 	Operator, Host           string
 	Active                   bool
 	Queries, Answers, Losses int64
+	Wide                     int64 // losses that were answers over MaxSampleBound
 	KEOK, KEFail             int64
 	LastAnswerAge            time.Duration
 	Off                      string

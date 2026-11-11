@@ -761,8 +761,12 @@ func TestNTSClockRefusesWideSamples(t *testing.T) {
 	if p.Stats.Wide != 1 || p.Stats.Samples != 0 || !strings.Contains(p.LastErr, "over the 100ms limit") {
 		t.Fatalf("a: wide %d samples %d err %v", p.Stats.Wide, p.Stats.Samples, p.LastErr)
 	}
-	if m := n.NTSSummary().Members; strings.Contains(","+strings.Join(m, ",")+",", ",a,") {
+	sum := n.NTSSummary()
+	if m := sum.Members; strings.Contains(","+strings.Join(m, ",")+",", ",a,") {
 		t.Fatalf("quorum members %v hold the wide sample", m)
+	}
+	if h := sum.Peers[0]; h.Operator != "a" || h.Wide != 1 || h.Losses != 1 {
+		t.Fatalf("HEALTH of a: %+v, want 1 wide loss", h)
 	}
 	fs2 := newServers(t, map[string]ntstest.NTPOptions{"a": wide}, "a", "b", "c", "d")
 	n2 := newNTS(fs2, &coarseClock{})
@@ -772,5 +776,26 @@ func TestNTSClockRefusesWideSamples(t *testing.T) {
 	}
 	if p := n2.Status().Peers["a"]; p.Stats.Wide != 0 || p.Stats.Samples != 1 {
 		t.Fatalf("with a 1 s cap: wide %d samples %d", p.Stats.Wide, p.Stats.Samples)
+	}
+}
+
+// A sample under the cap at receipt leaves the quorum once its bound, aged
+// by rho (500 ppm), passes the cap.
+func TestNTSJoinsAgedBound(t *testing.T) {
+	n := &NTS{MaxSampleBound: 100 * time.Millisecond}
+	p := &ntsPeer{sample: &nts.Sample{Bound: 99 * time.Millisecond, T4: 1}}
+	maxAge := int64(time.Minute)
+	if !n.joins(p, 1+int64(time.Second), maxAge) {
+		t.Fatal("99 ms aged 1 s (99.5 ms) refused")
+	}
+	if n.joins(p, 1+int64(3*time.Second), maxAge) {
+		t.Fatal("99 ms aged 3 s (100.5 ms) joins")
+	}
+	p.sample.Bound = 50 * time.Millisecond
+	if !n.joins(p, 1+int64(50*time.Second), maxAge) {
+		t.Fatal("50 ms aged 50 s (75 ms) refused")
+	}
+	if n.joins(p, 2+maxAge, maxAge) {
+		t.Fatal("a sample over maxAge joins")
 	}
 }

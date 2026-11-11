@@ -240,6 +240,10 @@ type ClockNTSOperator struct {
 	Queries int64 `json:"queries"`
 	Answers int64 `json:"answers"`
 	Losses  int64 `json:"losses"`
+	// Wide counts the losses that were answers with a bound over the
+	// sample cap (-nts-max-sample-bound): a host that delays one operator
+	// shows here, one that drops it does not.
+	Wide int64 `json:"wide,omitempty"`
 	// KEOK and KEFail count NTS-KE sessions.
 	KEOK   int64 `json:"ke_ok"`
 	KEFail int64 `json:"ke_fail"`

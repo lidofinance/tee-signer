@@ -263,7 +263,8 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
     ShiftActives(n)) x 15 minutes: 45 minutes with 7 or 8 operators.
 - HEALTH `clock_nts.operators` has one entry per server the clock dials,
   with or without shifts, servers that never answered included:
-  `operator`, `host`, `active`, `queries`, `answers`, `losses`, `ke_ok`,
+  `operator`, `host`, `active`, `queries`, `answers`, `losses`, `wide`
+  (losses that were answers over the sample cap), `ke_ok`,
   `ke_fail`, `last_answer_age_ms` (-1: no answer yet), `off` (a DENY or
   RSTR stop), `last_error`, and under shifts `fallbacks`, `bursts`,
   `rates`, `handovers`, `failed_handovers` and `fallback_ke`.
@@ -560,15 +561,21 @@ cannot turn it off or point it elsewhere:
 | GCP | `platform-gcp/deploy/Dockerfile` entrypoint (image digest) | `cloudkms.googleapis.com`, `sts.googleapis.com`, `www.cloudflare.com` | the VM's external address, direct (implied allow-all egress) |
 
 A sample whose own bound is over `-nts-max-sample-bound` joins no
-quorum (`clock.NTS.MaxSampleBound`; it counts as a lost answer, so a
-fallback may follow). The default is `-nts-max-bound`; it may be raised up
-to 1 s, where the cap is off, but not set below the max bound. Why: a host
-that delays the one honest answer of a small fresh set widens its bound,
-and two wrong servers can then place the time anywhere inside it while the
-quorum's bound looks small. Without the cap that is up to 1 s (RFC 5905
-MAXDIST, beyond which the core refuses a sample); with it, at most the max
-bound signing accepts anyway. The images name both flags, so a far
-deployment raises both.
+quorum (`clock.NTS.MaxSampleBound`). At receipt it counts as a lost answer,
+so a fallback may follow, and HEALTH counts it in `wide`. A sample that was
+under the cap at receipt leaves the quorum once its bound, aged by rho as
+the quorum ages it, passes the cap. The default is `-nts-max-bound`; it may
+be raised up to 1 s, where the cap is off, but not set below the max
+bound. Why: a host that delays the one honest answer of a small fresh set
+widens its bound, and two wrong servers can then place the time anywhere
+inside it while the quorum's bound looks small. The bound is a
+half-width, and the host's delay can put the true time at either edge, so
+the error is up to twice the cap: about 200 ms at the default 100 ms,
+against about 1 s each way without the cap (RFC 5905 MAXDIST, beyond
+which the core refuses a sample). An image that raises the sample cap
+above `-nts-max-bound` gives part of that back. The images name both
+flags, so a far deployment raises both, and that error grows with them
+(about 500 ms at 250 ms).
 
 The coarse URLs are hosts the platform's egress already allows. Each is
 an entry of the `coarse` list in `trusted-time/ntscatalog/catalog.json`,

@@ -1536,7 +1536,7 @@ func healthNTS(s clock.NTSSummary) *backend.ClockNTS {
 		}
 		c := s.Operators[p.Operator]
 		out.Operators = append(out.Operators, backend.ClockNTSOperator{
-			Operator: p.Operator, Host: p.Host, Active: p.Active, Queries: p.Queries, Answers: p.Answers, Losses: p.Losses,
+			Operator: p.Operator, Host: p.Host, Active: p.Active, Queries: p.Queries, Answers: p.Answers, Losses: p.Losses, Wide: p.Wide,
 			KEOK: p.KEOK, KEFail: p.KEFail, LastAnswerAgeMS: age, Off: p.Off, LastError: p.LastError,
 			Fallbacks: c.Fallbacks, Bursts: c.Bursts, Rates: c.Rates, Handovers: c.Handovers, FailedHandovers: c.FailedHandovers,
 			FallbackKE: c.FallbackKE,

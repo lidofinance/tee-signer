@@ -93,10 +93,11 @@ const ntsMaxBoundCap = 250 * time.Millisecond
 
 // ntsMaxSampleBoundCap is the largest -nts-max-sample-bound: 1 s, the
 // widest sample the NTS core takes at all (RFC 5905 MAXDIST), so 1s turns
-// the cap off. Its default is -nts-max-bound, and it may not be smaller:
-// a sample the cap refuses could not make a quorum within the max bound
-// alone, and a host that widens the one honest sample can then shift the
-// time by up to the cap, not up to 1 s.
+// the cap off. Its default is -nts-max-bound, and it may not be smaller.
+// A host that widens the one honest sample of a small fresh set lets two
+// wrong servers shift the time by up to about twice the cap (the bound is
+// a half-width), not about 1 s each way. An image that raises it above
+// -nts-max-bound gives part of that back.
 const ntsMaxSampleBoundCap = time.Second
 
 func init() {
@@ -485,6 +486,9 @@ func statusLine(st clock.NTSStatus) string {
 		}
 		for code, k := range p.Stats.Kisses {
 			s += fmt.Sprintf(",%s=%d", code, k)
+		}
+		if p.Stats.Wide > 0 {
+			s += fmt.Sprintf(",wide=%d", p.Stats.Wide)
 		}
 		if p.Disabled != "" {
 			s += ",off=" + p.Disabled

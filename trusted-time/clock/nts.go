@@ -134,11 +134,13 @@ type NTS struct {
 	Coarse   interface{ Now() (time.Time, error) }
 	Interval time.Duration // 0: NTSInterval
 	MaxBound time.Duration // 0: NTSMaxBound
-	// MaxSampleBound refuses a sample whose own bound is larger (0:
-	// MaxBound). A host that delays the one honest answer until its bound
-	// is wide lets two wrong servers place the time anywhere inside it; the
-	// cap keeps that within what signing accepts. A far region, whose
-	// samples are wide, raises MaxBound and with it this cap.
+	// MaxSampleBound refuses a sample whose own bound is larger, at receipt
+	// and as it ages (0: MaxBound). A host that delays the one honest answer
+	// of a small fresh set until its bound is wide lets two wrong servers
+	// place the time anywhere inside it while the quorum's bound looks
+	// small. The bound is a half-width, so that error is up to twice the
+	// cap (about 1 s each way without it). A far region, whose samples are
+	// wide, raises MaxBound and this cap.
 	MaxSampleBound time.Duration
 	MaxAge         time.Duration // 0: NTSMaxAge, or NTSShiftMaxAge with Shifts
 	MaxCoarseDiff  time.Duration // 0: NTSMaxCoarseDiff
@@ -268,6 +270,7 @@ type ntsPeer struct {
 
 type ntsPeerHealth struct {
 	queries, answers, losses int64
+	wide                     int64 // losses that were answers over MaxSampleBound
 	keOK, keFail             int64
 	lastAnswer               int64 // local ns of the last answer, 0 for none
 	off, lastErr             string
@@ -617,11 +620,22 @@ func (n *NTS) waitGap(ctx context.Context, p *ntsPeer, at int64, gap time.Durati
 func (n *NTS) fresh() int {
 	now, c := n.local(), 0
 	for _, p := range n.peers {
-		if p.sample != nil && now-p.sample.T4 <= n.sampleMaxAge() && p.sample.T4 > n.refusedT4 {
+		if n.joins(p, now, n.sampleMaxAge()) {
 			c++
 		}
 	}
 	return c
+}
+
+// joins says whether p's sample may join a quorum at local time now: at
+// most maxAge old, newer than a refused quorum, and with its bound, aged
+// by rho as the quorum ages it, within MaxSampleBound. The age check keeps
+// a sample that was narrow enough at receipt from growing past the cap
+// while it waits.
+func (n *NTS) joins(p *ntsPeer, now, maxAge int64) bool {
+	s := p.sample
+	return s != nil && now-s.T4 <= maxAge && s.T4 > n.refusedT4 &&
+		s.Bound+nts.Drift(time.Duration(now-s.T4)) <= n.maxSampleBound()
 }
 
 // certTime is the time NTS-KE checks certificate validity at: the coarse
@@ -758,6 +772,7 @@ func (n *NTS) resolve(ctx context.Context, addr string) string {
 
 // record takes the outcome of one query.
 func (n *NTS) record(p *ntsPeer, s nts.Sample, err error) bool {
+	wide := false
 	p.nextPoll = n.local() + int64(p.poll)
 	var kiss *nts.KissError
 	switch {
@@ -791,6 +806,7 @@ func (n *NTS) record(p *ntsPeer, s nts.Sample, err error) bool {
 		// fallback may follow), and the earlier sample stays until it ages
 		// out. NTS-KE would not help, so the loss streak does not grow.
 		p.stats.Wide++
+		wide = true
 		p.stats.LastDelay, p.stats.LastBound = s.Delay, s.Bound
 		err = fmt.Errorf("sample bound %v over the %v limit (MaxSampleBound)", s.Bound.Round(time.Microsecond), n.maxSampleBound())
 		p.lastErr = err
@@ -808,6 +824,9 @@ func (n *NTS) record(p *ntsPeer, s nts.Sample, err error) bool {
 	n.noteHealth(p, func(h *ntsPeerHealth) {
 		h.queries++
 		h.off = off
+		if wide {
+			h.wide++
+		}
 		if err != nil {
 			h.losses++
 			h.lastErr = err.Error()
@@ -831,7 +850,7 @@ func (n *NTS) combine(coarse time.Time, coarseLocal int64) error {
 		if p.lastErr != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", p.srv.Operator, p.lastErr))
 		}
-		if p.sample == nil || now-p.sample.T4 > maxAge || p.sample.T4 <= n.refusedT4 {
+		if !n.joins(p, now, maxAge) {
 			continue
 		}
 		in = append(in, nts.Interval{Operator: p.srv.Operator, Offset: p.sample.Offset, Bound: p.sample.Bound, T4: p.sample.T4})
@@ -1084,7 +1103,7 @@ func (n *NTS) NTSSummary() NTSSummary {
 	s.Peers = make([]NTSPeerHealth, len(n.peers))
 	for i, p := range n.peers {
 		h := p.health
-		ph := NTSPeerHealth{Operator: p.srv.Operator, Host: p.srv.Host, Queries: h.queries, Answers: h.answers, Losses: h.losses,
+		ph := NTSPeerHealth{Operator: p.srv.Operator, Host: p.srv.Host, Queries: h.queries, Answers: h.answers, Losses: h.losses, Wide: h.wide,
 			KEOK: h.keOK, KEFail: h.keFail, LastAnswerAge: -1, Off: h.off, LastError: h.lastErr,
 			Active: n.shifts == nil || slices.Contains(s.Actives, p.srv.Operator)}
 		if h.lastAnswer != 0 {
