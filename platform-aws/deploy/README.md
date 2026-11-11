@@ -691,8 +691,11 @@ destination it accepted.
 The destination's port must be 123 or 4123. A name must be one of the NTP
 host names of every catalog host (`udprelay.DefaultNames`: each
 server's own name and `time.meta.com`); the relay resolves it itself and
-sends to the first IPv4 address. An address must lie in `194.58.200.0/21` or be one that one of the
+sends to the first public address, IPv4 first. An address must lie in `194.58.200.0/21` or be a public one that one of the
 allowed names resolves to now (cached 5 minutes, a failed lookup 30 s).
+Public means global unicast, not private (RFC 1918, fc00::/7) and not
+shared space, NAT64, 6to4 or another special block, so a DNS answer that
+points a catalog name at the parent or the VPC gets no datagram.
 Nothing else goes out and no other name is resolved. The block is for
 Netnod: each IPv4 address of `nts.netnod.se` names a different NTP server by
 address, port 4123, in `194.58.203.x` to `194.58.207.x`, and none of them is

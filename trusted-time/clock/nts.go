@@ -168,6 +168,8 @@ type NTS struct {
 	started bool
 
 	shifts *ntsShifts // set by init when ScheduleSeed is set
+	// queryTimeout replaces the NTP query timeout in tests; 0: the default.
+	queryTimeout time.Duration
 	// testQuery, if set, stands in for NTS-KE and the NTP query (tests).
 	// at is the local time the query goes out.
 	testQuery    func(ctx context.Context, operator string, at int64) (nts.Sample, error)
@@ -245,8 +247,10 @@ type ntsPeer struct {
 	reEnable int64
 	lastErr  error
 	// lostInRow counts the queries in a row that got no answer and no
-	// kiss; at ntsKEAfterLost the next contact runs NTS-KE first.
+	// kiss; at ntsKEAfterLost the next contact runs NTS-KE first, once per
+	// such streak (lostKE), until an answer ends it.
 	lostInRow int
+	lostKE    bool
 	stats     NTSPeerStats
 	// contacted is the local time of the last contact under the shift
 	// schedule, 0 for none.
@@ -639,6 +643,7 @@ func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time, at int64) 
 		if n.shifts != nil {
 			timeout = NTSShiftQueryTimeout
 		}
+		timeout = cmpOr(n.queryTimeout, timeout)
 		qctx, cancel := context.WithTimeout(ctx, timeout)
 		s, err = p.assoc.Query(qctx, p.ntpAddr, coarse, n.Dial)
 		cancel()
@@ -651,63 +656,73 @@ func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time, at int64) 
 // ntsKEAfterLost is how many queries in a row may go unanswered before the
 // next contact runs NTS-KE again. A server that rotated its keys should
 // answer an old cookie with NTSN, but one that drops it would otherwise
-// cost all 8 cookies (8 contacts, 8 minutes on the 60 s grid) first.
+// cost all 8 cookies (8 contacts, 8 minutes on the 60 s grid) first. This
+// NTS-KE runs once per streak of losses: on a path that drops NTP but not
+// NTS-KE, a server gets one more NTS-KE per streak, not one per 3 queries.
 const ntsKEAfterLost = 3
 
-// keyExchange runs NTS-KE if p has no cookies left, or after ntsKEAfterLost
-// lost queries in a row once NTS-KE may run, and says whether p can be
-// queried.
+// keyExchange runs NTS-KE if p has no cookies left, or once after
+// ntsKEAfterLost lost queries in a row, and says whether p can be queried.
+// The second kind keeps the old cookies until NTS-KE succeeds, so a failed
+// or backed-off NTS-KE costs nothing.
 func (n *NTS) keyExchange(ctx context.Context, p *ntsPeer) bool {
 	now := n.local()
-	stale := p.assoc != nil && p.lostInRow >= ntsKEAfterLost && now >= p.nextKE
-	if p.assoc == nil || p.assoc.Cookies() == 0 || stale {
-		p.lostInRow = 0
-		if p.assoc != nil {
-			p.assoc.Close()
-			p.assoc = nil
-		}
-		if now < p.nextKE || ctx.Err() != nil {
-			return false
-		}
-		kctx, cancel := context.WithTimeout(ctx, ntsExchangeTimeout)
-		r, err := nts.KeyExchange(kctx, nts.KEConfig{
-			Host: p.srv.Host, Addr: p.srv.KEAddr, Roots: p.srv.Roots, Dial: n.Dial,
-			Time: n.certTime,
-		})
-		cancel()
-		if err != nil && ctx.Err() != nil {
-			// The caller's deadline ran out, not the server: no backoff.
-			p.lastErr = err
-			n.noteHealth(p, func(h *ntsPeerHealth) { h.lastErr = err.Error() })
-			return false
-		}
-		if err != nil {
-			p.stats.KEFail++
-			p.lastErr = err
-			n.noteHealth(p, func(h *ntsPeerHealth) { h.keFail++; h.lastErr = err.Error() })
-			if n.served.Load() {
-				p.keWait = min(max(2*p.keWait, n.interval()), n.maxPollD())
-			} else {
-				// No backoff before the first quorum, but random, so signers
-				// that failed together do not try again together.
-				p.keWait = n.interval()*3/4 + time.Duration(n.random(int64(n.interval()/2)))
-			}
-			p.nextKE = now + int64(p.keWait)
-			n.logf(slog.LevelWarn, "nts: key exchange failed", "operator", p.srv.Operator, "host", p.srv.Host, "retry_in", p.keWait, "err", err)
-			return false
-		}
-		p.stats.KEOK++
-		n.noteHealth(p, func(h *ntsPeerHealth) { h.keOK++ })
-		p.stats.LastKE = r.Elapsed
-		p.stats.CookiesAfterKE = r.Assoc.Cookies()
-		p.keWait = 0
-		p.assoc, p.ntpAddr = r.Assoc, r.NTPAddr
-		if n.shifts != nil && (n.Dial == nil || n.resolveAnyDial) {
-			p.ntpAddr = n.resolve(ctx, p.ntpAddr)
-		}
-		n.logf(slog.LevelInfo, "nts: key exchange", "operator", p.srv.Operator, "host", p.srv.Host, "ntp", r.NTPAddr,
-			"cookies", p.stats.CookiesAfterKE, "took", r.Elapsed.Round(time.Millisecond))
+	usable := p.assoc != nil && p.assoc.Cookies() > 0
+	stale := usable && p.lostInRow >= ntsKEAfterLost && !p.lostKE
+	if usable && !stale {
+		return true
 	}
+	if !usable && p.assoc != nil {
+		p.assoc.Close()
+		p.assoc = nil
+	}
+	if now < p.nextKE || ctx.Err() != nil {
+		return stale
+	}
+	if stale {
+		p.lostKE = true
+	}
+	kctx, cancel := context.WithTimeout(ctx, ntsExchangeTimeout)
+	r, err := nts.KeyExchange(kctx, nts.KEConfig{
+		Host: p.srv.Host, Addr: p.srv.KEAddr, Roots: p.srv.Roots, Dial: n.Dial,
+		Time: n.certTime,
+	})
+	cancel()
+	if err != nil && ctx.Err() != nil {
+		// The caller's deadline ran out, not the server: no backoff.
+		p.lastErr = err
+		n.noteHealth(p, func(h *ntsPeerHealth) { h.lastErr = err.Error() })
+		return stale
+	}
+	if err != nil {
+		p.stats.KEFail++
+		p.lastErr = err
+		n.noteHealth(p, func(h *ntsPeerHealth) { h.keFail++; h.lastErr = err.Error() })
+		if n.served.Load() {
+			p.keWait = min(max(2*p.keWait, n.interval()), n.maxPollD())
+		} else {
+			// No backoff before the first quorum, but random, so signers
+			// that failed together do not try again together.
+			p.keWait = n.interval()*3/4 + time.Duration(n.random(int64(n.interval()/2)))
+		}
+		p.nextKE = now + int64(p.keWait)
+		n.logf(slog.LevelWarn, "nts: key exchange failed", "operator", p.srv.Operator, "host", p.srv.Host, "retry_in", p.keWait, "err", err)
+		return stale
+	}
+	p.stats.KEOK++
+	n.noteHealth(p, func(h *ntsPeerHealth) { h.keOK++ })
+	p.stats.LastKE = r.Elapsed
+	p.stats.CookiesAfterKE = r.Assoc.Cookies()
+	p.keWait = 0
+	if p.assoc != nil {
+		p.assoc.Close()
+	}
+	p.assoc, p.ntpAddr = r.Assoc, r.NTPAddr
+	if n.shifts != nil && (n.Dial == nil || n.resolveAnyDial) {
+		p.ntpAddr = n.resolve(ctx, p.ntpAddr)
+	}
+	n.logf(slog.LevelInfo, "nts: key exchange", "operator", p.srv.Operator, "host", p.srv.Host, "ntp", r.NTPAddr,
+		"cookies", p.stats.CookiesAfterKE, "took", r.Elapsed.Round(time.Millisecond))
 	return true
 }
 
@@ -762,7 +777,7 @@ func (n *NTS) record(p *ntsPeer, s nts.Sample, err error) bool {
 		n.logf(slog.LevelWarn, "nts: query failed", "operator", p.srv.Operator, "err", err)
 	default:
 		p.stats.Samples++
-		p.lostInRow = 0
+		p.lostInRow, p.lostKE = 0, false
 		p.sample = &s
 		p.lastErr = nil
 		p.poll = max(p.poll/2, max(n.interval(), n.minPollD()))

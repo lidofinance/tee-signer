@@ -688,6 +688,7 @@ func TestNTSCertificateClockWithoutCoarseTime(t *testing.T) {
 func TestNTSClockKeyExchangeAfterLostQueries(t *testing.T) {
 	fs := newServers(t, nil, "a", "b", "c", "d")
 	n := newNTS(fs, &coarseClock{})
+	n.queryTimeout = 100 * time.Millisecond
 	if err := refresh(t, n); err != nil {
 		t.Fatal(err)
 	}
@@ -697,15 +698,51 @@ func TestNTSClockKeyExchangeAfterLostQueries(t *testing.T) {
 		_ = refresh(t, n)
 	}
 	if s := fs[0].ke.Sessions.Load(); s != 1 {
-		t.Fatalf("NTS-KE sessions with a while it drops: %d, want 1", s)
+		t.Fatalf("NTS-KE sessions with a after %d lost: %d, want 1", ntsKEAfterLost, s)
+	}
+	// One NTS-KE per streak: 7 more lost queries (fewer than the 8 cookies
+	// the second NTS-KE gave) add no more.
+	for range 7 {
+		time.Sleep(60 * time.Millisecond)
+		_ = refresh(t, n)
+	}
+	if s := fs[0].ke.Sessions.Load(); s != 2 {
+		t.Fatalf("NTS-KE sessions with a after %d lost: %d, want 2 (one per streak)", ntsKEAfterLost+7, s)
 	}
 	fs[0].ntp.Set(opt(ntstest.NTPOptions{}))
 	time.Sleep(60 * time.Millisecond)
 	if err := refresh(t, n); err != nil {
 		t.Fatal(err)
 	}
-	p := n.Status().Peers["a"]
-	if s := fs[0].ke.Sessions.Load(); s != 2 || p.Stats.Samples != 2 {
-		t.Fatalf("after %d lost: NTS-KE sessions %d, want 2; samples %d", ntsKEAfterLost, s, p.Stats.Samples)
+	if s, p := fs[0].ke.Sessions.Load(), n.Status().Peers["a"]; s != 2 || p.Stats.Samples != 2 {
+		t.Fatalf("after the drops: NTS-KE sessions %d, want 2; samples %d", s, p.Stats.Samples)
+	}
+}
+
+// The NTS-KE after lost queries keeps the old cookies when it fails: once
+// NTP answers again, the old cookies work without waiting out the backoff.
+func TestNTSClockFailedLostKeyExchangeKeepsCookies(t *testing.T) {
+	fs := newServers(t, nil, "a", "b", "c", "d")
+	n := newNTS(fs, &coarseClock{})
+	n.queryTimeout = 100 * time.Millisecond
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	fs[0].ntp.Set(opt(ntstest.NTPOptions{Drop: true}))
+	fs[0].ke.Close()
+	for range ntsKEAfterLost + 1 {
+		time.Sleep(60 * time.Millisecond)
+		_ = refresh(t, n)
+	}
+	if p := n.Status().Peers["a"]; p.Stats.KEFail != 1 {
+		t.Fatalf("KE failures %d, want 1", p.Stats.KEFail)
+	}
+	fs[0].ntp.Set(opt(ntstest.NTPOptions{}))
+	time.Sleep(60 * time.Millisecond)
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	if p := n.Status().Peers["a"]; p.Stats.Samples != 2 {
+		t.Fatalf("samples %d after the drops, want 2 (old cookies)", p.Stats.Samples)
 	}
 }

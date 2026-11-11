@@ -20,9 +20,13 @@ import (
 //
 //   - The port must be one of Ports (NTP 123; Netnod negotiates 4123).
 //   - A name must be one of Names, exactly (case and a trailing dot aside).
-//     The relay resolves it itself and sends to the first address.
-//   - An address must lie in one of Nets, or be an address that one of
-//     Names resolves to now (cached for TTL).
+//     The relay resolves it itself and sends to the first public address
+//     (IPv4 first), or one in Nets.
+//   - An address must lie in one of Nets, or be a public address that one
+//     of Names resolves to now (cached for TTL).
+//   - Public: global unicast, not private, not in notPublic (shared space,
+//     NAT64, 6to4 and other special blocks). A DNS answer that points a
+//     name at the parent or the VPC gets no datagram.
 //
 // Nothing else goes out: no other name is resolved, no other address is
 // reached. Netnod's NTS-KE servers name NTP servers by address, and those
@@ -166,12 +170,33 @@ func usable(ip netip.Addr) bool {
 	return ip.IsValid() && !ip.IsUnspecified() && !ip.IsMulticast() && !ip.IsLinkLocalUnicast()
 }
 
-// sharedSpace is the carrier-grade NAT block (RFC 6598).
-var sharedSpace = netip.MustParsePrefix("100.64.0.0/10")
+// notPublic are blocks a DNS answer must not point a name at, besides
+// loopback and private: shared space (RFC 6598), "this network", IETF
+// protocol assignments, benchmarking, reserved, and the IPv6 forms that
+// carry an IPv4 address (NAT64, 6to4), which could reach a private one.
+var notPublic = []netip.Prefix{
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("2002::/16"),
+}
 
-// public: not loopback, private (RFC 1918, fc00::/7) or shared space.
+// public: a global unicast address that is not private (RFC 1918,
+// fc00::/7) and in no block of notPublic.
 func public(ip netip.Addr) bool {
-	return !ip.IsLoopback() && !ip.IsPrivate() && !sharedSpace.Contains(ip)
+	if !ip.IsGlobalUnicast() || ip.IsPrivate() {
+		return false
+	}
+	for _, p := range notPublic {
+		if p.Contains(ip) {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *Allowlist) inNets(ip netip.Addr) bool {

@@ -526,15 +526,16 @@ func TestAllowlistRefusesLocalAnswers(t *testing.T) {
 		"lo.example":   addrs("127.0.0.1"),
 		"vpc.example":  addrs("10.0.0.5", "fd00::5"),
 		"cgn.example":  addrs("100.64.1.1"),
+		"n64.example":  addrs("64:ff9b::a00:5", "2002:a00:5::1", "198.18.0.1"),
 		"both.example": addrs("10.0.0.6", "192.0.2.7"),
 	}}
-	a := &Allowlist{Names: []string{"lo.example", "vpc.example", "cgn.example", "both.example"}, Ports: []uint16{123}, Lookup: dns.lookup}
-	for _, dest := range []string{"lo.example:123", "vpc.example:123", "cgn.example:123"} {
+	a := &Allowlist{Names: []string{"lo.example", "vpc.example", "cgn.example", "n64.example", "both.example"}, Ports: []uint16{123}, Lookup: dns.lookup}
+	for _, dest := range []string{"lo.example:123", "vpc.example:123", "cgn.example:123", "n64.example:123"} {
 		if _, err := a.Check(context.Background(), dest); err == nil || !strings.Contains(err.Error(), "no usable address") {
 			t.Errorf("%s: %v", dest, err)
 		}
 	}
-	for _, dest := range []string{"127.0.0.1:123", "10.0.0.5:123", "[fd00::5]:123", "100.64.1.1:123", "10.0.0.6:123"} {
+	for _, dest := range []string{"127.0.0.1:123", "10.0.0.5:123", "[fd00::5]:123", "100.64.1.1:123", "10.0.0.6:123", "[64:ff9b::a00:5]:123"} {
 		if _, err := a.Check(context.Background(), dest); err == nil || !strings.Contains(err.Error(), "not in the allowlist") {
 			t.Errorf("%s: %v", dest, err)
 		}
