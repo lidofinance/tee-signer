@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"net/url"
 	"slices"
 	"strings"
 )
@@ -185,7 +186,38 @@ var regions = []string{RegionGlobal, RegionEU, RegionNA, RegionSA, RegionAPAC}
 
 // Catalog is the built-in list.
 type Catalog struct {
-	NTS []NTSServer
+	NTS    []NTSServer
+	Coarse []Coarse
+}
+
+// Coarse is one HTTPS-date host of the NTS clock's coarse check. An image
+// names its coarse URLs in its command (-nts-coarse-urls); on a platform
+// with pinned roots each must be a catalog entry, and its source trusts
+// that entry's roots and no others.
+type Coarse struct {
+	ID string
+	// URL is https; {region} stands for the setup's region.
+	URL string
+	// Roots are files under trusted-time/nts/roots.
+	Roots []string
+	// CloudRoots names a cloud's pinned set in platform/cloudroots: one of
+	// CloudRootSets, or "" for none.
+	CloudRoots string
+	Note       string
+}
+
+// CloudRootSets are the values of Coarse.CloudRoots.
+var CloudRootSets = []string{"aws", "google", "azure"}
+
+// CoarseFor is the entry whose URL is url as the image names it (with
+// {region} not yet filled in).
+func (c *Catalog) CoarseFor(url string) (Coarse, bool) {
+	for _, e := range c.Coarse {
+		if e.URL == url {
+			return e, true
+		}
+	}
+	return Coarse{}, false
 }
 
 //go:embed catalog.json
@@ -239,7 +271,14 @@ func Parse(b []byte) (Catalog, error) {
 	d := json.NewDecoder(bytes.NewReader(b))
 	d.DisallowUnknownFields()
 	var raw struct {
-		NTS []jsonServer `json:"nts"`
+		NTS    []jsonServer `json:"nts"`
+		Coarse []struct {
+			ID         string   `json:"id"`
+			URL        string   `json:"url"`
+			Roots      []string `json:"roots"`
+			CloudRoots string   `json:"cloud_roots"`
+			Note       string   `json:"note"`
+		} `json:"coarse"`
 	}
 	if err := d.Decode(&raw); err != nil {
 		return Catalog{}, fmt.Errorf("ntscatalog: %w", err)
@@ -262,6 +301,9 @@ func Parse(b []byte) (Catalog, error) {
 		}
 		c.NTS = append(c.NTS, e)
 	}
+	for _, r := range raw.Coarse {
+		c.Coarse = append(c.Coarse, Coarse{ID: r.ID, URL: r.URL, Roots: r.Roots, CloudRoots: r.CloudRoots, Note: r.Note})
+	}
 	if err := c.Check(); err != nil {
 		return Catalog{}, err
 	}
@@ -269,9 +311,10 @@ func Parse(b []byte) (Catalog, error) {
 }
 
 // formatKeys are the keys of catalog.json by place: the top object and
-// each entry of "nts".
+// each entry of "nts" and "coarse".
 var formatKeys = map[string][]string{
-	"":           {"nts"},
+	"":           {"nts", "coarse"},
+	"coarse[]":   {"id", "url", "roots", "cloud_roots", "note"},
 	"nts[]":      {"id", "host", "operator", "roots", "ntp_nets", "ntp_names", "nitro_port", "status", "terms", "terms_url", "regions", "alt", "default", "note"},
 	"nts[]alt[]": {"host", "roots", "nitro_port", "note"},
 }
@@ -570,6 +613,37 @@ func (c *Catalog) Check() error {
 				return fmt.Errorf("ntscatalog: vsock port %d for %s and %s (%s)", a.NitroPort, prev, e.ID, a.Host)
 			}
 			ports[a.NitroPort] = e.ID + "@" + a.Host
+		}
+	}
+	return c.checkCoarse()
+}
+
+// checkCoarse: valid unique IDs and URLs, https URLs with no user, query
+// or fragment, and roots: files, a known cloud set, or both.
+func (c *Catalog) checkCoarse() error {
+	ids := map[string]bool{}
+	urls := map[string]bool{}
+	for _, e := range c.Coarse {
+		if !validID(e.ID) {
+			return fmt.Errorf("ntscatalog: coarse ID %q: 1 to %d of a-z, 0-9, '.' and '-'", e.ID, MaxLabel)
+		}
+		if ids[e.ID] {
+			return fmt.Errorf("ntscatalog: coarse ID %q twice", e.ID)
+		}
+		ids[e.ID] = true
+		if urls[e.URL] {
+			return fmt.Errorf("ntscatalog: coarse URL %s twice", e.URL)
+		}
+		urls[e.URL] = true
+		u, err := url.Parse(strings.ReplaceAll(e.URL, "{region}", "region"))
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return fmt.Errorf("ntscatalog: coarse %s: URL %q: https, a host, no user, query or fragment", e.ID, e.URL)
+		}
+		if e.CloudRoots != "" && !slices.Contains(CloudRootSets, e.CloudRoots) {
+			return fmt.Errorf("ntscatalog: coarse %s: cloud_roots %q: want one of %v", e.ID, e.CloudRoots, CloudRootSets)
+		}
+		if e.CloudRoots == "" && len(e.Roots) == 0 {
+			return fmt.Errorf("ntscatalog: coarse %s: no roots", e.ID)
 		}
 	}
 	return nil

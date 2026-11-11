@@ -194,7 +194,9 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   `Date` headers itself, move the coarse clock, and with it the time NTS-KE
   checks certificates at. Without such certificates, setting the system
   clock moves neither. HTTPS-date is no longer a signing clock, but it
-  is still the coarse check, so this residual stays.
+  is still the coarse check, so this residual stays. The certificates
+  must come from the roots of each host's own catalog entry (see "In the
+  clouds" below), not from any root the image trusts.
 - Shift schedule (`clock.NTS.Shifts` or `ScheduleSeed`, `ntsshift.go`; off
   by default). The runner always turns it on and refuses fewer than 4
   servers (with 3, one slow server would stop the quorum). Below 7
@@ -553,8 +555,19 @@ cannot turn it off or point it elsewhere:
 | Azure | `platform-azure/deploy/aci-template.json` command (CCE policy hash) | `login.microsoftonline.com`, `management.azure.com`, `www.cloudflare.com` | ACI's default outbound access, direct |
 | GCP | `platform-gcp/deploy/Dockerfile` entrypoint (image digest) | `cloudkms.googleapis.com`, `sts.googleapis.com`, `www.cloudflare.com` | the VM's external address, direct (implied allow-all egress) |
 
-The coarse URLs are hosts the platform's egress already allows. Each
-command also sets `-nts-wait 90s` and `-nts-max-bound 100ms` (the
+The coarse URLs are hosts the platform's egress already allows. Each is
+an entry of the `coarse` list in `trusted-time/ntscatalog/catalog.json`,
+with the roots it may chain to: a cloud's pinned set
+(`platform/cloudroots`: `aws`, `google`, `azure`) and root files of
+`trusted-time/nts/roots`. Each HTTPS-date source trusts its own entry's
+roots and no others, so a certificate for the KMS host from Cloudflare's
+CA, or for `www.cloudflare.com` from Amazon's, is refused. On a platform
+with pinned roots the runner refuses a coarse URL that is not in the list;
+a debug build takes others (the tests' servers) with the platform's roots
+and the NTS operators'. `www.cloudflare.com` chained to ISRG Root X1 on
+2026-11-11; Cloudflare's edge certificates also come from Google Trust
+Services and SSL.com, so its entry has the ISRG, SSL.com and Google roots.
+Each command also sets `-nts-wait 90s` and `-nts-max-bound 100ms` (the
 defaults), so no environment variable of the host or the launcher can
 change them. The build scripts check the flags (`nitro-eif.sh`,
 `gcp/build-image.sh`, `azure/deploy.sh render`), refuse a command without

@@ -15,7 +15,9 @@ package main
 //	-nts-clock                 RUNNER_NTS_CLOCK=1            turn it on
 //	-nts-coarse-urls a,b,c     RUNNER_NTS_COARSE_URLS=a,b,c  HTTPS-date URLs of the coarse check (required, 3 or more);
 //	                                                         {region} stands for the platform option region (Nitro,
-//	                                                         from the setup), so one image serves every region
+//	                                                         from the setup), so one image serves every region; each
+//	                                                         must be in the coarse catalog (ntscatalog), whose roots
+//	                                                         its source trusts
 //	-nts-wait 90s              RUNNER_NTS_WAIT=90s           how long start-up waits for the first quorum
 //	-nts-max-bound 100ms       RUNNER_NTS_MAX_BOUND=100ms    Now fails above this error bound; at most 250ms
 //	-nts-terms-confirmed a,b   RUNNER_NTS_TERMS_CONFIRMED    catalog entries (trusted-time/ntscatalog) dialed next to
@@ -37,6 +39,7 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
@@ -49,6 +52,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/platform"
+	"github.com/lidofinance/tee-signer/platform/cloudroots"
 	"github.com/lidofinance/tee-signer/trusted-time/clock"
 	"github.com/lidofinance/tee-signer/trusted-time/nts"
 	"github.com/lidofinance/tee-signer/trusted-time/ntscatalog"
@@ -163,12 +167,13 @@ func newNTSClock(client *http.Client, dial nts.DialFunc, region string, log *slo
 	if err != nil {
 		return nil, nil, err
 	}
-	if client, err = coarseClient(client); err != nil {
-		return nil, nil, err
-	}
 	q := &clock.Quorum{Min: len(urls)/2 + 1}
 	for _, u := range urls {
-		q.Sources = append(q.Sources, &clock.HTTPSDate{URL: u, Client: client})
+		c, err := coarseClient(client, u)
+		if err != nil {
+			return nil, nil, err
+		}
+		q.Sources = append(q.Sources, &clock.HTTPSDate{URL: u.url, Client: c})
 	}
 	// The coarse clock ages its reading on CLOCK_MONOTONIC_RAW, the NTS
 	// clock's local time, so the coarse check compares two times aged on
@@ -190,12 +195,23 @@ func newNTSClock(client *http.Client, dial nts.DialFunc, region string, log *slo
 	return n, coarse, nil
 }
 
-// coarseClient is client for the coarse check: its pinned cloud roots plus
-// the NTS operators' roots. The coarse URLs name two cloud hosts and
-// www.cloudflare.com, whose CA is outside the cloud's set; the clock trusts
-// the NTS roots already. A client without pinned roots (the dev platform)
-// is returned as it is.
-func coarseClient(c *http.Client) (*http.Client, error) {
+// coarseURL is one URL of the coarse check: as the image names it, with
+// {region} filled in, and its catalog entry (ok false: none).
+type coarseURL struct {
+	named, url string
+	entry      ntscatalog.Coarse
+	ok         bool
+}
+
+// coarseClient is the client of one coarse source. On a platform with
+// pinned roots it trusts the roots of the URL's catalog entry and no
+// others: a certificate for the KMS host from Cloudflare's CA, or for
+// www.cloudflare.com from a cloud's CA, is refused. A URL with no entry is
+// refused there, except in a debug build, whose tests name test servers;
+// it then gets the platform's roots plus the NTS operators', as before the
+// coarse catalog. A client without pinned roots (the dev platform) is
+// returned as it is.
+func coarseClient(c *http.Client, u coarseURL) (*http.Client, error) {
 	if c == nil {
 		return nil, nil
 	}
@@ -203,40 +219,75 @@ func coarseClient(c *http.Client) (*http.Client, error) {
 	if !ok || t.TLSClientConfig == nil || t.TLSClientConfig.RootCAs == nil {
 		return c, nil
 	}
-	t = t.Clone()
-	pool := t.TLSClientConfig.RootCAs.Clone()
-	for _, s := range nts.PublicServers {
-		if err := nts.AddRoots(pool, s.Roots); err != nil {
+	var pool *x509.CertPool
+	switch {
+	case u.ok:
+		pool = cloudroots.Pool()
+		if u.entry.CloudRoots != "" {
+			p, err := cloudRootSet(u.entry.CloudRoots)
+			if err != nil {
+				return nil, err
+			}
+			pool = cloudroots.Pool(p)
+		}
+		if err := nts.AddRoots(pool, u.entry.Roots); err != nil {
 			return nil, err
 		}
+	case coarseTestURLs:
+		pool = t.TLSClientConfig.RootCAs.Clone()
+		for _, s := range nts.PublicServers {
+			if err := nts.AddRoots(pool, s.Roots); err != nil {
+				return nil, err
+			}
+		}
+	default:
+		return nil, fmt.Errorf("nts clock: coarse URL %s is not in the coarse catalog (trusted-time/ntscatalog)", u.named)
 	}
+	t = t.Clone()
+	t.TLSClientConfig = t.TLSClientConfig.Clone()
 	t.TLSClientConfig.RootCAs = pool
 	cc := *c
 	cc.Transport = t
 	return &cc, nil
 }
 
-// ntsCoarseURLs reads -nts-coarse-urls (or RUNNER_NTS_COARSE_URLS) and puts
-// region in place of {region}. The Nitro image names its coarse-time hosts
-// kms.{region}.amazonaws.com and sts.{region}.amazonaws.com: the runner
-// fills in the region of the setup and nothing else.
-func ntsCoarseURLs(region string) ([]string, error) {
+// cloudRootSet maps a catalog cloud_roots value to its cloudroots set.
+func cloudRootSet(name string) (cloudroots.Provider, error) {
+	switch name {
+	case "aws":
+		return cloudroots.AWS, nil
+	case "google":
+		return cloudroots.Google, nil
+	case "azure":
+		return cloudroots.Azure, nil
+	}
+	return 0, fmt.Errorf("nts clock: cloud roots %q unknown", name)
+}
+
+// ntsCoarseURLs reads -nts-coarse-urls (or RUNNER_NTS_COARSE_URLS), looks
+// each up in the coarse catalog, and puts region in place of {region}. The
+// Nitro image names its coarse-time hosts kms.{region}.amazonaws.com and
+// sts.{region}.amazonaws.com: the runner fills in the region of the setup
+// and nothing else.
+func ntsCoarseURLs(region string) ([]coarseURL, error) {
 	list := *ntsCoarseFlag
 	if list == "" {
 		list = os.Getenv("RUNNER_NTS_COARSE_URLS")
 	}
-	var urls []string
+	var urls []coarseURL
 	for _, u := range strings.Split(list, ",") {
 		if u = strings.TrimSpace(u); u == "" {
 			continue
 		}
+		c := coarseURL{named: u, url: u}
+		c.entry, c.ok = ntscatalog.Builtin.CoarseFor(u)
 		if strings.Contains(u, "{region}") {
 			if region == "" {
 				return nil, fmt.Errorf("nts clock: coarse URL %s names {region}, and the platform has no region option", u)
 			}
-			u = strings.ReplaceAll(u, "{region}", region)
+			c.url = strings.ReplaceAll(u, "{region}", region)
 		}
-		urls = append(urls, u)
+		urls = append(urls, c)
 	}
 	if len(urls) < 3 {
 		return nil, errors.New("nts clock: -nts-coarse-urls (RUNNER_NTS_COARSE_URLS) needs 3 or more https URLs for the coarse check")

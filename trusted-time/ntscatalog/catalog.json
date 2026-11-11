@@ -208,5 +208,50 @@
       "regions": ["na", "sa"],
       "note": "Global Entry Systems, Colorado, stratum 2 with a GPS/PPS stratum 1 upstream. Terms not readable (site returns 403), so ask. 16/16 from all six non-EU GCP regions on 2026-11-10; 125 ms from Tokyo, 172 ms from Sydney, 187 ms from Singapore, so not apac by the 180 ms rule. Not measured from Europe."
     }
+  ],
+  "coarse": [
+    {
+      "id": "aws-kms",
+      "url": "https://kms.{region}.amazonaws.com/",
+      "cloud_roots": "aws",
+      "note": "Nitro image. Chain seen 2026-11-11: Amazon Root CA 1 (cross-signed by Starfield Services Root G2)."
+    },
+    {
+      "id": "aws-sts",
+      "url": "https://sts.{region}.amazonaws.com/",
+      "cloud_roots": "aws",
+      "note": "Nitro image. Chain seen 2026-11-11: Amazon Root CA 1."
+    },
+    {
+      "id": "gcp-kms",
+      "url": "https://cloudkms.googleapis.com/",
+      "cloud_roots": "google",
+      "note": "Confidential Space image. Chain seen 2026-11-11: GTS Root R4."
+    },
+    {
+      "id": "gcp-sts",
+      "url": "https://sts.googleapis.com/",
+      "cloud_roots": "google",
+      "note": "Confidential Space image. Chain seen 2026-11-11: GTS Root R4."
+    },
+    {
+      "id": "azure-login",
+      "url": "https://login.microsoftonline.com/",
+      "cloud_roots": "azure",
+      "note": "ACI image. Chain seen 2026-11-11: Microsoft TLS RSA Root G2 under DigiCert Global Root G2."
+    },
+    {
+      "id": "azure-management",
+      "url": "https://management.azure.com/",
+      "cloud_roots": "azure",
+      "note": "ACI image. Chain seen 2026-11-11: Microsoft TLS RSA Root G2 under DigiCert Global Root G2."
+    },
+    {
+      "id": "cloudflare-www",
+      "url": "https://www.cloudflare.com/",
+      "roots": ["isrg-root-x1.pem", "isrg-root-x2.pem", "sslcom-root-ecc.pem"],
+      "cloud_roots": "google",
+      "note": "Every image. Chain seen 2026-11-11: ISRG Root X1. Cloudflare's edge certificates also come from Google Trust Services and SSL.com, so their roots are here too."
+    }
   ]
 }

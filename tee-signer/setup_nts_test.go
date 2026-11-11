@@ -20,15 +20,22 @@ func TestNTSCoarseURLsRegion(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{"https://kms.eu-central-1.amazonaws.com/", "https://sts.eu-central-1.amazonaws.com/", "https://www.cloudflare.com/"}
-	if !slices.Equal(urls, want) {
-		t.Fatalf("urls %v", urls)
+	var got []string
+	for _, u := range urls {
+		got = append(got, u.url)
+		if !u.ok {
+			t.Errorf("%s: no catalog entry", u.named)
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("urls %v", got)
 	}
 	if _, err := ntsCoarseURLs(""); err == nil || !strings.Contains(err.Error(), "{region}") {
 		t.Fatalf("no region: %v", err)
 	}
 	// URLs without the placeholder stay as they are (Azure, GCP, old images).
 	t.Setenv("RUNNER_NTS_COARSE_URLS", "https://a.example/,https://b.example/,https://c.example/")
-	if urls, err := ntsCoarseURLs("eu-central-1"); err != nil || urls[0] != "https://a.example/" {
+	if urls, err := ntsCoarseURLs("eu-central-1"); err != nil || urls[0].url != "https://a.example/" || urls[0].ok {
 		t.Fatalf("plain urls %v %v", urls, err)
 	}
 }

@@ -12,6 +12,10 @@ import (
 	"github.com/lidofinance/tee-signer/trusted-time/clock"
 )
 
+// coarseTestURLs: a debug build also takes coarse URLs outside the
+// catalog (the tests' HTTPS-date servers), with the platform's roots.
+var coarseTestURLs = true
+
 // ntsServers: in a debug build (the tests/e2e tests), two variables replace
 // the public operators with test servers (trusted-time/nts/ntstest):
 //

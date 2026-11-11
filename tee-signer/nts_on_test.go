@@ -32,6 +32,7 @@ func TestNTSClockCheckContactsServersAtOnce(t *testing.T) {
 		pool.AddCert(s.Certificate())
 	}
 	t.Setenv("RUNNER_NTS_COARSE_URLS", strings.Join(urls, ","))
+	allowCoarseTestURLs(t)
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}}
 	start := time.Now()
 	for run := range 5 {
