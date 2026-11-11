@@ -744,17 +744,19 @@ that TLS session (AES-SIV-CMAC-256). It can send unauthenticated
 Kiss-o'-Death packets with our unique identifier, which may disable a server
 (RFC 8915 section 5.7 allows the client to act on them). A disabled
 active's slots go to fallbacks among the other servers; with too few
-servers answering, signing stops: fail closed. The host also runs
-the enclave's CPU counter, the clock's local time (`CLOCK_MONOTONIC_RAW`);
-the drift check against a quorum 17 minutes old refuses a rate beyond
-500 ppm. While it blocks the servers, a counter it runs fast moves the time
-ahead by less than the 90 s sample age limit, see `trusted-time/docs/nts.md`.
+servers answering, signing stops: fail closed. The parent does not run
+the enclave's CPU counter, the clock's local time (`CLOCK_MONOTONIC_RAW`):
+the enclave's CPUs are taken away from the parent, and the Nitro
+hypervisor, which AWS runs, keeps the counter. So the parent cannot move
+the time ahead by running the counter fast; the lead stays within the
+bound (`trusted-time/docs/nts.md`). The drift check against a quorum
+17 minutes old still refuses a rate beyond 500 ppm.
 
 With `time_policy` protocol ntp (plain NTP, no NTS) none of this holds: the
 parent sees every request and can forge every answer. The time is then
 only as good as the coarse check, up to about 46 s behind and 31 s ahead
-of real time, 196 s ahead with a counter it runs fast
-(`trusted-time/docs/nts.md`, "Plain NTP").
+of real time (`trusted-time/docs/nts.md`, "Plain NTP"); the 196 s case
+there needs a counter the host can run fast, which the parent cannot.
 
 ### Security group
 

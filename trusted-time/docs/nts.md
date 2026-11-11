@@ -159,8 +159,9 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   samples, so its time is real time at its samples plus the counter's
   advance since then, and `Now` stops at the age limit. (With plain NTP
   the samples are the host's, and the coarse window is the only limit; see
-  "Plain NTP".) Nitro is not affected: the host cannot set
-  `CLOCK_MONOTONIC_RAW` there. The restart floor's one epoch (384 s on
+  "Plain NTP".) Nitro is not affected: the parent cannot set
+  `CLOCK_MONOTONIC_RAW` there; the Nitro hypervisor, which AWS runs, keeps
+  the enclave's counter. The restart floor's one epoch (384 s on
   mainnet) covers 90 s (signer-core/README.md, "Restart floor"). The other direction has no such limit: a
   host that runs the clock slow makes the samples look young and the polls
   rare, so the time served falls behind real time without a bound until
