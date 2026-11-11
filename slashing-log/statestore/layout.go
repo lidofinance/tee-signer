@@ -368,6 +368,7 @@ func (s *Store) landed(ctx context.Context, name string, obj []byte) bool {
 				return err
 			}
 			if !bytes.Equal(b, obj) {
+				ok = false // another object under the name, in any order
 				return nil
 			}
 			ok = true
