@@ -19,7 +19,9 @@ pub fn request(random: &[u8; PLAIN_RANDOM_LEN]) -> ([u8; ntp::HEADER_LEN], Plain
 }
 
 /// Checks the response to `req` and measures it, as `Association::verify`
-/// does for NTS. The sample has no cookie counts.
+/// does for NTS. The sample has no cookie counts. An `E_NTP` refusal leaves
+/// `req` open; an `E_SAMPLE` one does not: the header passed, so `req` is
+/// already answered, and the caller's query ends there.
 pub fn verify(
     req: &mut PlainRequest,
     packet: &[u8],

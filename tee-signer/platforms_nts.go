@@ -85,7 +85,7 @@ var (
 // plainNTPWarning is logged at start when the clock runs plain NTP. The
 // numbers are worked out in trusted-time/docs/nts.md, "Plain NTP".
 const plainNTPWarning = "plain NTP: the host can forge every answer; the time is only as good as the coarse check " +
-	"(up to about 46 s behind and 31 s ahead of real time, 196 s ahead where the host sets the local counter)"
+	"(up to about 46 s behind and 31 s ahead of real time; where the host sets the local counter, 196 s ahead and behind without a limit)"
 
 // clockProtocol is -clock-protocol, or RUNNER_CLOCK_PROTOCOL: nts (also
 // when neither is set) or ntp. Any other value is an error. The variable

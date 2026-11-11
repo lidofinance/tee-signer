@@ -605,11 +605,18 @@ one-second resolution), and the coarse clock is itself off real time:
   check catches it: the host makes all the samples. That is 75 + 31 + 90,
   about 196 s ahead of real time. Behind has no limit there, as for NTS.
 
-196 s is under the restart floor's one epoch (384 s on mainnet). The host
-can move the time anywhere in this range, slowly enough that the drift
+The restart floor (signer-core/README.md, "Restart floor") needs the lead
+before a restart plus the lag after it under one epoch, and with plain NTP
+the host sets both: up to about 196 s ahead before a restart and 46 s
+behind at the first quorum after it, a swing of about 242 s. With a counter
+the host cannot set it is about 31 + 46 = 77 s. Both are under the 384 s
+epoch of mainnet and Hoodi. The host can move the time anywhere in this
+range, slowly enough that the drift
 check, which compares quorums of its own answers, sees nothing. HEALTH's
-`bound_now_ms` does not bound that error. Against an honest host and path,
-plain NTP is as precise as NTS.
+`bound_now_ms` does not bound that error. Plain NTP also trusts DNS:
+whoever answers DNS for an NTP name (the runner's resolver on Azure and
+GCP, the Nitro parent's relay) receives the request and can forge the
+answer. Against an honest host and path, plain NTP is as precise as NTS.
 
 In a release build only the measured `-clock-protocol` flag picks the
 protocol: `RUNNER_CLOCK_PROTOCOL` stops the runner at start, except on the
@@ -637,8 +644,8 @@ How the runner marks it, so no reader takes it for NTS:
   the `nts: status` line `protocol=ntp`;
 - at start the runner logs a WARN line: "plain NTP: the host can forge
   every answer; the time is only as good as the coarse check (up to about
-  46 s behind and 31 s ahead of real time, 196 s ahead where the host sets
-  the local counter)".
+  46 s behind and 31 s ahead of real time; where the host sets the local
+  counter, 196 s ahead and behind without a limit)".
 
 The clock still counts as trusted (`Trusted()`): the runner starts on a
 cloud platform with it, because the coarse check bounds the time.

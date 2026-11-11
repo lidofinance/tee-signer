@@ -50,7 +50,10 @@ func QueryPlain(ctx context.Context, addr string, pivot time.Time, dial DialFunc
 // comes back to verify, with the Monotonic times before the send (t1) and
 // after the receipt (t4). It reads on past a packet verify refuses with
 // CodeNTP, until one is accepted, a Kiss-o'-Death or another error comes,
-// or ctx ends.
+// or ctx ends. A packet whose header passes but whose sample fails
+// (CodeSample) ends the query: the library marked the request answered
+// first. With plain NTP anyone who sees the request can send such a packet
+// and so spoil one query; it costs that sample, not a wrong time.
 func exchange(ctx context.Context, addr string, packet []byte, verify func(p []byte, t1, t4 int64) (Sample, error), dial DialFunc) (Sample, error) {
 	var conn net.Conn
 	var err error

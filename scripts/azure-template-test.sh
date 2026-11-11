@@ -55,6 +55,8 @@ tpl() { echo "$out_az/signer-$1/template.json"; }
 for n in 1 2 3; do
   dep bash "$DEPLOY" render "$n" >/dev/null 2>"$work/render.log" || { cat "$work/render.log"; bad "render $n"; }
 done
+grep -q 'signer 3: clock protocol nts' "$work/render.log" && ok "render: states the clock protocol (nts)" ||
+  bad "render: no clock protocol line: $(cat "$work/render.log")"
 t="$(tpl 1)"
 c='.resources[0].properties.containers'
 if jq -e "$c | length == 1 and .[0].name == \"runner\"" "$t" >/dev/null; then ok "render: the runner alone"; else bad "render: containers $(jq -c "[${c}[].name]" "$t")"; fi

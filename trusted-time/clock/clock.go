@@ -45,7 +45,8 @@ const (
 	// on the path, can forge every answer. Against them the time is only as
 	// good as the coarse check: -30 s to +31 s against the coarse clock with
 	// the default MaxCoarseDiff, which is itself off real time (about 46 s
-	// behind to 196 s ahead in all, trusted-time/docs/nts.md "Plain NTP").
+	// behind to 196 s ahead in all; behind without a limit where the host
+	// sets the local counter; trusted-time/docs/nts.md "Plain NTP").
 	// Plain NTP adds precision only against an honest host.
 	ProtocolNTP Protocol = "ntp"
 )

@@ -698,6 +698,10 @@ impl PlainRequest {
     ///
     /// A refused response changes nothing, so the real response can still
     /// come. After one is accepted every further one is refused as a replay.
+    /// Accepting marks the request answered before the caller measures it
+    /// (`sample::measure`), so a good header with a bad sample (a zero
+    /// reference timestamp, a negative delay, a bound over MAXDIST) ends the
+    /// request: a forger who sees the request can use one to spoil it.
     pub fn verify_response(&mut self, packet: &[u8]) -> Result<Response, NtpError> {
         if self.answered {
             return Err(NtpError::AlreadyAnswered);

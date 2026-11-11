@@ -156,8 +156,9 @@ type ClockNTS struct {
 	// NTP. Plain NTP is not authenticated: the host can forge every answer,
 	// so against a hostile host the time is only as good as the coarse
 	// check, whatever BoundNowMS says: up to about 46 s behind and 31 s
-	// ahead of real time, 196 s ahead where the host sets the local counter
-	// (trusted-time/docs/nts.md, "Plain NTP"). Missing from older runners,
+	// ahead of real time; where the host sets the local counter, 196 s ahead
+	// and behind without a limit (trusted-time/docs/nts.md, "Plain NTP").
+	// Missing from older runners,
 	// which run NTS only.
 	Protocol string `json:"protocol,omitempty"`
 	// Quorum is true when the clock answers: a quorum that passed every
