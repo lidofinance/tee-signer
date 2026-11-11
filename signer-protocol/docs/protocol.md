@@ -175,6 +175,11 @@ N. A slashing refusal has the core's code and `detail`, the message kind
 such as `attestation`, at or below the floor as above it. No slashing
 refusal names a floor.
 
+A vote at or below the floor also gets a slashing code when another vote
+of the same key is in the core at that moment, for example a vote and its
+retry sent together: the runner then refuses against the vote in flight,
+and neither is signed. Through the gateway both answers are 412.
+
 `FLOOR_UNPROVEN` is common right after a restart: the interchange maxima
 of an import are not kept across a restart, the mark log holds no mark
 per key, and a persisted mark covers its headroom. A key's double vote of
