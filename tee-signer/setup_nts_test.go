@@ -41,10 +41,32 @@ func TestNTSCoarseURLsRegion(t *testing.T) {
 	}
 	// One URL named twice would count twice in the coarse quorum.
 	t.Setenv("RUNNER_NTS_COARSE_URLS", "https://www.cloudflare.com/,https://www.cloudflare.com/,https://www.cloudflare.com/")
-	if _, err := ntsCoarseURLs("eu-central-1"); err == nil || !strings.Contains(err.Error(), "twice") {
+	if _, err := ntsCoarseURLs("eu-central-1"); err == nil || !strings.Contains(err.Error(), "name one host") {
 		t.Fatalf("a URL three times: %v", err)
 	}
-	t.Setenv("RUNNER_NTS_COARSE_URLS", "https://kms.{region}.amazonaws.com/,https://sts.{region}.amazonaws.com/,https://www.cloudflare.com/")
+	// So would one host under another path, case, port spelling or region
+	// form: hosts are compared, not strings.
+	for _, list := range []string{
+		"https://www.cloudflare.com/,https://www.cloudflare.com,https://a.example/",
+		"https://www.cloudflare.com/,https://www.cloudflare.com/x,https://a.example/",
+		"https://www.cloudflare.com/,https://WWW.Cloudflare.com./,https://a.example/",
+		"https://www.cloudflare.com/,https://www.cloudflare.com:443/,https://a.example/",
+		"https://kms.{region}.amazonaws.com/,https://kms.eu-central-1.amazonaws.com/,https://a.example/",
+	} {
+		t.Setenv("RUNNER_NTS_COARSE_URLS", list)
+		if _, err := ntsCoarseURLs("eu-central-1"); err == nil || !strings.Contains(err.Error(), "name one host") {
+			t.Errorf("%s: %v", list, err)
+		}
+	}
+	// Another port is another source (test servers on one address).
+	t.Setenv("RUNNER_NTS_COARSE_URLS", "https://127.0.0.1:1/,https://127.0.0.1:2/,https://127.0.0.1:3/")
+	if _, err := ntsCoarseURLs(""); err != nil {
+		t.Fatalf("three ports: %v", err)
+	}
+	t.Setenv("RUNNER_NTS_COARSE_URLS", "http://a.example/,https://b.example/,https://c.example/")
+	if _, err := ntsCoarseURLs(""); err == nil || !strings.Contains(err.Error(), "https") {
+		t.Fatalf("an http URL: %v", err)
+	}
 	// URLs without the placeholder stay as they are (Azure, GCP, old images).
 	t.Setenv("RUNNER_NTS_COARSE_URLS", "https://a.example/,https://b.example/,https://c.example/")
 	if urls, err := ntsCoarseURLs("eu-central-1"); err != nil || urls[0].url != "https://a.example/" || urls[0].ok {

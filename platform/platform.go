@@ -169,10 +169,14 @@ type Platform struct {
 	// NTSScheduleSeed seeds the NTS clock's shift schedule
 	// (trusted-time/clock NTS.ScheduleSeed): ScheduleSeed of the sealing
 	// key, so it is fixed per signer, the same after a restart, and unknown
-	// to the host, which then cannot plan which time servers are active
-	// when. Whoever knows the sealing key knows it (see SealingKeyStored);
-	// it only orders the schedule. nil (dev): every server is active on the
-	// 60 s grid, with a random phase.
+	// to the host, which then cannot compute the order ahead. It does not
+	// hide the order from a host that watches: the traffic shows it within
+	// one cycle, and every start begins at the same window, so a host can
+	// keep the first window active by restarting the signer. A host that
+	// drops answers chooses the quorum's servers anyway. Whoever knows the
+	// sealing key knows the seed (see SealingKeyStored); it only orders the
+	// schedule. nil (dev): every server is active on the 60 s grid, with a
+	// random phase. Empty is refused.
 	NTSScheduleSeed []byte
 }
 

@@ -444,6 +444,14 @@ func TestQuorumBindingMajority(t *testing.T) {
 	}
 }
 
+// The catalog keeps copies of the quorum's limits (it builds without cgo);
+// they must be the core's.
+func TestCatalogLimitsMatchTheCore(t *testing.T) {
+	if ntscatalog.MaxLabel != MaxOperatorLen || ntscatalog.MaxServers != MaxServers {
+		t.Fatalf("catalog MaxLabel %d MaxServers %d, core %d and %d", ntscatalog.MaxLabel, ntscatalog.MaxServers, MaxOperatorLen, MaxServers)
+	}
+}
+
 func TestPinnedRoots(t *testing.T) {
 	for _, s := range PublicServers {
 		if _, err := RootPool(s.Roots); err != nil {

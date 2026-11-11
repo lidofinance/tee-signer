@@ -29,13 +29,18 @@ const (
 // (trusted-time/ntscatalog Endpoints) on their fixed catalog ports. The
 // parent routes all of them, since it cannot see which ones the enclave's
 // command chose (-nts-terms-confirmed); the enclave dials only its own
-// choice. A port belongs to its catalog host for good.
+// choice. A port belongs to its catalog host for good. The routes of hosts
+// outside the default set (ntscatalog Dialed) are Optional.
 var NitroNTSKE = nitroNTSKE()
 
 func nitroNTSKE() []Route {
+	def := map[string]bool{}
+	for _, e := range ntscatalog.Builtin.Dialed() {
+		def[e.Host] = true
+	}
 	var out []Route
 	for _, e := range ntscatalog.Builtin.Endpoints() {
-		out = append(out, Route{Port: e.NitroPort, Host: e.Host, HostPort: 4460})
+		out = append(out, Route{Port: e.NitroPort, Host: e.Host, HostPort: 4460, Optional: !def[e.Host]})
 	}
 	return out
 }
@@ -49,6 +54,10 @@ type Route struct {
 	Port     uint32
 	Host     string
 	HostPort int
+	// Optional: a runner of the default set does not dial it (an NTS-KE
+	// host only a -nts-terms-confirmed deployment names). The parent goes
+	// on if its proxy does not start.
+	Optional bool
 }
 
 func (r Route) hostPort() string { return r.Host + ":" + strconv.Itoa(r.HostPort) }
@@ -84,7 +93,8 @@ func RouteOption(routes []Route) string {
 }
 
 // NitroProxyLines are the lines the parent's start script reads to start
-// one vsock-proxy per route: "PORT HOST HOSTPORT".
+// one vsock-proxy per route: "PORT HOST HOSTPORT", and " optional" after
+// an Optional route.
 func NitroProxyLines(s *Setup) (string, error) {
 	if s.Wire.Platform.Platform != setupwire.PlatformNitro {
 		return "", fmt.Errorf("setup is for %s, not nitro", s.Wire.Platform.Platform)
@@ -92,7 +102,11 @@ func NitroProxyLines(s *Setup) (string, error) {
 	routes := NitroRoutes(&s.Wire.Platform)
 	var b strings.Builder
 	for _, r := range routes {
-		fmt.Fprintf(&b, "%d %s %d\n", r.Port, r.Host, r.HostPort)
+		fmt.Fprintf(&b, "%d %s %d", r.Port, r.Host, r.HostPort)
+		if r.Optional {
+			b.WriteString(" optional")
+		}
+		b.WriteString("\n")
 	}
 	return b.String(), nil
 }

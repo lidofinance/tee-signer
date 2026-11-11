@@ -204,12 +204,21 @@ func TestNTSMaxBoundCap(t *testing.T) {
 // active below) and refuses fewer than 4 servers.
 func TestNTSScheduleNeedsEnoughServers(t *testing.T) {
 	seed := []byte("seed")
-	for n, want := range map[int]bool{0: false, 3: false, ntsMinServers: true, 6: true, ntsShiftMinServers: true, 12: true} {
-		c := &clock.NTS{Servers: make([]clock.NTSServer, n)}
+	// A slice, not a map: the constants may come to equal a literal.
+	for _, tc := range []struct {
+		n    int
+		want bool
+	}{{0, false}, {3, false}, {ntsMinServers, true}, {6, true}, {ntsShiftMinServers, true}, {12, true}} {
+		c := &clock.NTS{Servers: make([]clock.NTSServer, tc.n)}
 		err := ntsSchedule(c, seed)
-		if (err == nil) != want || c.Shifts != want || (want && string(c.ScheduleSeed) != "seed") || (!want && c.ScheduleSeed != nil) {
-			t.Errorf("%d servers: err %v, shifts %v, seed %q", n, err, c.Shifts, c.ScheduleSeed)
+		if (err == nil) != tc.want || c.Shifts != tc.want || (tc.want && string(c.ScheduleSeed) != "seed") || (!tc.want && c.ScheduleSeed != nil) {
+			t.Errorf("%d servers: err %v, shifts %v, seed %q", tc.n, err, c.Shifts, c.ScheduleSeed)
 		}
+	}
+	// An empty seed would give every signer the same order.
+	c := &clock.NTS{Servers: make([]clock.NTSServer, ntsMinServers)}
+	if err := ntsSchedule(c, []byte{}); err == nil || c.Shifts {
+		t.Errorf("empty seed: err %v, shifts %v", err, c.Shifts)
 	}
 }
 
