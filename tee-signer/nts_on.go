@@ -63,7 +63,8 @@ func ntsClockCheck() int {
 // ntsClockCheckWith is ntsClockCheck with the coarse client and the dialer
 // as parameters, for the test.
 func ntsClockCheckWith(client *http.Client, dial nts.DialFunc, log *slog.Logger) int {
-	protocol, err := clockProtocol()
+	// The pre-flight signs nothing, so it takes the variable in any build.
+	protocol, err := clockProtocol(true)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "runner:", err)
 		return 2

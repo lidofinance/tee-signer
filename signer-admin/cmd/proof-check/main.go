@@ -563,11 +563,19 @@ func clockOf(r *result, h *cloud.Health, t0 time.Time, rtt time.Duration) {
 func round1(v float64) float64 { return math.Round(v*10) / 10 }
 
 // clockLine is the clock part of the log line: the NTS figures when the
-// signer has them, and the figure against this machine's clock.
+// signer has them, and the figure against this machine's clock. The
+// protocol comes first: a plain NTP clock (protocol=ntp-unauthenticated)
+// has a bound that holds only against an honest host.
 func clockLine(r result) string {
 	s := ""
 	if n := r.NTS; n != nil {
-		s = fmt.Sprintf("nts_bound=%.1fms nts_offset_from_tee_host=%+.1fms members=%d ", n.BoundNowMS, n.OffsetFromHostMS, len(n.Members))
+		p := "nts"
+		if n.Protocol == "ntp" {
+			p = "ntp-unauthenticated"
+		} else if n.Protocol != "" {
+			p = n.Protocol
+		}
+		s = fmt.Sprintf("protocol=%s nts_bound=%.1fms nts_offset_from_tee_host=%+.1fms members=%d ", p, n.BoundNowMS, n.OffsetFromHostMS, len(n.Members))
 	}
 	if r.ClockUnix == 0 {
 		return s + "signer_clock=none"

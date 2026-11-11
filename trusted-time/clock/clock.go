@@ -43,8 +43,10 @@ const (
 	// ProtocolNTP is plain NTP (RFC 5905) without NTS: no NTS-KE, no
 	// cookies, and nothing authenticates the answers. The host, or anyone
 	// on the path, can forge every answer. Against them the time is only as
-	// good as the coarse check (about -30 s to +31 s with the default
-	// MaxCoarseDiff); plain NTP adds precision only against an honest host.
+	// good as the coarse check: -30 s to +31 s against the coarse clock with
+	// the default MaxCoarseDiff, which is itself off real time (about 46 s
+	// behind to 196 s ahead in all, trusted-time/docs/nts.md "Plain NTP").
+	// Plain NTP adds precision only against an honest host.
 	ProtocolNTP Protocol = "ntp"
 )
 

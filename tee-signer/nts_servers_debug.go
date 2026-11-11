@@ -12,6 +12,10 @@ import (
 	"github.com/lidofinance/tee-signer/trusted-time/clock"
 )
 
+// clockProtocolEnvAllowed: a debug build (the tests) takes
+// RUNNER_CLOCK_PROTOCOL on every platform.
+const clockProtocolEnvAllowed = true
+
 // coarseTestURLs: a debug build also takes coarse URLs outside the
 // catalog (the tests' HTTPS-date servers), with the platform's roots.
 var coarseTestURLs = true

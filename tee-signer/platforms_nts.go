@@ -29,7 +29,8 @@ package main
 //	-clock-protocol nts|ntp    RUNNER_CLOCK_PROTOCOL=ntp     how the clock asks its servers: nts (the default) or
 //	                                                         plain NTP, unauthenticated: the host can forge every
 //	                                                         answer, and the time is only as good as the coarse check
-//	                                                         (about -30 s to +31 s); trusted-time/docs/nts.md
+//	                                                         (trusted-time/docs/nts.md, "Plain NTP"); the variable
+//	                                                         only on the dev platform and in debug builds
 //	                           RUNNER_NTS_STATUS_EVERY=60s   period of the "nts: status" log line
 //
 // -nts-clock turns the network clock on; -clock-protocol picks the protocol
@@ -81,15 +82,26 @@ var (
 	clockProtoFlag   = flag.String("clock-protocol", "", "protocol of the -nts-clock servers: nts (default) or ntp (plain NTP, unauthenticated: only as good as the coarse check); default RUNNER_CLOCK_PROTOCOL")
 )
 
-// plainNTPWarning is logged at start when the clock runs plain NTP.
-const plainNTPWarning = "plain NTP: the host can forge every answer; the time is only as good as the coarse check (about -30 s to +31 s)"
+// plainNTPWarning is logged at start when the clock runs plain NTP. The
+// numbers are worked out in trusted-time/docs/nts.md, "Plain NTP".
+const plainNTPWarning = "plain NTP: the host can forge every answer; the time is only as good as the coarse check " +
+	"(up to about 46 s behind and 31 s ahead of real time, 196 s ahead where the host sets the local counter)"
 
 // clockProtocol is -clock-protocol, or RUNNER_CLOCK_PROTOCOL: nts (also
-// when neither is set) or ntp. Any other value is an error.
-func clockProtocol() (clock.Protocol, error) {
+// when neither is set) or ntp. Any other value is an error. The variable
+// counts only with envOK (the dev platform, the -nts-clock-check
+// pre-flight) or in a debug build (clockProtocolEnvAllowed): a release
+// runner on a cloud takes the protocol from its measured command alone, so
+// the host cannot switch it to plain NTP.
+func clockProtocol(envOK bool) (clock.Protocol, error) {
 	v := *clockProtoFlag
 	if v == "" {
-		v = os.Getenv("RUNNER_CLOCK_PROTOCOL")
+		if e := os.Getenv("RUNNER_CLOCK_PROTOCOL"); e != "" {
+			if !envOK && !clockProtocolEnvAllowed {
+				return "", fmt.Errorf("RUNNER_CLOCK_PROTOCOL=%q: a release build takes the clock protocol only from -clock-protocol; set the flag in the image command", e)
+			}
+			v = e
+		}
 	}
 	p, err := clock.ParseProtocol(v)
 	if err != nil {
@@ -130,7 +142,7 @@ const ntsMaxSampleBoundCap = time.Second
 
 func init() {
 	for name, f := range platforms {
-		platforms[name] = ntsSwitch(f)
+		platforms[name] = ntsSwitch(name, f)
 	}
 }
 
@@ -139,16 +151,18 @@ func ntsOn() bool { return *ntsClockFlag || os.Getenv("RUNNER_NTS_CLOCK") == "1"
 
 // ntsSwitch runs f, and adds the NTS clock when it is on. The flags are
 // parsed by then: main calls the platform after flag.Parse. A bad
-// -clock-protocol is refused also with the clock off.
-func ntsSwitch(f platformFunc) platformFunc {
+// -clock-protocol is refused also with the clock off. name is the
+// platform's: only dev takes RUNNER_CLOCK_PROTOCOL in a release build.
+func ntsSwitch(name string, f platformFunc) platformFunc {
 	return func(o platform.Options) (*platform.Platform, error) {
-		if _, err := clockProtocol(); err != nil {
+		protocol, err := clockProtocol(name == "dev")
+		if err != nil {
 			return nil, err
 		}
 		if !ntsOn() {
 			return f(o)
 		}
-		return withNTSClock(f)(o)
+		return withNTSClock(f, protocol)(o)
 	}
 }
 
@@ -175,7 +189,7 @@ func envDuration(name string, def time.Duration) (time.Duration, error) {
 	return d, nil
 }
 
-func withNTSClock(f platformFunc) platformFunc {
+func withNTSClock(f platformFunc, protocol clock.Protocol) platformFunc {
 	return func(o platform.Options) (*platform.Platform, error) {
 		p, err := f(o)
 		if err != nil {
@@ -186,7 +200,7 @@ func withNTSClock(f platformFunc) platformFunc {
 		if p.Dial != nil {
 			dial = p.Dial
 		}
-		n, err := startNTSClock(context.Background(), p.HTTPClient, dial, o.Param("region", ""), p.NTSScheduleSeed, log)
+		n, err := startNTSClock(context.Background(), p.HTTPClient, dial, o.Param("region", ""), p.NTSScheduleSeed, protocol, log)
 		if err != nil {
 			// main never gets this platform, so it cannot report the
 			// error to the host (Nitro: the enclave has no console).
@@ -431,17 +445,13 @@ func ntsEnoughServers(n *clock.NTS) error {
 // the wait is an error: the runner does not start without the clock. The
 // clock runs the 60 s schedule (ntsSchedule) with seed
 // (platform.Platform.NTSScheduleSeed; nil: every server active, with a
-// random phase).
-func startNTSClock(ctx context.Context, client *http.Client, dial nts.DialFunc, region string, seed []byte, log *slog.Logger) (*clock.NTS, error) {
+// random phase). protocol is clockProtocol's.
+func startNTSClock(ctx context.Context, client *http.Client, dial nts.DialFunc, region string, seed []byte, protocol clock.Protocol, log *slog.Logger) (*clock.NTS, error) {
 	wait, err := ntsDuration(*ntsWaitFlag, "RUNNER_NTS_WAIT", 90*time.Second)
 	if err != nil {
 		return nil, err
 	}
 	every, err := envDuration("RUNNER_NTS_STATUS_EVERY", time.Minute)
-	if err != nil {
-		return nil, err
-	}
-	protocol, err := clockProtocol()
 	if err != nil {
 		return nil, err
 	}

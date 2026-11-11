@@ -28,12 +28,12 @@ import (
 func TestNTSClockWrapperNeedsCoarseURLs(t *testing.T) {
 	base := func(platform.Options) (*platform.Platform, error) { return &platform.Platform{}, nil }
 	t.Setenv("RUNNER_NTS_COARSE_URLS", "https://a.example/,https://b.example/")
-	if _, err := withNTSClock(base)(platform.Options{}); err == nil || !strings.Contains(err.Error(), "3 or more") {
+	if _, err := withNTSClock(base, clock.ProtocolNTS)(platform.Options{}); err == nil || !strings.Contains(err.Error(), "3 or more") {
 		t.Fatalf("two coarse URLs: %v", err)
 	}
 	t.Setenv("RUNNER_NTS_COARSE_URLS", "https://a.example/,https://b.example/,https://c.example/")
 	t.Setenv("RUNNER_NTS_WAIT", "soon")
-	if _, err := withNTSClock(base)(platform.Options{}); err == nil || !strings.Contains(err.Error(), "RUNNER_NTS_WAIT") {
+	if _, err := withNTSClock(base, clock.ProtocolNTS)(platform.Options{}); err == nil || !strings.Contains(err.Error(), "RUNNER_NTS_WAIT") {
 		t.Fatalf("bad wait: %v", err)
 	}
 	t.Setenv("RUNNER_NTS_WAIT", "")
@@ -81,7 +81,7 @@ func TestNTSSwitch(t *testing.T) {
 	sys := clock.System{}
 	base := func(platform.Options) (*platform.Platform, error) { return &platform.Platform{Clock: sys}, nil }
 	t.Setenv("RUNNER_NTS_CLOCK", "")
-	p, err := ntsSwitch(base)(platform.Options{})
+	p, err := ntsSwitch("dev", base)(platform.Options{})
 	if err != nil || p.Clock != sys {
 		t.Fatalf("off: %v %T", err, p.Clock)
 	}
@@ -92,7 +92,7 @@ func TestNTSSwitch(t *testing.T) {
 		func() { t.Setenv("RUNNER_NTS_CLOCK", ""); *ntsClockFlag = true },
 	} {
 		on()
-		if _, err := ntsSwitch(base)(platform.Options{}); err == nil || !strings.Contains(err.Error(), "-nts-coarse-urls") {
+		if _, err := ntsSwitch("dev", base)(platform.Options{}); err == nil || !strings.Contains(err.Error(), "-nts-coarse-urls") {
 			t.Fatalf("on: %v", err)
 		}
 	}
@@ -148,7 +148,7 @@ func TestNTSClockStartFailsWithoutQuorum(t *testing.T) {
 	t.Setenv("RUNNER_NTS_COARSE_URLS", "https://127.0.0.1:1/,https://127.0.0.1:2/,https://127.0.0.1:3/")
 	t.Setenv("RUNNER_NTS_WAIT", "1s")
 	start := time.Now()
-	n, err := startNTSClock(context.Background(), &http.Client{Timeout: time.Second}, nil, "", nil, slog.New(slog.DiscardHandler))
+	n, err := startNTSClock(context.Background(), &http.Client{Timeout: time.Second}, nil, "", nil, clock.ProtocolNTS, slog.New(slog.DiscardHandler))
 	if err == nil || !strings.Contains(err.Error(), "no quorum") {
 		t.Fatalf("started without a quorum: %v %v", n, err)
 	}
@@ -168,7 +168,7 @@ func TestNTSClockStartFailureIsReported(t *testing.T) {
 		return &platform.Platform{HTTPClient: &http.Client{Timeout: time.Second},
 			ReportExit: func(s string) { reported = s }, Close: func() error { closed = true; return nil }}, nil
 	}
-	if _, err := withNTSClock(base)(platform.Options{}); err == nil {
+	if _, err := withNTSClock(base, clock.ProtocolNTS)(platform.Options{}); err == nil {
 		t.Fatal("started without a quorum")
 	}
 	if !strings.Contains(reported, "no quorum") || !closed {
@@ -264,7 +264,7 @@ func TestClockProtocolFlag(t *testing.T) {
 	} {
 		*clockProtoFlag = tc.flag
 		t.Setenv("RUNNER_CLOCK_PROTOCOL", tc.env)
-		if p, err := clockProtocol(); err != nil || p != tc.want {
+		if p, err := clockProtocol(true); err != nil || p != tc.want {
 			t.Errorf("flag %q env %q: %v %v, want %v", tc.flag, tc.env, p, err, tc.want)
 		}
 	}
@@ -274,10 +274,10 @@ func TestClockProtocolFlag(t *testing.T) {
 	for _, bad := range []struct{ flag, env string }{{"NTP", ""}, {"sntp", ""}, {"", "ntp4"}} {
 		*clockProtoFlag = bad.flag
 		t.Setenv("RUNNER_CLOCK_PROTOCOL", bad.env)
-		if _, err := clockProtocol(); err == nil || !strings.Contains(err.Error(), "-clock-protocol") {
+		if _, err := clockProtocol(true); err == nil || !strings.Contains(err.Error(), "-clock-protocol") {
 			t.Errorf("%+v: %v", bad, err)
 		}
-		if _, err := ntsSwitch(base)(platform.Options{}); err == nil || !strings.Contains(err.Error(), "want nts or ntp") {
+		if _, err := ntsSwitch("dev", base)(platform.Options{}); err == nil || !strings.Contains(err.Error(), "want nts or ntp") {
 			t.Errorf("%+v with the clock off: %v", bad, err)
 		}
 	}

@@ -569,7 +569,8 @@ cloud builds link `trusted-time/nts` and the dev builds do not, and
 with plain NTP (RFC 5905) in place of NTS. `-nts-clock` still turns the
 clock on; `-clock-protocol` only picks how it asks the servers. The default
 is `nts`, and any other value stops the runner at start, also with the
-clock off. `-nts-clock-check` reads `RUNNER_CLOCK_PROTOCOL` too. For now
+clock off. `-nts-clock-check` reads `RUNNER_CLOCK_PROTOCOL` too (see the
+release rule below). For now
 the image command carries the choice; setup format 6 will move it into the
 setup's locked group. No cloud image sets it today, so they all run NTS.
 
@@ -585,12 +586,34 @@ Azure and GCP the network between the cloud and the servers). The quorum,
 the error bound, the sample cap and the drift check then measure the
 forged answers, not real time. The one check the host cannot forge is the
 coarse check: the HTTPS-date quorum, over TLS to pinned roots. So against a
-hostile host the time is only as good as the coarse check, about -30 s to
-+31 s (`NTSMaxCoarseDiff` and the one-second resolution), and the host can
-move it anywhere in that window, slowly enough that the drift check, which
-compares quorums of its own answers, sees nothing. HEALTH's `bound_now_ms`
-does not bound that error. Against an honest host and path, plain NTP is
-as precise as NTS.
+hostile host the time is only as good as the coarse check. The check allows
+-30 s to +31 s against the coarse clock (`NTSMaxCoarseDiff` and the
+one-second resolution), and the coarse clock is itself off real time:
+
+- Behind: an HTTP Date names the second the server was in, up to 1 s
+  before the answer, and `HTTPSDate.Fetch` has no round-trip cap, so a
+  host that holds every answer up to the 15 s timeout of `Anchored.Run`
+  puts the coarse clock about 16 s behind. With the 30 s window that is
+  about 46 s behind real time.
+- Ahead, with a local counter the host cannot set: the coarse clock is
+  never ahead, so under 31 s.
+- Ahead, where the host sets the counter: the coarse clock runs up to 75 s
+  ahead (`Anchored.MaxAdvance`, while the host blocks HTTPS), a forged
+  quorum may stand 31 s past it, and `Now` then serves that quorum's offset
+  plus the counter until its samples are 90 s old on the counter
+  (`NTSShiftMaxAge`). Forged samples are fresh at the quorum, and no drift
+  check catches it: the host makes all the samples. That is 75 + 31 + 90,
+  about 196 s ahead of real time. Behind has no limit there, as for NTS.
+
+196 s is under the restart floor's one epoch (384 s on mainnet). The host
+can move the time anywhere in this range, slowly enough that the drift
+check, which compares quorums of its own answers, sees nothing. HEALTH's
+`bound_now_ms` does not bound that error. Against an honest host and path,
+plain NTP is as precise as NTS.
+
+In a release build only the measured `-clock-protocol` flag picks the
+protocol: `RUNNER_CLOCK_PROTOCOL` stops the runner at start, except on the
+dev platform. Debug builds and `-nts-clock-check` take the variable.
 
 What changes against NTS: no NTS-KE, no cookies, no TLS to the time
 servers. The NTS-KE retries, the NTS-KE after lost queries and the NTSN
@@ -613,8 +636,9 @@ How the runner marks it, so no reader takes it for NTS:
 - every log line of the clock carries `protocol=ntp-unauthenticated`, and
   the `nts: status` line `protocol=ntp`;
 - at start the runner logs a WARN line: "plain NTP: the host can forge
-  every answer; the time is only as good as the coarse check (about -30 s
-  to +31 s)".
+  every answer; the time is only as good as the coarse check (up to about
+  46 s behind and 31 s ahead of real time, 196 s ahead where the host sets
+  the local counter)".
 
 The clock still counts as trusted (`Trusted()`): the runner starts on a
 cloud platform with it, because the coarse check bounds the time.
