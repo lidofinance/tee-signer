@@ -67,11 +67,19 @@ done
 # every release). A DNS failure of one catalog host that the default set
 # does not dial must not stop the parent. A deployment that confirmed that host
 # (-nts-terms-confirmed) then lacks one NTS server until this script runs
-# again; its clock goes on with the others.
+# again; its clock goes on with the others. If OPTIONAL_PIDS names a file
+# (parent-service.sh sets it), the PID of each optional proxy goes there, one
+# per line, so the service does not restart the set when one ends later.
 STARTED=()
 OPTIONAL=()
+[ -z "${OPTIONAL_PIDS:-}" ] || : >"$OPTIONAL_PIDS"
 start() { local log="$1"; shift; nohup "$@" >"$log" 2>&1 & STARTED+=("$! $log"); }
-start_optional() { local log="$1"; shift; nohup "$@" >"$log" 2>&1 & OPTIONAL+=("$! $log"); }
+start_optional() {
+  local log="$1"; shift
+  nohup "$@" >"$log" 2>&1 &
+  OPTIONAL+=("$! $log")
+  [ -z "${OPTIONAL_PIDS:-}" ] || echo "$!" >>"$OPTIONAL_PIDS"
+}
 check_started() {
   sleep 1
   local s

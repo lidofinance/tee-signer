@@ -723,7 +723,11 @@ all (burst 20) and 0.5 per second to one address (burst 4). Under the shift
 schedule the clock asks each server at most once per 60 s: 4 actives make
 4 datagrams a normal minute, plus fallbacks; the start round asks every dialed
 server at once, and until the first quorum a server that did not answer is
-asked again every 20 s (at most the 90 s start wait). Over a
+asked again every 20 s (at most the 90 s start wait). The one exception
+after the first quorum: a lost answer may get one retry 20 s later, at most
+one per lost contact and within the clock's 120 per hour cap of extra
+queries, so a server whose answers are lost gets at most two requests per
+60 s. Over a
 limit the datagram is dropped and counted, as a network would drop it.
 `udprelay` logs its counters every 10 minutes.
 

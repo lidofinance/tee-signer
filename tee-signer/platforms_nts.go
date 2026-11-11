@@ -399,7 +399,10 @@ const ntsMinServers = 4
 // ntsSchedule turns the seeded schedule on, with seed. From
 // ntsShiftMinServers servers it runs shifts; with fewer, every server is
 // active, each asked once per 60 s on the same grid, so a small set is not
-// asked more often than a large one. Fewer than ntsMinServers is an error.
+// asked more often than a large one. After the first quorum a lost answer
+// may get one retry 20 s later, at most one per lost contact and within
+// the 120 per hour cap, so the worst case per server is two requests per
+// 60 s while its answers are lost. Fewer than ntsMinServers is an error.
 func ntsSchedule(n *clock.NTS, seed []byte) error {
 	if err := ntsEnoughServers(n); err != nil {
 		return err

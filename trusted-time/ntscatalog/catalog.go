@@ -655,8 +655,8 @@ func (c *Catalog) Check() error {
 		}
 		ops[e.Operator] = e.ID
 		for _, n := range e.NTPNames {
-			if n == "" || n == e.Host || strings.ContainsAny(n, ":/ ") {
-				return fmt.Errorf("ntscatalog: NTS server %s: NTP name %q: a host name other than the server's own", e.ID, n)
+			if !validHost(n) || n == e.Host {
+				return fmt.Errorf("ntscatalog: NTS server %s: NTP name %q: a lower-case DNS name other than the server's own", e.ID, n)
 			}
 		}
 		for _, n := range e.NTPNets {

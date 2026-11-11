@@ -13,9 +13,9 @@ const testTick = 4 * time.Second
 // next plans the next tick, 4 s after the last (the start at local 0).
 func (s *ntsShifts) next() []ntsAsk {
 	if !s.started {
-		return s.plan(0)
+		return s.plan(0, nil)
 	}
-	return s.plan(int64(s.q+1) * s.tickNs)
+	return s.plan(int64(s.q+1)*s.tickNs, nil)
 }
 
 // contact is one contact the schedule made: the tick it counts at and why.
@@ -47,7 +47,7 @@ func driveShiftsRate(s *ntsShifts, ticks int, answer func(op, q int) (ok, rate b
 		ok, rate := answer(a.op, at)
 		early := !s.warm && s.counts[a.op].Answers == 0
 		got[a.op] = append(got[a.op], contact{at, a.role, rate, early})
-		s.result(a, ok, rate, false)
+		s.result(a, ok, rate, false, true)
 		if ok {
 			lastOK[a.op] = at
 		}
@@ -369,10 +369,10 @@ func TestShiftsNoSeedAndTicksFollowTime(t *testing.T) {
 	if len(s.slots) != 8 || s.seeded {
 		t.Fatalf("slots %v seeded %v", s.slots, s.seeded)
 	}
-	s.plan(0)
+	s.plan(0, nil)
 	var first int64 = -1
 	for now := int64(5 * time.Second); first < 0 && now < int64(2*time.Minute); now += int64(5 * time.Second) {
-		if len(s.plan(now)) > 0 {
+		if len(s.plan(now, nil)) > 0 {
 			first = now
 		}
 	}
@@ -414,7 +414,7 @@ func TestShiftsFallbackCap(t *testing.T) {
 func TestShiftsStartRetry(t *testing.T) {
 	s := newNTSShifts(4, []byte("seed"), testTick)
 	for _, a := range s.next() {
-		s.result(a, a.op == 0, a.op == 1, false)
+		s.result(a, a.op == 0, a.op == 1, false, true)
 	}
 	for range s.retry - 1 {
 		s.next()
@@ -426,7 +426,7 @@ func TestShiftsStartRetry(t *testing.T) {
 	var got []int
 	for _, a := range s.burst(1, allOps(s)) {
 		got = append(got, a.op)
-		s.result(a, false, false, false)
+		s.result(a, false, false, false, true)
 	}
 	slices.Sort(got)
 	if !slices.Equal(got, []int{2, 3}) {
@@ -461,7 +461,7 @@ func allOps(s *ntsShifts) []bool {
 func TestShiftsWideAnswerNoStartRetry(t *testing.T) {
 	s := newNTSShifts(4, []byte("seed"), testTick)
 	for _, a := range s.next() {
-		s.result(a, false, false, a.op == 0)
+		s.result(a, false, false, a.op == 0, true)
 	}
 	if s.minGap(0) != NTSShiftMinGap || s.minGap(1) != NTSShiftStartRetry {
 		t.Fatalf("min gaps: wide %v, lost %v", s.minGap(0), s.minGap(1))
@@ -476,7 +476,7 @@ func TestShiftsWideAnswerNoStartRetry(t *testing.T) {
 func TestShiftsRetryOfALostAnswer(t *testing.T) {
 	s := newNTSShifts(4, []byte("seed"), testTick)
 	for _, a := range s.next() {
-		s.result(a, true, false, false)
+		s.result(a, true, false, false, true)
 	}
 	s.quorum()
 	var lost ntsAsk
@@ -488,7 +488,7 @@ func TestShiftsRetryOfALostAnswer(t *testing.T) {
 		}
 	}
 	lostAt := s.q
-	s.result(lost, false, false, false)
+	s.result(lost, false, false, false, true)
 	if _, ok := s.fallback(lost.op, 1, true, allOps(s)); ok {
 		t.Fatal("a fallback with every operator active")
 	}
@@ -502,7 +502,7 @@ func TestShiftsRetryOfALostAnswer(t *testing.T) {
 			case roleRetry:
 				// refreshShifts asks no fallback or retry for a lost retry.
 				retryAt = s.q
-				s.result(a, false, false, false)
+				s.result(a, false, false, false, true)
 			case roleActive:
 				if retryAt == 0 || s.q-lostAt < s.gap {
 					t.Fatalf("slot at tick %d: lost at %d, retry at %d", s.q, lostAt, retryAt)
@@ -539,14 +539,14 @@ func TestShiftsRetryOfALostAnswer(t *testing.T) {
 // keep the schedule at most one tick ahead of local time.
 func TestShiftsTicksDoNotRunAhead(t *testing.T) {
 	s := newNTSShifts(8, nil, testTick)
-	s.plan(0)
+	s.plan(0, nil)
 	for i := range 20 {
-		s.plan(int64(i) * int64(100*time.Millisecond))
+		s.plan(int64(i)*int64(100*time.Millisecond), nil)
 	}
 	if s.q > 1 {
 		t.Fatalf("tick %d after 2 s of calls", s.q)
 	}
-	s.plan(int64(60 * time.Second))
+	s.plan(int64(60*time.Second), nil)
 	if s.q != 15 {
 		t.Fatalf("tick %d at 60 s", s.q)
 	}
@@ -572,11 +572,105 @@ func TestShiftsFallbackAndBurstSkipUnaskable(t *testing.T) {
 			t.Fatalf("burst asks %d", a.op)
 		}
 	}
+	s.burstAt = make([]int, NTSShiftBurstCap)
+	for i := range s.burstAt {
+		s.burstAt[i] = s.q
+	}
+	if b := s.burst(1, allOps(s)); len(b) != 0 {
+		t.Fatalf("burst with the cap full: %v", b)
+	}
+}
+
+// warmLost runs 4 operators (all active) to a lost answer of an active
+// after the first quorum and returns it and its tick.
+func warmLost(t *testing.T) (*ntsShifts, ntsAsk, int) {
+	t.Helper()
+	s := newNTSShifts(4, []byte("seed"), testTick)
+	for _, a := range s.next() {
+		s.result(a, true, false, false, true)
+	}
+	s.quorum()
+	for {
+		for _, a := range s.next() {
+			if a.role == roleActive {
+				s.result(a, false, false, false, true)
+				return s, a, s.q
+			}
+		}
+	}
+}
+
+// The retry of a lost answer is booked only for an operator that can be
+// asked and has the base gap (no RATE backoff); one that cannot be asked
+// when it is due, or is late by more than a tick, is dropped with no
+// query, no count and no cap.
+func TestShiftsRetryBookedAndDropped(t *testing.T) {
+	s, lost, _ := warmLost(t)
+	can := allOps(s)
+	can[lost.op] = false
+	s.fallback(lost.op, 1, true, can)
+	if s.retryAt[lost.op] != never {
+		t.Fatal("a retry booked for an operator that cannot be asked")
+	}
+	s.gaps[lost.op] = 2 * s.gap
+	s.fallback(lost.op, 1, true, allOps(s))
+	if s.retryAt[lost.op] != never {
+		t.Fatal("a retry booked in a RATE backoff")
+	}
+	s.gaps[lost.op] = s.gap
+	s.fallback(lost.op, 1, true, allOps(s))
+	at := s.retryAt[lost.op]
+	if at == never {
+		t.Fatal("no retry booked")
+	}
+	for s.q < at-1 {
+		s.next()
+	}
+	can = allOps(s)
+	can[lost.op] = false
+	caps := len(s.fallbackAt)
+	for _, a := range s.plan(int64(s.q+1)*s.tickNs, can) {
+		if a.role == roleRetry {
+			t.Fatal("a retry to an operator that cannot be asked")
+		}
+	}
+	if s.retryAt[lost.op] != never || len(s.fallbackAt) != caps || s.counts[lost.op].Retries != 0 {
+		t.Fatalf("dropped retry: at %d, cap %d to %d, retries %d", s.retryAt[lost.op], caps, len(s.fallbackAt), s.counts[lost.op].Retries)
+	}
+	// Late by more than a tick: dropped.
+	s2, lost2, _ := warmLost(t)
+	s2.fallback(lost2.op, 1, true, allOps(s2))
+	at2 := s2.retryAt[lost2.op]
+	for s2.q < at2-1 {
+		s2.next()
+	}
+	for _, a := range s2.plan(int64(at2+2)*s2.tickNs, nil) {
+		if a.role == roleRetry {
+			t.Fatalf("a retry 2 ticks late at tick %d", s2.q)
+		}
+	}
+}
+
+// Each burst contact counts toward NTSShiftBurstCap, and a burst stops when
+// it is reached. A full fallback cap does not stop it.
+func TestShiftsBurstCountsTowardItsCap(t *testing.T) {
+	s := newNTSShifts(8, []byte("burst"), testTick)
+	for range 16 {
+		s.next()
+	}
+	s.burstAt = make([]int, NTSShiftBurstCap-2)
+	for i := range s.burstAt {
+		s.burstAt[i] = s.q
+	}
 	s.fallbackAt = make([]int, NTSShiftFallbackCap)
 	for i := range s.fallbackAt {
 		s.fallbackAt[i] = s.q
 	}
-	if b := s.burst(1, allOps(s)); len(b) != 0 {
-		t.Fatalf("burst with the cap full: %v", b)
+	if b := s.burst(1, allOps(s)); len(b) != 2 || len(s.burstAt) != NTSShiftBurstCap {
+		t.Fatalf("burst with room for 2: %d asked, %d counted", len(b), len(s.burstAt))
+	}
+	s.q += s.hour
+	if b := s.burst(1, allOps(s)); len(b) == 0 {
+		t.Fatal("no burst an hour later")
 	}
 }

@@ -32,16 +32,20 @@ import (
 //     set under NTSShiftMinServers has none), the same operator is asked
 //     once more NTSShiftStartRetry after the lost contact, after the first
 //     quorum only, within the same cap. Its next slot stays where it was.
-//     A wide answer (over MaxSampleBound) and a RATE get no such retry.
+//     A wide answer (over MaxSampleBound), a RATE, an operator in a RATE
+//     backoff and a contact that sent nothing get no such retry.
 //   - With fewer than NTSShiftBurstBelow fresh samples after the tick's
-//     queries, every operator past its minimum gap is asked, until the
-//     fallback cap is reached.
+//     queries, every operator past its minimum gap is asked, up to
+//     NTSShiftBurstCap burst contacts per hour.
 //   - Each operator's minimum gap is NTSShiftMinGap; a Kiss-o'-Death RATE
 //     doubles it (up to 1024 s), each answer halves it back.
 //   - Two contacts with one operator start at least its gap apart (see
 //     mark, and NTS.waitGap for the gap in local time). Until the first
 //     quorum, an operator that missed its last contact and sent no RATE
-//     has a gap of NTSShiftStartRetry. A contact
+//     has a gap of NTSShiftStartRetry. After it, the retry of a lost answer
+//     above is the one exception: at most one per lost contact, within the
+//     120 per hour cap, so an operator whose answers are lost gets at most
+//     two requests per 60 s. A contact
 //     that runs NTS-KE first sends its NTP query up to a few seconds after
 //     its start.
 const (
@@ -75,11 +79,15 @@ const (
 	// burst finds no one past the gap; there the retry of a lost answer
 	// (NTSShiftStartRetry) fills the gap.
 	NTSShiftBurstBelow = 4
-	// NTSShiftFallbackCap caps the fallbacks per hour. A host that drops
-	// answers of actives can force fallbacks; past the cap a lost answer
-	// waits for the operator's next slot. In a simulation, 30 % loss
-	// everywhere needed about 65 per hour.
+	// NTSShiftFallbackCap caps the fallbacks and retries of lost answers
+	// per hour. A host that drops answers of actives can force them; past
+	// the cap a lost answer waits for the operator's next slot. In a
+	// simulation, 30 % loss everywhere needed about 65 per hour.
 	NTSShiftFallbackCap = 120
+	// NTSShiftBurstCap caps the burst contacts per hour, on their own: a
+	// shared cap let bursts use up the fallbacks two down actives of 7
+	// operators need (5.7 % blocked in the simulation, against none).
+	NTSShiftBurstCap = 120
 	// ntsShiftMaxGap caps the gap a RATE raises an operator to (NTSMaxPoll).
 	ntsShiftMaxGap = 1024 * time.Second
 )
@@ -136,6 +144,8 @@ type ntsShifts struct {
 	// counts the fallbacks the cap refused.
 	fallbackAt []int
 	capped     int64
+	// burstAt holds the ticks of the burst contacts of the last hour.
+	burstAt []int
 }
 
 // newNTSShifts: n operators, a tick of tick. seed nil: a random seed for
@@ -251,8 +261,9 @@ func (s *ntsShifts) tick(now int64) {
 }
 
 // plan starts a tick at local time now and returns the operators to ask at
-// its start.
-func (s *ntsShifts) plan(now int64) []ntsAsk {
+// its start. can says by operator whether a contact would send anything
+// (NTS.askable; nil: all); a retry of a lost answer goes out only then.
+func (s *ntsShifts) plan(now int64, can []bool) []ntsAsk {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []ntsAsk
@@ -276,12 +287,22 @@ func (s *ntsShifts) plan(now int64) []ntsAsk {
 			continue
 		}
 		s.retryAt[op] = never
-		if s.last[op] == s.q {
-			continue // asked on its slot at this tick
+		// Dropped, with no query and no count: a retry more than a tick
+		// late (no Refresh in between), one within NTSShiftStartRetry of
+		// the operator's next slot, one to an operator that cannot be asked
+		// now, and one past the cap.
+		if s.q > at+1 || s.last[op] == s.q || (can != nil && !can[op]) {
+			continue
+		}
+		if k := slices.Index(s.slots, op); k >= 0 && s.due(k, op)-s.q < s.retry {
+			continue
+		}
+		if s.capFull() {
+			s.capped++
+			continue
 		}
 		// Not marked: the next slot stays a gap after the lost contact.
-		s.counts[op].Queries++
-		s.counts[op].Retries++
+		s.fallbackAt = append(s.fallbackAt, s.q)
 		out = append(out, ntsAsk{op, roleRetry})
 	}
 	return out
@@ -316,10 +337,10 @@ func (s *ntsShifts) handover() {
 
 // mark records a contact with op as made at tick at. A contact made after
 // the start of the tick (a fallback or a burst) is marked at a later tick
-// (see after), so the next contact is still a gap after it.
+// (see after), so the next contact is still a gap after it. Queries counts
+// it in result, once a request went out.
 func (s *ntsShifts) mark(op, at int) {
 	s.last[op] = at
-	s.counts[op].Queries++
 }
 
 func (s *ntsShifts) eligible(op int) bool {
@@ -357,14 +378,21 @@ func (s *ntsShifts) quorum() {
 	s.warm = true
 }
 
-// result records the answer (or not) of a contact. rate: the answer was a
+// result records the answer (or not) of a contact. sent: a request went
+// out (Queries and Retries count only those). rate: the answer was a
 // Kiss-o'-Death RATE, which doubles the operator's gap; an answer halves it
 // back towards the base. wide: an answer too wide to use; it counts as a
 // loss, but the operator did answer, so it gets no start retry.
-func (s *ntsShifts) result(a ntsAsk, ok, rate, wide bool) {
+func (s *ntsShifts) result(a ntsAsk, ok, rate, wide, sent bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c := &s.counts[a.op]
+	if sent {
+		c.Queries++
+		if a.role == roleRetry {
+			c.Retries++
+		}
+	}
 	switch {
 	case ok:
 		c.Answers++
@@ -389,24 +417,31 @@ func (s *ntsShifts) result(a ntsAsk, ok, rate, wide bool) {
 	}
 }
 
-// capFull drops the fallbacks older than an hour and says whether
-// NTSShiftFallbackCap of them are left.
+// capFull drops the fallbacks and retries older than an hour and says
+// whether NTSShiftFallbackCap of them are left.
 func (s *ntsShifts) capFull() bool {
+	s.fallbackAt = s.lastHour(s.fallbackAt)
+	return len(s.fallbackAt) >= NTSShiftFallbackCap
+}
+
+// lastHour is at without the ticks over an hour old.
+func (s *ntsShifts) lastHour(at []int) []int {
 	i := 0
-	for i < len(s.fallbackAt) && s.q-s.fallbackAt[i] >= s.hour {
+	for i < len(at) && s.q-at[i] >= s.hour {
 		i++
 	}
-	s.fallbackAt = s.fallbackAt[i:]
-	return len(s.fallbackAt) >= NTSShiftFallbackCap
+	return at[i:]
 }
 
 // fallback picks a random non-active operator past its gap that can be
 // asked now (can, by operator: not stopped by DENY or RSTR, not waiting
 // out an NTS-KE backoff), for a contact after ticks after the start of
 // this tick (at least 1), for the active lost whose answer was lost. None once
-// NTSShiftFallbackCap fallbacks and retries went out in the last hour. If
-// there is no such operator and retry is set, lost is asked again
-// NTSShiftStartRetry later (plan), once, after the first quorum only.
+// NTSShiftFallbackCap fallbacks and retries went out in the last hour. If there is no such operator and retry is set (the lost
+// contact sent a request and got no answer, no RATE, no wide answer), lost
+// is booked to be asked again NTSShiftStartRetry later (plan): once, after
+// the first quorum only, while it can be asked and its gap is the base one
+// (no RATE backoff). The retry counts toward the cap when it goes out.
 func (s *ntsShifts) fallback(lost, after int, retry bool, can []bool) (int, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -421,9 +456,8 @@ func (s *ntsShifts) fallback(lost, after int, retry bool, can []bool) (int, bool
 		}
 	}
 	if len(cand) == 0 {
-		if retry && s.warm && s.retryAt[lost] == never {
+		if retry && s.warm && s.retryAt[lost] == never && can[lost] && s.gaps[lost] == s.gap {
 			s.retryAt[lost] = s.last[lost] + s.retry
-			s.fallbackAt = append(s.fallbackAt, s.q)
 		}
 		return 0, false
 	}
@@ -443,18 +477,21 @@ func (s *ntsShifts) fallbackKE(op int) {
 
 // burst returns every operator past its gap that can be asked now (can,
 // as for fallback), for a contact after ticks after the start of this
-// tick (at least 1). None while the fallback cap is full: a host that
-// keeps the fresh samples low by dropping answers then gets no more
-// queries out of the clock than the slots.
+// tick (at least 1). Each burst contact counts toward NTSShiftBurstCap, and
+// a burst stops when it is reached: a host that keeps the fresh samples low
+// by dropping answers then gets no more than that many burst queries per
+// hour out of the clock.
 func (s *ntsShifts) burst(after int, can []bool) []ntsAsk {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.capFull() {
-		return nil
-	}
+	s.burstAt = s.lastHour(s.burstAt)
 	var out []ntsAsk
 	for op := range s.last {
 		if s.eligible(op) && can[op] {
+			if len(s.burstAt) >= NTSShiftBurstCap {
+				break
+			}
+			s.burstAt = append(s.burstAt, s.q)
 			s.mark(op, s.q+after)
 			s.counts[op].Bursts++
 			out = append(out, ntsAsk{op, roleBurst})

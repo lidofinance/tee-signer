@@ -594,7 +594,7 @@ func (n *NTS) refreshShifts(ctx context.Context) error {
 	// the next contact with that operator is still NTSShiftMinGap after it.
 	tick := int64(n.interval() / 4)
 	after := func(at int64) int { return max(1, int((at-coarseLocal+tick-1)/tick)) }
-	lost := n.askAll(ctx, coarse, n.shifts.plan(coarseLocal), coarseLocal)
+	lost := n.askAll(ctx, coarse, n.shifts.plan(coarseLocal, n.askable(coarseLocal)), coarseLocal)
 	// Past the deadline the later rounds would mark contacts, use the
 	// fallback cap and back off NTS-KE without sending anything.
 	if ctx.Err() != nil {
@@ -610,7 +610,7 @@ func (n *NTS) refreshShifts(ctx context.Context) error {
 		// A wide answer leaves the quorum short like a lost one, so another
 		// operator may stand in. Asking the same operator again soon would
 		// most likely give another wide answer, and a RATE asks for less.
-		if op, found := n.shifts.fallback(l.op, after(at), !l.wide && !l.rate, can); found {
+		if op, found := n.shifts.fallback(l.op, after(at), l.sent && !l.wide && !l.rate, can); found {
 			fallbacks = append(fallbacks, ntsAsk{op, roleFallback})
 		}
 	}
@@ -645,11 +645,12 @@ func (n *NTS) combineShifts(coarse time.Time, coarseLocal int64) error {
 	return err
 }
 
-// ntsLost is an ask that got no sample. wide: the server answered with a
-// bound over MaxSampleBound; rate: with a Kiss-o'-Death RATE.
+// ntsLost is an ask that got no sample. sent: a request went out; wide:
+// the server answered with a bound over MaxSampleBound; rate: with a
+// Kiss-o'-Death RATE.
 type ntsLost struct {
 	ntsAsk
-	wide, rate bool
+	sent, wide, rate bool
 }
 
 // askAll polls asks in parallel, sent at local time at, and returns those
@@ -684,10 +685,10 @@ func (n *NTS) askAll(ctx context.Context, coarse time.Time, asks []ntsAsk, at in
 			var w *wideSampleError
 			rate := !ok && sent && errors.As(p.lastErr, &kiss) && kiss.Code == "RATE"
 			wide := !ok && sent && errors.As(p.lastErr, &w)
-			n.shifts.result(a, ok, rate, wide)
+			n.shifts.result(a, ok, rate, wide, sent)
 			if !ok {
 				mu.Lock()
-				lost = append(lost, ntsLost{a, wide, rate})
+				lost = append(lost, ntsLost{a, sent, wide, rate})
 				mu.Unlock()
 			}
 		}()
@@ -737,18 +738,17 @@ func (n *NTS) fresh() int {
 }
 
 // joins says whether p's sample may join a quorum at local time now: at
-// most maxAge old, newer than a refused quorum, and with its bound, aged
-// by rho as the quorum ages it, within MaxSampleBound plus the aging of
-// maxAge. record refuses a sample over the cap at receipt, so a sample
-// under it joins for its whole join age: the aged bound is then at most
-// the cap plus nts.Drift(maxAge), 38 ms at the 76 s join age of the shift
-// schedule. Checking the aged bound against the cap alone would let a
-// sample with bound B join for only 2 x (cap - B) seconds at 500 ppm, 30 s
-// at 85 ms, less than the 60 s until its operator's next contact.
+// most maxAge old, newer than a refused quorum, and within MaxSampleBound
+// at receipt (record refuses wider ones; this keeps that true here). Its
+// bound, aged by rho as the quorum ages it, is then at most the cap plus
+// nts.Drift(maxAge), 38 ms at the 76 s join age of the shift schedule, so
+// a sample under the cap joins for its whole join age. Checking the aged
+// bound against the cap alone would let a sample with bound B join for
+// only 2 x (cap - B) seconds at 500 ppm, 30 s at 85 ms, less than the 60 s
+// until its operator's next contact.
 func (n *NTS) joins(p *ntsPeer, now, maxAge int64) bool {
 	s := p.sample
-	return s != nil && now-s.T4 <= maxAge && s.T4 > n.refusedT4 && s.Bound <= n.maxSampleBound() &&
-		s.Bound+nts.Drift(time.Duration(now-s.T4)) <= n.maxSampleBound()+nts.Drift(time.Duration(maxAge))
+	return s != nil && now-s.T4 <= maxAge && s.T4 > n.refusedT4 && s.Bound <= n.maxSampleBound()
 }
 
 // certTime is the time NTS-KE checks certificate validity at: the coarse
@@ -790,7 +790,8 @@ func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time, at int64) 
 		if err != nil && ctx.Err() != nil {
 			// The caller's deadline (the tick's) cut the query, not the
 			// server or its own timeout: no loss, no streak, no HEALTH
-			// error for a server that may be fine.
+			// error for a server that may be fine. The request went out,
+			// so its cookie is used, and the contact stays marked.
 			p.lastErr = err
 			return false
 		}

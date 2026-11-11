@@ -173,6 +173,7 @@ func TestCheckRefuses(t *testing.T) {
 		"bad net":          {func(c *Catalog) { c.NTS[1].NTPNets = []string{"192.0.2.1/24"} }, "masked CIDR"},
 		"ntp name is host": {func(c *Catalog) { c.NTS[0].NTPNames = []string{"a.example"} }, "NTP name"},
 		"ntp name port":    {func(c *Catalog) { c.NTS[0].NTPNames = []string{"ntp.a.example:123"} }, "NTP name"},
+		"ntp name case":    {func(c *Catalog) { c.NTS[0].NTPNames = []string{"NTP.a.example."} }, "NTP name"},
 		"no port":          {func(c *Catalog) { c.NTS[0].NitroPort = 0 }, "no vsock port"},
 		"shared port":      {func(c *Catalog) { c.NTS[1].NitroPort = 9001 }, "vsock port 9001"},
 		"alt shares port":  {func(c *Catalog) { c.NTS[0].Alt[0].NitroPort = 9002 }, "vsock port 9002"},

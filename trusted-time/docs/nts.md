@@ -201,7 +201,7 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   by default). The runner always turns it on and refuses fewer than 4
   servers (with 3, one slow server would stop the quorum). Below 7
   servers every server is active, each asked once per 60 s on the same
-  grid, and nothing hands over: a small set (a region with few close
+  grid (the one exception: after the first quorum, a lost answer may get one retry 20 s later, at most one per lost contact and within the 120 per hour cap, so the worst case per operator is two requests per 60 s while its answers are lost), and nothing hands over: a small set (a region with few close
   operators) is asked no more often than a shift asks. From 7 servers:
   4 actives and 3 kept for fallbacks with 7, 5 actives from 8 on
   (`clock.ShiftActives`). With 4 actives the quorum is 3 of 4, so two
@@ -238,7 +238,8 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   - `ShiftActives(n)` operators are active (all below 7, 4 of 7, 5 from 8), each asked
     on its own slot of a 60 s grid (slots 12 s apart with 5, 12 to 16 s
     with 4, the phase from the seed). Two contacts with one
-    operator start at least 60 s apart, except those start retries (a contact that runs NTS-KE first
+    operator start at least 60 s apart, except those start retries and
+    the retry of a lost answer below: after the first quorum, a lost answer may get one retry 20 s later, at most one per lost contact and within the 120 per hour cap, so the worst case per operator is two requests per 60 s while its answers are lost (a contact that runs NTS-KE first
     sends its query a few seconds later); a RATE doubles that operator's
     gap up to 1024 s.
     Without a seed every operator is active.
@@ -249,7 +250,9 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
     operator not asked in 60 s that can be asked (not stopped by DENY or
     RSTR, not in an NTS-KE backoff), at most 120 per hour. With fewer than
     4 fresh samples, every such operator not asked in 60 s is asked (a
-    burst), until the 120 are used up. A set under 7 has no operator for a
+    burst), at most 120 burst contacts per hour (`NTSShiftBurstCap`, a cap
+    of their own: sharing the fallbacks' cap left two down actives of 7
+    operators without fallbacks, 5.7 % blocked in the simulation). A set under 7 has no operator for a
     fallback: there, and wherever none is free, a lost answer gets one
     retry of the same operator 20 s later (`NTSShiftStartRetry`), after
     the first quorum, within the same 120 per hour. Its next slot stays 60 s
@@ -257,7 +260,11 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
     In a simulation of 4 servers, 30 % loss blocked signing 18 % of the
     time without the retry and under 1 % with it; one server down and 10 %
     loss on the others, 17 % and 1 %. A wide answer and a RATE get no
-    retry: the server answered.
+    retry (the server answered), nor does an operator in a RATE backoff, a
+    contact that sent nothing, or one that cannot be asked when the retry
+    is due (DENY, RSTR, NTS-KE backoff). A retry more than a tick late, or
+    within 20 s of the operator's next slot, is dropped. HEALTH counts only
+    requests that went out.
   - NTP queries time out after 1 s; the NTP host is resolved once at
     NTS-KE (default dialer only). NTS-KE keeps 5 s.
   - `MaxAge` is 90 s. Each tick ends within 10 s, as a refresh without
@@ -291,7 +298,10 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   this signer's network before it costs a refusal: `queries` counts NTP
   queries only, so a server whose NTS-KE fails (TCP 4460 blocked, a bad
   certificate) shows `queries` 0 and `ke_fail` growing. A query that the
-  tick's 10 s deadline cut counts as no loss.
+  tick's 10 s deadline cut counts as no loss, no loss streak and no
+  `last_error`; its request went out, so its cookie is used and the
+  contact counts for the 60 s gap. Under shifts `queries` and `retries`
+  count only requests that went out.
   `clock_nts.coarse` has one entry per HTTPS-date host of the coarse
   check: `source`, `queries`, `answers`, `failures`, `last_answer_age_ms`
   (-1: no answer yet), `last_diff_ms` (its Date minus the coarse quorum's
@@ -359,7 +369,8 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
     operators of eu and na (or global): Cloudflare, Netnod, PTB, BEV, Meta
     and Wiktel. Earlier images dialed Cloudflare, Netnod, PTB and TimeNL;
     TimeNL left the set for its terms, FER for failing NTS-KE in a live run.
-    The six are all active, each asked once per 60 s. A deployment adds
+    The six are all active, each asked once per 60 s (one retry 20 s
+    after a lost answer aside, see the shift schedule above). A deployment adds
     operators whose terms it confirmed with `-nts-terms-confirmed` in the
     image's measured command (for example `time.nl@any.time.nl`, TimeNL's
     anycast host); from seven servers they hand over in shifts. Outside eu and na this set gives fewer close servers (Asia
