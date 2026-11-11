@@ -124,13 +124,7 @@ type ntsShifts struct {
 	// counts the fallbacks the cap refused.
 	fallbackAt []int
 	capped     int64
-	// left holds the last contact and gap of operators a swap removed,
-	// by name, so one added back keeps its minimum gap. An entry goes
-	// once it no longer limits anything (maxGap ticks).
-	left map[string]ntsLeft
 }
-
-type ntsLeft struct{ last, gap int }
 
 // newNTSShifts: n operators, a tick of tick. seed nil: a random seed for
 // the phase and the start delay, and every operator active until
@@ -216,48 +210,54 @@ func (s *ntsShifts) reseed(seed []byte) {
 	s.seeded = true
 }
 
-// swap moves the schedule to a new operator set: names are the new
-// operators, oldNames the old ones, keep[i] the old index of new operator
-// i or -1. Operators kept, and those added back (left), keep their last
-// contact, gap and counts. A new operator has no last contact, so the next
-// plan asks it. The order and the slots are drawn again from the same seed
-// for the new count; the grid and shift phases stay, so the slots of the
-// operators that stay active move as little as the new order allows. The
-// handover position starts over: no incoming carries over.
-func (s *ntsShifts) swap(oldNames, names []string, keep []int) {
+// ntsShiftState is what a swap carries of one operator's schedule when its
+// peer goes: the last contact and gap in ticks, and its RATE answers (a
+// RATE before the first quorum rules out the start retry).
+type ntsShiftState struct {
+	last, gap int
+	rates     int64
+}
+
+// state returns operator op's schedule state, for a swap that removes it.
+func (s *ntsShifts) state(op int) ntsShiftState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.left == nil {
-		s.left = map[string]ntsLeft{}
-	}
-	kept := make([]bool, len(oldNames))
-	for _, j := range keep {
-		if j >= 0 {
-			kept[j] = true
-		}
-	}
-	for j, name := range oldNames {
-		if !kept[j] && s.last[j] != never {
-			s.left[name] = ntsLeft{s.last[j], s.gaps[j]}
-		}
-	}
-	n := len(names)
+	return ntsShiftState{s.last[op], s.gaps[op], s.counts[op].Rates}
+}
+
+// cold puts the schedule back in its start state (no quorum yet in this
+// run): an operator that missed its last contact may be asked again after
+// NTSShiftStartRetry until the next quorum.
+func (s *ntsShifts) cold() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.warm = false
+}
+
+// swap moves the schedule to a new operator set: keep[i] is the old index
+// of new operator i, or -1. Operators kept keep their last contact, gap,
+// missed flag and counts. A new operator with carry[i] set (one the
+// clock knew before, by label or by host) starts from that last contact,
+// gap and RATE count; one without has no last contact, so the next plan
+// asks it. The order and the slots are drawn again from the same seed for
+// the new count; the grid and shift phases stay, so the slots of the
+// operators that stay active move as little as the new order allows. The
+// handover position starts over: no incoming carries over.
+func (s *ntsShifts) swap(keep []int, carry []*ntsShiftState) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := len(keep)
 	last, gaps := make([]int, n), make([]int, n)
 	missed, counts := make([]bool, n), make([]NTSOperatorCounts, n)
 	for i, j := range keep {
-		if j >= 0 {
+		switch {
+		case j >= 0:
 			last[i], gaps[i], missed[i], counts[i] = s.last[j], s.gaps[j], s.missed[j], s.counts[j]
-			continue
-		}
-		last[i], gaps[i] = never, s.gap
-		if l, ok := s.left[names[i]]; ok {
-			last[i], gaps[i] = l.last, l.gap
-			delete(s.left, names[i])
-		}
-	}
-	for name, l := range s.left {
-		if s.q-l.last >= s.maxGap {
-			delete(s.left, name)
+		case carry[i] != nil:
+			last[i], gaps[i] = carry[i].last, max(carry[i].gap, s.gap)
+			counts[i].Rates = carry[i].rates
+		default:
+			last[i], gaps[i] = never, s.gap
 		}
 	}
 	s.last, s.gaps, s.missed, s.counts = last, gaps, missed, counts

@@ -295,6 +295,10 @@ func TestNTSSwapRefusal(t *testing.T) {
 	noOp[3].Operator = ""
 	longLabel := swapServers(opNames(7)...)
 	longLabel[5].Operator = strings.Repeat("x", nts.MaxOperatorLen+1)
+	dupHost := swapServers(opNames(7)...)
+	dupHost[4].Host = dupHost[1].Host
+	dupNTP := swapServers(opNames(7)...)
+	dupNTP[2].NTPAddr, dupNTP[6].NTPAddr = "192.0.2.1:123", "192.0.2.1:123"
 	for name, tc := range map[string]struct {
 		servers []NTSServer
 		min     int
@@ -307,6 +311,8 @@ func TestNTSSwapRefusal(t *testing.T) {
 		"none":             {nil, 0},
 		"over MaxServers":  {swapServers(opNames(nts.MaxServers + 1)...), 0},
 		"label too long":   {longLabel, 0},
+		"host twice":       {dupHost, 0},
+		"NTP addr twice":   {dupNTP, 0},
 	} {
 		if err := n.SetServers(tc.servers, tc.min); err == nil {
 			t.Errorf("%s: taken", name)
@@ -360,7 +366,7 @@ func TestNTSSwapChangedHostIsNewPeer(t *testing.T) {
 		if err := n.SetServers(list, 0); err != nil {
 			t.Fatal(err)
 		}
-		if n.peers[i] == old || n.peers[i].sample != nil || n.Status().Peers[op].Host != "moved.test" {
+		if n.peers[i] == old || n.peers[i].sample != nil || n.Status().Peers[op].Host != "moved.test" || n.peers[i].contacted != old.contacted {
 			t.Fatalf("%s kept its peer after a host change", op)
 		}
 	})
@@ -504,4 +510,114 @@ func TestNTSSwapConcurrent(t *testing.T) {
 		t.Fatalf("%s contacted twice %v apart", op, g)
 	}
 	t.Logf("%d swaps", n.NTSSummary().ServerSwaps)
+}
+
+// peerOf returns n's peer of operator op, or nil.
+func peerOf(n *NTS, op string) (int, *ntsPeer) {
+	for i, p := range n.peers {
+		if p.srv.Operator == op {
+			return i, p
+		}
+	}
+	return -1, nil
+}
+
+// A server that leaves keeps its DENY stop, its last contact (in ticks and
+// in local time), its gap and its RATE count when its label comes back,
+// with a new host too, or when its host comes back under a new label.
+func TestNTSSwapCarriesStopAndRate(t *testing.T) {
+	for _, tc := range []string{"label back", "host changed", "host under a new label"} {
+		w := newFollowWorld(14)
+		n := newFollowNTS(w, 8, []byte("swap-carry"))
+		// op3 answers RATE before the first quorum.
+		w.rateUntil["op3"] = int64(shiftBase + 30*time.Second)
+		runSwapWorld(w, n, 0, 3*time.Minute, nil)
+		i, p := peerOf(n, "op3")
+		reEnable := w.local() + int64(n.maxPollD())
+		p.disabled, p.reEnable = "DENY", reEnable
+		st := n.shifts.state(i)
+		contacted := p.contacted
+		if st.rates == 0 || contacted == 0 {
+			t.Fatalf("%s: setup: rates %d, contacted %d", tc, st.rates, contacted)
+		}
+		all := swapServers(opNames(8)...)
+		label := "op3"
+		switch tc {
+		case "label back":
+			if err := n.SetServers(slices.Delete(slices.Clone(all), 3, 4), 0); err != nil {
+				t.Fatal(err)
+			}
+		case "host changed":
+			all[3].Host = "moved.test"
+		case "host under a new label":
+			all[3].Operator, label = "renamed", "renamed"
+		}
+		if err := n.SetServers(all, 0); err != nil {
+			t.Fatal(err)
+		}
+		j, q := peerOf(n, label)
+		got := n.shifts.state(j)
+		if q == p || q.disabled != "DENY" || q.reEnable != reEnable || q.contacted != contacted || got != st {
+			t.Fatalf("%s: disabled %q until %d, contacted %d, schedule %+v; want DENY until %d, %d, %+v",
+				tc, q.disabled, q.reEnable, q.contacted, got, reEnable, contacted, st)
+		}
+		if h := n.NTSSummary().Peers[j]; h.Off != "DENY" {
+			t.Fatalf("%s: health off %q", tc, h.Off)
+		}
+	}
+}
+
+// A host moved to a new label is not asked sooner than its gap after its
+// last contact under the old label.
+func TestNTSSwapHostToNewLabelKeepsGap(t *testing.T) {
+	const swapAt = 3 * time.Minute
+	w := newFollowWorld(15)
+	n := newFollowNTS(w, 8, []byte("swap-relabel"))
+	var op string
+	var lastBefore int64
+	runSwapWorld(w, n, 0, 8*time.Minute, func(sec time.Duration) {
+		if sec != swapAt {
+			return
+		}
+		op = n.NTSSummary().Actives[0]
+		i, _ := peerOf(n, op)
+		c := contactsSince(w, op, 0)
+		lastBefore = c[len(c)-1]
+		list := swapServers(opNames(8)...)
+		list[i].Operator = "renamed"
+		if err := n.SetServers(list, 0); err != nil {
+			t.Fatal(err)
+		}
+	})
+	c := contactsSince(w, "renamed", swapAt)
+	if len(c) == 0 || c[0] < lastBefore+int64(NTSShiftMinGap) {
+		t.Fatalf("%s as renamed asked %v after its last contact", op, time.Duration(c[0]-lastBefore))
+	}
+	t.Logf("%s last asked at %v, as renamed at %v", op, time.Duration(lastBefore)-shiftBase, c)
+}
+
+// After the fail-closed path the clock is back in its start state: the
+// schedule is not warm and NTS-KE retries without backoff, until a quorum.
+func TestNTSSwapFailClosedRestarts(t *testing.T) {
+	w := newFollowWorld(16)
+	n := newFollowNTS(w, 8, []byte("swap-cold"))
+	c := &coarseSwitch{w: w}
+	n.Coarse = c
+	runSwapWorld(w, n, 0, 3*time.Minute, nil)
+	if !n.served.Load() || !n.shifts.warm {
+		t.Fatal("setup: no quorum")
+	}
+	gone := n.NTSSummary().Members[0]
+	c.fail.Store(true)
+	if err := n.SetServers(swapServers(slices.DeleteFunc(opNames(8), func(op string) bool { return op == gone })...), 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.Now(); err == nil || n.served.Load() || n.shifts.warm {
+		t.Fatalf("after the failed re-combine: Now err %v, served %v, warm %v", err, n.served.Load(), n.shifts.warm)
+	}
+	c.fail.Store(false)
+	runSwapWorld(w, n, 3*time.Minute, 3*time.Minute+2*testTick, nil)
+	if _, err := n.Now(); err != nil || !n.served.Load() || !n.shifts.warm {
+		t.Fatalf("after the next tick: Now err %v, served %v, warm %v", err, n.served.Load(), n.shifts.warm)
+	}
 }
