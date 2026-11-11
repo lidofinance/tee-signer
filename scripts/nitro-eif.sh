@@ -172,7 +172,7 @@ build_eif() { # build_eif <tag>
   # runner has no such flag).
   local ep
   ep="$(docker inspect --format '{{json .Config.Entrypoint}}' "$ENCLAVE_IMAGE")"
-  for want in '"-setup","platform"' '"-nts-clock"' '"-nts-wait"' '"-nts-max-bound"' 'https://kms.{region}.amazonaws.com/'; do
+  for want in '"-setup","platform"' '"-nts-clock"' '"-nts-wait"' '"-nts-max-bound"' '"-nts-max-sample-bound"' 'https://kms.{region}.amazonaws.com/'; do
     grep -qF -- "$want" <<<"$ep" || die "the image's command lacks $want"
   done
   for not in '"-config"' '"-tls-client-ca"' '"-platform-opt"' '"-mark-store"' '"-mark-signer"' '"-record' \

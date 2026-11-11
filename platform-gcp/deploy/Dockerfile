@@ -21,7 +21,7 @@
 # entry (README, "Network entry") is outside the image: a firewall rule on
 # the VM's external address. The setup's mark log is the clone protection.
 # Clock: the NTS clock (-nts-clock, runner built with the tag nts), with
-# -nts-wait and -nts-max-bound in the command, so the launch environment
+# -nts-wait, -nts-max-bound and -nts-max-sample-bound in the command, so the launch environment
 # cannot set them. NTS-KE on
 # TCP 4460 and NTP on UDP 123 and 4123 to the default servers of
 # trusted-time/ntscatalog plus any -nts-terms-confirmed entries, straight out through the VM's external address
@@ -61,5 +61,5 @@ ENTRYPOINT ["/runner", \
   "-restart-floor=true", "-persist-watermarks=false", \
   "-nts-clock", \
   "-nts-coarse-urls", "https://cloudkms.googleapis.com/,https://sts.googleapis.com/,https://www.cloudflare.com/", \
-  "-nts-wait", "90s", "-nts-max-bound", "100ms", \
+  "-nts-wait", "90s", "-nts-max-bound", "100ms", "-nts-max-sample-bound", "100ms", \
   "-log-json"]

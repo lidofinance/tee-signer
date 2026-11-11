@@ -239,3 +239,40 @@ func TestNTSTermsConfirmed(t *testing.T) {
 		}
 	}
 }
+
+// -nts-max-sample-bound defaults to -nts-max-bound, may be raised to 1 s
+// (no cap), and is refused below the max bound or above 1 s.
+func TestNTSMaxSampleBound(t *testing.T) {
+	t.Setenv("RUNNER_NTS_COARSE_URLS", "https://a.example/,https://b.example/,https://c.example/")
+	t.Setenv("RUNNER_NTS_MAX_BOUND", "")
+	t.Setenv("RUNNER_NTS_MAX_SAMPLE_BOUND", "")
+	defer func() { *ntsMaxBoundFlag, *ntsMaxSampleFlag = 0, 0 }()
+	for _, tc := range []struct {
+		bound, sample, want time.Duration
+		err                 string
+	}{
+		{0, 0, 100 * time.Millisecond, ""},
+		{250 * time.Millisecond, 0, 250 * time.Millisecond, ""},
+		{0, time.Second, time.Second, ""},
+		{0, 50 * time.Millisecond, 0, "-nts-max-sample-bound"},
+		{0, 2 * time.Second, 0, "-nts-max-sample-bound"},
+	} {
+		*ntsMaxBoundFlag, *ntsMaxSampleFlag = tc.bound, tc.sample
+		n, _, err := newNTSClock(nil, nil, "", nil)
+		switch {
+		case tc.err != "":
+			if err == nil || !strings.Contains(err.Error(), tc.err) {
+				t.Errorf("%v/%v: %v, want %q", tc.bound, tc.sample, err, tc.err)
+			}
+		case err != nil:
+			t.Errorf("%v/%v: %v", tc.bound, tc.sample, err)
+		case n.MaxSampleBound != tc.want:
+			t.Errorf("%v/%v: MaxSampleBound %v, want %v", tc.bound, tc.sample, n.MaxSampleBound, tc.want)
+		}
+	}
+	*ntsMaxBoundFlag, *ntsMaxSampleFlag = 0, 0
+	t.Setenv("RUNNER_NTS_MAX_SAMPLE_BOUND", "500ms")
+	if n, _, err := newNTSClock(nil, nil, "", nil); err != nil || n.MaxSampleBound != 500*time.Millisecond {
+		t.Fatalf("RUNNER_NTS_MAX_SAMPLE_BOUND=500ms: %v", err)
+	}
+}

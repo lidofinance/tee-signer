@@ -746,3 +746,31 @@ func TestNTSClockFailedLostKeyExchangeKeepsCookies(t *testing.T) {
 		t.Fatalf("samples %d after the drops, want 2 (old cookies)", p.Stats.Samples)
 	}
 }
+
+// A sample wider than MaxSampleBound (default MaxBound) joins no quorum:
+// a host that delays the one honest answer cannot widen it past what
+// signing accepts. MaxSampleBound raised to 1 s takes it again.
+func TestNTSClockRefusesWideSamples(t *testing.T) {
+	wide := ntstest.NTPOptions{RootDisp: 400 * time.Millisecond}
+	fs := newServers(t, map[string]ntstest.NTPOptions{"a": wide}, "a", "b", "c", "d")
+	n := newNTS(fs, &coarseClock{})
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	p := n.Status().Peers["a"]
+	if p.Stats.Wide != 1 || p.Stats.Samples != 0 || !strings.Contains(p.LastErr, "over the 100ms limit") {
+		t.Fatalf("a: wide %d samples %d err %v", p.Stats.Wide, p.Stats.Samples, p.LastErr)
+	}
+	if m := n.NTSSummary().Members; strings.Contains(","+strings.Join(m, ",")+",", ",a,") {
+		t.Fatalf("quorum members %v hold the wide sample", m)
+	}
+	fs2 := newServers(t, map[string]ntstest.NTPOptions{"a": wide}, "a", "b", "c", "d")
+	n2 := newNTS(fs2, &coarseClock{})
+	n2.MaxSampleBound = time.Second
+	if err := refresh(t, n2); err != nil {
+		t.Fatal(err)
+	}
+	if p := n2.Status().Peers["a"]; p.Stats.Wide != 0 || p.Stats.Samples != 1 {
+		t.Fatalf("with a 1 s cap: wide %d samples %d", p.Stats.Wide, p.Stats.Samples)
+	}
+}

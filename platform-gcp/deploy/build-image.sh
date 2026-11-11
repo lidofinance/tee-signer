@@ -137,7 +137,7 @@ done
 # The NTS clock with its start wait and error bound, and no -clock flag
 # that would replace it.
 grep -q -F -- " -nts-clock -nts-coarse-urls " "$OUT/runner.entrypoint" || die "the image entrypoint lacks -nts-clock"
-for want in " -nts-wait " " -nts-max-bound "; do
+for want in " -nts-wait " " -nts-max-bound " " -nts-max-sample-bound "; do
   grep -q -F -- "$want" "$OUT/runner.entrypoint" || die "the image entrypoint lacks$want"
 done
 ! grep -q -F -- " -clock " "$OUT/runner.entrypoint" || die "the image entrypoint has -clock, which would replace the NTS clock"

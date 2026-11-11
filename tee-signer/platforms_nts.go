@@ -20,6 +20,8 @@ package main
 //	                                                         its source trusts
 //	-nts-wait 90s              RUNNER_NTS_WAIT=90s           how long start-up waits for the first quorum
 //	-nts-max-bound 100ms       RUNNER_NTS_MAX_BOUND=100ms    Now fails above this error bound; at most 250ms
+//	-nts-max-sample-bound 100ms RUNNER_NTS_MAX_SAMPLE_BOUND   a sample with a wider bound joins no quorum; from
+//	                                                         -nts-max-bound (the default) to 1s (no cap)
 //	-nts-terms-confirmed a,b   RUNNER_NTS_TERMS_CONFIRMED    catalog entries (trusted-time/ntscatalog) dialed next to
 //	                                                         the default set, whose operators' terms the deployment's
 //	                                                         writer confirmed; id@host picks an alt host with a Nitro
@@ -63,7 +65,9 @@ var (
 	ntsCoarseFlag   = flag.String("nts-coarse-urls", "", "comma-separated https URLs (3 or more) of the NTS clock's coarse check; default RUNNER_NTS_COARSE_URLS")
 	ntsWaitFlag     = flag.Duration("nts-wait", 0, "how long start-up waits for the first NTS quorum; 0 = RUNNER_NTS_WAIT or 90s")
 	ntsMaxBoundFlag = flag.Duration("nts-max-bound", 0, "signing fails above this NTS error bound, at most 250ms; 0 = RUNNER_NTS_MAX_BOUND or 100ms")
-	ntsConfirmFlag  = flag.String("nts-terms-confirmed", "", "comma-separated NTS catalog IDs (id or id@alt-host) whose operators' terms the deployment confirmed, dialed next to the default set; default RUNNER_NTS_TERMS_CONFIRMED")
+	// ntsMaxSampleFlag: see ntsMaxSampleBoundCap.
+	ntsMaxSampleFlag = flag.Duration("nts-max-sample-bound", 0, "an NTS sample with a wider bound joins no quorum, from -nts-max-bound to 1s; 0 = RUNNER_NTS_MAX_SAMPLE_BOUND or -nts-max-bound")
+	ntsConfirmFlag   = flag.String("nts-terms-confirmed", "", "comma-separated NTS catalog IDs (id or id@alt-host) whose operators' terms the deployment confirmed, dialed next to the default set; default RUNNER_NTS_TERMS_CONFIRMED")
 )
 
 // ntsConfirmed is -nts-terms-confirmed, or RUNNER_NTS_TERMS_CONFIRMED.
@@ -86,6 +90,14 @@ func ntsConfirmed() []string {
 // servers up to about 400 ms away. A larger limit lets the runner sign on a
 // time it can vouch for only that loosely.
 const ntsMaxBoundCap = 250 * time.Millisecond
+
+// ntsMaxSampleBoundCap is the largest -nts-max-sample-bound: 1 s, the
+// widest sample the NTS core takes at all (RFC 5905 MAXDIST), so 1s turns
+// the cap off. Its default is -nts-max-bound, and it may not be smaller:
+// a sample the cap refuses could not make a quorum within the max bound
+// alone, and a host that widens the one honest sample can then shift the
+// time by up to the cap, not up to 1 s.
+const ntsMaxSampleBoundCap = time.Second
 
 func init() {
 	for name, f := range platforms {
@@ -188,7 +200,14 @@ func newNTSClock(client *http.Client, dial nts.DialFunc, region string, log *slo
 	if maxBound > ntsMaxBoundCap {
 		return nil, nil, fmt.Errorf("nts clock: -nts-max-bound (RUNNER_NTS_MAX_BOUND) %v: at most %v", maxBound, ntsMaxBoundCap)
 	}
-	n := &clock.NTS{Coarse: coarse, MaxBound: maxBound, Log: log, Dial: dial}
+	maxSample, err := ntsDuration(*ntsMaxSampleFlag, "RUNNER_NTS_MAX_SAMPLE_BOUND", maxBound)
+	if err != nil {
+		return nil, nil, err
+	}
+	if maxSample < maxBound || maxSample > ntsMaxSampleBoundCap {
+		return nil, nil, fmt.Errorf("nts clock: -nts-max-sample-bound (RUNNER_NTS_MAX_SAMPLE_BOUND) %v: from -nts-max-bound (%v) to %v", maxSample, maxBound, ntsMaxSampleBoundCap)
+	}
+	n := &clock.NTS{Coarse: coarse, MaxBound: maxBound, MaxSampleBound: maxSample, Log: log, Dial: dial}
 	if n.Servers, err = ntsServers(); err != nil {
 		return nil, nil, err
 	}

@@ -130,13 +130,19 @@ type NTSServer struct {
 //     no time, there is no NTS time either. There is no fallback to Coarse.
 //   - Now never goes back, as for Anchored.
 type NTS struct {
-	Servers       []NTSServer
-	Coarse        interface{ Now() (time.Time, error) }
-	Interval      time.Duration // 0: NTSInterval
-	MaxBound      time.Duration // 0: NTSMaxBound
-	MaxAge        time.Duration // 0: NTSMaxAge, or NTSShiftMaxAge with Shifts
-	MaxCoarseDiff time.Duration // 0: NTSMaxCoarseDiff
-	Dial          nts.DialFunc  // nil: the default dialer
+	Servers  []NTSServer
+	Coarse   interface{ Now() (time.Time, error) }
+	Interval time.Duration // 0: NTSInterval
+	MaxBound time.Duration // 0: NTSMaxBound
+	// MaxSampleBound refuses a sample whose own bound is larger (0:
+	// MaxBound). A host that delays the one honest answer until its bound
+	// is wide lets two wrong servers place the time anywhere inside it; the
+	// cap keeps that within what signing accepts. A far region, whose
+	// samples are wide, raises MaxBound and with it this cap.
+	MaxSampleBound time.Duration
+	MaxAge         time.Duration // 0: NTSMaxAge, or NTSShiftMaxAge with Shifts
+	MaxCoarseDiff  time.Duration // 0: NTSMaxCoarseDiff
+	Dial           nts.DialFunc  // nil: the default dialer
 	// StartDelay bounds the random wait of the first Refresh before it
 	// contacts anyone. 0: NTSStartDelay (NTSShiftStartDelay with Shifts);
 	// negative: none (a one-shot check that calls Refresh once).
@@ -294,11 +300,16 @@ type NTSPeerStats struct {
 	LastDelay          time.Duration
 	LastBound          time.Duration
 	LastOffsetFromHost time.Duration // the sample's time minus the host clock, for logs only
+	// Wide counts answers refused for a bound over MaxSampleBound.
+	Wide int
 }
 
 func (n *NTS) interval() time.Duration { return cmpOr(n.Interval, NTSInterval) }
 func (n *NTS) maxBound() time.Duration { return cmpOr(n.MaxBound, NTSMaxBound) }
-func (n *NTS) shiftMode() bool         { return n.Shifts || n.ScheduleSeed != nil }
+func (n *NTS) maxSampleBound() time.Duration {
+	return cmpOr(n.MaxSampleBound, n.maxBound())
+}
+func (n *NTS) shiftMode() bool { return n.Shifts || n.ScheduleSeed != nil }
 
 // SetScheduleSeed switches the shift schedule from every operator to
 // ShiftActives(n) in the order seed gives, for a clock that starts before
@@ -775,6 +786,15 @@ func (n *NTS) record(p *ntsPeer, s nts.Sample, err error) bool {
 		p.lostInRow++
 		p.lastErr = err
 		n.logf(slog.LevelWarn, "nts: query failed", "operator", p.srv.Operator, "err", err)
+	case s.Bound > n.maxSampleBound():
+		// An answer, but too wide to join a quorum: it counts as lost (a
+		// fallback may follow), and the earlier sample stays until it ages
+		// out. NTS-KE would not help, so the loss streak does not grow.
+		p.stats.Wide++
+		p.stats.LastDelay, p.stats.LastBound = s.Delay, s.Bound
+		err = fmt.Errorf("sample bound %v over the %v limit (MaxSampleBound)", s.Bound.Round(time.Microsecond), n.maxSampleBound())
+		p.lastErr = err
+		n.logf(slog.LevelWarn, "nts: sample too wide", "operator", p.srv.Operator, "bound", s.Bound, "delay", s.Delay, "limit", n.maxSampleBound())
 	default:
 		p.stats.Samples++
 		p.lostInRow, p.lostKE = 0, false

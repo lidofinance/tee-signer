@@ -59,7 +59,7 @@ t="$(tpl 1)"
 c='.resources[0].properties.containers'
 if jq -e "$c | length == 1 and .[0].name == \"runner\"" "$t" >/dev/null; then ok "render: the runner alone"; else bad "render: containers $(jq -c "[${c}[].name]" "$t")"; fi
 cmd="$(jq -c "${c}[0].properties.command" "$t")"
-for w in '"-listen","tcp:0.0.0.0:7100"' '"-nts-wait","90s"' '"-nts-max-bound","100ms"' '"-setup","platform"'; do
+for w in '"-listen","tcp:0.0.0.0:7100"' '"-nts-wait","90s"' '"-nts-max-bound","100ms"' '"-nts-max-sample-bound","100ms"' '"-setup","platform"'; do
   grep -qF -- "$w" <<<"$cmd" || bad "render: runner command lacks $w: $cmd"
 done
 jq -e "${c}[0].properties.ports == [{port: 7100, protocol: \"TCP\"}]" "$t" >/dev/null &&

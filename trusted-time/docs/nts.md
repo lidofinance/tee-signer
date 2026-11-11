@@ -339,6 +339,10 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
     image's measured command (for example `time.nl@any.time.nl`, TimeNL's
     anycast host); from seven servers they hand over in shifts. Outside eu and na this set gives fewer close servers (Asia
     and Oceania: Cloudflare and Meta only), so a deployment there adds more.
+    Where no NTS server is close, the samples of distant ones are wide
+    (about half the round trip): such a deployment raises `-nts-max-bound`
+    and `-nts-max-sample-bound` in its image command, up to 250 ms, which
+    fits round trips up to about 500 ms.
     Once setups can name servers, the same choice moves into the setup.
   - `alt` hosts with a `nitro_port` can be chosen in place of the entry's
     host (`id@host`). The Nitro parent routes every entry and every such alt
@@ -555,6 +559,17 @@ cannot turn it off or point it elsewhere:
 | Azure | `platform-azure/deploy/aci-template.json` command (CCE policy hash) | `login.microsoftonline.com`, `management.azure.com`, `www.cloudflare.com` | ACI's default outbound access, direct |
 | GCP | `platform-gcp/deploy/Dockerfile` entrypoint (image digest) | `cloudkms.googleapis.com`, `sts.googleapis.com`, `www.cloudflare.com` | the VM's external address, direct (implied allow-all egress) |
 
+A sample whose own bound is over `-nts-max-sample-bound` joins no
+quorum (`clock.NTS.MaxSampleBound`; it counts as a lost answer, so a
+fallback may follow). The default is `-nts-max-bound`; it may be raised up
+to 1 s, where the cap is off, but not set below the max bound. Why: a host
+that delays the one honest answer of a small fresh set widens its bound,
+and two wrong servers can then place the time anywhere inside it while the
+quorum's bound looks small. Without the cap that is up to 1 s (RFC 5905
+MAXDIST, beyond which the core refuses a sample); with it, at most the max
+bound signing accepts anyway. The images name both flags, so a far
+deployment raises both.
+
 The coarse URLs are hosts the platform's egress already allows. Each is
 an entry of the `coarse` list in `trusted-time/ntscatalog/catalog.json`,
 with the roots it may chain to: a cloud's pinned set
@@ -567,11 +582,11 @@ a debug build takes others (the tests' servers) with the platform's roots
 and the NTS operators'. `www.cloudflare.com` chained to ISRG Root X1 on
 2026-11-11; Cloudflare's edge certificates also come from Google Trust
 Services and SSL.com, so its entry has the ISRG, SSL.com and Google roots.
-Each command also sets `-nts-wait 90s` and `-nts-max-bound 100ms` (the
+Each command also sets `-nts-wait 90s` , `-nts-max-bound 100ms` and `-nts-max-sample-bound 100ms` (the
 defaults), so no environment variable of the host or the launcher can
 change them. The build scripts check the flags (`nitro-eif.sh`,
 `gcp/build-image.sh`, `azure/deploy.sh render`), refuse a command without
-`-nts-clock`, `-nts-wait` or `-nts-max-bound`, and refuse one that has
+`-nts-clock`, `-nts-wait`, `-nts-max-bound` or `-nts-max-sample-bound`, and refuse one that has
 `-clock`. The runner itself refuses to start on a cloud platform whose
 clock the host can set (`checkClock` in `tee-signer/main.go`). Only the
 dev platform and debug builds may run on the system clock.
