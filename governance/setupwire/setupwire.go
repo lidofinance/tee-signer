@@ -163,8 +163,9 @@ const (
 	MaxLockDays = 36500
 	// MaxWithdrawalCredentials caps deposit_policy.withdrawal_credentials.
 	MaxWithdrawalCredentials = 16
-	// MaxRevokedClientCerts caps revoked_client_certs. The list only grows
-	// (ClassifyOpen), so the cap is generous.
+	// MaxRevokedClientCerts caps revoked_client_certs. Adding entries is
+	// fast; dropping one needs every approver in force (changes.go), for
+	// example to make room once the list is full.
 	MaxRevokedClientCerts = 128
 	// MaxTimeServers caps time_servers, the servers a setup adds to the
 	// image's default set.
@@ -546,8 +547,10 @@ type Open struct {
 	ForkSchedule   []Fork // ascending epochs
 	GloasForkEpoch *uint64
 	// RevokedClientCerts are SHA-256 hashes of client leaf, intermediate or
-	// CA certificates (DER) the runner refuses. Sorted, without repeats. An
-	// update may add entries but not drop one (ClassifyOpen).
+	// CA certificates (DER) the runner refuses. Sorted, without repeats, at
+	// most MaxRevokedClientCerts. An update adds entries with the usual
+	// signature count; one that drops an entry needs every approver in
+	// force (Update.Decide).
 	RevokedClientCerts [][32]byte
 	// TimeServers (time_servers, version 1) are the NTS or NTP servers the
 	// clock dials besides the image's default set: catalog IDs, "id" for

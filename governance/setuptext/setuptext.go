@@ -1001,7 +1001,7 @@ func formatOpen(w *printer, o *setupwire.Open) {
 		w.kv("gloas_fork_epoch", *o.GloasForkEpoch)
 	}
 	if len(o.RevokedClientCerts) > 0 {
-		w.note("revoked_client_certs: SHA-256 of client certificates (DER) the runner refuses; an update cannot drop one")
+		w.note("revoked_client_certs: SHA-256 of client certificates (DER) the runner refuses; dropping one needs every approver")
 	}
 	for _, h := range o.RevokedClientCerts {
 		w.kv("revoked_client_certs", hexOf(h[:]))

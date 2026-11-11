@@ -30,9 +30,24 @@ import (
 // lowering change_delay_seconds or approvals_needed, and adding, replacing
 // or reordering approvers, always wait.
 //
-// The open group never waits. Its one rule here is that
-// revoked_client_certs only grows. The minimum number of time servers is
-// the runner's check, since it needs the image's catalog.
+// Where 0 or an empty list turns a check off, moving to it loosens and
+// moving away from it tightens (tightenLimit): builder_registration_max_
+// future_seconds (0 turns the core's check off, signer-core policy.c) and
+// deposit_policy.allowed_deposit_amounts (unused yet; empty may come to
+// mean any amount). The other locked fields were checked against the core
+// and the runner: an empty allowed list (images, fee recipients,
+// BuilderRequestAuth roots) refuses everything, gas limits are a plain
+// range, bare_root_domains 0 allows no domain, change_delay_seconds 0 is
+// the shortest delay and absent is the build default, which ChangeDelay
+// compares, and the time_policy bounds are never 0 (1000 ms, the largest
+// sample bound, is the loosest and compares as such).
+//
+// The open group never waits. Adding entries to revoked_client_certs is
+// fast with the usual count. Dropping one undoes a revocation, for
+// example to make room under MaxRevokedClientCerts or once a certificate
+// has expired: it needs every active approver and no wait (PathBreakGlass),
+// and with fewer signers Decide refuses the update. The minimum number of
+// time servers is the runner's check, since it needs the image's catalog.
 //
 // The runner's config Accept does not call Decide yet: it still checks
 // with Verify and waits Wait for every locked update, the slower path.
@@ -118,11 +133,15 @@ func (u *Update) Decide(c *Chain, active *Locked, open *Open) (Decision, error) 
 		if open == nil {
 			return Decision{}, errors.New("update: the open values in force are unknown")
 		}
-		cs, err := ClassifyOpen(open, b.Open)
-		if err != nil {
-			return Decision{}, err
+		d.Changes = ClassifyOpen(open, b.Open)
+		if d.Loosens() {
+			// A dropped revocation: every active approver, no delay path.
+			if len(u.Approvals) != len(active.Approvers.Keys) {
+				return Decision{}, fmt.Errorf("update: open: dropping an entry of revoked_client_certs needs every approver in force (%d), %d signed",
+					len(active.Approvers.Keys), len(u.Approvals))
+			}
+			d.Path = PathBreakGlass
 		}
-		d.Changes = cs
 		return d, nil
 	}
 	d.Changes = ClassifyLocked(active, b.Locked)
@@ -231,7 +250,7 @@ func lockedClass(name string, a, n *Locked) ChangeClass {
 	case "builder_gas_limit_max":
 		return tightenIf(n.BuilderGasLimitMax < a.BuilderGasLimitMax)
 	case "builder_registration_max_future_seconds":
-		return tightenIf(n.BuilderRegistrationMaxFutureSeconds < a.BuilderRegistrationMaxFutureSeconds)
+		return tightenLimit(a.BuilderRegistrationMaxFutureSeconds, n.BuilderRegistrationMaxFutureSeconds)
 	case "allow_unverified_nonslashable_signing":
 		return tightenIf(!n.AllowUnverifiedNonslashableSigning)
 	case "bare_root_domains":
@@ -244,7 +263,7 @@ func lockedClass(name string, a, n *Locked) ChangeClass {
 		ad, nd := &a.DepositPolicy, &n.DepositPolicy
 		return tightenIf(ad.MinActivationBalance == nd.MinActivationBalance && ad.MaxEffectiveBalance == nd.MaxEffectiveBalance &&
 			subset(nd.WithdrawalCredentials, ad.WithdrawalCredentials, compareRoots) &&
-			subset(nd.AllowedDepositAmounts, ad.AllowedDepositAmounts, cmp.Compare[uint64]))
+			tighterList(ad.AllowedDepositAmounts, nd.AllowedDepositAmounts))
 	}
 	// approvers (a removal has its own path, EmergencyRemoval),
 	// slot_time_changes, exit_policy and any field added later.
@@ -263,26 +282,41 @@ func timePolicyClass(a, n *TimePolicy) ChangeClass {
 	return ChangeTighten
 }
 
-// ClassifyOpen lists the leaves of next that differ from active, each
-// ChangeOpen. It refuses an update that drops an entry of
-// revoked_client_certs: a revocation cannot be undone. (The plan allows
-// dropping an entry once its certificate has expired; that needs a proof
-// of the expiry, which no update carries yet.)
-func ClassifyOpen(active, next *Open) ([]FieldChange, error) {
-	for _, h := range active.RevokedClientCerts {
-		if _, ok := slices.BinarySearchFunc(next.RevokedClientCerts, h, compare32); !ok {
-			return nil, fmt.Errorf("update: open: revoked_client_certs drops %x; a revocation cannot be undone", h[:8])
-		}
-	}
+// ClassifyOpen lists the leaves of next that differ from active. Each is
+// ChangeOpen, except revoked_client_certs when it drops an entry of active:
+// ChangeBreakGlass, which Decide lets in only with every active approver.
+func ClassifyOpen(active, next *Open) []FieldChange {
 	fs := active.fields()
 	a, n := leafBytes(fs), leafBytes(next.fields())
 	var out []FieldChange
 	for i, f := range fs {
-		if !bytes.Equal(a[i], n[i]) {
-			out = append(out, FieldChange{f.name, ChangeOpen})
+		if bytes.Equal(a[i], n[i]) {
+			continue
 		}
+		c := ChangeOpen
+		if f.name == "revoked_client_certs" && !subset(active.RevokedClientCerts, next.RevokedClientCerts, compare32) {
+			c = ChangeBreakGlass
+		}
+		out = append(out, FieldChange{f.name, c})
 	}
-	return out, nil
+	return out
+}
+
+// tightenLimit classes a change of a limit where 0 turns the check off: a
+// lower non-zero limit, or one where there was none, tightens; 0 from a
+// limit, or a higher limit, loosens.
+func tightenLimit(a, n uint64) ChangeClass {
+	return tightenIf(n != 0 && (a == 0 || n < a))
+}
+
+// tighterList reports whether sorted list n is no looser than a, for a
+// list where empty means no limit: n is not empty, and a is empty or n is
+// a subset of a; or both are empty.
+func tighterList(a, n []uint64) bool {
+	if len(n) == 0 {
+		return len(a) == 0
+	}
+	return len(a) == 0 || subset(n, a, cmp.Compare[uint64])
 }
 
 func tightenIf(ok bool) ChangeClass {

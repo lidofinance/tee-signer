@@ -49,6 +49,10 @@ func TestClassifyLocked(t *testing.T) {
 	unverified.AllowUnverifiedNonslashableSigning = true
 	delay := cloneLocked(base)
 	delay.ChangeDelaySeconds = u64p(100) // below MaxTimeLock of every build
+	noHorizon := cloneLocked(base)
+	noHorizon.BuilderRegistrationMaxFutureSeconds = 0
+	noAmounts := cloneLocked(base)
+	noAmounts.DepositPolicy.AllowedDepositAmounts = nil
 	cases := []struct {
 		name   string
 		from   Locked
@@ -96,6 +100,12 @@ func TestClassifyLocked(t *testing.T) {
 			l.DepositPolicy.WithdrawalCredentials = append(l.DepositPolicy.WithdrawalCredentials, credentials(0x02, 0x43))
 		}, "deposit_policy", ChangeLoosen},
 		{"balance changed", base, func(l *Locked) { l.DepositPolicy.MaxEffectiveBalance-- }, "deposit_policy", ChangeLoosen},
+		// 0 turns the core's registration horizon check off.
+		{"registration horizon 3600 to 0", base, func(l *Locked) { l.BuilderRegistrationMaxFutureSeconds = 0 }, "builder_registration_max_future_seconds", ChangeLoosen},
+		{"registration horizon 0 to 3600", noHorizon, func(l *Locked) { l.BuilderRegistrationMaxFutureSeconds = 3600 }, "builder_registration_max_future_seconds", ChangeTighten},
+		// An empty allowed_deposit_amounts may come to mean any amount.
+		{"deposit amounts emptied", base, func(l *Locked) { l.DepositPolicy.AllowedDepositAmounts = nil }, "deposit_policy", ChangeLoosen},
+		{"deposit amounts from empty", noAmounts, func(l *Locked) { l.DepositPolicy.AllowedDepositAmounts = []uint64{32 * eth} }, "deposit_policy", ChangeTighten},
 	}
 	for _, c := range cases {
 		next := cloneLocked(c.from)
@@ -129,7 +139,7 @@ func TestClassifyLocked(t *testing.T) {
 	}
 }
 
-// The open group never waits, and revoked_client_certs only grows.
+// The open group never waits; dropping a revocation is break-glass.
 func TestClassifyOpen(t *testing.T) {
 	base := sampleOpen()
 	for name, c := range map[string]struct {
@@ -149,15 +159,14 @@ func TestClassifyOpen(t *testing.T) {
 		if err := next.Check(); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		got, err := ClassifyOpen(&base, &next)
-		if err != nil || !reflect.DeepEqual(got, []FieldChange{{c.field, ChangeOpen}}) {
-			t.Errorf("%s: got %v, %v", name, got, err)
+		if got := ClassifyOpen(&base, &next); !reflect.DeepEqual(got, []FieldChange{{c.field, ChangeOpen}}) {
+			t.Errorf("%s: got %v", name, got)
 		}
 	}
 	next := base
 	next.RevokedClientCerts = base.RevokedClientCerts[1:]
-	if _, err := ClassifyOpen(&base, &next); err == nil || !strings.Contains(err.Error(), "a revocation cannot be undone") {
-		t.Errorf("revocation dropped: %v, want a refusal", err)
+	if got := ClassifyOpen(&base, &next); !reflect.DeepEqual(got, []FieldChange{{"revoked_client_certs", ChangeBreakGlass}}) {
+		t.Errorf("revocation dropped: got %v", got)
 	}
 }
 
@@ -237,6 +246,7 @@ func TestDecide(t *testing.T) {
 			[]byte{0, 1, 2}, []byte{1, 2, 4}, PathNormal, normal, -1},
 		{"approvals_needed lowered, every approver", s5k4, func(l *Locked) { l.Approvers.ApprovalsNeeded = 3 },
 			[]byte{0, 1, 2, 3, 4}, []byte{1, 2, 3, 4, 5}, PathNormal, normal, -1},
+		{"registration horizon off, every approver", s3, func(l *Locked) { l.BuilderRegistrationMaxFutureSeconds = 0 }, []byte{0, 1, 2}, nil, PathNormal, normal, -1},
 		{"change delay lowered, every approver", s3, func(l *Locked) { l.ChangeDelaySeconds = u64p(60) }, []byte{0, 1, 2}, nil, PathNormal, normal, -1},
 	}
 	for _, c := range cases {
@@ -277,9 +287,17 @@ func TestDecideOpen(t *testing.T) {
 	if err != nil || d.Path != PathNormal || d.Wait != 0 || !reflect.DeepEqual(d.Changes, want) {
 		t.Fatalf("open: %+v, %v", d, err)
 	}
-	u = signedUpdate(t, s, body(func(o *Open) { o.RevokedClientCerts = nil }), []byte{0, 1, 2}, nil)
-	if _, err := u.Decide(&s.Chain, &s.Locked, &s.Open); err == nil || !strings.Contains(err.Error(), "cannot be undone") {
-		t.Fatalf("revocation dropped: %v", err)
+	// Dropping a revocation (to make room under the cap, say): every
+	// approver, no wait; the usual count is refused.
+	drop := body(func(o *Open) { o.RevokedClientCerts = o.RevokedClientCerts[1:] })
+	u = signedUpdate(t, s, drop, []byte{0, 1, 2}, nil)
+	d, err = u.Decide(&s.Chain, &s.Locked, &s.Open)
+	if err != nil || d.Path != PathBreakGlass || d.Wait != 0 || !reflect.DeepEqual(d.Changes, []FieldChange{{"revoked_client_certs", ChangeBreakGlass}}) {
+		t.Fatalf("revocation dropped by every approver: %+v, %v", d, err)
+	}
+	short := signedUpdate(t, s, drop, []byte{0, 2}, nil)
+	if _, err := short.Decide(&s.Chain, &s.Locked, &s.Open); err == nil || !strings.Contains(err.Error(), "needs every approver in force (3), 2 signed") {
+		t.Fatalf("revocation dropped with the usual count: %v", err)
 	}
 	if _, err := u.Decide(&s.Chain, &s.Locked, nil); err == nil {
 		t.Fatal("open update without the open values in force")
