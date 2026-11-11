@@ -24,7 +24,7 @@
 #   mark_bucket the bucket policy refuses puts under fewer days of retention
 #              than mark_min_lock_days + 1, or none, and writes under marks/
 #              and config/ by anyone but the writer user, and lifecycle
-#              rules on the bucket by anyone
+#              rules on the bucket by anyone; the writer may read the rules
 #   min_days_* mark_min_lock_days refuses 0 and a part day, and is
 #              required with mark_bucket
 #
@@ -248,6 +248,10 @@ run "mark_bucket" {
       Resource  = "arn:aws:s3:::signer-marks"
     })
     error_message = "the bucket policy does not deny lifecycle rules to every principal"
+  }
+  assert {
+    condition     = contains(one([for st in jsondecode(aws_s3_bucket_policy.marks[0].policy).Statement : st.Action if st.Sid == "EnclaveWriterListsAndChecksTheLock"]), "s3:GetLifecycleConfiguration")
+    error_message = "the writer cannot read the lifecycle rules for the lock check"
   }
 }
 

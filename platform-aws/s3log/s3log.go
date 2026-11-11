@@ -33,6 +33,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"sort"
@@ -57,6 +58,8 @@ type Log struct {
 	// RetainDays, if not 0, makes every Create set compliance retention
 	// for at least that many days on the new version.
 	RetainDays uint32
+	// Logger takes the lifecycle check's warnings; nil: slog.Default().
+	Logger *slog.Logger
 
 	// defaultDays is the compliance default retention Lock last read. A
 	// per-object date replaces the default, so Create keeps the longer one.
@@ -64,6 +67,9 @@ type Log struct {
 	// copy) reads the default at its first retained Create.
 	defaultDays atomic.Int64
 	defaultRead atomic.Bool
+	// expiryWarned, deniedWarned: lifecycle has warned of an expiration
+	// rule, of a refused read.
+	expiryWarned, deniedWarned atomic.Bool
 }
 
 // retainSlack is added to every retention date. The date and the signed
@@ -89,7 +95,7 @@ func Open(rest string, env markstore.Env) (markstore.Log, error) {
 		return nil, errors.New("s3log: no credentials: the store needs credentials only the enclave holds")
 	}
 	return &Log{Bucket: p["bucket"], Region: p["region"], Endpoint: p["endpoint"], HTTP: env.HTTP, Creds: env.AWSCreds,
-		RetainDays: env.RetainDays}, nil
+		RetainDays: env.RetainDays, Logger: env.Logger}, nil
 }
 
 func (l *Log) now() time.Time {
@@ -428,8 +434,11 @@ func (l *Log) listVersions(ctx context.Context, prefix string) ([]markstore.Entr
 // names none. The credentials need s3:GetBucketObjectLockConfiguration. A
 // bucket without Object Lock answers 404 ObjectLockConfigurationNotFoundError.
 // The default can change after this read; with RetainDays set, Create does
-// not depend on it.
+// not depend on it. Lock first checks the lifecycle rules (lifecycle).
 func (l *Log) Lock(ctx context.Context) (markstore.Lock, error) {
+	if err := l.lifecycle(ctx); err != nil {
+		return markstore.Lock{}, err
+	}
 	resp, err := l.send(ctx, http.MethodGet, "", url.Values{"object-lock": {""}}, nil, nil)
 	if err != nil {
 		return markstore.Lock{}, err
@@ -473,6 +482,63 @@ func (l *Log) Lock(ctx context.Context) (markstore.Lock, error) {
 	l.defaultRead.Store(true)
 	return markstore.Lock{Kind: "s3 object lock", Mode: r.Mode, Compliance: compliance,
 		Retention: time.Duration(days) * 24 * time.Hour}, nil
+}
+
+// lifecycle reads the bucket's lifecycle rules (GetBucketLifecycleConfiguration,
+// GET /?lifecycle). The credentials need s3:GetLifecycleConfiguration. The
+// bucket policy of platform-aws/deploy/main.tf denies new rules, but a rule
+// set before it keeps running. An enabled rule with a transition fails the
+// check: a record moved to an archive class cannot be read without a
+// restore, and the next start could not read the log. An expiration rule
+// only adds delete markers, which List and Get read past, and cannot
+// remove a version before its retention ends: a warning, once. A bucket
+// without rules answers 404 NoSuchLifecycleConfiguration. A refused read
+// (403, a bucket policy older than this check) is a warning, once, and
+// passes: the rules only cost liveness. Other errors fail, as the Object
+// Lock read would on them.
+func (l *Log) lifecycle(ctx context.Context) error {
+	resp, err := l.send(ctx, http.MethodGet, "", url.Values{"lifecycle": {""}}, nil, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	log := l.Logger
+	if log == nil {
+		log = slog.Default()
+	}
+	if resp.StatusCode != http.StatusOK {
+		err := errorOf(resp)
+		switch {
+		case resp.StatusCode == http.StatusNotFound && strings.Contains(err.Error(), "NoSuchLifecycleConfiguration"):
+			return nil
+		case resp.StatusCode == http.StatusForbidden:
+			if !l.deniedWarned.Swap(true) {
+				log.Warn("s3log: cannot read lifecycle rules; apply the new bucket policy", "bucket", l.Bucket, "err", err)
+			}
+			return nil
+		}
+		return err
+	}
+	var c struct {
+		Rule []struct {
+			ID, Status                                                                       string
+			Transition, NoncurrentVersionTransition, Expiration, NoncurrentVersionExpiration []struct{}
+		}
+	}
+	if err := xml.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&c); err != nil {
+		return fmt.Errorf("s3log: lifecycle configuration: %w", err)
+	}
+	for _, r := range c.Rule {
+		switch {
+		case r.Status != "Enabled":
+		case len(r.Transition)+len(r.NoncurrentVersionTransition) > 0:
+			return fmt.Errorf("s3log: s3://%s: lifecycle rule %q moves objects to another storage class; remove it", l.Bucket, r.ID)
+		case len(r.Expiration)+len(r.NoncurrentVersionExpiration) > 0 && !l.expiryWarned.Swap(true):
+			log.Warn("s3log: a lifecycle rule expires objects in the mark bucket; the log reads past its delete markers, but remove it",
+				"bucket", l.Bucket, "rule", r.ID)
+		}
+	}
+	return nil
 }
 
 // Get reads one object version.

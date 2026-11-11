@@ -273,8 +273,9 @@ SETUP=signer-2.bin platform-aws/deploy/parent-run.sh               # on the pare
 With `mark_bucket` set, `main.tf` writes the bucket policy: the writer may
 create and read objects under `marks/` and `config/`, set each new object's
 retention (`s3:PutObjectRetention`, see "Mark log"), list versions and read
-the Object Lock configuration (the runner's lock check needs
-`s3:GetBucketObjectLockConfiguration`); the parent role is denied every
+the Object Lock configuration and the lifecycle rules (the runner's lock
+check needs `s3:GetBucketObjectLockConfiguration` and
+`s3:GetLifecycleConfiguration`); the parent role is denied every
 write. No principal but the writer user may put objects, retention or
 replicas under `marks/` and `config/`, the account's root user and admins
 included: objects planted under a signer's path can stop its mark writes
@@ -449,12 +450,17 @@ or deleting rules, transitions to archive classes included) to every
 principal. Before applying this policy, on a new or an existing
 deployment, check that the bucket has no lifecycle rule (`aws s3api
 get-bucket-lifecycle-configuration` returns `NoSuchLifecycleConfiguration`);
-after it, removing one takes a policy change. A lifecycle rule, such as
-cleanup of old versions after the lock ends, takes a policy change that
-drops NoLifecycleRules. That raises the PutBucketPolicy alert, and the
-runner's checks still catch a marker it lets through. Compliance mode
-keeps everyone from deleting or overwriting a locked version. An admin who
-can change the bucket policy can lift these denies, and one who mints an
+after it, removing one takes a policy change. The runner's lock check
+reads the rules at every start: an enabled rule with a transition stops
+the start (an archive class makes records unreadable), and an expiration
+rule logs a warning. Apply this policy before or with a runner that has
+this check: under an older policy the runner cannot read the rules, logs
+a warning and starts without the check. A lifecycle rule, such as cleanup
+of old versions after the lock ends, takes a policy change that drops
+NoLifecycleRules. That raises the PutBucketPolicy alert, and the runner's
+checks still catch a marker it lets through. Compliance mode keeps
+everyone from deleting or overwriting a locked version. An admin who can
+change the bucket policy can lift these denies, and one who mints an
 access key or a console password for the record writer user writes as it
 without changing the policy. So alert in CloudTrail on `PutBucketPolicy`,
 `DeleteBucketPolicy` and `PutBucketLifecycle` for the bucket, and on

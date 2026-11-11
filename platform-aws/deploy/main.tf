@@ -325,7 +325,10 @@ resource "aws_iam_user" "record_writer" {
 # NoLifecycleRules denies s3:PutLifecycleConfiguration (which also covers
 # DeleteBucketLifecycle) to every principal; it also blocks transitions to
 # archive classes. A rule set before this policy keeps running, so the
-# bucket must have none when this statement is first applied. While the
+# bucket must have none when this statement is first applied; the lock
+# check reads the rules (s3:GetLifecycleConfiguration; without it, a
+# warning) and refuses to start on a transition and warns of an
+# expiration. While the
 # policy stands no request and no new lifecycle rule adds a delete marker;
 # an admin who can change the policy can lift both denies. Versioning
 # cannot be suspended on an Object Lock bucket, and a replication rule
@@ -370,7 +373,7 @@ resource "aws_s3_bucket_policy" "marks" {
         Sid       = "EnclaveWriterListsAndChecksTheLock"
         Effect    = "Allow"
         Principal = { AWS = aws_iam_user.record_writer.arn }
-        Action    = ["s3:ListBucketVersions", "s3:GetBucketObjectLockConfiguration"]
+        Action    = ["s3:ListBucketVersions", "s3:GetBucketObjectLockConfiguration", "s3:GetLifecycleConfiguration"]
         Resource  = "arn:aws:s3:::${var.mark_bucket}"
       },
       {

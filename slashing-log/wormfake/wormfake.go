@@ -12,7 +12,8 @@
 //	Azure  PUT blob (If-None-Match: *), GET blob, GET list (comp=list),
 //	       with a locked time-based retention policy
 //
-// and the lock self-check's read of the lock (S3 GET ?object-lock, GCS GET
+// and the lock self-check's read of the lock (S3 GET ?object-lock and
+// ?lifecycle, GCS GET
 // bucket with its retentionPolicy, Azure the management plane's storage
 // account and container with its immutability policy); and the faults the tests need: the store down, slow
 // answers, a stale listing, a listing that leaves names out, a lock in the
@@ -120,6 +121,7 @@ type Server struct {
 	staleBy  int    // listings omit the last staleBy writes
 	hidden   string // listings omit names with this prefix ("": none)
 	lock     Lock
+	rules    string        // S3 lifecycle rules, XML ("": none)
 	offset   time.Duration // the fake clock runs this far ahead of the real one
 	faults   []*Fault
 	hits     int
@@ -147,6 +149,10 @@ func (s *Server) Advance(d time.Duration) { s.mu.Lock(); s.offset += d; s.mu.Unl
 
 // SetLock sets the lock the store reports and its retention.
 func (s *Server) SetLock(l Lock) { s.mu.Lock(); s.lock = l; s.mu.Unlock() }
+
+// SetLifecycle sets the S3 bucket's lifecycle rules: the Rule elements of
+// a LifecycleConfiguration ("": none, a 404 NoSuchLifecycleConfiguration).
+func (s *Server) SetLifecycle(rules string) { s.mu.Lock(); s.rules = rules; s.mu.Unlock() }
 
 // SetHidden makes listings leave out every name that starts with prefix
 // (a listing that hides objects); "" shows everything again.
@@ -588,6 +594,12 @@ func (s *Server) serveS3(w http.ResponseWriter, r *http.Request, body []byte) {
 		}
 		fmt.Fprintf(w, `<ObjectLockConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><ObjectLockEnabled>Enabled</ObjectLockEnabled>`+
 			`<Rule><DefaultRetention><Mode>%s</Mode><Days>%d</Days></DefaultRetention></Rule></ObjectLockConfiguration>`, mode, s.lock.Days)
+	case r.Method == http.MethodGet && key == "" && q.Has("lifecycle"):
+		if s.rules == "" {
+			s3err(w, http.StatusNotFound, "NoSuchLifecycleConfiguration")
+			return
+		}
+		fmt.Fprint(w, `<LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`+s.rules+`</LifecycleConfiguration>`)
 	default:
 		s3err(w, http.StatusNotImplemented, "NotImplemented")
 	}

@@ -475,6 +475,7 @@ func setupMarkLog(ctx context.Context, plat *platform.Platform, hooks *state.Hoo
 		return markClaim{}, errors.New("-mark-store needs -mark-signer")
 	}
 	env := markLogEnv(plat, platformName, st)
+	env.Logger = log
 	if plat.Keys == nil {
 		return markClaim{}, fmt.Errorf("platform %s has no key release for the mark log", platformName)
 	}
