@@ -55,7 +55,7 @@ const (
 )
 
 // Version is the name and version of the Rust library, for example
-// "signer-nts 0.0.3".
+// "signer-nts 0.0.5".
 func Version() string { return C.GoString(C.snts_version()) }
 
 // AESSIVSelfTest runs the AES-SIV-CMAC-256 test vector of RFC 5297 appendix

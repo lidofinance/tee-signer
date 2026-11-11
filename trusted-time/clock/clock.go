@@ -121,17 +121,20 @@ type NTSPeerHealth struct {
 
 // NTSOperatorCounts counts the contacts with one operator under the shift
 // schedule. Queries counts every contact the schedule made (start, active
-// slot, fallback, burst); Fallbacks and Bursts count those made as a
-// fallback or in a recovery burst. Handovers counts the shifts this
-// operator came in at, FailedHandovers those where its first contact after
-// coming in got no answer. Rates counts Kiss-o'-Death RATE answers (also
-// counted as losses). FallbackKE counts the fallbacks to this operator that
-// ran NTS-KE first: if it grows, its cookies expire while it is idle.
+// slot, fallback, burst, retry); Fallbacks and Bursts count those made as a
+// fallback or in a recovery burst, Retries those that asked this operator
+// again NTSShiftStartRetry after a lost answer that found no fallback.
+// Handovers counts the shifts this operator came in at, FailedHandovers
+// those where its first contact after coming in got no answer. Rates counts
+// Kiss-o'-Death RATE answers (also counted as losses). FallbackKE counts
+// the fallbacks to this operator that ran NTS-KE first: if it grows, its
+// cookies expire while it is idle.
 type NTSOperatorCounts struct {
 	Queries, Answers, Losses   int64
 	Fallbacks, Bursts, Rates   int64
 	Handovers, FailedHandovers int64
 	FallbackKE                 int64
+	Retries                    int64
 }
 
 // NTSReporter is a clock that reports an NTSSummary.

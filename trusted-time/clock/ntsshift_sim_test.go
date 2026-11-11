@@ -39,7 +39,10 @@ type shiftWorld struct {
 	// NTSShiftStartRetry. inStart reports that no quorum formed yet.
 	early    map[string][]bool
 	answered map[string]bool
-	inStart  func() bool
+	// lost marks the contacts that got no answer: the one retry of a lost
+	// answer may follow it after NTSShiftStartRetry.
+	lost    map[string][]bool
+	inStart func() bool
 	// downUntil: no answers before this local time; rateUntil: a
 	// Kiss-o'-Death RATE before this local time.
 	downUntil map[string]int64
@@ -69,32 +72,47 @@ func (w *shiftWorld) query(op string, t int64) (nts.Sample, error) {
 	defer w.mu.Unlock()
 	w.contacts[op] = append(w.contacts[op], t)
 	if w.early == nil {
-		w.early, w.answered = map[string][]bool{}, map[string]bool{}
+		w.early, w.answered, w.lost = map[string][]bool{}, map[string]bool{}, map[string][]bool{}
 	}
 	w.early[op] = append(w.early[op], w.inStart != nil && w.inStart() && !w.answered[op])
 	if t < w.rateUntil[op] {
+		w.lost[op] = append(w.lost[op], false) // a RATE gets no retry
 		return nts.Sample{}, &nts.KissError{Code: "RATE"}
 	}
 	if w.inBlip(t) || w.down[op] || t < w.downUntil[op] || w.draw(op, t) < w.loss[op] {
+		w.lost[op] = append(w.lost[op], true)
 		w.now = max(w.now, t+int64(NTSShiftQueryTimeout))
 		return nts.Sample{}, errors.New("timeout")
 	}
+	w.lost[op] = append(w.lost[op], false)
 	w.answered[op] = true
 	return nts.Sample{Offset: w.off + int64(w.wrong[op]), Bound: 15 * time.Millisecond, Delay: 30 * time.Millisecond, T4: t}, nil
 }
 
-// gapsOf is the shortest gap between two contacts with one operator, an
-// early contact's gap counted as NTSShiftMinGap/NTSShiftStartRetry times
-// longer (so 20 s before the first quorum reads as 60 s), and its operator.
+// gapsOf is the shortest gap between two contacts with one operator, and
+// its operator. Two kinds of contact may come NTSShiftStartRetry after the
+// one before, so their gap counts NTSShiftMinGap/NTSShiftStartRetry times
+// longer (20 s reads as 60 s): an early one, and the one retry of a lost
+// answer inside the gap. The contact after a retry is measured from the
+// lost one, so a lost answer costs at most one extra query.
 func gapsOf(w *shiftWorld) (time.Duration, string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	best, who := time.Duration(1<<62), ""
 	for op, cs := range w.contacts {
+		prev := 0 // the last contact that was not a retry
 		for i := 1; i < len(cs); i++ {
-			d := time.Duration(cs[i] - cs[i-1])
-			if w.early[op][i] {
-				d *= NTSShiftMinGap / NTSShiftStartRetry
+			d := time.Duration(cs[i] - cs[prev])
+			retry := false
+			switch {
+			case w.early[op][i]:
+				d = time.Duration(cs[i]-cs[i-1]) * (NTSShiftMinGap / NTSShiftStartRetry)
+			case d < NTSShiftMinGap && i == prev+1 && w.lost[op][prev]:
+				d = time.Duration(cs[i]-cs[i-1]) * (NTSShiftMinGap / NTSShiftStartRetry)
+				retry = true
+			}
+			if !retry {
+				prev = i
 			}
 			if d < best {
 				best, who = d, op
@@ -284,6 +302,7 @@ func runShiftScenario(t testing.TB, sc shiftScenario) shiftResult {
 		res.counts.Bursts += c.Bursts
 		res.counts.Handovers += c.Handovers
 		res.counts.FailedHandovers += c.FailedHandovers
+		res.counts.Retries += c.Retries
 	}
 	if res.counts.Queries != int64(total) {
 		t.Fatalf("%s: schedule counted %d queries, the servers saw %d", sc.name, res.counts.Queries, total)
@@ -316,6 +335,16 @@ func reviewScenariosN(dur time.Duration, seed uint64, catalog int) []shiftScenar
 			s.wrong = map[int]time.Duration{2: time.Second, 5: -time.Second}
 		}),
 	}
+}
+
+// smallSetLossScenarios: one operator down and a lossy one, where every
+// lost answer of a set under 7 leaves too few fresh samples.
+func smallSetLossScenarios(dur time.Duration, seed uint64, catalog int) []shiftScenario {
+	base := shiftScenario{catalog: catalog, dur: dur, from: 20 * time.Minute, seed: seed}
+	a, b := base, base
+	a.name, a.down, a.lossy = "one down, one at 50% loss", []int{0}, []int{1}
+	b.name, b.down, b.loss = "one down, 10% loss everywhere", []int{0}, 0.1
+	return []shiftScenario{a, b}
 }
 
 func blipScenario(seed uint64) shiftScenario {
@@ -639,13 +668,17 @@ func TestNTSShiftSevenVersusEight(t *testing.T) {
 // Below 7 operators every one is active, once per 60 s, and nothing hands
 // over: about 60 queries per operator per hour when healthy. A healthy
 // run, one wrong operator and one lossy operator never block with 4 or 6;
-// with 6, two down or two wrong do not either.
+// with 6, two down or two wrong do not either. There is no operator for a
+// fallback, so a lost answer gets one retry 20 s later: with 4 servers,
+// 30 % loss blocked 18 % of the time without it, one down and one at 50 %
+// loss 34 %, one down and 10 % loss 17 %. A lost answer costs at most one
+// extra query.
 func TestNTSShiftSmallSets(t *testing.T) {
 	for _, c := range []int{4, 6} {
 		if got := ShiftActives(c); got != c {
 			t.Fatalf("ShiftActives(%d) = %d", c, got)
 		}
-		for _, sc := range reviewScenariosN(2*time.Hour, 1, c) {
+		for _, sc := range append(reviewScenariosN(2*time.Hour, 1, c), smallSetLossScenarios(2*time.Hour, 1, c)...) {
 			r := runShiftScenario(t, sc)
 			checkMinGap(t, sc.name, r)
 			t.Logf("%d servers, %s: blocked %v (%.3f%%), longest %v, %.1f q/h, %+v", c, sc.name, r.blocked, r.blockedPct(), r.longest, r.queriesPerHour, r.counts)
@@ -656,8 +689,15 @@ func TestNTSShiftSmallSets(t *testing.T) {
 			if mustNot && r.blocked != 0 {
 				t.Errorf("%d servers, %s: blocked %v", c, sc.name, r.blocked)
 			}
-			if sc.name == "healthy" && (r.counts.Handovers != 0 || r.queriesPerHour > 61*float64(c)) {
+			if sc.name == "healthy" && (r.counts.Handovers != 0 || r.counts.Retries != 0 || r.queriesPerHour > 61*float64(c)) {
 				t.Errorf("%d servers, healthy: %.1f q/h, %+v", c, r.queriesPerHour, r.counts)
+			}
+			if r.counts.Retries > r.counts.Losses || r.counts.Fallbacks != 0 {
+				t.Errorf("%d servers, %s: %d retries for %d losses, %d fallbacks", c, sc.name, r.counts.Retries, r.counts.Losses, r.counts.Fallbacks)
+			}
+			limit := map[string]float64{"30% loss everywhere": 3, "one down, one at 50% loss": 20, "one down, 10% loss everywhere": 3}
+			if l, ok := limit[sc.name]; ok && (r.blockedPct() > l || r.counts.Retries == 0) {
+				t.Errorf("%d servers, %s: blocked %.3f%%, over %v%%, with %d retries", c, sc.name, r.blockedPct(), l, r.counts.Retries)
 			}
 		}
 	}

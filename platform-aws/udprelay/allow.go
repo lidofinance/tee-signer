@@ -26,7 +26,13 @@ import (
 //     of Names resolves to now (cached for TTL).
 //   - Public: global unicast, not private, not in notPublic (shared space,
 //     NAT64, 6to4 and other special blocks). A DNS answer that points a
-//     name at the parent or the VPC gets no datagram.
+//     name at a private or special address (the VPC's IPv4 space, the
+//     parent's private address, loopback) gets no datagram. The relay
+//     cannot tell a public address of this VPC or of the parent (an
+//     Elastic IP, the VPC's global IPv6 block) from an NTP server's: a DNS
+//     answer that names one is sent to. Such an answer comes from the
+//     parent's resolver, which the host runs; the host can send datagrams
+//     there itself, and NTS requests carry nothing a receiver can use.
 //
 // Nothing else goes out: no other name is resolved, no other address is
 // reached. Netnod's NTS-KE servers name NTP servers by address, and those
@@ -211,8 +217,9 @@ func (a *Allowlist) inNets(ip netip.Addr) bool {
 
 // nameAddr: an address a name of the allowlist resolved to that a datagram
 // may go to. It must be public unless Nets holds it: a DNS answer that
-// points a catalog name at the parent itself or at the VPC must not turn
-// the relay toward them (the tests allow loopback with Nets).
+// points a catalog name at a private address of the parent or the VPC must
+// not turn the relay toward them (the tests allow loopback with Nets).
+// Public addresses of the VPC are not known here (see Allowlist).
 func (a *Allowlist) nameAddr(ip netip.Addr) bool {
 	return usable(ip) && (public(ip) || a.inNets(ip))
 }
@@ -237,9 +244,14 @@ func (a *Allowlist) Check(ctx context.Context, dest string) (netip.AddrPort, err
 		if a.inNets(ip) {
 			return netip.AddrPortFrom(ip, port), nil
 		}
+		// Before any lookup: an address that is not public can never pass,
+		// so it costs no DNS query of the allowed names.
+		if !public(ip) {
+			return netip.AddrPort{}, refusal{"address " + host + " not in the allowlist"}
+		}
 		for _, name := range a.Names {
 			addrs, err := a.lookup(ctx, name)
-			if err == nil && public(ip) && slices.Contains(addrs, ip) {
+			if err == nil && slices.Contains(addrs, ip) {
 				return netip.AddrPortFrom(ip, port), nil
 			}
 		}

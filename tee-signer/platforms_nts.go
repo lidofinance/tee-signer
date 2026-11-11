@@ -59,6 +59,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -135,8 +136,9 @@ const ntsMaxBoundCap = 250 * time.Millisecond
 // widest sample the NTS core takes at all (RFC 5905 MAXDIST), so 1s turns
 // the cap off. Its default is -nts-max-bound, and it may not be smaller.
 // A host that widens the one honest sample of a small fresh set lets two
-// wrong servers shift the time by up to about twice the cap (the bound is
-// a half-width), not about 1 s each way. An image that raises it above
+// wrong servers shift the time by up to about twice the cap plus the
+// sample's aging (the bound is a half-width; 2 x (100 + 38) ms at the
+// default), not about 1 s each way. An image that raises it above
 // -nts-max-bound gives part of that back.
 const ntsMaxSampleBoundCap = time.Second
 
@@ -355,16 +357,11 @@ func ntsCoarseURLs(region string) ([]coarseURL, error) {
 		list = os.Getenv("RUNNER_NTS_COARSE_URLS")
 	}
 	var urls []coarseURL
-	seen := map[string]bool{}
+	seen := map[string]string{} // scheme://host:port -> the URL that named it
 	for _, u := range strings.Split(list, ",") {
 		if u = strings.TrimSpace(u); u == "" {
 			continue
 		}
-		// One host named twice would count twice in the coarse quorum.
-		if seen[u] {
-			return nil, fmt.Errorf("nts clock: coarse URL %s named twice", u)
-		}
-		seen[u] = true
 		c := coarseURL{named: u, url: u}
 		c.entry, c.ok = ntscatalog.Builtin.CoarseFor(u)
 		if strings.Contains(u, "{region}") {
@@ -376,12 +373,41 @@ func ntsCoarseURLs(region string) ([]coarseURL, error) {
 			}
 			c.url = strings.ReplaceAll(u, "{region}", region)
 		}
+		// One host named twice would count twice in the coarse quorum,
+		// whatever the path, a trailing slash, the case of the name or a
+		// {region} form next to its filled-in one.
+		key, err := coarseHostKey(c.url)
+		if err != nil {
+			return nil, fmt.Errorf("nts clock: coarse URL %s: %w", u, err)
+		}
+		if prev, dup := seen[key]; dup {
+			return nil, fmt.Errorf("nts clock: coarse URLs %s and %s name one host (%s)", prev, u, key)
+		}
+		seen[key] = u
 		urls = append(urls, c)
 	}
 	if len(urls) < 3 {
 		return nil, errors.New("nts clock: -nts-coarse-urls (RUNNER_NTS_COARSE_URLS) needs 3 or more https URLs for the coarse check")
 	}
 	return urls, nil
+}
+
+// coarseHostKey is the scheme, host and port of an https URL, the host in
+// lower case without a trailing dot and the port filled in, so two URLs of
+// one host compare equal whatever their paths.
+func coarseHostKey(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	if u.Scheme != "https" || u.Hostname() == "" {
+		return "", errors.New("want an https URL with a host")
+	}
+	port := u.Port()
+	if port == "" {
+		port = "443"
+	}
+	return "https://" + net.JoinHostPort(strings.TrimSuffix(strings.ToLower(u.Hostname()), "."), port), nil
 }
 
 // publicNTSServers are the catalog's default set plus the entries named in
@@ -423,10 +449,18 @@ const ntsMinServers = 4
 // ntsSchedule turns the seeded schedule on, with seed. From
 // ntsShiftMinServers servers it runs shifts; with fewer, every server is
 // active, each asked once per 60 s on the same grid, so a small set is not
-// asked more often than a large one. Fewer than ntsMinServers is an error.
+// asked more often than a large one. After the first quorum a lost answer
+// may get one retry 20 s later, at most one per lost contact and within
+// the 120 per hour cap, so the worst case per server is two requests per
+// 60 s while its answers are lost. Fewer than ntsMinServers is an error.
 func ntsSchedule(n *clock.NTS, seed []byte) error {
 	if err := ntsEnoughServers(n); err != nil {
 		return err
+	}
+	if seed != nil && len(seed) == 0 {
+		// A platform that failed to derive it: every signer would share
+		// the order of the empty seed.
+		return errors.New("nts clock: empty schedule seed")
 	}
 	n.Shifts, n.ScheduleSeed = true, seed
 	return nil
