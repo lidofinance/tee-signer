@@ -235,3 +235,15 @@ func TestIdentityAudience(t *testing.T) {
 		t.Fatalf("New with the STS audience: %v", err)
 	}
 }
+
+// The runner's clients ignore proxy variables, as the Azure runner's do:
+// Google's APIs and the metadata server are reached directly, never
+// through a proxy the VM's environment names.
+func TestClientsIgnoreProxyVariables(t *testing.T) {
+	for name, c := range map[string]*http.Client{"google": googleClient(), "metadata": metadataClient()} {
+		tr, ok := c.Transport.(*http.Transport)
+		if !ok || tr.Proxy != nil {
+			t.Errorf("%s client: transport %T with a proxy function", name, c.Transport)
+		}
+	}
+}

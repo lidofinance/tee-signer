@@ -110,9 +110,12 @@ func identityAudience(o platform.Options) (string, error) {
 }
 
 // googleClient is the client for Google's APIs (STS, IAM credentials,
-// Cloud KMS, and GCS for the mark log): it trusts Google's roots only.
+// Cloud KMS, and GCS for the mark log): it trusts Google's roots only. It
+// ignores proxy variables, as the Azure runner's client does: nothing here
+// should go through a proxy the VM's environment names.
 func googleClient() *http.Client {
 	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.Proxy = nil
 	t.TLSClientConfig = &tls.Config{RootCAs: cloudroots.Pool(cloudroots.Google)}
 	return &http.Client{Transport: t, Timeout: 30 * time.Second}
 }
