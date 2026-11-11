@@ -138,6 +138,11 @@ type Hooks struct {
 	// keyFloor is each validator's import floor (ImportFloor): a source
 	// bound of its own, set when it came in without vote history.
 	keyFloor map[backend.Pubkey]uint64
+	// recorded is the interchange maxima of each validator's import in
+	// this run (Recorded); stored is its persisted mark as read at its
+	// load (Unproven). Both before any floor.
+	recorded map[backend.Pubkey]backend.Watermark
+	stored   map[backend.Pubkey]backend.Watermark
 }
 
 var _ core.Hooks = (*Hooks)(nil)
@@ -171,7 +176,8 @@ func New(cfg core.Config, mode Mode, clk platform.Clock, store platform.Store,
 	}
 	h := &Hooks{cfg: cfg, mode: mode, clock: clk, store: store, sealer: sealer, log: log,
 		floors: map[backend.Pubkey]uint64{}, expect: map[backend.Pubkey]bool{}, history: map[backend.Pubkey]bool{},
-		keyFloor: map[backend.Pubkey]uint64{}}
+		keyFloor: map[backend.Pubkey]uint64{}, recorded: map[backend.Pubkey]backend.Watermark{},
+		stored: map[backend.Pubkey]backend.Watermark{}}
 	h.epochAt = h.cfg.EpochAt
 	return h, nil
 }
@@ -440,6 +446,39 @@ func (h *Hooks) LoadFloor(pk backend.Pubkey) (uint64, bool) {
 	return f, ok
 }
 
+// NoteInterchange adds the interchange maxima of pk's import to what
+// Recorded holds. Call it before pk can sign.
+func (h *Hooks) NoteInterchange(pk backend.Pubkey, interchange backend.Watermark) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.recorded[pk] = Merge(h.recorded[pk], interchange)
+}
+
+// Recorded is what proves pk's own history in this run, without any
+// floor: the interchange maxima of its import. A refusal this mark
+// explains is a conflict of the key's own.
+func (h *Hooks) Recorded(pk backend.Pubkey) backend.Watermark {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.recorded[pk]
+}
+
+// Unproven is what the runner read at start that bounds pk but proves no
+// message pk signed: the mark log's mark (one for every key, the highest
+// any key signed or the runner covered) and pk's persisted mark (the
+// core's commit-ahead mark, with its headroom and any earlier floor). A
+// refusal only this mark explains may be a conflict, another key's
+// message, or headroom.
+func (h *Hooks) Unproven(pk backend.Pubkey) (backend.Watermark, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	wm, found := h.stored[pk]
+	if h.markFound {
+		wm, found = Merge(wm, h.mark), true
+	}
+	return wm, found
+}
+
 func satAdd(a, b uint64) uint64 {
 	if a > math.MaxUint64-b {
 		return math.MaxUint64
@@ -511,6 +550,9 @@ func (h *Hooks) LoadWatermark(pk backend.Pubkey) (backend.Watermark, bool, error
 				return wm, false, err
 			}
 			found = true
+			h.mu.Lock()
+			h.stored[pk] = Merge(h.stored[pk], wm)
+			h.mu.Unlock()
 		}
 	}
 	floor, hasFloor := uint64(0), false

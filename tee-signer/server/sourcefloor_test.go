@@ -13,12 +13,14 @@ func (e *tgtEnv) floorOf() uint64 {
 	return e.signer.EpochAt(e.now()) + e.setup.Safety.MaxSignEpochsAheadOfClock + 1
 }
 
-// wantSlashSource fails unless err is a StatusSlashSource refusal.
+// wantSlashSource fails unless err is a StatusSlashSource refusal, or a
+// floor refusal (StatusFloor, StatusFloorUnproven) when nothing the key's
+// own history explains it.
 func wantSlashSource(t *testing.T, err error, what string) {
 	t.Helper()
 	if err == nil {
 		t.Errorf("%s: signed, want %v", what, backend.StatusSlashSource)
-	} else if backend.StatusOf(err) != backend.StatusSlashSource {
+	} else if st := backend.StatusOf(err); st != backend.StatusSlashSource && st != backend.StatusFloor && st != backend.StatusFloorUnproven {
 		t.Errorf("%s: %v, want %v", what, err, backend.StatusSlashSource)
 	}
 }

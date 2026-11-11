@@ -68,9 +68,10 @@ func (l *faultLog) Create(ctx context.Context, name string, data []byte) error {
 
 // modelRunner is one runner process of the model.
 type modelRunner struct {
-	e   tgtEnv
-	log *faultLog
-	ok  bool // started; false when its start refused
+	e     tgtEnv
+	log   *faultLog
+	ok    bool // started; false when its start refused
+	start int  // the step of the model it started at
 }
 
 // startRunner starts a runner on base's setup, store, clock and log
@@ -152,6 +153,16 @@ type modelVote struct {
 	// for pre-history and imports): a target above it was signed for a slot
 	// that had not started.
 	at uint64
+	// by is the runner that signed or imported it (nil: pre-history), at
+	// step of the model.
+	by   *modelRunner
+	step int
+}
+
+// slashable reports whether votes p and v make a double vote or a surround.
+func slashable(p, v modelVote) bool {
+	return p.target == v.target && (p.source != v.source || p.root != v.root) ||
+		v.source < p.source && v.target > p.target || p.source < v.source && p.target > v.target
 }
 
 // oracle holds every signature returned, and the pre-history of imports.
@@ -210,8 +221,12 @@ func runModel(t *testing.T, ops []byte) (signed int) {
 			r.close()
 		}
 	}()
-	active := 0
+	active, step := 0, 0
 	var keys []modelKey
+	// hist: the key came in with its pre-history as interchange maxima.
+	hist := map[backend.Pubkey]bool{}
+	// histBy: the runner that imported the key with its pre-history.
+	histBy := map[backend.Pubkey]*modelRunner{}
 	// Votes each key signed, returned or not, in order; and the last one
 	// per runner slot since its start.
 	sent := map[backend.Pubkey][]modelVote{}
@@ -237,6 +252,9 @@ func runModel(t *testing.T, ops []byte) (signed int) {
 	floorHi, coverHi, restarted := first.e.floorOf(), uint64(0), false
 	keyFloor := map[backend.Pubkey]uint64{}
 	noteStart := func(nr *modelRunner) {
+		if nr != nil {
+			nr.start = step
+		}
 		if nr != nil && nr.ok {
 			floorHi = max(floorHi, nr.e.floorOf())
 			restarted = true
@@ -275,6 +293,32 @@ func runModel(t *testing.T, ops []byte) (signed int) {
 		hiS, hiT = max(hiS, fl), max(hiT, fl)
 		return tg <= hiT || s < hiS
 	}
+	// checkFloor fails on a floor refusal of vote v by runner r that makes
+	// a slashable pair with a vote r knows of. For FLOOR: one r signed or
+	// imported, one any runner signed before r started (the mark log holds
+	// it), and the pre-history of a key imported with it. For
+	// FLOOR_UNPROVEN, which the mark log's mark alone may explain: one r
+	// signed or imported in this run, and the pre-history r imported.
+	checkFloor := func(r *modelRunner, pk backend.Pubkey, v modelVote, err error) {
+		t.Helper()
+		st := backend.StatusOf(err)
+		if st != backend.StatusFloor && st != backend.StatusFloorUnproven {
+			return
+		}
+		for _, vs := range [][]modelVote{sent[pk], o.votes[pk]} {
+			for _, p := range vs {
+				own := p.by == r && p.step >= r.start || p.by == nil && histBy[pk] == r
+				known := own
+				if st == backend.StatusFloor {
+					known = own || p.by == r || p.by != nil && p.step < r.start || p.by == nil && hist[pk]
+				}
+				if known && slashable(p, v) {
+					fail("vote (%d, %d) root %d refused as a floor refusal, but it conflicts with (%d, %d) root %d by %s: %v",
+						v.source, v.target, v.root, p.source, p.target, p.root, p.who, err)
+				}
+			}
+		}
+	}
 	importKey := func(history bool) {
 		r := runners[active]
 		if !r.ok || len(keys) >= 6 {
@@ -291,6 +335,8 @@ func runModel(t *testing.T, ops []byte) (signed int) {
 		var ic *backend.Watermark
 		if history {
 			ic = &pre
+			hist[pk] = true
+			histBy[pk] = r
 		}
 		err = r.e.importSealed(pk, sk, k.index, ic)
 		trace = append(trace, fmt.Sprintf("runner %d: import key %d history=%v: %v", active, len(keys), history, err))
@@ -308,6 +354,7 @@ func runModel(t *testing.T, ops []byte) (signed int) {
 	}
 	importKey(false)
 	for pos < len(ops) {
+		step++
 		op := next() % 19
 		r := runners[active]
 		epoch := r.e.signer.EpochAt(r.e.now())
@@ -342,17 +389,18 @@ func runModel(t *testing.T, ops []byte) (signed int) {
 			if skew && err == nil {
 				fail("vote (%d, %d) in a slot of epoch %d signed: it can never be included and only moves the target mark", s, tg, m.Slot/spe)
 			}
+			checkFloor(r, k.pk, modelVote{source: s, target: tg, root: root}, err)
 			if honest := op < 3 || op == 16; honest && err != nil {
 				switch st := backend.StatusOf(err); {
 				case st == backend.StatusPolicyFuture || st == backend.StatusPolicyTargetSlot:
 					fail("honest vote (%d, %d) at slot %d refused: %v", s, tg, m.Slot, err)
-				case st.IsSlashing() && !excused(r, k.pk, s, tg):
+				case (st.IsSlashing() || st == backend.StatusFloor || st == backend.StatusFloorUnproven) && !excused(r, k.pk, s, tg):
 					fail("honest vote (%d, %d) refused, and no vote, import, floor, cover or commit-ahead of the key explains it: %v", s, tg, err)
 				}
 			}
 			if err == nil {
 				started(r, "vote", m.Slot)
-				v := modelVote{source: s, target: tg, root: root, at: at}
+				v := modelVote{source: s, target: tg, root: root, at: at, who: fmt.Sprintf("runner %d", active), by: r, step: step}
 				sent[k.pk] = append(sent[k.pk], v)
 				if last[active] == nil {
 					last[active] = map[backend.Pubkey]modelVote{}
@@ -361,7 +409,7 @@ func runModel(t *testing.T, ops []byte) (signed int) {
 			}
 			if err == nil && !lost {
 				signed++
-				if err := o.vote(k.pk, modelVote{source: s, target: tg, root: root, who: fmt.Sprintf("runner %d", active), at: at}); err != nil {
+				if err := o.vote(k.pk, modelVote{source: s, target: tg, root: root, who: fmt.Sprintf("runner %d", active), at: at, by: r, step: step}); err != nil {
 					fail("%v", err)
 				}
 			}
@@ -448,6 +496,7 @@ func runModel(t *testing.T, ops []byte) (signed int) {
 			trace = append(trace, fmt.Sprintf("runner %d: import into key %d inside (%d, %d): (%d, %d): %v", active, k.index, lv0.source, lv0.target, in.source, in.target, err))
 			if err == nil {
 				r.e.hooks.NoteHistory(k.pk)
+				in.by, in.step = r, step
 				if err := o.vote(k.pk, *in); err != nil {
 					t.Fatal(err)
 				}
@@ -472,10 +521,11 @@ func runModel(t *testing.T, ops []byte) (signed int) {
 			m.BeaconBlockRoot[1] = v.root
 			err := r.e.signMsg(k.pk, m)
 			trace = append(trace, fmt.Sprintf("runner %d epoch %d: vote again key %d (%d, %d) root %d: %v", active, epoch, k.index, v.source, v.target, v.root, err))
+			checkFloor(r, k.pk, v, err)
 			if err == nil {
 				started(r, "vote again", m.Slot)
 				signed++
-				if err := o.vote(k.pk, modelVote{source: v.source, target: v.target, root: v.root, who: fmt.Sprintf("runner %d, again", active), at: v.at}); err != nil {
+				if err := o.vote(k.pk, modelVote{source: v.source, target: v.target, root: v.root, who: fmt.Sprintf("runner %d, again", active), at: v.at, by: r, step: step}); err != nil {
 					fail("%v", err)
 				}
 			}

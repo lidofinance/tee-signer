@@ -317,6 +317,29 @@ func TestResponses(t *testing.T) {
 	if !r.Code.IsSlashing() || r.Code.IsPolicy() {
 		t.Fatal("classification")
 	}
+	// A floor refusal: code 1008 on the wire, in no class, the floor epoch
+	// first in detail, so a cut at MaxDetail keeps it.
+	p := EncodeError(backend.Refused(backend.StatusFloor, "floor epoch 12 (import floor): %s", strings.Repeat("x", MaxDetail)))
+	if !bytes.Equal(p[:2], []byte{0x03, 0xf0}) {
+		t.Fatalf("status bytes %x, want 03f0", p[:2])
+	}
+	_, err = DecodeResponse(p)
+	if !errors.As(err, &r) || r.Code != backend.StatusFloor || r.Code.String() != "FLOOR" ||
+		!strings.HasPrefix(r.Detail, "floor epoch 12 (import floor): ") || len(r.Detail) != MaxDetail {
+		t.Fatalf("%v", err)
+	}
+	if r.Code.IsSlashing() || r.Code.IsPolicy() {
+		t.Fatal("a floor refusal is in no class")
+	}
+	p = EncodeError(backend.Refused(backend.StatusFloorUnproven, "floor epoch 12 (restart floor): block"))
+	if !bytes.Equal(p[:2], []byte{0x03, 0xf1}) {
+		t.Fatalf("status bytes %x, want 03f1", p[:2])
+	}
+	_, err = DecodeResponse(p)
+	if !errors.As(err, &r) || r.Code != backend.StatusFloorUnproven || r.Code.String() != "FLOOR_UNPROVEN" ||
+		r.Code.IsSlashing() || r.Code.IsPolicy() {
+		t.Fatalf("%v", err)
+	}
 	_, err = DecodeResponse(EncodeError(errors.New("boom")))
 	if backend.StatusOf(err) != backend.StatusInternal {
 		t.Fatal(err)

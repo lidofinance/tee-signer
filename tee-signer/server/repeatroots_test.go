@@ -58,8 +58,10 @@ func TestReimportWithoutHistoryIgnoresOldRepeatRoot(t *testing.T) {
 	if err := e.importSealed(pk, sk, 10, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.signMsg(pk, m); !backend.StatusOf(err).IsSlashing() {
-		t.Fatalf("the vote signed before the share was lost, again: %v, want a slashing refusal", err)
+	// Refused: the mark log's mark holds the vote, the key's own history
+	// does not, so FLOOR_UNPROVEN.
+	if err := e.signMsg(pk, m); backend.StatusOf(err) != backend.StatusFloorUnproven {
+		t.Fatalf("the vote signed before the share was lost, again: %v, want %v", err, backend.StatusFloorUnproven)
 	}
 	if st := e.signer.Stats(); st.ExactRepeats != 0 {
 		t.Fatalf("stats %+v", st)

@@ -214,10 +214,12 @@ Errors use Web3Signer's JSON shape, `{"code":<status>,"message":"..."}`:
 | 400 | Malformed body, unknown or unsupported `type`, a `signingRoot`/`signing_root` that differs from the root computed from the data, or a `fork_info` that disagrees with the pinned chain (another `genesis_validators_root`, a fork not in the schedule, or a fork version the schedule does not give for the message's epoch); the gateway log names the reason |
 | 404 | The identifier is not a key the signers hold |
 | 413 | Body over 10 MiB |
-| 412 | Gateway policy refused, or signers refused (slashing protection, their policy, another domain) and the threshold was out of reach |
+| 412 | Gateway policy refused, or signers refused (slashing protection or its floor, their policy, another domain) and the threshold was out of reach |
 | 500 | Too few signers answered with a partial signature that verifies, before `signers.timeout` |
 
 A 412 means the signers refused the request, for example because another client already signed that duty. Lighthouse logs it as `CRIT Failed to sign ...`. It is not a gateway error.
+
+Update the gateway with or before the runners: a gateway from before the signers' floor statuses (`FLOOR`, 1008, and `FLOOR_UNPROVEN`, 1009) answers a floor refusal with HTTP 500, not 412.
 
 The `identifier` may come with or without `0x`, in any case.
 
