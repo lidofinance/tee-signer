@@ -408,7 +408,7 @@ func (g Keys) OpenKey(ctx context.Context, blob, aad []byte) ([]byte, error) {
 }
 
 // New builds the platform. Params: socket, wif_provider, kms_key,
-// attest_audience (default signer-runner-identity; the STS audience and WIF
+// project_number (from the setup; checkSetupProject), attest_audience (default signer-runner-identity; the STS audience and WIF
 // resource names are refused), clock=system, and service_account
 // (optional, impersonation; leave it unset with the setup of deploy.sh).
 func New(o platform.Options) (*platform.Platform, error) {
@@ -425,6 +425,9 @@ func New(o platform.Options) (*platform.Platform, error) {
 		ServiceAccount: o.Param("service_account", ""), Key: o.Param("kms_key", ""), Seen: &platform.ImageSeen{}}
 	if k.Provider == "" || k.Key == "" {
 		return nil, errors.New("gcp: wif_provider and kms_key are required")
+	}
+	if err := checkSetupProject(k.Provider, k.Key, o.Param("project_number", "")); err != nil {
+		return nil, err
 	}
 	debugEndpoints(o, k)
 	var clk platform.Clock = clock.System{}

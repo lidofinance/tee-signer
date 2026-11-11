@@ -244,6 +244,7 @@ func startPlatform(ctx context.Context, a *startArgs, newPlatform platformFunc, 
 		if s.setup != nil {
 			copyStore.setupHash = s.setup.SHA256
 			copyStore.checkVersions = true
+			copyStore.projectNumber = s.setup.Wire.Platform.SealingKeyRelease.ProjectNumber
 			if a.platformName != "dev" {
 				copyStore.lockDays, copyStore.requireLock = s.setup.Wire.SlashingLogMinLockDays, s.prod
 			}

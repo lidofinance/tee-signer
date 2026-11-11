@@ -324,6 +324,10 @@ func run() (err error) {
 			go claimed.log.RefreshLoop(ctx, markRefreshEvery)
 		}
 		srv.KeyReleaseHash, srv.KeyLock, srv.KeyLockWhy = rule.Hash, rule.Lock, rule.Why
+		// The revoked client certificates in force (server/revoked.go).
+		srv.Revoked = &attls.Revoked{}
+		srv.Revoked.Set(boot.setup.Wire.Open.RevokedClientCerts)
+		srv.RefreshRevokedClientCerts()
 	}
 	applyPlainImport(srv)
 	if *sealedImport {
@@ -343,7 +347,7 @@ func run() (err error) {
 	}
 	var tlsCfg *tls.Config
 	if caPEM != nil {
-		if tlsCfg, srv.TLSKeyHash, err = attls.ServerConfig(caPEM, plat.Clock.Now, chainMark(cfg)); err != nil {
+		if tlsCfg, srv.TLSKeyHash, err = attls.ServerConfig(caPEM, plat.Clock.Now, chainMark(cfg), attls.WithRevoked(srv.Revoked)); err != nil {
 			return err
 		}
 		srv.ClientCAs = tlsCfg.ClientCAs
@@ -403,7 +407,7 @@ func run() (err error) {
 		"restart_mode", mode.String(), "floor_margin", margin,
 		"clock", plat.Clock.Source(), "clock_trusted", plat.Clock.Trusted(),
 		"record", hooks.MarkLogStatus(), "state_copy", copyStore.status(), "shares_loaded", n, "plaintext_import", plainImportStatus(), "sealed_import", *sealedImport,
-		"tls_key_sha256", fmt.Sprintf("%x", srv.TLSKeyHash), "image_check", imageState,
+		"tls_key_sha256", fmt.Sprintf("%x", srv.TLSKeyHash), "revoked_client_certs", srv.Revoked.Len(), "image_check", imageState,
 		"max_conns", *maxConns, "max_handshakes", *maxHandshakes, "max_inflight_mib", *maxInflight, "idle_timeout", idleTimeout.String())
 	if !plat.Clock.Trusted() && mode.Floor && !mode.Persist {
 		log.Warn("restart floor relies on a clock the host controls; a host that moves it can get double votes signed")
@@ -496,6 +500,9 @@ func setupMarkLog(ctx context.Context, plat *platform.Platform, hooks *state.Hoo
 				return markClaim{}, err
 			}
 			opts.LockDays = st.Wire.SlashingLogMinLockDays
+		}
+		if err := checkStoreProject(ctx, l, st.Wire.Platform.SealingKeyRelease.ProjectNumber, "mark log"); err != nil {
+			return markClaim{}, err
 		}
 	}
 	m, err := markstore.New(l, signerID, plat.Keys, opts)

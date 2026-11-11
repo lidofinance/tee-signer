@@ -176,6 +176,15 @@ The setup's `sealing_key_release` names the GCP resources, all from
 | `wif_provider` | `//iam.googleapis.com/projects/<project-number>/locations/global/workloadIdentityPools/signer-pool/providers/signer-attestation` |
 | `kms_key` | `projects/<gcp-project>/locations/europe-west4/keyRings/signer/cryptoKeys/sealing` |
 | `attest_audience` | `signer-runner-identity` |
+| `project_number` | `<project-number>` (required on a prod chain) |
+
+The runner checks `project_number` itself at start. `wif_provider` must
+name that project number, and a `kms_key` named by project number must
+name the same one. The mark log and state copy buckets must be in that
+project: the runner reads each bucket's `projectNumber` (`buckets.get`,
+the `storage.buckets.get` permission the lock check needs too) and does
+not start when it differs. A setup without `project_number` gets none of
+these checks.
 
 `PROJECT_ID`, `PROJECT_NUMBER`, `REGION` and `ZONE` (default
 `europe-west4-a`) set the project and location. The mark log and the state
@@ -608,7 +617,9 @@ assumes the launcher's log is named `confidential-space-launcher`).
   binds the key's hash (`signer-protocol/docs/protocol.md`, "Channel
   binding"). A client connects with `remote.WithTLS` and a client
   certificate from that CA. The signing client does that through
-  `attestation-verify/runnerclient`.
+  `attestation-verify/runnerclient`. The runner refuses a certificate
+  listed in the setup's `revoked_client_certs`, or one below a listed CA
+  (`signer-protocol/docs/protocol.md`, "Client roles").
 - Shares arrive only sealed with HPKE (ML-KEM-768 + X25519) to the
   runner's attested per-boot key. The image holds the GCP release runner
   (`build-image.sh` builds `build/x86_64/bin/runner-gcp`, tag `platform_gcp`:

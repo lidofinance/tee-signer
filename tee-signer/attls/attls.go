@@ -132,7 +132,10 @@ func ServerConfig(caPEM []byte, now func() (time.Time, error), opts ...Option) (
 			if err != nil {
 				return fmt.Errorf("attls: no trusted time to check the client certificate: %w", err)
 			}
-			return CheckDates(&cs, t)
+			if err := CheckDates(&cs, t); err != nil {
+				return err
+			}
+			return o.revoked.Check(cs.VerifiedChains)
 		},
 	}
 	// Without trusted time at ClientHello: the chain check without dates,
@@ -140,10 +143,11 @@ func ServerConfig(caPEM []byte, now func() (time.Time, error), opts ...Option) (
 	noTime := cfg.Clone()
 	noTime.ClientAuth = tls.RequireAnyClientCert
 	noTime.VerifyConnection = func(cs tls.ConnectionState) error {
-		if err := verifyUndated(undatedRoots, cs.PeerCertificates); err != nil {
+		chains, err := verifyUndated(undatedRoots, cs.PeerCertificates)
+		if err != nil {
 			return fmt.Errorf("attls: no trusted time, and the client certificate chain fails even without its dates: %w", err)
 		}
-		return nil
+		return o.revoked.Check(chains)
 	}
 	cfg.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
 		if _, err := now(); err != nil {
@@ -169,17 +173,17 @@ func undated(c *x509.Certificate) *x509.Certificate {
 // verifyUndated is the chain check of crypto/tls without the dates: certs
 // (leaf first) must chain to a CA of roots, an undated copy of the CA
 // file, with clientAuth allowed at every step. It gives x509 a fixed
-// nonzero time, never the system clock.
-func verifyUndated(roots *x509.CertPool, certs []*x509.Certificate) error {
+// nonzero time, never the system clock. The chains it returns hold the
+// undated copies, whose DER is the original's.
+func verifyUndated(roots *x509.CertPool, certs []*x509.Certificate) ([][]*x509.Certificate, error) {
 	if len(certs) == 0 {
-		return errors.New("attls: no client certificate")
+		return nil, errors.New("attls: no client certificate")
 	}
 	opts := x509.VerifyOptions{Roots: roots, Intermediates: x509.NewCertPool(), CurrentTime: noTrustedTime, KeyUsages: clientAuth}
 	for _, c := range certs[1:] {
 		opts.Intermediates.AddCert(undated(c))
 	}
-	_, err := undated(certs[0]).Verify(opts)
-	return err
+	return undated(certs[0]).Verify(opts)
 }
 
 // VerifyAt checks the client certificates of a connection whose handshake
@@ -215,7 +219,67 @@ func VerifyAt(roots *x509.CertPool, peer []*x509.Certificate, t time.Time) ([][]
 type Option func(*options)
 
 type options struct {
-	chain []byte
+	chain   []byte
+	revoked *Revoked
+}
+
+// WithRevoked refuses, in the handshake, a client whose verified chain
+// holds a certificate of r. r may change after ServerConfig returns: each
+// handshake reads the set in force then.
+func WithRevoked(r *Revoked) Option {
+	return func(o *options) { o.revoked = r }
+}
+
+// Revoked is the set of client certificates the runner refuses: the
+// SHA-256 of the DER of a leaf, intermediate or CA certificate (the
+// setup's revoked_client_certs). A config update can change it while the
+// runner runs, so Set and Check may run at the same time. A nil or zero
+// Revoked refuses nothing.
+type Revoked struct {
+	set atomic.Pointer[map[[32]byte]bool]
+}
+
+// Set replaces the set with the union of lists.
+func (r *Revoked) Set(lists ...[][32]byte) {
+	m := map[[32]byte]bool{}
+	for _, l := range lists {
+		for _, h := range l {
+			m[h] = true
+		}
+	}
+	r.set.Store(&m)
+}
+
+// Len is the number of revoked certificates in force.
+func (r *Revoked) Len() int {
+	if r == nil {
+		return 0
+	}
+	if m := r.set.Load(); m != nil {
+		return len(*m)
+	}
+	return 0
+}
+
+// Check refuses chains if a certificate of any of them is revoked. A
+// revoked CA refuses every certificate below it. A revoked leaf is in
+// every chain of its client.
+func (r *Revoked) Check(chains [][]*x509.Certificate) error {
+	if r == nil {
+		return nil
+	}
+	m := r.set.Load()
+	if m == nil || len(*m) == 0 {
+		return nil
+	}
+	for _, chain := range chains {
+		for _, c := range chain {
+			if h := sha256.Sum256(c.Raw); (*m)[h] {
+				return fmt.Errorf("attls: certificate %q (sha256 %x) is revoked (revoked_client_certs)", c.Subject.CommonName, h[:8])
+			}
+		}
+	}
+	return nil
 }
 
 // WithChain names the chain the runner signs for in its TLS certificate:

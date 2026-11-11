@@ -47,6 +47,9 @@ type client struct {
 	// that check.
 	undated bool
 	peer    []*x509.Certificate
+	// chains are the verified chains, for the revocation check of each
+	// frame (stillValid). nil while undated.
+	chains [][]*x509.Certificate
 }
 
 // localAdmin is the client of a connection without TLS.
@@ -63,7 +66,7 @@ var localAllows = func() map[wire.MsgType]grant {
 
 // clientOf is the client of a TLS connection after its handshake.
 func clientOf(cs *tls.ConnectionState) *client {
-	cl := &client{role: attls.RoleOf(cs), notAfter: attls.NotAfter(cs)}
+	cl := &client{role: attls.RoleOf(cs), notAfter: attls.NotAfter(cs), chains: cs.VerifiedChains}
 	if len(cs.PeerCertificates) > 0 {
 		cl.cert = sha256.Sum256(cs.PeerCertificates[0].Raw)
 		if len(cs.VerifiedChains) == 0 {
@@ -83,9 +86,20 @@ func clientOf(cs *tls.ConnectionState) *client {
 // handshake had no trusted time has its chain checked with its dates at
 // the first request that has a reading (checkUndated). A local client has
 // no certificate.
+//
+// Every frame, HEALTH too, also checks the chain against the revoked
+// certificates in force (Revoked), so a revocation that a config update
+// brings closes the connections already open.
 func (s *Server) stillValid(cl *client, t wire.MsgType) error {
 	if cl == nil || cl.local {
 		return nil
+	}
+	chains := cl.chains
+	if cl.undated {
+		chains = [][]*x509.Certificate{cl.peer}
+	}
+	if err := s.Revoked.Check(chains); err != nil {
+		return backend.Refused(backend.StatusForbidden, "%v", err)
 	}
 	now, err := s.certNow()
 	if err != nil {
@@ -116,8 +130,11 @@ func (s *Server) checkUndated(cl *client, now time.Time) error {
 		return backend.Refused(backend.StatusForbidden,
 			"the client certificate chain, taken without trusted time at the handshake, fails at the trusted time: %v; connect again with a valid certificate", err)
 	}
+	if err := s.Revoked.Check(chains); err != nil {
+		return backend.Refused(backend.StatusForbidden, "%v", err)
+	}
 	cs := &tls.ConnectionState{PeerCertificates: cl.peer, VerifiedChains: chains}
-	cl.role, cl.notAfter, cl.undated, cl.peer = attls.RoleOf(cs), attls.NotAfter(cs), false, nil
+	cl.role, cl.notAfter, cl.undated, cl.peer, cl.chains = attls.RoleOf(cs), attls.NotAfter(cs), false, nil, chains
 	s.Log.Info("client certificate checked at trusted time", "role", cl.role.String(), "cert_sha256", hex.EncodeToString(cl.cert[:8]))
 	return nil
 }
