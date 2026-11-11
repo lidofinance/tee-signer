@@ -6,6 +6,7 @@ require (
 	github.com/lidofinance/tee-signer/attestation-verify v0.0.0
 	github.com/lidofinance/tee-signer/signer-admin v0.0.0
 	github.com/lidofinance/tee-signer/signer-protocol v0.0.0
+	golang.org/x/net v0.55.0
 )
 
 require (
@@ -15,7 +16,6 @@ require (
 	github.com/mdlayher/socket v0.6.0 // indirect
 	github.com/mdlayher/vsock v1.3.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
-	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 )

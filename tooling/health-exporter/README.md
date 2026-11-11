@@ -57,7 +57,14 @@ until it answers again.
 ## Docker Compose
 
 Build the binary as above, then run it next to Prometheus. The exporter port
-stays on the compose network.
+stays on the compose network: `-listen 0.0.0.0:9478` binds inside the
+container only, and the service has no `ports:`. Keep it that way.
+`/metrics` is plain HTTP without authentication; if you must publish it,
+bind it to loopback (`127.0.0.1:9478:9478`). The server closes a
+connection that sends no request headers within 10 s, or stays idle for
+60 s, and holds at most 16 connections at once. A peer that reaches the
+port can then fail the scrapes, but cannot use up the connections to the
+runners.
 
 ```yaml
 services:
