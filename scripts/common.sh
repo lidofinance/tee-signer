@@ -10,6 +10,9 @@ LOGS="$ROOT/logs"
 # The C signer core is the signer-core module of this repo.
 # scripts/build-core.sh builds it into build/<arch>/lib for cgo.
 SIGNER_CORE="$ROOT/signer-core"
+# The C flags of the runners' cgo code (Go's default -g -O2), with the
+# stack protector named, so it does not depend on the compiler's default.
+CGO_HARDEN="-g -O2 -fstack-protector-strong"
 # The Go modules of this repo, in dependency order (each has its own go.mod).
 # The tools under tooling/ are one module each, named by their folder.
 GO_MODULES=(devkit trusted-time signer-protocol markformat governance signer-core platform slashing-log

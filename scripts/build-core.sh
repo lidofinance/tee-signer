@@ -60,26 +60,31 @@ for arch in "${archs[@]}"; do
   out="$BUILD/$arch"
   mkdir -p "$out/lib" "$out/obj" "$out/blst"
 
-  if [ ! -f "$out/lib/libblst.a" ]; then
+  if [ ! -f "$out/lib/libblst.a" ] || [ "${BASH_SOURCE[0]}" -nt "$out/lib/libblst.a" ]; then
     flags=()
     # Runtime ADX detection keeps x86_64 binaries portable between CPUs.
     [ "$arch" = x86_64 ] && flags+=(-D__BLST_PORTABLE__)
-    (cd "$out/blst" && CC="$cc" "$BLST_DIR/build.sh" "${flags[@]}" >build.log 2>&1) \
+    # blst's own default flags plus the stack protector, so the canary does
+    # not depend on the compiler's default.
+    (cd "$out/blst" && CC="$cc" CFLAGS="-O2 -fno-builtin -fPIC -Wall -Wextra -Werror -fstack-protector-strong" \
+      "$BLST_DIR/build.sh" "${flags[@]}" >build.log 2>&1) \
       || { cat "$out/blst/build.log"; exit 1; }
     cp "$out/blst/libblst.a" "$out/lib/libblst.a"
     log "blst built for $arch"
   fi
+  "$nm" -u "$out/lib/libblst.a" | grep -w __stack_chk_fail >/dev/null ||
+    { echo "libblst.a for $arch has no stack protector (__stack_chk_fail)" >&2; exit 1; }
 
+  # Every run compiles all core files (a handful), so no old object can
+  # end up in the library.
+  rm -f "$out/obj/"*.o
   objs=()
   for c in "$SRC"/src/*.c; do
     o="$out/obj/$(basename "${c%.c}").o"
-    if [ ! -f "$o" ] || [ "$c" -nt "$o" ] || [ "$SRC/include/signer_core.h" -nt "$o" ] ||
-      [ "${BASH_SOURCE[0]}" -nt "$o" ]; then
-      # -ffreestanding drops the distro default stack protector; turn it on.
-      # shellcheck disable=SC2086
-      "$cc" -std=c11 -O2 -fPIC -ffreestanding -fstack-protector-strong -fno-common $WARN \
-        -I"$SRC/include" -I"$BLST_DIR/bindings" -c "$c" -o "$o"
-    fi
+    # -ffreestanding drops the distro default stack protector; turn it on.
+    # shellcheck disable=SC2086
+    "$cc" -std=c11 -O2 -fPIC -ffreestanding -fstack-protector-strong -fno-common $WARN \
+      -I"$SRC/include" -I"$BLST_DIR/bindings" -c "$c" -o "$o"
     objs+=("$o")
   done
   rm -f "$out/lib/libsigner_core.a"
