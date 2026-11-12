@@ -16,7 +16,7 @@
  *   - `reason` pointers may be null. When a function returns SNTS_E_KE,
  *     SNTS_E_NTP, SNTS_E_SAMPLE or SNTS_E_QUORUM it writes the reason there:
  *     kind << 16 | value. snts_reason_text() gives the text.
- *   - Handles (snts_assoc, snts_request) are freed with their _free
+ *   - Handles (snts_assoc, snts_request, snts_plain) are freed with their _free
  *     function, once. A handle is not safe to use from two threads at once;
  *     different handles are.
  *   - No panic crosses into the caller: the library is built with
@@ -33,7 +33,7 @@ extern "C" {
 
 /* Return codes. */
 #define SNTS_OK (0)
-#define SNTS_KISS (1)         /* snts_ntp_verify: a Kiss-o'-Death, no time */
+#define SNTS_KISS (1)         /* snts_ntp_verify, snts_plain_verify: a Kiss-o'-Death, no time */
 #define SNTS_MORE (2)         /* snts_ke_response_length: read more octets */
 #define SNTS_E_NULL (-1)      /* a required pointer is null */
 #define SNTS_E_BUFFER (-2)    /* output buffer too small; *out_len = needed */
@@ -41,12 +41,14 @@ extern "C" {
 #define SNTS_E_KE (-4)        /* NTS-KE response refused; see reason */
 #define SNTS_E_NO_COOKIE (-5) /* no cookie left: run NTS-KE again */
 #define SNTS_E_NTP (-6)       /* NTP response refused; see reason */
-#define SNTS_E_SAMPLE (-7)    /* authentic, but fails an RFC 5905 check; see reason */
+#define SNTS_E_SAMPLE (-7)    /* accepted, but fails an RFC 5905 check; see reason */
 #define SNTS_E_QUORUM (-8)    /* no quorum; see reason */
 
 /* Sizes and limits. */
 #define SNTS_KEY_LEN 32                /* each exported key, AEAD_AES_SIV_CMAC_256 (RFC 5297 6.1) */
 #define SNTS_REQUEST_RANDOM_LEN 56     /* transmit timestamp 8, Unique Identifier 32, nonce 16 */
+#define SNTS_PLAIN_RANDOM_LEN 8        /* plain NTP: the transmit timestamp */
+#define SNTS_PLAIN_REQUEST_LEN 48      /* plain NTP: the header alone */
 #define SNTS_KE_MAX_RESPONSE_LEN 65536 /* RFC 8915 section 4 */
 #define SNTS_NTP_MAX_REQUEST_LEN 1280
 #define SNTS_NTP_MAX_RESPONSE_LEN 2048
@@ -60,6 +62,7 @@ extern "C" {
 
 typedef struct snts_assoc snts_assoc;     /* keys and cookies of one NTS-KE session */
 typedef struct snts_request snts_request; /* one NTP request waiting for its answer */
+typedef struct snts_plain snts_plain;     /* one plain NTP request waiting for its answer */
 
 /* One measurement. Times are nanoseconds. "local" means the caller's
  * monotonic clock; offset_ns is real Unix time minus that clock. */
@@ -95,7 +98,7 @@ typedef struct {
   int64_t hi_ns;
 } snts_quorum_result;
 
-/* The name and version of the library, for example "signer-nts 0.0.3".
+/* The name and version of the library, for example "signer-nts 0.0.5".
  * NUL-terminated, valid for the life of the program. Do not free it. */
 const char *snts_version(void);
 
@@ -165,6 +168,25 @@ void snts_request_free(snts_request *r);
 int snts_ntp_verify(snts_assoc *a, snts_request *r, const uint8_t *packet, size_t packet_len,
                     int64_t t1_local_ns, int64_t t4_local_ns, int64_t pivot_unix_ns, snts_sample *out,
                     uint32_t *reason);
+
+/* Plain NTP (RFC 5905 section 7.3), without NTS. Nothing authenticates
+ * the response: anyone on the path who sees the request can answer it with
+ * any time. Only the random transmit timestamp ties it to the request. */
+
+/* Builds the 48-octet request: leap 0, version 4, mode 3, and `random`
+ * (SNTS_PLAIN_RANDOM_LEN octets from a CSPRNG) as the transmit timestamp.
+ * SNTS_E_BUFFER if cap is under SNTS_PLAIN_REQUEST_LEN. On SNTS_OK, *req is
+ * a new handle for the answer. */
+int snts_plain_request(const uint8_t *random, size_t random_len, uint8_t *out, size_t cap, size_t *out_len,
+                       snts_plain **req);
+/* Frees a plain request. Null is fine. */
+void snts_plain_free(snts_plain *r);
+/* Checks a response to r as snts_ntp_verify checks the header (length,
+ * version 4, mode 4, origin, stratum 0 as a kiss, leap 3, stratum over 15),
+ * ignores what follows the header, and measures it. Return codes as for
+ * snts_ntp_verify; the cookie counts of *out are 0. */
+int snts_plain_verify(snts_plain *r, const uint8_t *packet, size_t packet_len, int64_t t1_local_ns,
+                      int64_t t4_local_ns, int64_t pivot_unix_ns, snts_sample *out, uint32_t *reason);
 
 /* Combines 3 to 16 intervals from distinct operators, up to max_wrong of
  * which may be wrong, at the caller's monotonic time now_local_ns. Each bound

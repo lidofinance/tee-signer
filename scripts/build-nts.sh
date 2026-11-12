@@ -29,7 +29,7 @@
 #     cargo, rustup and target folders (nts-container.sh), no debug info
 #     (Cargo.toml), no build script of our own;
 #   - the script sets its own umask, and the archive is written with mode 0644.
-# After each build the script checks that the archive holds the 17 exports,
+# After each build the script checks that the archive holds the 20 exports,
 # is for the right architecture, and names no path of this machine.
 set -euo pipefail
 umask 022
@@ -101,7 +101,7 @@ for arch in "${archs[@]}"; do
   defined="$("$(tool_for "$arch" nm)" -g --defined-only "$lib" 2>/dev/null)"
   for sym in snts_version snts_aes_siv_selftest snts_reason_text snts_ke_alpn snts_ke_exporter_label \
     snts_ke_exporter_context snts_ke_request snts_ke_response_length snts_assoc_new snts_assoc_free \
-    snts_assoc_cookies snts_assoc_port snts_assoc_server snts_ntp_request snts_request_free snts_ntp_verify snts_quorum; do
+    snts_assoc_cookies snts_assoc_port snts_assoc_server snts_ntp_request snts_request_free snts_ntp_verify snts_plain_request snts_plain_free snts_plain_verify snts_quorum; do
     grep -q " T $sym\$" <<<"$defined" || { echo "build-nts: $lib does not define $sym" >&2; exit 1; }
   done
   # Every object in the archive is for this architecture.

@@ -676,6 +676,7 @@ func New(o platform.Options) (*platform.Platform, error) {
 		return fail(err)
 	}
 	sealer, err := platform.NewGCMSealer(key)
+	seed := platform.ScheduleSeed(key)
 	clear(key)
 	if err != nil {
 		return fail(err)
@@ -702,6 +703,7 @@ func New(o platform.Options) (*platform.Platform, error) {
 		// AWS-KMS-02: a stored blob may be one the key admin made before
 		// the key policy was locked.
 		SealingKeyStored: stored,
+		NTSScheduleSeed:  seed,
 		// PCR0 to PCR2 of the documents KMS took as recipient.
 		SelfImage: seen.Get,
 	}

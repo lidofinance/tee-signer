@@ -14,9 +14,10 @@ import (
 	"github.com/lidofinance/tee-signer/trusted-time/nts"
 )
 
-// TestNTSInteropPublicServers runs the NTS clock against the four public
-// operators: one NTS-KE and three queries per server, 33 s apart (RFC 5905
-// MINPOLL is 16 s), so about 70 s and 4 x (1 TLS session + 3 UDP queries).
+// TestNTSInteropPublicServers runs the NTS clock against the catalog's
+// default public servers (nts.PublicServers): one NTS-KE and three queries
+// per server, 33 s apart (RFC 5905 MINPOLL is 16 s), so about 70 s and one
+// TLS session and 3 UDP queries per server.
 // It runs only with NTS_INTEROP=1 (scripts/nts-interop.sh): it needs the
 // network and is not part of the offline tests.
 //

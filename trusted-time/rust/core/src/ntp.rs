@@ -11,6 +11,13 @@
 //! NTS Authenticator over all of it with the C2S key. A response must echo
 //! the Unique Identifier and carry an authenticator with the S2C key, and its
 //! encrypted part holds the new cookies (RFC 8915 section 5.7).
+//!
+//! [`build_plain_request`] and [`PlainRequest`] are plain NTP (RFC 5905
+//! section 7.3) without NTS: the 48-octet header alone, no cookies and no
+//! authenticator. The response gets the same header checks as with NTS.
+//! Only the random transmit timestamp ties it to our request, so anyone on
+//! the path can forge it. The caller must not trust such a time more than
+//! the checks it makes around it.
 
 use alloc::vec::Vec;
 use core::fmt;
@@ -137,6 +144,22 @@ fn push_field(out: &mut Vec<u8>, field_type: u16, body: &[u8]) -> Result<(), Ntp
     Ok(())
 }
 
+/// The header of a client request. RFC 5905 section 7.3: LI (2 bits), VN
+/// (3 bits), mode (3 bits), then stratum, poll, precision, root delay, root
+/// dispersion, reference ID, and the reference, origin and receive
+/// timestamps, all zero here (octets 1 to 39). The transmit timestamp is
+/// octets 40 to 47.
+fn request_header(transmit: NtpTimestamp) -> [u8; HEADER_LEN] {
+    let mut h = [0u8; HEADER_LEN];
+    if let Some(first) = h.first_mut() {
+        *first = (VERSION << 3) | MODE_CLIENT;
+    }
+    if let Some(t) = h.last_chunk_mut::<8>() {
+        *t = transmit.to_be_bytes();
+    }
+    h
+}
+
 /// Builds a client request (RFC 8915 section 5.7) and the state that checks
 /// its response.
 ///
@@ -156,14 +179,7 @@ pub fn build_request(c2s: &C2sKey, input: &RequestInput<'_>) -> Result<(Vec<u8>,
         return Err(NtpError::RequestTooLong);
     }
     let mut out = Vec::with_capacity(len);
-
-    // RFC 5905 section 7.3: LI (2 bits), VN (3 bits), mode (3 bits), then
-    // stratum, poll, precision, root delay, root dispersion, reference ID,
-    // and the reference, origin and receive timestamps, all zero here
-    // (octets 1 to 39). The transmit timestamp is octets 40 to 47.
-    out.push((VERSION << 3) | MODE_CLIENT);
-    out.resize(HEADER_LEN - 8, 0);
-    out.extend_from_slice(&input.transmit.to_be_bytes());
+    out.extend_from_slice(&request_header(input.transmit));
 
     push_field(&mut out, field_type::UNIQUE_IDENTIFIER, &input.unique_id)?;
     push_field(&mut out, field_type::NTS_COOKIE, cookie)?;
@@ -244,7 +260,8 @@ pub struct TimeSample {
     pub receive: NtpTimestamp,
     /// When the server sent this response (T3).
     pub transmit: NtpTimestamp,
-    /// New cookies from the encrypted part, 1 to 1 + placeholders.
+    /// New cookies from the encrypted part, 1 to 1 + placeholders. Empty
+    /// for plain NTP.
     pub cookies: Vec<Cookie>,
 }
 
@@ -266,7 +283,10 @@ pub enum KissCode {
     /// "RATE": poll less often (RFC 5905 section 7.4).
     Rate,
     /// "NTSN": the server could not check our cookie or request; run NTS-KE
-    /// again (RFC 8915 section 5.7).
+    /// again (RFC 8915 section 5.7). Also "NTS" and a zero octet, which
+    /// some servers send for the same NAK (seen from nts1.ntp.hr for stale
+    /// cookies). A forged kiss can already say NTSN, so taking this one too
+    /// lets nobody do more than force an NTS-KE.
     Ntsn,
     /// "DENY": access denied; stop using this server (RFC 5905 section 7.4).
     Deny,
@@ -280,7 +300,7 @@ impl KissCode {
     fn from_reference_id(id: [u8; 4]) -> Self {
         match &id {
             b"RATE" => Self::Rate,
-            b"NTSN" => Self::Ntsn,
+            b"NTSN" | b"NTS\0" => Self::Ntsn,
             b"DENY" => Self::Deny,
             b"RSTR" => Self::Rstr,
             _ => Self::Other(id),
@@ -548,23 +568,7 @@ impl PendingRequest {
         if self.answered {
             return Err(NtpError::AlreadyAnswered);
         }
-        if packet.len() > MAX_RESPONSE_LEN {
-            return Err(NtpError::TooLong);
-        }
-        let (head, fields) = packet.split_first_chunk::<HEADER_LEN>().ok_or(NtpError::TooShort)?;
-        let h = Header::parse(head).ok_or(NtpError::TooShort)?;
-        if h.version != VERSION {
-            return Err(NtpError::BadVersion(h.version));
-        }
-        if h.mode != MODE_SERVER {
-            return Err(NtpError::BadMode(h.mode));
-        }
-        // RFC 5905 section 8: a response whose origin timestamp is not the
-        // transmit timestamp we sent is bogus. Ours is random, so this is
-        // also a 64-bit check against forged responses.
-        if !bool::from(h.origin.to_bits().ct_eq(&self.transmit.to_bits())) {
-            return Err(NtpError::OriginMismatch);
-        }
+        let (h, fields) = check_header(packet, self.transmit)?;
         let fields = parse_fields(fields)?;
         // RFC 8915 section 5.7: the Unique Identifier must match ours, in a
         // normal response and in a KoD.
@@ -589,34 +593,128 @@ impl PendingRequest {
             siv::open(s2c.bytes(), ad, auth.nonce, auth.ciphertext).ok_or(NtpError::AuthenticationFailed)?;
         let cookies = encrypted_cookies(&plaintext, self.placeholders + 1)?;
 
-        if h.leap == LEAP_UNSYNCHRONIZED {
-            return Err(NtpError::Unsynchronized);
-        }
-        let leap = match h.leap {
-            1 => LeapIndicator::InsertSecond,
-            2 => LeapIndicator::DeleteSecond,
-            _ => LeapIndicator::NoWarning,
-        };
-        if h.stratum > MAX_STRATUM {
-            return Err(NtpError::BadStratum(h.stratum));
-        }
-        if cookies.is_empty() {
+        let sample = time_sample(&h, cookies)?;
+        if sample.cookies.is_empty() {
             return Err(NtpError::NoCookies);
         }
-
         self.answered = true;
-        Ok(Response::Time(TimeSample {
-            leap,
-            stratum: h.stratum,
-            precision: h.precision,
-            root_delay: h.root_delay,
-            root_dispersion: h.root_dispersion,
-            reference: h.reference,
-            origin: h.origin,
-            receive: h.receive,
-            transmit: h.transmit,
-            cookies,
-        }))
+        Ok(Response::Time(sample))
+    }
+}
+
+/// The checks of a response header that NTS and plain NTP share, in order:
+/// at most [`MAX_RESPONSE_LEN`] octets, at least the header, version 4,
+/// mode 4, and the origin timestamp equal to our transmit timestamp
+/// (constant-time compare). Returns the header and the octets after it.
+fn check_header(packet: &[u8], transmit: NtpTimestamp) -> Result<(Header, &[u8]), NtpError> {
+    if packet.len() > MAX_RESPONSE_LEN {
+        return Err(NtpError::TooLong);
+    }
+    let (head, rest) = packet.split_first_chunk::<HEADER_LEN>().ok_or(NtpError::TooShort)?;
+    let h = Header::parse(head).ok_or(NtpError::TooShort)?;
+    if h.version != VERSION {
+        return Err(NtpError::BadVersion(h.version));
+    }
+    if h.mode != MODE_SERVER {
+        return Err(NtpError::BadMode(h.mode));
+    }
+    // RFC 5905 section 8: a response whose origin timestamp is not the
+    // transmit timestamp we sent is bogus. Ours is random, so this is
+    // also a 64-bit check against forged responses.
+    if !bool::from(h.origin.to_bits().ct_eq(&transmit.to_bits())) {
+        return Err(NtpError::OriginMismatch);
+    }
+    Ok((h, rest))
+}
+
+/// The time sample of a response that is not a KoD. Leap indicator 3 and
+/// stratum above 15 are refused (RFC 5905 section 7.3).
+fn time_sample(h: &Header, cookies: Vec<Cookie>) -> Result<TimeSample, NtpError> {
+    if h.leap == LEAP_UNSYNCHRONIZED {
+        return Err(NtpError::Unsynchronized);
+    }
+    let leap = match h.leap {
+        1 => LeapIndicator::InsertSecond,
+        2 => LeapIndicator::DeleteSecond,
+        _ => LeapIndicator::NoWarning,
+    };
+    if h.stratum > MAX_STRATUM {
+        return Err(NtpError::BadStratum(h.stratum));
+    }
+    Ok(TimeSample {
+        leap,
+        stratum: h.stratum,
+        precision: h.precision,
+        root_delay: h.root_delay,
+        root_dispersion: h.root_dispersion,
+        reference: h.reference,
+        origin: h.origin,
+        receive: h.receive,
+        transmit: h.transmit,
+        cookies,
+    })
+}
+
+/// Builds a plain NTP client request (RFC 5905 section 7.3), without NTS:
+/// the 48-octet header with leap indicator 0, version 4, mode 3 and the
+/// caller's transmit timestamp, all other fields zero, and nothing after
+/// it. Set `transmit` to a random value, as for [`RequestInput::transmit`]:
+/// it is the only thing that ties the response to this request.
+pub fn build_plain_request(transmit: NtpTimestamp) -> ([u8; HEADER_LEN], PlainRequest) {
+    (request_header(transmit), PlainRequest { transmit, answered: false })
+}
+
+/// A plain NTP request that was built and may be waiting for its response.
+/// Like [`PendingRequest`] it accepts at most one response and is not
+/// `Clone`.
+///
+/// Nothing authenticates the response. A party on the path that sees the
+/// request can answer with any time; the origin check only stops a party
+/// that does not see it.
+#[derive(Debug)]
+pub struct PlainRequest {
+    transmit: NtpTimestamp,
+    answered: bool,
+}
+
+impl PlainRequest {
+    /// The transmit timestamp the request carries.
+    pub fn transmit(&self) -> NtpTimestamp {
+        self.transmit
+    }
+
+    /// True once a response was accepted.
+    pub fn is_answered(&self) -> bool {
+        self.answered
+    }
+
+    /// Checks a response to this request with the header checks of
+    /// [`PendingRequest::verify_response`]: length, version 4, mode 4 and
+    /// the origin timestamp (constant-time compare). Stratum 0 then gives a
+    /// [`Response::KissOfDeath`] and no time. Otherwise leap indicator 3 and
+    /// stratum above 15 are refused. The octets after the header are
+    /// ignored: a plain response has no NTS fields to check, and RFC 7822
+    /// fields or a legacy MAC would carry nothing we use.
+    ///
+    /// A refused response changes nothing, so the real response can still
+    /// come. After one is accepted every further one is refused as a replay.
+    /// Accepting marks the request answered before the caller measures it
+    /// (`sample::measure`), so a good header with a bad sample (a zero
+    /// reference timestamp, a negative delay, a bound over MAXDIST) ends the
+    /// request: a forger who sees the request can use one to spoil it.
+    pub fn verify_response(&mut self, packet: &[u8]) -> Result<Response, NtpError> {
+        if self.answered {
+            return Err(NtpError::AlreadyAnswered);
+        }
+        let (h, _) = check_header(packet, self.transmit)?;
+        if h.stratum == 0 {
+            // A Kiss-o'-Death (RFC 5905 section 7.4): no time in it.
+            self.answered = true;
+            return Ok(Response::KissOfDeath(KissCode::from_reference_id(h.reference_id)));
+        }
+        let sample = time_sample(&h, Vec::new())?;
+        self.answered = true;
+        Ok(Response::Time(sample))
     }
 }
 
@@ -645,9 +743,108 @@ mod tests {
     fn kiss_codes() {
         assert_eq!(KissCode::from_reference_id(*b"RATE"), KissCode::Rate);
         assert_eq!(KissCode::from_reference_id(*b"NTSN"), KissCode::Ntsn);
+        assert_eq!(KissCode::from_reference_id(*b"NTS\0"), KissCode::Ntsn);
+        assert_eq!(KissCode::from_reference_id(*b"NTS "), KissCode::Other(*b"NTS "));
         assert_eq!(KissCode::from_reference_id(*b"DENY"), KissCode::Deny);
         assert_eq!(KissCode::from_reference_id(*b"RSTR"), KissCode::Rstr);
         assert_eq!(KissCode::from_reference_id(*b"INIT"), KissCode::Other(*b"INIT"));
+    }
+
+    const PLAIN_TRANSMIT: u64 = 0x1122_3344_5566_7788;
+
+    /// A plain server response to [`PLAIN_TRANSMIT`]: leap 0, version 4,
+    /// mode 4, stratum 2.
+    fn plain_response() -> [u8; HEADER_LEN] {
+        let mut b = [0u8; HEADER_LEN];
+        b[0] = 0b00_100_100;
+        b[1] = 2;
+        b[3] = 0xec;
+        b[12..16].copy_from_slice(b"GPS\0");
+        b[16..24].copy_from_slice(&0xec00_0000_1000_0000u64.to_be_bytes());
+        b[24..32].copy_from_slice(&PLAIN_TRANSMIT.to_be_bytes());
+        b[32..40].copy_from_slice(&0xec00_0010_8000_0000u64.to_be_bytes());
+        b[40..48].copy_from_slice(&0xec00_0010_8000_1000u64.to_be_bytes());
+        b
+    }
+
+    fn plain_request() -> PlainRequest {
+        build_plain_request(NtpTimestamp::from_bits(PLAIN_TRANSMIT)).1
+    }
+
+    #[test]
+    fn plain_request_is_the_header_alone() {
+        let (packet, req) = build_plain_request(NtpTimestamp::from_bits(PLAIN_TRANSMIT));
+        let mut want = [0u8; HEADER_LEN];
+        want[0] = 0x23; // LI 0, VN 4, mode 3
+        want[40..48].copy_from_slice(&PLAIN_TRANSMIT.to_be_bytes());
+        assert_eq!(packet, want);
+        assert_eq!(req.transmit().to_bits(), PLAIN_TRANSMIT);
+        assert!(!req.is_answered());
+    }
+
+    #[test]
+    fn plain_response_gives_a_sample_without_cookies() {
+        let mut req = plain_request();
+        let Response::Time(s) = req.verify_response(&plain_response()).unwrap() else { panic!("not a time") };
+        assert_eq!((s.leap, s.stratum, s.precision), (LeapIndicator::NoWarning, 2, -20));
+        assert_eq!(s.origin.to_bits(), PLAIN_TRANSMIT);
+        assert_eq!(s.transmit.to_bits(), 0xec00_0010_8000_1000);
+        assert!(s.cookies.is_empty());
+        assert!(req.is_answered());
+        // The same response again is a replay.
+        assert_eq!(req.verify_response(&plain_response()), Err(NtpError::AlreadyAnswered));
+    }
+
+    #[test]
+    fn plain_response_ignores_what_follows_the_header() {
+        // An RFC 7822 field, a legacy MAC, or junk: none of it is read.
+        for tail in [&[0u8; 20][..], &[0xff; 3][..], &[0x01, 0x04, 0x00, 0x24][..]] {
+            let mut p = plain_response().to_vec();
+            p.extend_from_slice(tail);
+            assert!(matches!(plain_request().verify_response(&p), Ok(Response::Time(_))), "tail {tail:?}");
+        }
+        let mut p = plain_response().to_vec();
+        p.resize(MAX_RESPONSE_LEN, 0);
+        assert!(plain_request().verify_response(&p).is_ok());
+        p.push(0);
+        assert_eq!(plain_request().verify_response(&p), Err(NtpError::TooLong));
+    }
+
+    #[test]
+    fn plain_response_refusals_leave_the_request_open() {
+        let mut req = plain_request();
+        let ok = plain_response();
+        let cases: [(fn(&mut [u8; HEADER_LEN]), NtpError); 6] = [
+            (|b| b[0] = 0b00_011_100, NtpError::BadVersion(3)),
+            (|b| b[0] = 0b00_100_011, NtpError::BadMode(3)),
+            (|b| b[31] ^= 1, NtpError::OriginMismatch),
+            (|b| b[0] |= 3 << 6, NtpError::Unsynchronized),
+            (|b| b[1] = 16, NtpError::BadStratum(16)),
+            (|b| b[1] = 255, NtpError::BadStratum(255)),
+        ];
+        for (change, want) in cases {
+            let mut b = ok;
+            change(&mut b);
+            assert_eq!(req.verify_response(&b), Err(want));
+        }
+        assert_eq!(req.verify_response(&ok[..47]), Err(NtpError::TooShort));
+        assert_eq!(req.verify_response(&[]), Err(NtpError::TooShort));
+        assert!(!req.is_answered());
+        assert!(req.verify_response(&ok).is_ok());
+    }
+
+    #[test]
+    fn plain_kiss_of_death() {
+        let mut b = plain_response();
+        b[0] = 0b11_100_100;
+        b[1] = 0;
+        b[12..16].copy_from_slice(b"RATE");
+        let mut req = plain_request();
+        assert_eq!(req.verify_response(&b), Ok(Response::KissOfDeath(KissCode::Rate)));
+        assert!(req.is_answered());
+        // A kiss must still match our transmit timestamp.
+        b[24] ^= 1;
+        assert_eq!(plain_request().verify_response(&b), Err(NtpError::OriginMismatch));
     }
 
     #[test]

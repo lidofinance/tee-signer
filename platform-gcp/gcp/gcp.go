@@ -466,6 +466,7 @@ func New(o platform.Options) (*platform.Platform, error) {
 		return nil, err
 	}
 	p.Sealer, err = platform.NewGCMSealer(dek)
+	p.NTSScheduleSeed = platform.ScheduleSeed(dek)
 	clear(dek)
 	if err != nil {
 		return nil, err

@@ -158,7 +158,7 @@ pub fn quorum(e: &QuorumError) -> u32 {
 
 const QUORUM_TEXT: [&CStr; 9] = [
     c"quorum: unknown reason",
-    c"too few servers for the quorum rule",
+    c"too few servers: at least 3, and over twice the number allowed wrong",
     c"more than 16 servers",
     c"operator label empty or over 32 octets",
     c"two servers of one operator",
