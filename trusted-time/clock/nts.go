@@ -1346,7 +1346,17 @@ func (n *NTS) resolve(ctx context.Context, addr string) string {
 		n.logf(slog.LevelWarn, "nts: no address for the NTP host; each query looks it up", "host", host, "err", err)
 		return addr
 	}
-	return net.JoinHostPort(ips[0].Unmap().String(), port)
+	// An IPv4 address when the name has one: the platforms' egress rules
+	// and the Nitro relay are built for IPv4, and a host with IPv6 may sort
+	// an IPv6 address first (localhost is ::1 on some CI runners).
+	ip := ips[0].Unmap()
+	for _, a := range ips {
+		if a.Unmap().Is4() {
+			ip = a.Unmap()
+			break
+		}
+	}
+	return net.JoinHostPort(ip.String(), port)
 }
 
 // wideSampleError is an answer whose bound is over MaxSampleBound.
