@@ -80,11 +80,12 @@ func TestFederatedTokenWithoutServiceAccount(t *testing.T) {
 		t.Fatalf("storage and KMS token %q, %v: want the federated token itself", tok, err)
 	}
 	store, _ := filestore.New(t.TempDir())
-	d1, err := k.dataKey(ctx, store, [32]byte{3})
+	d1, _, err := k.dataKey(ctx, store, [32]byte{3})
 	if err != nil {
 		t.Fatal(err)
 	}
-	d2, err := k.dataKey(ctx, store, [32]byte{3})
+	store.Put(sharePrefix+"aa01", []byte("sealed share"))
+	d2, _, err := k.dataKey(ctx, store, [32]byte{3})
 	if err != nil || !bytes.Equal(d1, d2) {
 		t.Fatalf("data key through the federated token: %v", err)
 	}
@@ -103,7 +104,7 @@ func TestFederatedTokenWithoutServiceAccount(t *testing.T) {
 	// no impersonation, so key release fails instead of using the account.
 	sa := *k
 	sa.ServiceAccount = "signer-workload@p.iam.gserviceaccount.com"
-	if _, err := sa.dataKey(ctx, store, [32]byte{3}); err == nil {
+	if _, _, err := sa.dataKey(ctx, store, [32]byte{3}); err == nil {
 		t.Fatal("impersonation worked although the principal set may not act as the account")
 	}
 	if iamCalls.Load() == 0 {

@@ -76,14 +76,51 @@ CHAIN=<chain> CHAIN_JSON=chain.json SETUP_FILE=signer-3.bin CONFIRM=yes platform
   length-prefixed, `governance/setupwire` contexts). A runner started with
   another setup does not decrypt this signer's data key (it stops) and opens
   none of its keys.
-- Who can plant a data key: whoever may encrypt with the key. `deploy.sh`
-  grants `cryptoKeyEncrypterDecrypter` on the key to the WIF principal set
-  alone, whose provider pins the image; the service account gets no KMS
-  role (`platform-gcp/gcp/deploy_test.go` checks the script). The AAD is
-  not secret, so a principal that holds the role anyway (an admin who
-  grants it to itself, a binding inherited from the project or the
-  organization) can still plant one, and the runner cannot see such
-  bindings. GCP is outside the admin-proof goal.
+- Who can use the key: `deploy.sh` grants `cryptoKeyEncrypterDecrypter`
+  on it to the WIF principal set alone, whose provider pins the image; the
+  service account gets no KMS role (`platform-gcp/gcp/deploy_test.go`
+  checks the script). A principal that holds a role on the key anyway (an
+  admin who grants it to itself, a binding inherited from the project or
+  the organization) is invisible to the runner, and the AADs are not
+  secret. With decrypt it opens `sealing/dek.gcpkms`, from the state copy
+  too, and reads every share; it needs no planted key. GCP is outside the
+  admin-proof goal: keep the KMS role with the WIF principal set, and
+  check the key's IAM policy and the inherited bindings before the first
+  start.
+- What the runner stops is a holder of encrypt alone
+  (`roles/cloudkms.cryptoKeyEncrypter` or a custom role) planting a key it
+  knows. It uses a stored `sealing/dek.gcpkms` only when the store also
+  lists an object under `shares/`. On a store without one it copies the
+  blob to `sealing/dek.gcpkms.ignored-<hash>` (the first 8 bytes of its
+  SHA-256), logs a warning and makes a new key in the VM, so the first
+  start seals under a key of its own. The copy is a trace only: it stays
+  in the runner's store, goes into the state copy, and cannot be put back
+  from outside. Each restart before the first import leaves one more.
+- A key from a stored blob is unproven: before the runner loads a share
+  or seals a new one, every share listed at that start must unseal under
+  it (`server.ProveSealingKey`, the same check as on AWS). Otherwise the
+  start stops and names the shares that did not open. A planted blob next
+  to junk under `shares/` fails this; a runner's own blob and shares
+  pass, so signers already in service keep their key on upgrade.
+- These two checks stop only a blob planted without a matching share.
+  They do not stop a holder of encrypt alone who also writes a forged
+  state copy commit with one share sealed under the planted key: the
+  state copy's object keys are KMS encrypts under a public AAD too, and
+  the log_id in the share's AAD is public on a signer in service (before
+  the first start the holder can write the first mark log record itself).
+  Such a holder needs object create on the state copy bucket, and for the
+  first start on the mark log bucket. Cloud KMS symmetric keys give no
+  secret that the encrypt role cannot produce, so the runner cannot tell
+  this case apart: keep encrypt, like decrypt, with the WIF principal set,
+  and keep the buckets' write access with it too.
+- As on AWS, any object under `shares/` that does not open under the
+  current sealing key and the mark log's log_id (a leftover from an
+  earlier mark log, a foreign object) now stops the start, where before it
+  was logged and skipped. The store is the container's file system and
+  the state copy is encrypted and restored as a whole commit, so nobody
+  can remove such an object. The way out is a new setup (a new
+  setup_hash, so a new state copy path and sealing AAD) and a new import
+  of the shares.
 - `CHAIN` picks the runner build of `build-image.sh` (the mainnet runner
   when unset); the chain config is checked, not put into the image. The
   script refuses `CLIENT_CA`, and `render_dockerfile` refuses `STATE_STORE`
@@ -174,19 +211,27 @@ The setup's `sealing_key_release` names the GCP resources, all from
 | Setup field | Value |
 | --- | --- |
 | `wif_provider` | `//iam.googleapis.com/projects/<project-number>/locations/global/workloadIdentityPools/signer-pool/providers/signer-attestation` |
-| `kms_key` | `projects/<project-number>/locations/europe-west4/keyRings/signer/cryptoKeys/sealing` |
+| `kms_key` | `projects/<gcp-project>/locations/europe-west4/keyRings/signer/cryptoKeys/sealing` (the project ID: Cloud KMS refuses a key name with the number) |
 | `attest_audience` | `signer-runner-identity` |
 | `project_number` | `<project-number>` (required on a prod chain) |
 
-The runner checks `project_number` itself at start. `wif_provider` and
-`kms_key` must both name that project number. A `kms_key` named by
-project ID (`projects/<gcp-project>/...`) is refused with
-`project_number` set, since the runner cannot tell its project without
-an API call. The mark log and state copy buckets must be in that
+The runner checks `project_number` itself at start. `wif_provider` must
+name that project number. `kms_key` names the project by ID, the only
+form Cloud KMS takes (a key name with the number answers 403); a
+`kms_key` by number must be that number. Before each key release the
+runner also needs the launcher token's project number to equal
+`project_number`, which ties the key's project ID to it (below). The
+mark log and state copy buckets must be in that
 project: the runner reads each bucket's `projectNumber` (`buckets.get`,
 the `storage.buckets.get` permission the lock check needs too) and does
 not start when it differs. A setup without `project_number` gets none of
 these checks.
+
+The runner checks the first two itself: before each key release it reads
+the project of its VM from the launcher token (`submods.gce`), and gets
+no token from STS when `wif_provider` is not a WIF provider of its
+project number, or `kms_key` not a KMS key of its project. It does not
+check the buckets.
 
 `PROJECT_ID`, `PROJECT_NUMBER`, `REGION` and `ZONE` (default
 `europe-west4-a`) set the project and location. The mark log and the state

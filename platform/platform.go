@@ -162,9 +162,10 @@ type Platform struct {
 	// sealing context before the key policy was locked (AWS-KMS-02). The
 	// runner then uses the key only once every stored share opens under
 	// it, and seals no new share before that (tee-signer
-	// server.ProveSealingKey). false: the key is new at this start, or the
-	// platform does not set it (Azure derives the key inside the TEE; GCP
-	// and dev have no lock to plant before).
+	// server.ProveSealingKey). On GCP any holder of the encrypter role on
+	// the KMS key can wrap a key it knows under the public AAD. false: the
+	// key is new at this start, or the platform does not set it (Azure
+	// derives the key inside the TEE and stores none; dev).
 	SealingKeyStored bool
 	// NTSScheduleSeed seeds the NTS clock's shift schedule
 	// (trusted-time/clock NTS.ScheduleSeed): ScheduleSeed of the sealing

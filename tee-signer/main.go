@@ -362,7 +362,7 @@ func run() (err error) {
 		}
 	}
 	// A sealing key from a stored blob seals nothing until every stored
-	// share opens under it (AWS-KMS-02, server.ProveSealingKey).
+	// share opens under it (Nitro and GCP, server.ProveSealingKey).
 	srv.SealingKeyUnproven = plat.SealingKeyStored
 	var n int
 	imageState := "not_applicable"
