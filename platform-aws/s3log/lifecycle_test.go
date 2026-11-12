@@ -19,8 +19,9 @@ import (
 // keeps running. The lock check refuses a rule that moves objects to
 // another storage class (an archive class makes records unreadable),
 // warns once of an expiration rule, and passes a bucket without rules. A
-// writer the bucket policy does not yet let read the rules (403) warns
-// once and passes: the rules cost liveness only.
+// refused read (any 403: a writer the bucket policy does not yet let read
+// the rules, but also a request S3 finds too skewed) warns once and
+// passes, so a runner under the old policy starts; a rule then goes unseen.
 func TestS3LifecycleCheck(t *testing.T) {
 	const (
 		transition = `<Rule><ID>t</ID><Filter/><Status>Enabled</Status>` +
@@ -37,14 +38,15 @@ func TestS3LifecycleCheck(t *testing.T) {
 		name, rules string
 		refuse      bool
 		warns       int
-		denied      bool
+		denied      string // the 403 the read gets, if any
 	}{
-		{"none", "", false, 0, false},
-		{"transition", transition, true, 0, false},
-		{"noncurrent transition", expiration + noncurrent, true, 1, false},
-		{"disabled transition", disabled, false, 0, false},
-		{"expiration", expiration, false, 1, false},
-		{"read denied", transition, false, 1, true},
+		{"none", "", false, 0, ""},
+		{"transition", transition, true, 0, ""},
+		{"noncurrent transition", expiration + noncurrent, true, 1, ""},
+		{"disabled transition", disabled, false, 0, ""},
+		{"expiration", expiration, false, 1, ""},
+		{"read denied", transition, false, 1, "AccessDenied"},
+		{"read refused as skewed", transition, false, 1, "RequestTimeTooSkewed"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			logs.Reset()
@@ -53,10 +55,10 @@ func TestS3LifecycleCheck(t *testing.T) {
 			srv.SetLifecycle(c.rules)
 			l := openRetained(t, srv, 30)
 			l.Logger = slog.New(slog.NewTextHandler(&logs, nil))
-			if auth := srv.Auth; c.denied {
+			if auth := srv.Auth; c.denied != "" {
 				srv.Auth = func(r *http.Request) error {
 					if r.URL.Query().Has("lifecycle") {
-						return errors.New("AccessDenied")
+						return errors.New(c.denied)
 					}
 					return auth(r)
 				}

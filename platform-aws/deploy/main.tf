@@ -326,9 +326,11 @@ resource "aws_iam_user" "record_writer" {
 # DeleteBucketLifecycle) to every principal; it also blocks transitions to
 # archive classes. A rule set before this policy keeps running, so the
 # bucket must have none when this statement is first applied; the lock
-# check reads the rules (s3:GetLifecycleConfiguration; without it, a
-# warning) and refuses a transition (at start the start fails, later mark
-# writes stop) and warns of an expiration. While the
+# check reads the rules (s3:GetLifecycleConfiguration; any 403 on the
+# read, whatever its code, is a warning and skips the check) and refuses a
+# transition (at start the start fails, later mark writes stop) and warns
+# of an expiration, which also removes noncurrent versions once their
+# retention ends. While the
 # policy stands no request and no new lifecycle rule adds a delete marker;
 # an admin who can change the policy can lift both denies. Versioning
 # cannot be suspended on an Object Lock bucket, and a replication rule

@@ -466,14 +466,20 @@ reads the rules at every start, every hour while it runs, and before a
 write after a failed check. An enabled rule with a transition stops the
 start; found while the runner runs, it stops mark writes, so nothing signs
 above the committed mark until the rule is gone (an archive class makes
-records unreadable). An expiration rule logs a warning. Apply this policy
-before or with a runner that has this check: under an older policy the
-runner cannot read the rules, logs a warning and starts without the
-check. A lifecycle rule, such as cleanup of old versions after the lock
-ends, takes a policy change that drops NoLifecycleRules. That raises the
-PutBucketPolicy alert. The runner's checks catch a delete marker the rule
-adds only while the version under it exists. Compliance mode keeps
-everyone from deleting or overwriting a locked version. An admin who can
+records unreadable). An expiration rule logs a warning; it adds delete
+markers, and a noncurrent version expiration removes versions once their
+retention ends. Apply this policy before or with a runner that has this
+check: under an older policy the runner cannot read the rules, logs a
+warning and starts without the check. That pass covers any 403 on the
+read, whatever its error code, so an identity deny on the writer user or
+a request S3 refuses as too skewed also skips the check, and a rule
+already on the bucket goes unseen. A lifecycle rule, such as cleanup of
+old versions after the lock ends, takes a policy change that drops
+NoLifecycleRules. That raises the PutBucketPolicy alert. The runner's
+checks catch a delete marker the rule adds only while the version under
+it exists (`slashing-log/docs/marklog.md`, "What it does not cover").
+Compliance mode keeps everyone from deleting or overwriting a locked
+version. An admin who can
 change the bucket policy can lift these denies, and one who mints an
 access key or a console password for the record writer user writes as it
 without changing the policy. So alert in CloudTrail on `PutBucketPolicy`,
