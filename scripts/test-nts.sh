@@ -41,10 +41,14 @@ bash "$ROOT/scripts/build-core.sh" "${archs[@]}"
 bash "$ROOT/scripts/build-nts.sh" "${archs[@]}"
 bash "$ROOT/scripts/build-runner-nts.sh" "${archs[@]}"
 
-log "nts: gofmt and vet (tag nts)"
+# Every test of tee-signer with the tag, in the release and the debug build:
+# the nts-tagged files (coarseroots_test.go, nts_on_test.go, the setup time
+# tests) run nowhere else.
+log "nts: gofmt, vet and the tee-signer tests (tag nts)"
 ( (cd "$ROOT/tee-signer" && [ -z "$(gofmt -l nts_on.go nts_servers_debug.go nts_servers_release.go platforms_nts.go)" ] &&
     go vet -tags netgo,osusergo,platform_dev,nts . && go vet -tags netgo,osusergo,platform_aws,platform_dev,debugimport,nts . &&
-    CGO_ENABLED=1 go test -count=1 -tags netgo,osusergo,platform_dev,nts -run 'NTS' .) &&
+    CGO_ENABLED=1 go test -count=1 -tags netgo,osusergo,platform_dev,nts . &&
+    CGO_ENABLED=1 go test -count=1 -tags netgo,osusergo,platform_aws,platform_dev,debugimport,nts .) &&
   (cd "$ROOT/trusted-time" && [ -z "$(gofmt -l nts clock)" ] && go vet -tags netgo,osusergo,nts ./...) &&
   (cd "$ROOT/platform-aws" && [ -z "$(gofmt -l udprelay nitro)" ] && go vet -tags netgo,osusergo,platform_aws,platform_dev,debugimport,nts ./nitro) &&
   (cd "$ROOT/tests" && [ -z "$(gofmt -l e2e)" ] && go vet -tags netgo,osusergo,platform_aws,platform_dev,debugimport,nts ./e2e) ) \

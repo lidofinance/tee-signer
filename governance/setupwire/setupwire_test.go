@@ -384,7 +384,12 @@ func setupRefusals(t testing.TB) []setupRefusal {
 		{"time protocol 3", "", func(s *Setup) { s.Locked.TimePolicy.Protocol = 3 }, "time_policy.protocol 3", ""},
 		{"max bound 0", "", func(s *Setup) { s.Locked.TimePolicy.MaxBoundMs = 0 }, "time_policy.max_bound_ms 0, want 1 to 250", ""},
 		{"max bound 251", "", func(s *Setup) { s.Locked.TimePolicy.MaxBoundMs = 251 }, "time_policy.max_bound_ms 251", ""},
-		{"sample bound below max bound", "", func(s *Setup) { s.Locked.TimePolicy.MaxSampleBoundMs = 99 }, "time_policy.max_sample_bound_ms 99, want max_bound_ms (100) to 1000", ""},
+		{"sample bound below max bound", "", func(s *Setup) { s.Locked.TimePolicy.MaxSampleBoundMs = 99 }, "time_policy.max_sample_bound_ms 99, want max(max_bound_ms (100), 80) to 1000", ""},
+		// rv-dko.5: the clock takes a sample at receipt only while its bound
+		// plus 38 ms of aging fits the cap, so the cap is at least 80 ms.
+		{"sample bound under 80 ms", "", func(s *Setup) {
+			s.Locked.TimePolicy.MaxBoundMs, s.Locked.TimePolicy.MaxSampleBoundMs = 50, 79
+		}, "time_policy.max_sample_bound_ms 79, want max(max_bound_ms (50), 80) to 1000", ""},
 		{"sample bound 1001", "", func(s *Setup) { s.Locked.TimePolicy.MaxSampleBoundMs = 1001 }, "time_policy.max_sample_bound_ms 1001", ""},
 		{"exit validator", "", func(s *Setup) { s.Locked.ExitPolicy.AllowedValidators = []backend.Pubkey{{1}} }, "exit approvals are not in this version",
 			"1 exit_policy.allowed_validators, at most 0"},

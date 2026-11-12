@@ -87,17 +87,30 @@ func (l *Locked) ChangeDelayOn(c *Chain) uint64 {
 // Wait is W of step 7 for update u under the active locked group of a
 // setup of chain c: 0 for an open update; for a locked one the active change delay (ChangeDelayOn, never
 // below the chain's floor), or the images minimum when that is larger and
-// allowed_image_measurements gains an entry. A change delay of zero does
-// not shorten the images minimum (decision 10).
+// allowed_image_measurements gains an entry (ImagesWait). A change delay
+// of zero does not shorten the images minimum (decision 10).
+//
+// It is the wait of the normal path. Break-glass (Decide) adds an image
+// with no wait when every approver signs, but only once the approver set
+// has been in force for ImagesWait (History.ImageHeld): a new image is
+// never in force sooner than the images minimum after the set that signed
+// it took over.
 func Wait(c *Chain, active *Locked, u *UpdateBody) uint64 {
 	if u.Group != GroupLocked {
 		return 0
 	}
-	w := active.ChangeDelayOn(c)
 	if u.Locked != nil && GainsImage(active.AllowedImageMeasurements, u.Locked.AllowedImageMeasurements) {
-		w = max(w, ImagesMinTimeLock)
+		return ImagesWait(c, active)
 	}
-	return w
+	return active.ChangeDelayOn(c)
+}
+
+// ImagesWait is the wait of a locked update that adds an image: the change
+// delay in force (ChangeDelayOn) or the images minimum of the build
+// (ImagesMinTimeLock: 7 days in the mainnet build, 7 minutes in a non-prod
+// build, on any chain), whichever is larger.
+func ImagesWait(c *Chain, active *Locked) uint64 {
+	return max(active.ChangeDelayOn(c), ImagesMinTimeLock)
 }
 
 // LatestActivateAt is the latest activate_at an update with wait w may

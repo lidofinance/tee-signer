@@ -69,6 +69,67 @@ func TestBreakGlassHeldAfterRemoval(t *testing.T) {
 	e.mustSend(signed(t, drop, first2, nil), wireadmin.ConfigAccepted)
 }
 
+// rv-dko.2: with n = 3 and k = 2, two approvers rotate to their own two
+// keys (no removal in shape: the order changes) and are every approver once
+// the rotation is in force. A raised bound by break-glass is in force at
+// once, but an added image waits the images wait. The record keeps the
+// time the set came into force across a restart. Once the set has been in
+// force for the images wait, break-glass adds the image at once.
+func TestImageBreakGlassHeldAfterRotation(t *testing.T) {
+	e, _ := newTimeEnv(t, u64(3600))
+	images := max(3600, uint64(setupwire.ImagesMinTimeLock))
+	own := approverSet(2, 2, 1)
+	every := []by{{0, 2}, {1, 1}}
+	rot := e.body(locked, 1, e.groupHash(locked), e.now())
+	rot.Locked.Approvers = own
+	h1 := hashOf(t, rot)
+	rotAt := e.now() + 3600
+	if st := e.mustSend(signed(t, rot, first2, []byte{2, 1}), wireadmin.ConfigAccepted); st.Locked.Pending != pending(1, h1, rotAt) {
+		t.Fatalf("rotation: %+v, want pending for the change delay", st.Locked)
+	}
+	e.clock.add(3600)
+	if err := e.upd.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st := e.log.State(); st.ApproversAt != rotAt || st.RemovedAt != 0 {
+		t.Fatalf("the record: approver set time %d, removal time %d; want %d, 0", st.ApproversAt, st.RemovedAt, rotAt)
+	}
+	lockedOn := func(v uint64, prev [32]byte, change func(l *setupwire.Locked)) *setupwire.UpdateBody {
+		b := e.body(locked, v, prev, e.now())
+		b.Locked.Approvers = own
+		b.Locked.TimePolicy.MaxBoundMs, b.Locked.TimePolicy.MaxSampleBoundMs = 150, 150
+		change(b.Locked)
+		return b
+	}
+	addImage := func(l *setupwire.Locked) {
+		l.AllowedImageMeasurements = append(l.AllowedImageMeasurements, setupwire.Image{Kind: setupwire.ImageGCP, Measurement: bytes.Repeat([]byte{0x78}, 32)})
+	}
+	bound := lockedOn(2, h1, func(*setupwire.Locked) {})
+	h2 := hashOf(t, bound)
+	if st := e.mustSend(signed(t, bound, every, nil), wireadmin.ConfigAccepted); st.Locked != (backend.ConfigGroup{Version: 2, Hash: h2}) {
+		t.Fatalf("a bound raised by every approver right after the rotation: %+v, want in force at once", st.Locked)
+	}
+	img := lockedOn(3, h2, addImage)
+	if st := e.mustSend(signed(t, img, every, nil), wireadmin.ConfigAccepted); st.Locked.Pending != pending(3, hashOf(t, img), e.now()+images) {
+		t.Fatalf("an image added by every approver right after the rotation: %+v, want pending for the images wait", st.Locked)
+	}
+	e.restart()
+	if got := e.log.State().ApproversAt; got != rotAt {
+		t.Fatalf("approver set time after the restart %d, want %d", got, rotAt)
+	}
+	// A second before the set has been in force for the images wait.
+	e.clock.add(images - 1)
+	img = lockedOn(4, h2, addImage)
+	if st := e.mustSend(signed(t, img, every, nil), wireadmin.ConfigAccepted); st.Locked.Pending != pending(4, hashOf(t, img), e.now()+images) {
+		t.Fatalf("an image added a second early: %+v, want pending", st.Locked)
+	}
+	e.clock.add(1)
+	img = lockedOn(5, h2, addImage)
+	if st := e.mustSend(signed(t, img, every, nil), wireadmin.ConfigAccepted); st.Locked != (backend.ConfigGroup{Version: 5, Hash: hashOf(t, img)}) {
+		t.Fatalf("an image added by every approver after the images wait: %+v, want in force at once", st.Locked)
+	}
+}
+
 // rv-pb4.2: a time_policy the NTS clock cannot meet (a 1 ms bound) stops
 // the NTS time. The update that undoes it is still taken, on the coarse
 // clock; without a coarse reading it is refused. Signing waits for the NTS
@@ -79,7 +140,7 @@ func TestConfigUpdateOnCoarseClock(t *testing.T) {
 	e.restart()
 	fee := e.setup.Locked.AllowedFeeRecipients[0]
 	tight := e.body(locked, 1, e.groupHash(locked), e.now())
-	tight.Locked.TimePolicy.MaxBoundMs, tight.Locked.TimePolicy.MaxSampleBoundMs = 1, 1
+	tight.Locked.TimePolicy.MaxBoundMs, tight.Locked.TimePolicy.MaxSampleBoundMs = 1, 80
 	h1 := hashOf(t, tight)
 	if st := e.mustSend(signed(t, tight, first2, nil), wireadmin.ConfigAccepted); st.Locked != (backend.ConfigGroup{Version: 1, Hash: h1}) {
 		t.Fatalf("a 1 ms bound: %+v, want in force at once", st.Locked)

@@ -20,11 +20,11 @@ func FuzzParse(f *testing.F) {
 	// byte and the config history) and an SMARK2 one (without the
 	// history), which must parse and encode back as they are.
 	b := r.encodeBody()
-	v1 := append([]byte(recordMagicV1), b[len(recordMagic):len(b)-7]...)
+	v1 := append([]byte(recordMagicV1), b[len(recordMagic):len(b)-8]...)
 	f.Add(append(v1, ed25519.Sign(key, signedMessage(v1))...))
-	v2 := append([]byte(recordMagicV2), b[len(recordMagic):len(b)-6]...)
+	v2 := append([]byte(recordMagicV2), b[len(recordMagic):len(b)-7]...)
 	f.Add(append(v2, ed25519.Sign(key, signedMessage(v2))...))
-	r.State.RemovedAt, r.State.Carried = 1_800_000_000, [][32]byte{{1}, {2}}
+	r.State.RemovedAt, r.State.ApproversAt, r.State.Carried = 1_800_000_000, 1_800_000_000, [][32]byte{{1}, {2}}
 	r.State.Locked.Version, r.State.Paths[0] = 1, setupwire.PathBreakGlass
 	f.Add(r.Sign(key))
 	f.Fuzz(func(t *testing.T, b []byte) {

@@ -370,8 +370,8 @@ func TestNTSClockCheckPlainNTP(t *testing.T) {
 	}
 }
 
-// -nts-max-sample-bound defaults to -nts-max-bound, may be raised to 1 s
-// (no cap), and is refused below the max bound or above 1 s.
+// -nts-max-sample-bound defaults to -nts-max-bound and at least 80 ms, may
+// be raised to 1 s (no cap), and is refused below that or above 1 s.
 func TestNTSMaxSampleBound(t *testing.T) {
 	t.Setenv("RUNNER_NTS_COARSE_URLS", "https://a.example/,https://b.example/,https://c.example/")
 	t.Setenv("RUNNER_NTS_MAX_BOUND", "")
@@ -385,6 +385,8 @@ func TestNTSMaxSampleBound(t *testing.T) {
 		{250 * time.Millisecond, 0, 250 * time.Millisecond, ""},
 		{0, time.Second, time.Second, ""},
 		{0, 50 * time.Millisecond, 0, "-nts-max-sample-bound"},
+		{50 * time.Millisecond, 0, 80 * time.Millisecond, ""},
+		{50 * time.Millisecond, 79 * time.Millisecond, 0, "at least 80ms"},
 		{0, 2 * time.Second, 0, "-nts-max-sample-bound"},
 	} {
 		*ntsMaxBoundFlag, *ntsMaxSampleFlag = tc.bound, tc.sample

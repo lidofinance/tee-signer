@@ -129,6 +129,9 @@ type view struct {
 	// when its body is readable and they differ from those in force: the
 	// fork rule counts epochs under them too.
 	pendingSlots [][]core.SlotTimeChange
+	// pendingLockedErr: the pending locked update has no readable body, so
+	// its slot time changes are unknown.
+	pendingLockedErr error
 	// newest is the open schedule the core holds: the pending update's when
 	// its body is readable, else the active one's. newestAt is its
 	// effective time: the pending update's, or openAt for the active
@@ -383,7 +386,8 @@ func activate(st *markstore.ConfigState, g setupwire.Group) {
 //
 // The state also keeps a config history (markstore.ConfigState): the
 // effective time of the newest update in force that removed one approver
-// (RemovedAt, setupwire.History), and the revocations of a pending open
+// (RemovedAt, setupwire.History) and of the newest one that changed the
+// approver set (ApproversAt), and the revocations of a pending open
 // update that a rotation dropped (Carried), which stay enforced until the
 // next open update comes into force (revoked.go).
 func (u *Updates) compute(st markstore.ConfigState, now uint64) view {
@@ -404,6 +408,9 @@ func (u *Updates) compute(st markstore.ConfigState, now uint64) view {
 		activate(&v.state, setupwire.GroupLocked)
 		if removal {
 			v.state.RemovedAt = lp.EffectiveAt
+		}
+		if rotation {
+			v.state.ApproversAt = lp.EffectiveAt
 		}
 		if p := v.state.Open.Pending; rotation && p != nil {
 			// The new set replaces the old one: what the old set signed and
@@ -446,6 +453,8 @@ func (u *Updates) compute(st markstore.ConfigState, now uint64) view {
 			if st := slotTimesOf(b.Body.Locked); !slices.Equal(st, slotTimesOf(v.locked)) {
 				v.pendingSlots = [][]core.SlotTimeChange{st}
 			}
+		} else {
+			v.pendingLockedErr = err
 		}
 	}
 	v.missing = errors.Join(errs...)
@@ -662,7 +671,10 @@ func (u *Updates) Sync(ctx context.Context) error {
 		u.reconcileLocked(now)
 	}
 	st, old := u.view.state.Clone(), u.logSt
-	write := u.view.missing == nil && !st.Equal(old)
+	// No record while a core setter waits for its retry (u.retry): the view of
+	// a record with the update in force has no effective time for it, and the
+	// retried setter would give the core the time of the retry instead.
+	write := u.view.missing == nil && u.retry == nil && !st.Equal(old)
 	u.mu.Unlock()
 	u.applyTimeLocked()
 	if !write {
@@ -944,7 +956,7 @@ func (u *Updates) Accept(ctx context.Context, raw []byte) (uint8, backend.SetupS
 		return 0, none, backend.Refused(backend.StatusStorage, "config update: the values in force are unknown, so no record is written: %v (send that update again first)", v.missing)
 	}
 	// The change rules: the signatures and the wait (setupwire changes.go).
-	h := setupwire.History{RemovedAt: v.state.RemovedAt, Now: now}
+	h := setupwire.History{RemovedAt: v.state.RemovedAt, ApproversAt: v.state.ApproversAt, Now: now}
 	d, err := upd.Decide(&u.opt.Setup.Chain, v.locked, v.open, h)
 	if err != nil {
 		return 0, none, backend.Refused(backend.StatusBadRequest, "config update: %v", err)
@@ -1008,6 +1020,11 @@ func (u *Updates) Accept(ctx context.Context, raw []byte) (uint8, backend.SetupS
 		// The epochs count under the slot times in force and under those of a
 		// pending locked update.
 		if next := scheduleOf(b.Open); !sameSchedule(next, scheduleOf(v.newest)) {
+			if p := v.state.Locked.Pending; p != nil && v.pendingLockedErr != nil {
+				// As the locked case: without the body the rule would count
+				// epochs only under the slot times in force.
+				return 0, none, backend.Refused(backend.StatusStorage, "config update: the pending locked version %d has no readable body, so the fork rule cannot check open version %d under its slot times; send that update again first", p.Version, b.Version)
+			}
 			if err := signer.CheckSchedule(next, at, v.pendingSlots...); err != nil {
 				return 0, none, refusedAs(err, fmt.Sprintf("config update: the fork rule refuses open version %d in force at %d", b.Version, at))
 			}

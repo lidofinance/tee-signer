@@ -59,6 +59,10 @@ const (
 	// before it contacts anyone, so signers that restart together do not
 	// reach the servers in the same second.
 	NTSStartDelay = 5 * time.Second
+	// NTSStartWait is how long the start state lasts after a server swap
+	// or a policy change left the clock without a quorum (NTS.StartWait):
+	// the runner's default wait for the first quorum of a start.
+	NTSStartWait = 90 * time.Second
 	// ntsDriftBaselinePolls times Interval is the baseline of the drift
 	// reading: the check also compares each quorum with the oldest quorum
 	// kept, at least this old.
@@ -98,7 +102,10 @@ type NTSServer struct {
 //     has been served; until then NTS-KE is tried again after a random
 //     3/4 to 5/4 Interval (12 to 20 s), so a relay that comes up late does
 //     not push the first quorum past the runner's start wait, and signers
-//     that failed together do not try again together.
+//     that failed together do not try again together. A server swap or
+//     a policy change that leaves no quorum brings these start retries
+//     back for StartWait at most; then the backoff applies again, with
+//     or without a quorum.
 //   - The latest sample of each server goes to the Rust quorum if it will
 //     stay under MaxAge until the next quorum (n is the count of such
 //     fresh samples, not of the servers; up to (n - 1) / 2 of them may be
@@ -151,16 +158,17 @@ type NTS struct {
 	Coarse   interface{ Now() (time.Time, error) }
 	Interval time.Duration // 0: NTSInterval
 	MaxBound time.Duration // 0: NTSMaxBound
-	// MaxSampleBound refuses a sample whose own bound is larger at receipt
-	// (0: MaxBound). While it waits to join, its bound grows by rho, by at
-	// most nts.Drift of the oldest join age (38 ms at 76 s under the shift
-	// schedule); a sample under the cap at receipt joins for its whole join
-	// age. A host that delays the one honest answer of a small fresh set
-	// until its bound is wide lets two wrong servers place the time
-	// anywhere inside it while the quorum's bound looks small. The bound is
-	// a half-width, so that error is up to twice the cap plus the aging,
-	// about 2 x (cap + 38 ms) (about 1 s each way without the cap). A far
-	// region, whose samples are wide, raises MaxBound and this cap.
+	// MaxSampleBound caps a sample's bound (0: MaxBound). At receipt the
+	// bound must leave room for the aging over the join age (nts.Drift, 38
+	// ms at 76 s under the shift schedule; receiptBound), so the aged bound
+	// stays within the cap for as long as the sample may join. A host that
+	// delays the honest answers of a small fresh set until their bounds are
+	// wide lets wrong servers place the time anywhere inside them while the
+	// quorum's bound looks small: two wrong of 4 or 5 fresh samples, and one
+	// wrong of exactly 3, where none is outvoted (HEALTH worst_bound_ms
+	// shows that case). The bound is a half-width, so that error is up to
+	// twice the cap (about 1 s each way without the cap). A far region,
+	// whose samples are wide, raises MaxBound and this cap.
 	MaxSampleBound time.Duration
 	MaxAge         time.Duration // 0: NTSMaxAge, or NTSShiftMaxAge with Shifts
 	MaxCoarseDiff  time.Duration // 0: NTSMaxCoarseDiff
@@ -188,6 +196,12 @@ type NTS struct {
 	// (newNTSShifts). Refresh refuses an empty seed: every signer would
 	// share its order.
 	ScheduleSeed []byte
+	// StartWait limits the start state the clock goes back to when a
+	// server swap or a policy change leaves it without a quorum
+	// (SetServers, SetPolicy). 0: NTSStartWait. The runner sets its
+	// -nts-wait, the time a real start has before the runner gives up. Set
+	// before the first Refresh.
+	StartWait time.Duration
 
 	minPoll time.Duration // 0: NTSMinPoll; tests set it lower
 	maxPoll time.Duration // 0: NTSMaxPoll; tests set it lower
@@ -198,6 +212,9 @@ type NTS struct {
 	sleep func(d time.Duration)
 	// started is set by the first Refresh, after its start wait. Under rmu.
 	started bool
+	// coldUntil is the local time the start state of cold ends at without
+	// a quorum, 0 outside that state. Under rmu.
+	coldUntil int64
 
 	shifts *ntsShifts // set by init when ScheduleSeed is set
 	// queryTimeout replaces the NTP query timeout in tests; 0: the default.
@@ -216,7 +233,8 @@ type NTS struct {
 	peers  []*ntsPeer
 	result *ntsResult // served by Now; nil until a quorum passes all checks
 	// served is set once a quorum has passed; before that NTS-KE is tried
-	// again after about Interval (3/4 to 5/4 of it), without backoff.
+	// again after about Interval (3/4 to 5/4 of it), without backoff. cold
+	// clears it, and endCold sets it again when the start wait is over.
 	served atomic.Bool
 	// hist holds the quorums of the drift check, oldest first: the last one
 	// (served or refused) at the end, the baseline at index 0. A refused
@@ -269,6 +287,14 @@ type ntsResult struct {
 	sampled int64         // local ns of the oldest sample (T4) in the quorum
 	members []string
 	lo, hi  int64
+	// worst is the error a single wrong member can cause, at `at`. With
+	// exactly 3 fresh samples (nts.QuorumWrong(3) is 0) the result is the
+	// overlap of all three intervals, so one wrong operator can place a
+	// narrow interval anywhere inside the honest overlap: the error is up to
+	// the width of the widest honest interval, twice its aged bound, while
+	// bound may be a few ms. With more samples a wrong one is outvoted, and
+	// worst is bound (rv-dko.4).
+	worst time.Duration
 }
 
 type ntsPeer struct {
@@ -354,6 +380,20 @@ func (n *NTS) interval() time.Duration { return cmpOr(n.Interval, NTSInterval) }
 func (n *NTS) maxBound() time.Duration { return cmpOr(n.MaxBound, NTSMaxBound) }
 func (n *NTS) maxSampleBound() time.Duration {
 	return cmpOr(n.MaxSampleBound, n.maxBound())
+}
+
+// receiptBound is the widest bound a sample may have at receipt: the cap
+// less the aging over the join age (nts.Drift, 38 ms at the 76 s join age
+// of the shift schedule). A sample under it stays under the cap, aged by
+// rho, for as long as it may join, so it never leaves a quorum early, and
+// the error a host and wrong servers reach stays twice the cap (rv-dko.5).
+// The setup's max_sample_bound_ms is at least 80 ms, so this is at least
+// 42 ms; for a smaller cap (tests) it does not go below half the cap.
+func (n *NTS) receiptBound() time.Duration { return n.receiptBoundOf(n.maxSampleBound()) }
+
+// receiptBoundOf is receiptBound for the sample cap c.
+func (n *NTS) receiptBoundOf(c time.Duration) time.Duration {
+	return max(c-nts.Drift(time.Duration(n.sampleMaxAge())), c/2)
 }
 func (n *NTS) shiftMode() bool { return n.Shifts || n.ScheduleSeed != nil }
 
@@ -533,7 +573,8 @@ func leftKeys(s NTSServer) [2]string { return [2]string{"op\x00" + s.Operator, "
 // member of the quorum in force, that quorum stops serving and forms
 // again from the samples left. If that fails (too few samples left, no
 // coarse time, a check refuses it), Now fails until a Refresh forms a
-// quorum, and the start retries apply again until then.
+// quorum, and the start retries apply again until then, for StartWait at
+// most (cold).
 //
 // A server that left (removed, or changed under its label) is kept by
 // label and by host for NTSMaxPoll. If its label or its host comes back,
@@ -694,7 +735,7 @@ func sameServer(a, b NTSServer) bool {
 // is closed, every sample and the quorum in force are dropped, and so is
 // the drift history, which the other protocol's answers made. Now fails
 // until a Refresh forms a quorum on the new protocol, and the start
-// retries apply until then. What limits the contacts stays: the schedule
+// retries apply until then, for StartWait at most (cold). What limits the contacts stays: the schedule
 // seed, the grid, each server's last contact and gap, its poll interval and
 // its DENY or RSTR stop. Now still never goes back.
 func (n *NTS) SetPolicy(protocol Protocol, maxBound, maxSampleBound time.Duration) error {
@@ -720,7 +761,7 @@ func (n *NTS) SetPolicy(protocol Protocol, maxBound, maxSampleBound time.Duratio
 			}
 			p.sample, p.ntpAddr = nil, ""
 			p.nextKE, p.keWait, p.lostInRow, p.lostKE = 0, 0, 0, false
-		case p.sample != nil && p.sample.Bound > maxSampleBound:
+		case p.sample != nil && p.sample.Bound > n.receiptBoundOf(maxSampleBound):
 			p.sample = nil
 			dropped = append(dropped, p.srv.Operator)
 		}
@@ -760,13 +801,36 @@ func (n *NTS) SetPolicy(protocol Protocol, maxBound, maxSampleBound time.Duratio
 	return nil
 }
 
-// cold puts the clock back in its start state until a quorum forms: the
-// start retries (NTSShiftStartRetry, NTS-KE after 12 to 20 s) apply.
+// cold puts the clock back in its start state: the start retries
+// (NTSShiftStartRetry, NTS-KE after 12 to 20 s) apply until a quorum
+// forms, or until StartWait is over (endCold). A real start has the same
+// limit: the runner gives up after its start wait. Without it a host that
+// drops the answers after a swap would keep the clock on the start
+// retries, with no NTS-KE backoff, for as long as it liked. The caller
+// holds rmu.
 func (n *NTS) cold() {
 	n.served.Store(false)
+	n.coldUntil = n.local() + int64(cmpOr(n.StartWait, NTSStartWait))
 	if n.shifts != nil {
 		n.shifts.cold()
 	}
+}
+
+// endCold ends the start state of cold once StartWait is over without a
+// quorum. The clock goes on as after a start that formed one: NTS-KE
+// failures back off, and under the shift schedule every gap is the full
+// one, with the retry of a lost answer and the bursts under their hourly
+// caps. Now still fails until a quorum forms. Refresh calls it, under rmu.
+func (n *NTS) endCold() {
+	if n.coldUntil == 0 || n.local() < n.coldUntil {
+		return
+	}
+	n.coldUntil = 0
+	n.served.Store(true)
+	if n.shifts != nil {
+		n.shifts.quorum()
+	}
+	n.logf(slog.LevelWarn, "nts: still no quorum after the start wait; the start retries end", "wait", cmpOr(n.StartWait, NTSStartWait))
 }
 
 // startWait is the wait of the first Refresh before it contacts anyone: a
@@ -868,6 +932,7 @@ func (n *NTS) Refresh(ctx context.Context) error {
 		n.setErr(err)
 		return err
 	}
+	n.endCold()
 	if n.shifts != nil {
 		return n.refreshShifts(ctx)
 	}
@@ -1098,17 +1163,16 @@ func (n *NTS) fresh() int {
 }
 
 // joins says whether p's sample may join a quorum at local time now: at
-// most maxAge old, newer than a refused quorum, and within MaxSampleBound
-// at receipt (record refuses wider ones; this keeps that true here). Its
-// bound, aged by rho as the quorum ages it, is then at most the cap plus
-// nts.Drift(maxAge), 38 ms at the 76 s join age of the shift schedule, so
-// a sample under the cap joins for its whole join age. Checking the aged
-// bound against the cap alone would let a sample with bound B join for
-// only 2 x (cap - B) seconds at 500 ppm, 30 s at 85 ms, less than the 60 s
-// until its operator's next contact.
+// most maxAge old, newer than a refused quorum, and within receiptBound at
+// receipt (record refuses wider ones; this keeps that true here). Its
+// bound, aged by rho as the quorum ages it, then stays within the cap for
+// the whole join age. Checking the aged bound against the cap instead
+// would let a sample with bound B join for only 2 x (cap - B) seconds at
+// 500 ppm, 30 s at 85 ms, less than the 60 s until its operator's next
+// contact; letting the aged bound pass the cap would widen the error.
 func (n *NTS) joins(p *ntsPeer, now, maxAge int64) bool {
 	s := p.sample
-	return s != nil && now-s.T4 <= maxAge && s.T4 > n.refusedT4 && s.Bound <= n.maxSampleBound()
+	return s != nil && now-s.T4 <= maxAge && s.T4 > n.refusedT4 && s.Bound <= n.receiptBound()
 }
 
 // certTime is the time NTS-KE checks certificate validity at: the coarse
@@ -1323,7 +1387,7 @@ func (n *NTS) record(p *ntsPeer, s nts.Sample, err error) bool {
 		p.lostInRow++
 		p.lastErr = err
 		n.logf(slog.LevelWarn, "nts: query failed", "operator", p.srv.Operator, "err", err)
-	case s.Bound > n.maxSampleBound():
+	case s.Bound > n.receiptBound():
 		// An answer, but too wide to join a quorum: it counts as lost (a
 		// fallback may follow), and the earlier sample stays until it ages
 		// out. It is authenticated, so the cookies work: it ends a loss
@@ -1332,9 +1396,9 @@ func (n *NTS) record(p *ntsPeer, s nts.Sample, err error) bool {
 		wide = true
 		p.lostInRow, p.lostKE = 0, false
 		p.stats.LastDelay, p.stats.LastBound = s.Delay, s.Bound
-		err = &wideSampleError{bound: s.Bound, limit: n.maxSampleBound()}
+		err = &wideSampleError{bound: s.Bound, limit: n.receiptBound()}
 		p.lastErr = err
-		n.logf(slog.LevelWarn, "nts: sample too wide", "operator", p.srv.Operator, "bound", s.Bound, "delay", s.Delay, "limit", n.maxSampleBound())
+		n.logf(slog.LevelWarn, "nts: sample too wide", "operator", p.srv.Operator, "bound", s.Bound, "delay", s.Delay, "limit", n.receiptBound())
 	default:
 		p.stats.Samples++
 		p.lostInRow, p.lostKE = 0, false
@@ -1415,7 +1479,13 @@ func (n *NTS) combine(coarse time.Time, coarseLocal int64) error {
 	for _, v := range in {
 		sampled = min(sampled, v.T4)
 	}
-	cur := &ntsResult{offset: q.Offset, bound: q.Bound, at: now, sampled: sampled, members: members, lo: q.Lo, hi: q.Hi}
+	worst := q.Bound
+	if nts.QuorumWrong(len(in)) == 0 {
+		for _, v := range in {
+			worst = max(worst, 2*nts.AddBound(v.Bound, nts.Drift(time.Duration(now-v.T4))))
+		}
+	}
+	cur := &ntsResult{offset: q.Offset, bound: q.Bound, at: now, sampled: sampled, members: members, lo: q.Lo, hi: q.Hi, worst: worst}
 	n.mu.Lock()
 	// The bound grows by rho only if the local clock keeps within rho of
 	// real time. Check that against the last quorum and the baseline: both
@@ -1470,6 +1540,7 @@ func (n *NTS) combine(coarse time.Time, coarseLocal int64) error {
 	n.lastErr = nil
 	n.mu.Unlock()
 	n.served.Store(true)
+	n.coldUntil = 0
 	// Every quorum at debug level; a change of members at info.
 	level := slog.LevelDebug
 	if joined := strings.Join(members, ","); joined != prev {
@@ -1616,6 +1687,7 @@ func (n *NTS) NTSSummary() NTSSummary {
 	if r := n.result; r != nil {
 		s.Members = append([]string(nil), r.members...)
 		s.AgeOfQuorum = time.Duration(now - r.at)
+		s.WorstBoundNow = nts.AddBound(r.worst, nts.Drift(s.AgeOfQuorum))
 		s.OffsetFromHost = time.Duration(now + r.offset - time.Now().UnixNano())
 	}
 	if n.shifts != nil {

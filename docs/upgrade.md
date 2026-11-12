@@ -75,7 +75,9 @@ It changed:
   (an image added, NTS to NTP, a higher time bound, a dropped revocation)
   are in force at once when every approver signs (break-glass). Within one
   change delay after an update that removed an approver, break-glass is
-  not available. `attestation-verify/docs/attestation-statement.md` has
+  not available. After any change of the approver set, break-glass adds
+  no image until the new set has been in force for the images minimum
+  (or the change delay, when that is longer). `attestation-verify/docs/attestation-statement.md` has
   the full rules.
 
 Format 5 added `sealing_key_release.kms_key_creation_date` (AWS-KMS-02),
@@ -237,8 +239,11 @@ Then:
 7. Wait for `activate_at`. `signer-admin status -cluster cluster.json`
    shows it as `pending=locked:vN/...@TIME`. It is now plus the wait plus
    the `draft -margin` (default 10 minutes). For a new image the wait is
-   at least the images minimum (7 days on a prod chain, 7 minutes off
-   prod). On a prod chain the change delay never drops below the build's
+   at least the images minimum (7 days in the mainnet build, 7 minutes
+   in a non-prod build). Every approver can sign a new image in with no
+   wait (break-glass), but only once the approver set has been in force
+   for that long: after a rotation or a removal such an update waits as
+   any other. On a prod chain the change delay never drops below the build's
    default time lock.
 8. `signer-admin status -cluster cluster.json` shows `locked=vN/...` with
    the new version and no `pending=` on every signer.

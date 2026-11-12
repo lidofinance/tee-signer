@@ -179,7 +179,9 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   short outage, later after a long one, when the cookies ran out and NTS-KE
   backs off (up to 1024 s; before the first quorum of a run NTS-KE is tried
   again after a random 12 to 20 s, so a relay that comes up late does not
-  push the first quorum past the runner's start wait). The first refresh
+  push the first quorum past the runner's start wait; a server swap or
+  policy change that leaves no quorum brings these retries back for the
+  start wait at most, see the server list swap below). The first refresh
   of a run waits a random time under 5 s before it contacts anyone, so
   signers that restart together (a release, a region outage) do not reach
   every server in the same second; the retries keep the spread. HEALTH reports `sample_age_ms`, `max_sample_age_ms` and, while the
@@ -256,7 +258,9 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
     be asked again 20 s after its last try (`NTSShiftStartRetry`), so a
     relay that comes up late gets up to 5 tries in the 90 s start wait,
     not 2. A server that does not answer gets those tries once per run
-    (per restart), then the full 60 s gap.
+    (per restart), then the full 60 s gap. A server swap or a policy
+    change that leaves no quorum starts them again, for the start wait
+    at most.
   - `ShiftActives(n)` operators are active (all below 7, 4 of 7, 5 from 8), each asked
     on its own slot of a 60 s grid (slots 12 s apart with 5, 12 to 16 s
     with 4, the phase from the seed). Two contacts with one
@@ -328,7 +332,20 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   the samples left. If that fails (too few samples, no coarse time, a
   check refuses it), the clock serves no time until a Refresh forms a
   quorum, and is back in its start state until then (20 s start retries,
-  NTS-KE retried after 12 to 20 s).
+  NTS-KE retried after 12 to 20 s), for the start wait at most
+  (`clock.NTS.StartWait`, which the runner sets to `-nts-wait`; 90 s by
+  default). A real start has that limit because the runner gives up
+  after `-nts-wait`; a running clock had none, so a host that dropped
+  the answers at a swap could hold it on the start retries, with NTS-KE
+  to failing servers every 12 to 20 s, for as long as it liked. Once
+  the start wait is over without a quorum, the first Refresh puts the
+  clock back on the normal schedule, as after a start that formed a
+  quorum: NTS-KE failures back off from 16 s to 1024 s, and under
+  shifts each operator's gap is the full 60 s again, with one retry of
+  a lost answer and the bursts under their caps of 120 per hour. The
+  clock still serves no time until a quorum forms, and a quorum ends
+  the start state early. A second swap that fails gets a start wait of
+  its own; each swap needs a signed update.
   A server that leaves (removed, or changed under its label) is kept by
   label and by host for `NTSMaxPoll`. If its label comes back, with any
   host, or its host comes back under a new label, the new peer keeps its
@@ -357,7 +374,7 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   every association is closed, every sample, the quorum in force and the
   drift history (made of the other protocol's answers) are dropped, and
   the clock is back in its start state until a quorum forms on the new
-  protocol. The schedule seed, the grid, each server's last contact and
+  protocol, for the start wait at most, as after a swap. The schedule seed, the grid, each server's last contact and
   gap, its poll interval and its DENY or RSTR stop stay, so no server is
   asked within its gap. `Now` still never goes back. In the simulation the
   next tick formed the new quorum, with a burst to the servers past their
@@ -852,25 +869,30 @@ cannot turn it off or point it elsewhere:
 | Azure | `platform-azure/deploy/aci-template.json` command (CCE policy hash) | `login.microsoftonline.com`, `management.azure.com`, `www.cloudflare.com` | ACI's default outbound access, direct |
 | GCP | `platform-gcp/deploy/Dockerfile` entrypoint (image digest) | `cloudkms.googleapis.com`, `sts.googleapis.com`, `www.cloudflare.com` | the VM's external address, direct (implied allow-all egress) |
 
-A sample whose own bound is over the setup's `max_sample_bound_ms` joins no
-quorum (`clock.NTS.MaxSampleBound`). At receipt it counts as a lost answer,
-so a fallback may follow, and HEALTH counts it in `wide`; it ends a loss
-streak (the cookies work) and gets no start retry. A sample under the cap
-at receipt joins for its whole join age (76 s): its bound, aged by rho as
-the quorum ages it, may pass the cap by that aging, at most 38 ms. Without
-that allowance a sample with bound B would join for only 2 x (cap - B)
-seconds, 30 s at 85 ms, and leave before its operator's next contact 60 s
-later. The cap is at least `max_bound_ms` and may be raised up to 1 s,
-where the cap is off. Why: a host that delays the one honest answer of a
-small fresh set widens its bound, and two wrong servers can then place
-the time anywhere inside it while the quorum's bound looks small. The
-bound is a half-width, and the host's delay can put the true time at
-either edge, so the error is up to twice the aged cap: about
-2 x (100 + 38) ms, 276 ms, at the default 100 ms, against about 1 s each
-way without the cap (RFC 5905 MAXDIST, beyond which the core refuses a
-sample). A setup that raises the sample cap above `max_bound_ms` gives
-part of that back. A far deployment raises both, and that error grows
-with them (about 2 x (250 + 38) ms, 576 ms, at 250 ms).
+A sample whose bound at receipt is over the setup's `max_sample_bound_ms`
+less the aging over the join age (38 ms at 76 s, so 62 ms at the default
+100 ms; `clock.NTS.MaxSampleBound`, `receiptBound`) joins no quorum. It
+counts as a lost answer, so a fallback may follow, and HEALTH counts it in
+`wide`; it ends a loss streak (the cookies work) and gets no start retry.
+A sample within that limit joins for its whole join age, and its bound,
+aged by rho as the quorum ages it, stays within the cap all that time. A
+check of the aged bound against the cap alone would let a sample with
+bound B join for only 2 x (cap - B) seconds, 30 s at 85 ms, and leave
+before its operator's next contact 60 s later; letting the aged bound pass
+the cap would widen the error below (rv-dko.5). The cap is at least
+`max_bound_ms` and 80 ms, and may be raised up to 1 s, where the cap is
+off. Why: a host that delays the honest answers of a small fresh set
+widens their bounds, and wrong servers can then place the time anywhere
+inside them while the quorum's bound looks small: two wrong of 4 or 5
+fresh samples, and one wrong of exactly 3, where no wrong sample is
+outvoted. The bound is a half-width, and the host's delay can put the true
+time at either edge, so the error is up to twice the cap: about 200 ms at
+the default 100 ms, against about 1 s each way without the cap (RFC 5905
+MAXDIST, beyond which the core refuses a sample). HEALTH `bound_now_ms`
+does not show this; `worst_bound_ms` does for the 3-sample case (twice the
+widest member's bound). A setup that raises the sample cap above
+`max_bound_ms` gives part of that back. A far deployment raises both, and
+that error grows with them (about 500 ms at 250 ms).
 
 The coarse URLs are hosts the platform's egress already allows. Their
 status does not matter, only the Date header of their own answer: on

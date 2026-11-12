@@ -20,7 +20,11 @@ import (
 //   - break-glass: three loosening changes (adding an image measurement,
 //     time_policy from NTS to NTP, raising either time_policy bound) may
 //     also come into force with no wait when every active approver signs.
-//     The normal path, usual count and wait, stays open for them.
+//     The normal path, usual count and wait, stays open for them. After
+//     any change of the approver set (keys, order or approvals_needed),
+//     break-glass adds no image until the new set has been in force for
+//     the images wait (History.ImageHeld), so the images minimum also
+//     binds approvers who rotate to their own keys.
 //
 // One more fast path: emergency approver removal. An update that removes
 // one approver and makes no other loosening change comes into force with no
@@ -131,7 +135,8 @@ func loosens(cs []FieldChange) bool {
 // tightens, else emergency removal, else break-glass, else the normal
 // path with Wait. h is what the signer's state says about earlier updates:
 // within one change delay after an approver removal, break-glass is not a
-// path (History.BreakGlassHeld).
+// path (History.BreakGlassHeld), and it adds no image until the approver
+// set has been in force for the images wait (History.ImageHeld).
 func (u *Update) Decide(c *Chain, active *Locked, open *Open, h History) (Decision, error) {
 	if err := u.Verify(&active.Approvers); err != nil {
 		return Decision{}, err
@@ -179,8 +184,11 @@ func (u *Update) Decide(c *Chain, active *Locked, open *Open, h History) (Decisi
 		}
 	}
 	if BreakGlassOnly(d.Changes) && len(signed) == len(active.Approvers.Keys) && !held {
-		d.Path = PathBreakGlass
-		return d, nil
+		imageHeld, _ := h.ImageHeld(c, active)
+		if !imageHeld || !GainsImage(active.AllowedImageMeasurements, b.Locked.AllowedImageMeasurements) {
+			d.Path = PathBreakGlass
+			return d, nil
+		}
 	}
 	d.Wait = Wait(c, active, b)
 	return d, nil
@@ -194,6 +202,11 @@ type History struct {
 	// RemovedAt is the effective time of the newest locked update in force
 	// that removed one approver (RemovesOne, on any path), 0 for none.
 	RemovedAt uint64
+	// ApproversAt is the effective time of the newest locked update in
+	// force that changed the approver set (UpdateBody.IsRotation: other
+	// keys, another order or another approvals_needed; a removal too), 0
+	// for none.
+	ApproversAt uint64
 	// Now is the trusted time of the check.
 	Now uint64
 }
@@ -212,6 +225,23 @@ func (h History) BreakGlassHeld(c *Chain, active *Locked) (bool, uint64) {
 		return false, 0
 	}
 	until := SatAdd(h.RemovedAt, active.ChangeDelayOn(c))
+	return h.Now < until, until
+}
+
+// ImageHeld reports whether break-glass may not add an image at h.Now, and
+// until when: until the approver set in force has been so for the images
+// wait of active (ImagesWait), counted from h.ApproversAt, or from
+// h.RemovedAt when that is later (a removal changes the set). Without it
+// the images minimum would not bind k approvers of n: they rotate to their
+// own k keys, which waits one change delay, and are then every approver
+// (rv-dko.2). An update that adds an image then takes the normal path and
+// waits.
+func (h History) ImageHeld(c *Chain, active *Locked) (bool, uint64) {
+	at := max(h.ApproversAt, h.RemovedAt)
+	if at == 0 {
+		return false, 0
+	}
+	until := SatAdd(at, ImagesWait(c, active))
 	return h.Now < until, until
 }
 

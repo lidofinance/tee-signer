@@ -70,10 +70,15 @@ func ParseProtocol(s string) (Protocol, error) {
 type NTSSummary struct {
 	// Protocol is how the clock asks its servers: ProtocolNTS, or
 	// ProtocolNTP (plain NTP, unauthenticated).
-	Protocol       Protocol
-	Quorum         bool
-	Refused        string
-	BoundNow       time.Duration
+	Protocol Protocol
+	Quorum   bool
+	Refused  string
+	BoundNow time.Duration
+	// WorstBoundNow is the error one wrong quorum member can cause now:
+	// BoundNow with 4 or more fresh samples, and up to twice the widest
+	// member's bound with exactly 3, where no wrong sample is outvoted.
+	// Signing checks BoundNow only.
+	WorstBoundNow  time.Duration
 	MaxBound       time.Duration
 	OffsetFromHost time.Duration
 	Members        []string

@@ -545,7 +545,10 @@ active (the `Updates` view that also feeds the core, with
 effective times from `setupwire.EffectiveActivation`). A pending update
 that adds the image counts only from its effective time, which is at least
 the images minimum (7 days, 7 minutes in a non-prod build) after it
-arrived. An entry of another kind with the same bytes does not match.
+arrived. An update that every approver signed adds an image with no wait
+(break-glass), but only when the approver set has been in force for the
+images minimum; so a new image never counts sooner than the images
+minimum after the approver set that signed it took over. An entry of another kind with the same bytes does not match.
 
 The start order:
 
@@ -955,6 +958,11 @@ order (the status of each refusal in brackets):
    48 hours when the group names none; on a prod chain never less than
    that, whatever the group in force names), at least the image's minimum
    of 7 days when the allowed-images list gains an entry; for `open` 0.
+   The change rules (`setupwire.Update.Decide`) set W to 0 for an update
+   that only tightens and on the fast paths. One of them, break-glass
+   (every approver signed), adds no image until the approver set in force
+   has been so for the wait of an image addition: after any change of the
+   set, such an update waits W as on the normal path.
    `activate_at` is at most now + W + 30 days. Sums saturate.
    (`BAD_REQUEST`)
 10. The core takes the values, and its status goes out as it is: the

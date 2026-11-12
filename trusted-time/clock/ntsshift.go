@@ -256,7 +256,8 @@ func (s *ntsShifts) state(op int) ntsShiftState {
 
 // cold puts the schedule back in its start state (no quorum yet in this
 // run): an operator that missed its last contact may be asked again after
-// NTSShiftStartRetry until the next quorum.
+// NTSShiftStartRetry until the next quorum, or until NTS.endCold ends the
+// state.
 func (s *ntsShifts) cold() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -445,7 +446,8 @@ func (s *ntsShifts) minGap(op int) time.Duration {
 	return NTSShiftMinGap
 }
 
-// quorum records that a quorum formed: from now on every gap is the full one.
+// quorum records that a quorum formed, or that the start state of cold
+// ran out: from now on every gap is the full one.
 func (s *ntsShifts) quorum() {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -49,19 +49,30 @@ func TestRecordFormatRoundTrip(t *testing.T) {
 	}
 	// An SMARK2 record (no config history) reads, with none.
 	got, err = decode(signedOld(t, testKey(1), r, 2), testKey(1), r.Setup, r.Signer, 3)
-	if err != nil || got.State.RemovedAt != 0 || got.State.Carried != nil || got.State.Paths != ([4]setupwire.Path{}) {
+	if err != nil || got.State.RemovedAt != 0 || got.State.ApproversAt != 0 || got.State.Carried != nil || got.State.Paths != ([4]setupwire.Path{}) {
 		t.Fatalf("SMARK2: %+v, %v", got, err)
 	}
 	// The config history round-trips.
 	h := r
 	h.State = r.State.Clone()
-	h.State.RemovedAt, h.State.Carried = 1_800_000_100, [][32]byte{{0x11}, {0x12}}
+	h.State.RemovedAt, h.State.ApproversAt, h.State.Carried = 1_800_000_100, 1_800_000_200, [][32]byte{{0x11}, {0x12}}
 	h.State.Locked.Version, h.State.Locked.Hash = 4, [32]byte{0x44}
 	h.Copies[0] = BodyCopy{N: 1, At: 1_800_000_000}
 	h.State.SetPath(setupwire.GroupLocked, false, setupwire.PathEmergencyRemoval)
 	got, err = decode(signed(t, testKey(1), h), testKey(1), r.Setup, r.Signer, 3)
-	if err != nil || !got.State.Equal(h.State) {
+	if err != nil || !got.State.Equal(h.State) || got.State.ApproversAt != 1_800_000_200 {
 		t.Fatalf("config history: %+v, %v", got, err)
+	}
+	// The approver set time alone (a rotation that is no removal).
+	h.State.RemovedAt = 0
+	got, err = decode(signed(t, testKey(1), h), testKey(1), r.Setup, r.Signer, 3)
+	if err != nil || !got.State.Equal(h.State) || got.State.ApproversAt != 1_800_000_200 || got.State.RemovedAt != 0 {
+		t.Fatalf("approver set time without a removal: %+v, %v", got, err)
+	}
+	other := h.State.Clone()
+	other.ApproversAt++
+	if other.Equal(h.State) {
+		t.Fatal("Equal ignores the approver set time")
 	}
 	for name, c := range map[string][][32]byte{"unsorted": {{2}, {1}}, "repeated": {{1}, {1}}, "zero": {{}}} {
 		h.State.Carried = c
@@ -74,9 +85,11 @@ func TestRecordFormatRoundTrip(t *testing.T) {
 	body := enc[:len(enc)-64]
 	cases := map[string][]byte{
 		"trailing byte":       append(bytes.Clone(body), 0),
-		"shares presence 2":   append(bytes.Clone(body[:len(body)-7]), 2, 0, 0, 0, 0, 0, 0),
-		"removal presence 2":  append(bytes.Clone(body[:len(body)-6]), 2, 0, 0, 0, 0, 0),
-		"removal at 0":        append(bytes.Clone(body[:len(body)-6]), append([]byte{1}, make([]byte, 13)...)...),
+		"shares presence 2":   append(bytes.Clone(body[:len(body)-8]), 2, 0, 0, 0, 0, 0, 0, 0),
+		"removal presence 2":  append(bytes.Clone(body[:len(body)-7]), 2, 0, 0, 0, 0, 0, 0),
+		"removal at 0":        append(bytes.Clone(body[:len(body)-7]), append([]byte{1}, make([]byte, 14)...)...),
+		"set time presence 2": append(bytes.Clone(body[:len(body)-6]), 2, 0, 0, 0, 0, 0),
+		"set time 0":          append(bytes.Clone(body[:len(body)-6]), append([]byte{1}, make([]byte, 13)...)...),
 		"carried count short": append(bytes.Clone(body[:len(body)-5]), 1, 0, 0, 0, 0),
 		"path 4":              append(bytes.Clone(body[:len(body)-4]), 0, 0, 0, 4),
 		"path of no update":   append(bytes.Clone(body[:len(body)-4]), 1, 0, 0, 0),
@@ -111,7 +124,7 @@ func TestRecordFormatRoundTrip(t *testing.T) {
 // history) or SMARK2 record (ver 2: without the history).
 func signedOld(t *testing.T, keys platform.Keys, r Record, ver int) []byte {
 	t.Helper()
-	if r.Shares != nil || r.State.RemovedAt != 0 || r.State.Carried != nil {
+	if r.Shares != nil || r.State.RemovedAt != 0 || r.State.ApproversAt != 0 || r.State.Carried != nil {
 		t.Fatal("an old record has no share set or history here")
 	}
 	seed, blob, err := keys.NewKey(context.Background(), KeyAAD(r.Setup, r.Signer))
@@ -120,9 +133,9 @@ func signedOld(t *testing.T, keys platform.Keys, r Record, ver int) []byte {
 	}
 	r.KeyBlob = blob
 	b := r.encodeBody()
-	body := append([]byte(recordMagicV1), b[len(recordMagic):len(b)-7]...)
+	body := append([]byte(recordMagicV1), b[len(recordMagic):len(b)-8]...)
 	if ver == 2 {
-		body = append([]byte(recordMagicV2), b[len(recordMagic):len(b)-6]...)
+		body = append([]byte(recordMagicV2), b[len(recordMagic):len(b)-7]...)
 	}
 	return append(body, ed25519.Sign(ed25519.NewKeyFromSeed(seed), signedMessage(body))...)
 }
