@@ -16,7 +16,8 @@
 #          the key immutable unless KEY_IMMUTABLE=false. It refuses, before
 #          any key exists, a CCE policy that cce-policy-check.py does not
 #          expect, another az confcom version and a dmverity-vhd other than
-#          the pinned one. The render goes to the group's own
+#          the pinned one, and runs the extension's dmverity-vhd when the
+#          wheel left its exec bit unset. The render goes to the group's own
 #          folder with the running group's identity, and group-deploy
 #          takes the new key name and refuses the running group's. After
 #          key-create it takes only a setup that names the created version
@@ -272,6 +273,12 @@ chmod +x "$work/other-dmverity-vhd"
 key_create_all CHAIN=ci-test DMVERITY_VHD="$work/other-dmverity-vhd"
 [ "$rc" != 0 ] && grep -q 'is not dmverity-vhd v2.2' <<<"$out" && ! grep -q 'acipolicygen\|key create' "$work/az.log" &&
   ok "azure key-create refuses a dmverity-vhd other than the pinned one" || bad "azure key-create, other dmverity-vhd: rc $rc $out $(cat "$work/az.log")"
+# The confcom wheel ships dmverity-vhd without the exec bit.
+fake_az_create
+chmod a-x "$work/confcom/azext_confcom/bin/dmverity-vhd"
+key_create_all CHAIN=ci-test
+[ "$rc" = 0 ] && [ -x "$work/confcom/azext_confcom/bin/dmverity-vhd" ] && grep -q '^az keyvault key create' "$work/az.log" &&
+  ok "azure key-create runs the confcom dmverity-vhd shipped without the exec bit" || bad "azure key-create, dmverity-vhd not executable: rc $rc $out $(cat "$work/az.log")"
 fake_az_create
 key_create_all CHAIN=ci-test
 [ "$rc" = 0 ] && grep -q '^az keyvault key create .* --immutable true' "$work/az.log" &&
