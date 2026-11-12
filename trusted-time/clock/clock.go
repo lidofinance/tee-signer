@@ -86,6 +86,8 @@ type NTSSummary struct {
 	DriftBaseline  time.Duration
 	RhoViolations  int64
 	CoarseDiff     time.Duration
+	// ServerSwaps counts the server lists NTS.SetServers took since start.
+	ServerSwaps int64
 	// With the shift schedule (NTS.Shifts): the active operators
 	// now, counts per operator since start, and the fallbacks
 	// NTSShiftFallbackCap refused.

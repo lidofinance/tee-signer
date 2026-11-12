@@ -294,6 +294,43 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
     answer) and the fallbacks the cap refused. Fallbacks to an operator that often need NTS-KE mean its
     cookies expire while it idles; an operator can idle for about (n -
     ShiftActives(n)) x 15 minutes: 45 minutes with 7 or 8 operators.
+- Server list swap (`clock.NTS.SetServers`, for setup format 6, where the
+  approvers change the extra time servers with a fast config update). The
+  running clock takes the new list without a restart. It refuses fewer
+  than 4 servers (or the caller's minimum, if higher), more than
+  `nts.MaxServers`, an operator label outside 1 to `nts.MaxOperatorLen`
+  octets, an operator named twice, and a host or NTP address named twice
+  (one server, two votes), and then changes nothing. Refresh refuses a
+  start list over `nts.MaxServers`, with a bad label or with an operator
+  named twice too, since `nts.Quorum` would refuse every quorum of it. A
+  Refresh in flight finishes on the old list; SetServers waits for it,
+  and the next tick uses the new one. An operator that stays with the
+  same host, addresses and roots keeps everything: association and
+  cookies, sample, poll interval, RATE gap, Kiss-o'-Death stop, loss
+  streak, health counters and last contact. Any other operator gets a new
+  peer (new NTS-KE, no sample). A removed operator's association is
+  closed. Its sample, and the old sample of a changed operator, leave the
+  quorum at once: if one was a member of the quorum in force, that quorum
+  stops serving in the same lock hold as the swap and forms again from
+  the samples left. If that fails (too few samples, no coarse time, a
+  check refuses it), the clock serves no time until a Refresh forms a
+  quorum, and is back in its start state until then (20 s start retries,
+  NTS-KE retried after 12 to 20 s).
+  A server that leaves (removed, or changed under its label) is kept by
+  label and by host for `NTSMaxPoll`. If its label comes back, with any
+  host, or its host comes back under a new label, the new peer keeps its
+  DENY or RSTR stop and its last contact in local time, and under shifts
+  its last contact, gap and RATE count. So under shifts a changed,
+  returning or relabelled server is asked at its next slot past its gap,
+  not at once, and no server is asked twice within its gap across a
+  swap. A server new by label and host is asked at the next tick, as in
+  the start round, then on the 60 s rule. Without shifts there are no
+  gaps: every new peer is asked at the next Refresh unless it is stopped.
+  Under shifts the seed and the grid phase stay; the order and the active
+  slots are drawn again for the new count (`ShiftActives`), so the
+  handover position starts over. `NTSSummary.ServerSwaps`
+  counts the swaps. In the simulation swaps from 7 to 8, 8 to 7, 6 to 7
+  and 8 to 9 servers on a healthy set never stopped the time.
 - HEALTH `clock_nts.operators` has one entry per server the clock dials,
   with or without shifts, servers that never answered included:
   `operator`, `host`, `active`, `queries`, `answers`, `losses`, `wide`

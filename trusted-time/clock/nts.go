@@ -229,6 +229,11 @@ type NTS struct {
 	coarseDiff time.Duration
 	lastErr    error
 	refusals   atomic.Int64
+	// swaps counts the server lists SetServers took. Under mu.
+	swaps int64
+	// left holds the servers swaps took out, by label and by host
+	// (leftKeys). Under rmu.
+	left map[string]ntsLeft
 }
 
 // ntsDrift is one reading of the drift check, between quorum a and a later
@@ -428,12 +433,251 @@ func (n *NTS) local() int64 {
 func (n *NTS) init() {
 	n.once.Do(func() {
 		for _, s := range n.Servers {
-			n.peers = append(n.peers, &ntsPeer{srv: s, poll: max(n.interval(), n.minPollD()), stats: NTSPeerStats{Kisses: map[string]int{}}})
+			n.peers = append(n.peers, n.newPeer(s))
 		}
 		if n.shiftMode() {
 			n.shifts = newNTSShifts(len(n.peers), n.ScheduleSeed, n.interval()/4)
 		}
 	})
+}
+
+func (n *NTS) newPeer(s NTSServer) *ntsPeer {
+	return &ntsPeer{srv: s, poll: max(n.interval(), n.minPollD()), stats: NTSPeerStats{Kisses: map[string]int{}}}
+}
+
+// ntsSwapMinServers is the fewest servers SetServers takes: the runner's
+// ntsMinServers. With 3, one slow server would stop the quorum.
+const ntsSwapMinServers = 4
+
+// checkServers refuses a list nts.Quorum would refuse at every quorum:
+// more than nts.MaxServers servers, an operator label outside 1 to
+// nts.MaxOperatorLen octets, or an operator named twice. It also refuses
+// fewer than min servers. With distinct, it also refuses a Host or a set
+// NTPAddr named twice: one server would get two votes.
+func checkServers(servers []NTSServer, min int, distinct bool) error {
+	if len(servers) < min {
+		return fmt.Errorf("clock: nts: %d servers, want at least %d", len(servers), min)
+	}
+	if len(servers) > nts.MaxServers {
+		return fmt.Errorf("clock: nts: %d servers, at most %d", len(servers), nts.MaxServers)
+	}
+	ops, hosts, addrs := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	for _, s := range servers {
+		if len(s.Operator) == 0 || len(s.Operator) > nts.MaxOperatorLen {
+			return fmt.Errorf("clock: nts: server %q: operator label %q: 1 to %d octets", s.Host, s.Operator, nts.MaxOperatorLen)
+		}
+		if ops[s.Operator] {
+			return fmt.Errorf("clock: nts: operator %q named twice", s.Operator)
+		}
+		ops[s.Operator] = true
+		if !distinct {
+			continue
+		}
+		if hosts[s.Host] {
+			return fmt.Errorf("clock: nts: host %q named twice", s.Host)
+		}
+		hosts[s.Host] = true
+		if s.NTPAddr != "" {
+			if addrs[s.NTPAddr] {
+				return fmt.Errorf("clock: nts: NTP address %q named twice", s.NTPAddr)
+			}
+			addrs[s.NTPAddr] = true
+		}
+	}
+	return nil
+}
+
+// ntsLeft is what the clock keeps of a server a swap took out (removed, or
+// changed under the same label), by label and by host, so the label or
+// the host coming back does not get a fresh gap or a lifted stop.
+type ntsLeft struct {
+	at        int64 // local ns of the swap that took it out
+	contacted int64 // ntsPeer.contacted
+	disabled  string
+	reEnable  int64
+	shift     *ntsShiftState // nil without the shift schedule
+}
+
+// merge keeps the stricter of l and o: the later contact, the longer gap,
+// the later stop.
+func (l ntsLeft) merge(o ntsLeft) ntsLeft {
+	l.at, l.contacted = max(l.at, o.at), max(l.contacted, o.contacted)
+	if o.disabled != "" && o.reEnable > l.reEnable {
+		l.disabled, l.reEnable = o.disabled, o.reEnable
+	}
+	if l.shift == nil {
+		l.shift = o.shift
+	} else if o.shift != nil {
+		l.shift = &ntsShiftState{max(l.shift.last, o.shift.last), max(l.shift.gap, o.shift.gap), max(l.shift.rates, o.shift.rates)}
+	}
+	return l
+}
+
+func leftKeys(s NTSServer) [2]string { return [2]string{"op\x00" + s.Operator, "host\x00" + s.Host} }
+
+// SetServers replaces the server list of a running clock, for a config
+// update that changes the time servers. It refuses fewer than
+// max(minServers, 4) servers, a Host or NTPAddr named twice and the lists
+// checkServers refuses; on refusal nothing changes.
+//
+// It waits for a Refresh in flight, which finishes on the old list; the
+// next Refresh uses the new one. An operator that stays, with the same
+// Host, KEAddr, NTPAddr and Roots, keeps its peer state: association and
+// cookies, sample, poll interval, Kiss-o'-Death stop, loss streak, health
+// counters and last contact. Any other operator gets a new peer. A removed
+// operator's association is closed. Its sample, and the old sample of an
+// operator whose server changed, leave the quorum at once: if one was a
+// member of the quorum in force, that quorum stops serving and forms
+// again from the samples left. If that fails (too few samples left, no
+// coarse time, a check refuses it), Now fails until a Refresh forms a
+// quorum, and the start retries apply again until then.
+//
+// A server that left (removed, or changed under its label) is kept by
+// label and by host for NTSMaxPoll. If its label or its host comes back,
+// the new peer keeps its DENY or RSTR stop and its last contact in local
+// time, and under the shift schedule its last contact, gap and RATE
+// count: it is asked at its next slot (or fallback or burst) past its
+// gap, not at once.
+//
+// Under the shift schedule the seed and the grid phase stay. The order and
+// the active slots are drawn again for the new set (ShiftActives of the
+// new count), so the handover position starts over. Operators that stay
+// keep their last contact, gap and counts, so the minimum gap holds across
+// the swap. A new operator is asked at the next tick, as in the start
+// round. Without the shift schedule there are no gaps to keep: every new
+// peer, a changed or returning server included, is asked at the next
+// Refresh unless it is stopped.
+func (n *NTS) SetServers(servers []NTSServer, minServers int) error {
+	if err := checkServers(servers, max(minServers, ntsSwapMinServers), true); err != nil {
+		return err
+	}
+	n.init()
+	n.rmu.Lock()
+	defer n.rmu.Unlock()
+	now := n.local()
+	byOp := map[string]int{}
+	for j, p := range n.peers {
+		byOp[p.srv.Operator] = j
+	}
+	keep := make([]int, len(servers))
+	kept := make([]bool, len(n.peers))
+	for i, s := range servers {
+		keep[i] = -1
+		if j, ok := byOp[s.Operator]; ok && sameServer(n.peers[j].srv, s) {
+			keep[i], kept[j] = j, true
+		}
+	}
+	// Keep what limits the servers that go, then drop what no longer
+	// limits anything.
+	if n.left == nil {
+		n.left = map[string]ntsLeft{}
+	}
+	var removed []string
+	for j, p := range n.peers {
+		if kept[j] {
+			continue
+		}
+		removed = append(removed, p.srv.Operator)
+		if p.assoc != nil {
+			p.assoc.Close()
+			p.assoc = nil
+		}
+		l := ntsLeft{at: now, contacted: p.contacted, disabled: p.disabled, reEnable: p.reEnable}
+		if n.shifts != nil {
+			st := n.shifts.state(j)
+			l.shift = &st
+		}
+		for _, k := range leftKeys(p.srv) {
+			if o, ok := n.left[k]; ok {
+				l = l.merge(o)
+			}
+			n.left[k] = l
+		}
+	}
+	for k, l := range n.left {
+		if now-l.at >= int64(n.maxPollD()) && now >= l.reEnable {
+			delete(n.left, k)
+		}
+	}
+	peers := make([]*ntsPeer, len(servers))
+	names := make([]string, len(servers))
+	carry := make([]*ntsShiftState, len(servers))
+	for i, s := range servers {
+		names[i] = s.Operator
+		if keep[i] >= 0 {
+			peers[i] = n.peers[keep[i]]
+			continue
+		}
+		p := n.newPeer(s)
+		var l ntsLeft
+		found := false
+		for _, k := range leftKeys(s) {
+			if o, ok := n.left[k]; ok {
+				l, found = l.merge(o), true
+				delete(n.left, k)
+			}
+		}
+		if found {
+			p.contacted = l.contacted
+			if l.disabled != "" && now < l.reEnable {
+				p.disabled, p.reEnable = l.disabled, l.reEnable
+				p.health.off = l.disabled
+			}
+			carry[i] = l.shift
+		}
+		peers[i] = p
+	}
+	n.mu.Lock()
+	// NTSSummary reads the peers and the schedule under mu: both change
+	// together. A quorum with a removed member stops serving in the same
+	// hold, so no Now in between uses it.
+	if n.shifts != nil {
+		n.shifts.swap(keep, carry)
+	}
+	n.peers = peers
+	n.Servers = slices.Clone(servers)
+	n.swaps++
+	again := n.result != nil && slices.ContainsFunc(n.result.members, func(m string) bool { return slices.Contains(removed, m) })
+	if again {
+		n.result = nil
+	}
+	n.mu.Unlock()
+	n.logf(slog.LevelInfo, "nts: server list swapped", "operators", strings.Join(names, ","), "removed", strings.Join(removed, ","))
+	if again {
+		// A removed operator was in the quorum in force. Form it again
+		// without it, or serve no time until a quorum forms: the approvers
+		// took that operator out, so its sample must not count any more.
+		coarse, err := n.Coarse.Now()
+		if err != nil {
+			err = fmt.Errorf("clock: nts: no coarse time: %w", err)
+		} else {
+			err = n.combine(coarse, n.local())
+		}
+		if err != nil {
+			err = fmt.Errorf("clock: nts: no quorum without the removed operators %s: %w", strings.Join(removed, ","), err)
+			n.setErr(err)
+			// Back to the start state until a quorum forms: the start
+			// retries (NTSShiftStartRetry, NTS-KE after 12 to 20 s) apply.
+			n.served.Store(false)
+			if n.shifts != nil {
+				n.shifts.cold()
+			}
+			n.logf(slog.LevelError, "nts: no quorum after the server swap", "removed", strings.Join(removed, ","), "err", err)
+		}
+	}
+	return nil
+}
+
+// sameServer says whether a and b are the same server, so a peer of a can
+// serve b without a new NTS-KE.
+func sameServer(a, b NTSServer) bool {
+	if a.Host != b.Host || a.KEAddr != b.KEAddr || a.NTPAddr != b.NTPAddr {
+		return false
+	}
+	if a.Roots == nil || b.Roots == nil {
+		return a.Roots == b.Roots
+	}
+	return a.Roots.Equal(b.Roots)
 }
 
 // startWait is the wait of the first Refresh before it contacts anyone: a
@@ -472,6 +716,8 @@ func (n *NTS) random(limit int64) int64 {
 }
 
 func (n *NTS) Source() string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	ops := make([]string, len(n.Servers))
 	for i, s := range n.Servers {
 		ops[i] = s.Operator
@@ -494,26 +740,6 @@ func (n *NTS) logf(level slog.Level, msg string, args ...any) {
 	}
 }
 
-// checkServers refuses a list nts.Quorum would refuse at every quorum:
-// more than nts.MaxServers servers, an operator label outside 1 to
-// nts.MaxOperatorLen octets, or an operator named twice.
-func checkServers(servers []NTSServer) error {
-	if len(servers) > nts.MaxServers {
-		return fmt.Errorf("clock: nts: %d servers, at most %d", len(servers), nts.MaxServers)
-	}
-	seen := map[string]bool{}
-	for _, s := range servers {
-		if len(s.Operator) == 0 || len(s.Operator) > nts.MaxOperatorLen {
-			return fmt.Errorf("clock: nts: server %q: operator label %q: 1 to %d octets", s.Host, s.Operator, nts.MaxOperatorLen)
-		}
-		if seen[s.Operator] {
-			return fmt.Errorf("clock: nts: operator %q named twice", s.Operator)
-		}
-		seen[s.Operator] = true
-	}
-	return nil
-}
-
 // Refresh asks the servers that are due, then forms a new quorum.
 func (n *NTS) Refresh(ctx context.Context) error {
 	n.init()
@@ -524,8 +750,9 @@ func (n *NTS) Refresh(ctx context.Context) error {
 		n.setErr(err)
 		return err
 	}
-	// A list nts.Quorum refuses would fail every quorum.
-	if err := checkServers(n.Servers); err != nil {
+	// The same list checks as SetServers, without its minimum: a list
+	// nts.Quorum refuses would fail every quorum.
+	if err := checkServers(n.Servers, 0, false); err != nil {
 		n.setErr(err)
 		return err
 	}
@@ -1281,7 +1508,7 @@ func (n *NTS) NTSSummary() NTSSummary {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	s := NTSSummary{Protocol: n.protocol(), MaxBound: n.maxBound(), MaxSampleAge: n.maxAge(), Refusals: n.refusals.Load(), DriftPPM: n.drift.ppm,
-		DriftErrPPM: n.drift.errPPM, DriftBaseline: n.drift.baseline, RhoViolations: n.violations, CoarseDiff: n.coarseDiff}
+		DriftErrPPM: n.drift.errPPM, DriftBaseline: n.drift.baseline, RhoViolations: n.violations, CoarseDiff: n.coarseDiff, ServerSwaps: n.swaps}
 	now := n.local()
 	s.BoundNow, s.SampleAge, s.Refused = n.check(now)
 	s.Quorum = s.Refused == ""
