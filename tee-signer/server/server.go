@@ -1141,12 +1141,8 @@ func (s *Server) sign(req backend.SignRequest) (backend.Signature, error) {
 	if err != nil {
 		var r *backend.RefusedError
 		if errors.As(err, &r) && r.Code.IsSlashing() && s.Hooks != nil {
-			if f, ok := s.Hooks.Floor(req.Pubkey); ok && atOrBelowFloor(req.Message, f, s.Signer.Config().SlotsPerEpoch) {
+			if f, which, ok := s.floorOf(req.Pubkey); ok && atOrBelowFloor(req.Message, f, s.Signer.Config().SlotsPerEpoch) {
 				if st, ok := s.floorStatus(req); ok {
-					which := "restart"
-					if lf, ok := s.Hooks.LoadFloor(req.Pubkey); ok && lf == f {
-						which = "import"
-					}
 					err = backend.Refused(st, "floor epoch %d (%s floor): %s", f, which, r.Detail)
 				}
 			}
@@ -1166,6 +1162,24 @@ func (s *Server) sign(req backend.SignRequest) (backend.Signature, error) {
 	}
 	s.Log.Info("signed", "kind", kind, "pubkey", req.Pubkey.String()[:18], "msg", describe(req.Message))
 	return sig, nil
+}
+
+// floorOf is the floor epoch at or below which the core refuses pk's
+// messages, and which floor it is: import for a key added while the
+// runner runs, else restart. It is the higher of the core's restart floor
+// and the floors the hooks put into pk's marks. Each reads the clock on
+// its own, so either may be one epoch higher when an epoch starts between
+// the two readings.
+func (s *Server) floorOf(pk backend.Pubkey) (uint64, string, bool) {
+	f, ok := s.Hooks.Floor(pk)
+	if cf, err := s.Signer.Floor(pk); err == nil {
+		f, ok = max(f, cf), true
+	}
+	which := "restart"
+	if _, loaded := s.Hooks.LoadFloor(pk); loaded {
+		which = "import"
+	}
+	return f, which, ok
 }
 
 // floorStatus classifies req, refused at or below a floor; it never

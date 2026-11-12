@@ -605,6 +605,21 @@ func (s *Signer) State(pubkey backend.Pubkey) (SlashingState, error) {
 	return SlashingState{RAM: fromC(st.ram), Committed: fromC(st.committed)}, nil
 }
 
+// Floor returns the restart floor epoch the core applied to a validator
+// at its load (AddValidator), from the clock reading of that load.
+func (s *Signer) Floor(pubkey backend.Pubkey) (uint64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.s == nil {
+		return 0, ErrClosed
+	}
+	var f C.uint64_t
+	if rc := C.sc_signer_get_floor(s.s, u8(pubkey[:]), &f); rc != C.SC_OK {
+		return 0, &backend.RefusedError{Code: backend.Status(rc)}
+	}
+	return uint64(f), nil
+}
+
 // Stats returns the core's counters.
 func (s *Signer) Stats() Stats {
 	s.mu.Lock()

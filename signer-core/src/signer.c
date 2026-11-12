@@ -11,6 +11,7 @@ typedef struct {
      * mark stands in for slash.committed. */
     sc_slashing_state slash;
     sc_repeat_roots repeat;
+    uint64_t floor_epoch; /* the restart floor applied at its load */
     /* Gloas, RAM only (see sc_sign_payload_attestation in signer_core.h). */
     uint32_t gloas;                     /* G_* flags */
     uint64_t ptc_slot;                  /* G_PTC: no PTC vote at or below this slot */
@@ -225,6 +226,7 @@ static int load_marks(sc_signer *s, sc_validator *v, const uint8_t pubkey[SC_PUB
      * ahead or import, then compares against what is durable. */
     sc_slashing_restore(&v->slash, &wm);
     sc_slashing_floor(&v->slash.ram, floor, s->cfg.slots_per_epoch);
+    v->floor_epoch = floor;
     gloas_restore(v, &v->slash.ram);
     return SC_OK;
 }
@@ -445,6 +447,18 @@ int sc_signer_get_repeat_roots(const sc_signer *s, const uint8_t pubkey[SC_PUBKE
     if (!v)
         return s && pubkey ? SC_ERR_UNKNOWN_VALIDATOR : SC_ERR_ARG;
     *out = v->repeat;
+    return SC_OK;
+}
+
+int sc_signer_get_floor(const sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
+                        uint64_t *floor_epoch)
+{
+    const sc_validator *v = find_validator(s, pubkey);
+    if (!floor_epoch)
+        return SC_ERR_ARG;
+    if (!v)
+        return s && pubkey ? SC_ERR_UNKNOWN_VALIDATOR : SC_ERR_ARG;
+    *floor_epoch = v->floor_epoch;
     return SC_OK;
 }
 
