@@ -220,12 +220,14 @@ stay the same. The same change adds the new row below.
 | Level | Meaning |
 | --- | --- |
 | 1 | before `FLOOR` and `FLOOR_UNPROVEN`: a refusal at or below a floor has a slashing code, and its `detail` names the floor |
-| 2 | a refusal at or below a floor is `FLOOR` (1008) or `FLOOR_UNPROVEN` (1009); no slashing refusal names a floor ("Floor refusals") |
+| 2 | a refusal by a floor alone is `FLOOR` (1008) or `FLOOR_UNPROVEN` (1009); a slashing code is a conflict the runner can prove, or a vote in flight, and names no floor ("Floor refusals") |
 
 Runners before level 2 send no `protocol`. A client reads a HEALTH answer
-without it as level 1 (`Health.EffectiveProtocol`). A level above the
-highest one a client knows means answers the client may misread, so the
-client warns its operator. HEALTH is not attested, so `protocol` is the
+without it as level 1 (`Health.EffectiveProtocol`). A runner at a level
+above the highest one a client knows may answer in ways the client
+misreads, so the client should warn its operator. The gateway logs one
+warning per signer and level, for the signers it asks for HEALTH
+(`gateway/README.md`). HEALTH is not attested, so `protocol` is the
 runner's own claim; the image measurement in ATTEST and IDENTITY is the
 proof of the build.
 

@@ -84,6 +84,10 @@ type Signers struct {
 	// modes is the signing_mode each signer's HEALTH last reported, ""
 	// before the first. Only a signer that lists a whole key is asked.
 	modes []string
+	// newerLevel is the protocol level above proto.ProtocolLevel each
+	// signer's HEALTH last reported and the gateway warned about, 0 before
+	// one. A level is warned about once per signer.
+	newerLevel []int
 	// derived caches deriveGroup by validator key, share keys and modes.
 	derived map[string]derivedGroup
 }
@@ -154,7 +158,7 @@ func newSigners(names []string, nodes []runner, maxIndex int, timeout time.Durat
 		maxIndex = len(nodes)
 	}
 	s := &Signers{nodes: nodes, names: names, maxIndex: min(maxIndex, maxShareIndex), timeout: timeout, log: log,
-		listed: make([][]proto.ValidatorKey, len(nodes)), modes: make([]string, len(nodes)), derived: map[string]derivedGroup{}, m: metrics.New(),
+		listed: make([][]proto.ValidatorKey, len(nodes)), modes: make([]string, len(nodes)), newerLevel: make([]int, len(nodes)), derived: map[string]derivedGroup{}, m: metrics.New(),
 		warns: newWarnLimit(warnEvery)}
 	s.keys = newKeyList(s.loadKeys, keysMaxAge, log)
 
@@ -197,6 +201,7 @@ func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, err
 		err     error
 		asked   bool // HEALTH was asked: the signer lists a whole key
 		mode    string
+		level   int // HEALTH's EffectiveProtocol
 		modeErr error
 	}
 	answers := make([]answer, len(s.nodes))
@@ -220,7 +225,7 @@ func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, err
 			case h == nil:
 				answers[i].modeErr = errors.New("no HEALTH answer")
 			default:
-				answers[i].mode = h.SigningMode
+				answers[i].mode, answers[i].level = h.SigningMode, h.EffectiveProtocol()
 			}
 		})
 	}
@@ -244,6 +249,13 @@ func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, err
 			s.log.Warn("signer health failed", "signer", s.names[i], "err", a.modeErr.Error())
 		case a.asked:
 			s.modes[i] = a.mode
+			// A runner newer than this gateway may answer in ways it reads
+			// wrongly (signer-protocol/docs/protocol.md, "Protocol level").
+			if a.level > proto.ProtocolLevel && a.level != s.newerLevel[i] {
+				s.newerLevel[i] = a.level
+				s.log.Warn("signer reports a newer protocol level; update the gateway", "signer", s.names[i],
+					"protocol", a.level, "gateway_protocol", proto.ProtocolLevel)
+			}
 		}
 	}
 	shares := map[phase0.BLSPubKey][]share{}

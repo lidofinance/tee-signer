@@ -91,6 +91,7 @@ type fakeRunner struct {
 	mode      string // the signing_mode HEALTH reports
 	healthErr error  // HEALTH fails with it
 	health    int    // HEALTH calls
+	protocol  int    // the protocol level HEALTH reports
 }
 
 func (f *fakeRunner) Health(context.Context) (*proto.Health, error) {
@@ -101,7 +102,7 @@ func (f *fakeRunner) Health(context.Context) (*proto.Health, error) {
 		return nil, f.healthErr
 	}
 
-	return &proto.Health{Ready: true, SigningMode: f.mode}, nil
+	return &proto.Health{Ready: true, SigningMode: f.mode, Protocol: f.protocol}, nil
 }
 
 func (f *fakeRunner) PublicKeys(context.Context) ([]proto.ValidatorKey, error) {
@@ -480,6 +481,33 @@ func TestWholeKeyNeedsSingleMode(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// A signer whose HEALTH reports a protocol level above the gateway's gets
+// one warning, however many refreshes see it; a signer at the gateway's
+// level or without a level gets none.
+func TestNewerProtocolLevelWarnsOnce(t *testing.T) {
+	newer, same, none := splitKey(t, 1, 1), splitKey(t, 1, 1), splitKey(t, 1, 1)
+	fakes := []*fakeRunner{cluster([]*testKey{newer}, 1)[0], cluster([]*testKey{same}, 1)[0], cluster([]*testKey{none}, 1)[0]}
+	fakes[0].protocol, fakes[1].protocol = proto.ProtocolLevel+1, proto.ProtocolLevel
+	runners, names := make([]runner, len(fakes)), make([]string, len(fakes))
+	for i, f := range fakes {
+		runners[i], names[i] = f, fmt.Sprintf("signer-%d", i+1)
+	}
+	var logs strings.Builder
+	s := newSigners(names, runners, 0, 2*time.Second, slog.New(slog.NewTextHandler(&logs, nil)))
+	for range 3 {
+		if _, err := s.Refresh(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const msg = "newer protocol level"
+	if n := strings.Count(logs.String(), msg); n != 1 || !strings.Contains(logs.String(), "signer=signer-1") {
+		t.Fatalf("%d warnings, want 1 for signer-1:\n%s", n, logs.String())
+	}
+	if !s.HasKey(context.Background(), newer.pk) {
+		t.Fatal("a signer with a newer level is not served")
 	}
 }
 
