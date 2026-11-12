@@ -26,8 +26,8 @@ const maxConnections = 16
 type runner interface {
 	PublicKeys(ctx context.Context) ([]proto.ValidatorKey, error)
 	Sign(ctx context.Context, req proto.SignRequest) (proto.Signature, error)
-	// Health is asked only of a signer that lists a whole key, for the
-	// signing_mode of its setup and its protocol level.
+	// Health is asked of every signer at a key load, for its protocol
+	// level, and for the signing_mode of a signer that lists a whole key.
 	Health(ctx context.Context) (*proto.Health, error)
 	Close() error
 }
