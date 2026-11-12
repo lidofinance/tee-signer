@@ -209,7 +209,7 @@ Set these once per shell, from the deploy settings of each cloud.
    slashing_log_store.bucket = <GCS_BUCKET>
    encrypted_state_store.bucket = <GCS_BUCKET>
    sealing_key_release.wif_provider = //iam.googleapis.com/projects/<PROJECT_NUMBER>/locations/global/workloadIdentityPools/signer-pool/providers/signer-attestation
-   sealing_key_release.kms_key = projects/<PROJECT_NUMBER>/locations/europe-west4/keyRings/signer/cryptoKeys/sealing
+   sealing_key_release.kms_key = projects/<PROJECT_ID>/locations/europe-west4/keyRings/signer/cryptoKeys/sealing
    sealing_key_release.attest_audience = signer-runner-identity
    ```
 

@@ -211,15 +211,17 @@ The setup's `sealing_key_release` names the GCP resources, all from
 | Setup field | Value |
 | --- | --- |
 | `wif_provider` | `//iam.googleapis.com/projects/<project-number>/locations/global/workloadIdentityPools/signer-pool/providers/signer-attestation` |
-| `kms_key` | `projects/<project-number>/locations/europe-west4/keyRings/signer/cryptoKeys/sealing` |
+| `kms_key` | `projects/<gcp-project>/locations/europe-west4/keyRings/signer/cryptoKeys/sealing` (the project ID: Cloud KMS refuses a key name with the number) |
 | `attest_audience` | `signer-runner-identity` |
 | `project_number` | `<project-number>` (required on a prod chain) |
 
-The runner checks `project_number` itself at start. `wif_provider` and
-`kms_key` must both name that project number. A `kms_key` named by
-project ID (`projects/<gcp-project>/...`) is refused with
-`project_number` set, since the runner cannot tell its project without
-an API call. The mark log and state copy buckets must be in that
+The runner checks `project_number` itself at start. `wif_provider` must
+name that project number. `kms_key` names the project by ID, the only
+form Cloud KMS takes (a key name with the number answers 403); a
+`kms_key` by number must be that number. Before each key release the
+runner also needs the launcher token's project number to equal
+`project_number`, which ties the key's project ID to it (below). The
+mark log and state copy buckets must be in that
 project: the runner reads each bucket's `projectNumber` (`buckets.get`,
 the `storage.buckets.get` permission the lock check needs too) and does
 not start when it differs. A setup without `project_number` gets none of

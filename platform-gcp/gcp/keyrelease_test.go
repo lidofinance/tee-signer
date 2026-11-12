@@ -173,6 +173,33 @@ func TestKeyReleaseStaysInTheRunnersProject(t *testing.T) {
 	}
 }
 
+// With the setup's project_number the VM must run in that project (the
+// launcher token's project number): then a KMS key named by project ID,
+// which checkProject matches to the token's project ID, is in the setup's
+// project too. Cloud KMS takes that form only (rv-d18).
+func TestKeyReleaseKeyByIDNeedsTheSetupsProject(t *testing.T) {
+	g := fakeGoogle(t)
+	defer g.Close()
+	for _, c := range []struct{ name, number, err string }{
+		{"setup project_number is the VM's", "1", ""},
+		{"setup project_number of another project", "2", "setup's project_number"},
+	} {
+		k := testKMS(t, g)
+		k.Provider, k.Key, k.ProjectNumber = "//iam.googleapis.com/projects/"+c.number+"/locations/global/workloadIdentityPools/p/providers/q", testKey, c.number
+		if err := checkSetupProject(k.Provider, k.Key, k.ProjectNumber); err != nil {
+			t.Fatalf("%s: the setup check refuses a key by project ID: %v", c.name, err)
+		}
+		store, _ := filestore.New(t.TempDir())
+		_, _, err := k.dataKey(context.Background(), store, [32]byte{1})
+		switch {
+		case c.err == "" && err != nil:
+			t.Errorf("%s: %v", c.name, err)
+		case c.err != "" && (err == nil || !strings.Contains(err.Error(), c.err)):
+			t.Errorf("%s: %v, want an error naming %s", c.name, err, c.err)
+		}
+	}
+}
+
 // A launcher token without the project claims releases no key. A project
 // number given as a JSON number instead of a string is read.
 func TestKeyReleaseNeedsTheProjectClaims(t *testing.T) {

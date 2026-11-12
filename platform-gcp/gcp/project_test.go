@@ -18,9 +18,10 @@ func TestCheckSetupProject(t *testing.T) {
 		{"no project_number", "anything", "anything", "", ""},
 		{"no project_number, domain-scoped project ID", prov, "projects/example.com:signer/locations/l/keyRings/r/cryptoKeys/k", "", ""},
 		{"same project, key by number", prov, key, "123456789", ""},
-		// rv-nsd.9: a key by project ID could be of any project.
-		{"key by project ID", prov, "projects/signer-prod/locations/europe-west4/keyRings/signer/cryptoKeys/sealing", "123456789", "by project number"},
-		{"key by domain-scoped project ID", prov, "projects/example.com:signer/locations/l/keyRings/r/cryptoKeys/k", "123456789", "by project number"},
+		// rv-d18: Cloud KMS takes a key by project ID only. The key release
+		// ties the ID to the number through the launcher token (checkProject).
+		{"key by project ID", prov, "projects/signer-prod/locations/europe-west4/keyRings/signer/cryptoKeys/sealing", "123456789", ""},
+		{"key by domain-scoped project ID", prov, "projects/example.com:signer/locations/l/keyRings/r/cryptoKeys/k", "123456789", "not a KMS key name"},
 		{"provider of another project", strings.Replace(prov, "123456789", "987654321", 1), key, "123456789", "wif_provider"},
 		{"key of another project number", prov, "projects/987654321/locations/europe-west4/keyRings/signer/cryptoKeys/sealing", "123456789", "KMS key of project 987654321"},
 		{"key with more segments", prov, "projects/123456789/locations/l/keyRings/r/cryptoKeys/k/../../../../projects/9/locations/l/keyRings/r/cryptoKeys/k", "123456789", "not a KMS key name"},

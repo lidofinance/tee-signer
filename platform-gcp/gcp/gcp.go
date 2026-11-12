@@ -176,6 +176,9 @@ type KMS struct {
 	Provider       string // //iam.googleapis.com/projects/NUM/locations/global/workloadIdentityPools/POOL/providers/PROV
 	ServiceAccount string // optional: impersonate this account
 	Key            string // projects/P/locations/L/keyRings/R/cryptoKeys/K
+	// ProjectNumber is the setup's project_number ("" without it). The
+	// launcher token's project number must equal it (checkProject).
+	ProjectNumber string
 	// Endpoints; empty means the public Google endpoints. Tests use fakes.
 	STSURL, IAMURL, KMSURL string
 	// Seen, if set, records the image digest of every token sent to STS:
@@ -229,6 +232,12 @@ func (k *KMS) checkProject(tok string) error {
 	}
 	if id == "" || num == "" {
 		return errors.New("gcp: launcher token: no submods.gce.project_id and project_number; the runner cannot tell which project it runs in")
+	}
+	// With project_number, the VM must run in that project: then a key named
+	// by project ID, checked against the token's ID below, is in the setup's
+	// project too (checkSetupProject cannot match an ID to a number).
+	if k.ProjectNumber != "" && num != k.ProjectNumber {
+		return fmt.Errorf("gcp: this VM runs in project %s (number %s), not in the setup's project_number %s", id, num, k.ProjectNumber)
 	}
 	if m := wifProviderRE.FindStringSubmatch(k.Provider); m == nil || m[1] != num {
 		return fmt.Errorf("gcp: wif_provider %q is not a WIF provider of project %s (number %s), where this VM runs", k.Provider, id, num)
@@ -526,11 +535,12 @@ func New(o platform.Options) (*platform.Platform, error) {
 		return nil, err
 	}
 	k := &KMS{L: l, HTTP: googleClient(), Provider: o.Param("wif_provider", ""),
-		ServiceAccount: o.Param("service_account", ""), Key: o.Param("kms_key", ""), Seen: &platform.ImageSeen{}}
+		ServiceAccount: o.Param("service_account", ""), Key: o.Param("kms_key", ""), ProjectNumber: o.Param("project_number", ""),
+		Seen: &platform.ImageSeen{}}
 	if k.Provider == "" || k.Key == "" {
 		return nil, errors.New("gcp: wif_provider and kms_key are required")
 	}
-	if err := checkSetupProject(k.Provider, k.Key, o.Param("project_number", "")); err != nil {
+	if err := checkSetupProject(k.Provider, k.Key, k.ProjectNumber); err != nil {
 		return nil, err
 	}
 	debugEndpoints(o, k)

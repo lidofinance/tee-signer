@@ -61,8 +61,9 @@ It changed:
   catalog IDs the clock dials besides the image's default set, at most
   10).
 - GCP key release: new `sealing_key_release.project_number`, required on
-  a prod chain. With it, `wif_provider` and `kms_key` name that project
-  number (platform-gcp/deploy/README.md, "Setup").
+  a prod chain. With it, `wif_provider` names that project number and
+  `kms_key` the project ID, the only form Cloud KMS takes
+  (platform-gcp/deploy/README.md, "Setup").
 - The clock's protocol, bounds and servers come from the setup. An image
   command no longer sets `-clock-protocol`, `-nts-max-bound`,
   `-nts-max-sample-bound` or `-nts-terms-confirmed`, and a cloud runner
@@ -86,8 +87,9 @@ required for Nitro on a prod chain.
    to their `deposit_policy.` names, and add `time_policy.*` with the
    protocol and bounds the image command gave before (defaults: `nts`,
    100 and 100). Move the IDs of `-nts-terms-confirmed` to
-   `time_servers`. On GCP, add `sealing_key_release.project_number` and
-   write `kms_key` by project number. `setup-tool show` on an encoded
+   `time_servers`. On GCP, add `sealing_key_release.project_number`, and
+   keep `kms_key` by project ID: Cloud KMS refuses a key name with the
+   project number. `setup-tool show` on an encoded
    setup prints every field with a note, as a check.
 3. Nitro on a prod chain: check the key's CloudTrail history
    ([platform-aws/deploy/README.md](../platform-aws/deploy/README.md#setup),
