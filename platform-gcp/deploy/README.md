@@ -152,7 +152,7 @@ the supported-configurations page names Milan for N2D with SEV.
   runner built with the tag nts, `trusted-time/docs/nts.md`) with the
   coarse-check URLs `cloudkms.googleapis.com`, `sts.googleapis.com` and
   `www.cloudflare.com` (`-nts-coarse-urls`), `-log-json`. The clock reaches
-  the four NTS operators directly: TCP 4460 and UDP 123 and 4123 out through
+  the NTS servers directly: TCP 4460 and UDP 123 and 4123 out through
   the VM's external address. The custom VPC has no egress rule of its own,
   so the implied allow-all egress rule applies (Google, "VPC firewall
   rules", implied rules).

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# NTS interop test against the four public operators (Cloudflare, Netnod,
-# PTB, time.nl): one NTS-KE and three queries per server, 34 s apart, then
+# NTS interop test against the catalog's default public servers
+# (nts.PublicServers): one NTS-KE and three queries per server, 34 s apart, then
 # the quorum, through the runner's NTS clock (trusted-time/clock, tag nts). It
 # needs the network, so it is not part of make test-offline or test-nts.sh.
 #
-# Traffic: TCP 4460 (NTS-KE) and UDP 123 (NTP) to time.cloudflare.com,
-# nts.netnod.se, ptbtime1.ptb.de and ntppool1.time.nl, plus their DNS
+# Traffic: TCP 4460 (NTS-KE) and UDP 123 or 4123 (NTP) to those servers
+# (trusted-time/ntscatalog/catalog.json, the default ones), plus their DNS
 # lookups. Nothing else. At most one query per server per 34 s, about 75 s
 # in all, stopped at 290 s. The coarse check uses the host clock here, not
 # HTTPS-date, so no other host is contacted.

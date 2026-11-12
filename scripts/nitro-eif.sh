@@ -172,13 +172,26 @@ build_eif() { # build_eif <tag>
   # runner has no such flag).
   local ep
   ep="$(docker inspect --format '{{json .Config.Entrypoint}}' "$ENCLAVE_IMAGE")"
-  for want in '"-setup","platform"' '"-nts-clock"' '"-nts-wait"' '"-nts-max-bound"' 'https://kms.{region}.amazonaws.com/'; do
+  for want in '"-setup","platform"' '"-nts-clock"' '"-nts-wait"' '"-nts-max-bound"' '"-nts-max-sample-bound"' 'https://kms.{region}.amazonaws.com/'; do
     grep -qF -- "$want" <<<"$ep" || die "the image's command lacks $want"
   done
   for not in '"-config"' '"-tls-client-ca"' '"-platform-opt"' '"-mark-store"' '"-mark-signer"' '"-record' \
     'dynamodb' ':8003' '"-mark-create"' '"-state-create"' '"https-date"'; do
     ! grep -qF -- "$not" <<<"$ep" || die "the image's command has $not"
   done
+  # The clock protocol the command names: nts without -clock-protocol, or
+  # ntp (plain NTP, unauthenticated). The build record states it.
+  CLOCK_PROTOCOL="$(python3 -c '
+import json, sys
+a = json.loads(sys.argv[1])
+p = [a[i + 1] if i + 1 < len(a) else "" for i, v in enumerate(a) if v == "-clock-protocol"]
+p += [v.split("=", 1)[1] for v in a if v.startswith("-clock-protocol=")]
+print(p[-1] if p else "nts")' "$ep")"
+  case "$CLOCK_PROTOCOL" in
+    nts) ;;
+    ntp) log "the image's command runs plain NTP (-clock-protocol ntp): unauthenticated, the parent can forge every answer within the coarse check (trusted-time/docs/nts.md, Plain NTP)" ;;
+    *) die "the image's command names -clock-protocol $CLOCK_PROTOCOL; want nts or ntp" ;;
+  esac
   log "image holds runner-aws $(sha256sum <"$RUNNER" | cut -c1-16)... as built here, with the Dockerfile's mode, and no operator value"
   # HOME: linuxkit keeps a cache in ~/.moby.
   docker run --rm --user "$(id -u):$(id -g)" --group-add "$DOCKER_GID" -e HOME=/tmp \
@@ -220,7 +233,11 @@ bash "$ROOT/scripts/kms-policy.sh" render "$OUT/build-enclave-$arch.json" "$OUT/
   printf 'Dockerfile  %s\n' "$(sha256sum <"$CTX/Dockerfile" | cut -d' ' -f1)"
   (cd "$CTX" && sha256sum licenses/*)
   printf 'setup       from the host agent at every start (chain, client CA, KMS key, region, mark bucket, signer)\n'
-  printf 'clock       nts: NTS-KE via vsock 8005-8008, NTP via udprelay on vsock 7102\n'
+  if [ "$CLOCK_PROTOCOL" = ntp ]; then
+    printf 'clock       ntp (plain NTP, unauthenticated, -clock-protocol ntp): NTP via udprelay on vsock 7102\n'
+  else
+    printf 'clock       nts: NTS-KE via vsock 8005-8018, NTP via udprelay on vsock 7102\n'
+  fi
   printf 'nitro-cli  %s, target-arch.patch %s, built on %s, image %s\n' "$NITRO_CLI_TAG" \
     "$(sha256sum <"$ROOT/platform-aws/deploy/nitro-cli/target-arch.patch" | cut -c1-16)" "$HOST_ARCH" \
     "$(docker image inspect "$NITRO_IMAGE" --format '{{.Id}}')"

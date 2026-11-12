@@ -506,7 +506,7 @@ most 75 s (5 intervals). It never returns a lower time than before. A
 host that speeds up the local timer gains at most 75 s per reading, far
 below one epoch and the floor margin, and the next reading ends it. At
 the fifth missed reading in a row it fails. The NTS clock then forms no
-new quorum and refuses once its samples are over 60 s old, so a blocked
+new quorum and refuses once its samples are over 90 s old, so a blocked
 network stops signing instead of freezing time.
 
 Cost per restart: votes for targets `E`, `E+1` and `E+2` and proposals in

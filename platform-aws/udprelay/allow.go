@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/lidofinance/tee-signer/trusted-time/ntscatalog"
 )
 
 // Allowlist decides which destinations the relay sends to. A destination is
@@ -18,9 +20,19 @@ import (
 //
 //   - The port must be one of Ports (NTP 123; Netnod negotiates 4123).
 //   - A name must be one of Names, exactly (case and a trailing dot aside).
-//     The relay resolves it itself and sends to the first address.
-//   - An address must lie in one of Nets, or be an address that one of
-//     Names resolves to now (cached for TTL).
+//     The relay resolves it itself and sends to the first public address
+//     (IPv4 first), or one in Nets.
+//   - An address must lie in one of Nets, or be a public address that one
+//     of Names resolves to now (cached for TTL).
+//   - Public: global unicast, not private, not in notPublic (shared space,
+//     NAT64, 6to4 and other special blocks). A DNS answer that points a
+//     name at a private or special address (the VPC's IPv4 space, the
+//     parent's private address, loopback) gets no datagram. The relay
+//     cannot tell a public address of this VPC or of the parent (an
+//     Elastic IP, the VPC's global IPv6 block) from an NTP server's: a DNS
+//     answer that names one is sent to. Such an answer comes from the
+//     parent's resolver, which the host runs; the host can send datagrams
+//     there itself, and NTS requests carry nothing a receiver can use.
 //
 // Nothing else goes out: no other name is resolved, no other address is
 // reached. Netnod's NTS-KE servers name NTP servers by address, and those
@@ -45,22 +57,31 @@ type resolved struct {
 	at    time.Time
 }
 
-// DefaultNames are the NTS-KE hosts of the runner's four operators
-// (trusted-time/nts.PublicServers); each names itself as its NTP server, except
-// Netnod.
-var DefaultNames = []string{"time.cloudflare.com", "nts.netnod.se", "ptbtime1.ptb.de", "ntppool1.time.nl"}
+// DefaultNames are the NTP host names of every NTS-KE host a runner of this
+// image may dial (trusted-time/ntscatalog Endpoints and NTPHosts): each
+// host's own name, which the client uses when NTS-KE names none, and the
+// names NTS-KE servers name instead (Meta: time.meta.com), and the hosts
+// plain NTP asks in their place (Netnod: ntp.se, FER: ntp.hr). The parent cannot
+// see which servers the enclave's command chose, so it allows all of them.
+var DefaultNames = ntscatalog.NTPHosts(ntscatalog.Builtin.Endpoints())
 
 // DefaultPorts: NTP, and the port Netnod's NTS-KE negotiates.
 var DefaultPorts = []uint16{123, 4123}
 
-// DefaultNets hold the NTP servers that Netnod's NTS-KE servers name: each
-// IPv4 address of nts.netnod.se names another NTP server in 194.58.203.0 to
-// 194.58.207.255, port 4123, none of them an address of nts.netnod.se.
-var DefaultNets = []netip.Prefix{
-	netip.MustParsePrefix("194.58.200.0/21"),
+// DefaultNets hold NTP servers that NTS-KE servers name by address outside
+// their own names' addresses (Netnod: each IPv4 address of nts.netnod.se
+// names another NTP server in 194.58.203.0 to 194.58.207.255, port 4123).
+var DefaultNets = defaultNets()
+
+func defaultNets() []netip.Prefix {
+	var out []netip.Prefix
+	for _, n := range ntscatalog.NTPNets(ntscatalog.Builtin.Endpoints()) {
+		out = append(out, netip.MustParsePrefix(n)) // ntscatalog.Check parsed them
+	}
+	return out
 }
 
-// Default is the allowlist of the runner's four NTS operators.
+// Default is the allowlist of the NTS servers a runner of this image may dial.
 func Default() *Allowlist {
 	return &Allowlist{Names: slices.Clone(DefaultNames), Nets: slices.Clone(DefaultNets), Ports: slices.Clone(DefaultPorts)}
 }
@@ -156,6 +177,53 @@ func usable(ip netip.Addr) bool {
 	return ip.IsValid() && !ip.IsUnspecified() && !ip.IsMulticast() && !ip.IsLinkLocalUnicast()
 }
 
+// notPublic are blocks a DNS answer must not point a name at, besides
+// loopback and private: shared space (RFC 6598), "this network", IETF
+// protocol assignments, benchmarking, reserved, and the IPv6 forms that
+// carry an IPv4 address (NAT64, 6to4), which could reach a private one.
+var notPublic = []netip.Prefix{
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("2002::/16"),
+}
+
+// public: a global unicast address that is not private (RFC 1918,
+// fc00::/7) and in no block of notPublic.
+func public(ip netip.Addr) bool {
+	if !ip.IsGlobalUnicast() || ip.IsPrivate() {
+		return false
+	}
+	for _, p := range notPublic {
+		if p.Contains(ip) {
+			return false
+		}
+	}
+	return true
+}
+
+func (a *Allowlist) inNets(ip netip.Addr) bool {
+	for _, n := range a.Nets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// nameAddr: an address a name of the allowlist resolved to that a datagram
+// may go to. It must be public unless Nets holds it: a DNS answer that
+// points a catalog name at a private address of the parent or the VPC must
+// not turn the relay toward them (the tests allow loopback with Nets).
+// Public addresses of the VPC are not known here (see Allowlist).
+func (a *Allowlist) nameAddr(ip netip.Addr) bool {
+	return usable(ip) && (public(ip) || a.inNets(ip))
+}
+
 // Check returns the UDP address for dest, or why dest is refused (an error
 // whose text is the reason sent to the client).
 func (a *Allowlist) Check(ctx context.Context, dest string) (netip.AddrPort, error) {
@@ -173,10 +241,13 @@ func (a *Allowlist) Check(ctx context.Context, dest string) (netip.AddrPort, err
 		if ip.Zone() != "" || !usable(ip) {
 			return netip.AddrPort{}, refusal{"address " + host + " not allowed"}
 		}
-		for _, n := range a.Nets {
-			if n.Contains(ip) {
-				return netip.AddrPortFrom(ip, port), nil
-			}
+		if a.inNets(ip) {
+			return netip.AddrPortFrom(ip, port), nil
+		}
+		// Before any lookup: an address that is not public can never pass,
+		// so it costs no DNS query of the allowed names.
+		if !public(ip) {
+			return netip.AddrPort{}, refusal{"address " + host + " not in the allowlist"}
 		}
 		for _, name := range a.Names {
 			addrs, err := a.lookup(ctx, name)
@@ -197,7 +268,7 @@ func (a *Allowlist) Check(ctx context.Context, dest string) (netip.AddrPort, err
 	// IPv4 first: the parent may have no IPv6 route.
 	for _, v4 := range []bool{true, false} {
 		for _, ip := range addrs {
-			if ip.Is4() == v4 && usable(ip) {
+			if ip.Is4() == v4 && a.nameAddr(ip) {
 				return netip.AddrPortFrom(ip, port), nil
 			}
 		}

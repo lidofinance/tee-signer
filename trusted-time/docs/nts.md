@@ -19,7 +19,7 @@ The parts:
 - The Go side, behind the build tag `nts`: NTS-KE over `crypto/tls` and NTP
   over UDP in `trusted-time/nts`, the clock `trusted-time/clock.NTS`, the switch
   `RUNNER_NTS_CLOCK=1` in tagged runners (`tee-signer/platforms_nts.go`),
-  and the interop test against four public operators
+  and the interop test against the default public servers
   (`scripts/nts-interop.sh`).
 - The clouds. The cloud runners (azure, aws, gcp, their debug and key
   generation builds) have the tag, and their images run `-nts-clock`
@@ -70,6 +70,12 @@ expanded AES keys and the CMAC state are wiped on drop), `subtle`, `zeroize`.
   time. Otherwise `Response::Time` with the four timestamps, root delay, root
   dispersion, precision, stratum, leap indicator and the cookies. One
   accepted response per request; a second is refused as a replay.
+- `build_plain_request(transmit)` and `PlainRequest::verify_response(packet)`:
+  plain NTP without NTS (see "Plain NTP" below). The request is the 48-octet
+  header alone. The response gets the same header checks (length caps,
+  version 4, mode 4, origin, KoD on stratum 0, leap indicator 3, stratum
+  above 15) and anything after the header is ignored. No cookies, and
+  nothing is authenticated.
 
 `keys`: `C2sKey`, `S2cKey`, wiped on drop, not printed by `Debug`.
 `cookie`: `Cookie`, 1 to 1024 octets, wiped on drop. `time`: `NtpTimestamp`,
@@ -88,8 +94,11 @@ after T3, and a bound over 1 s (MAXDIST).
 `quorum`: `combine_with(intervals, now, max_wrong)`. 3 to 16 intervals from
 distinct operators (labels from the caller, duplicates refused). Up to F =
 max_wrong of them may be wrong; fewer than 2F + 1 intervals is an error. The
-clock passes the majority rule, F = (n - 1) / 2 rounded down: 3 of 3, 3 of 4,
-3 of 5, 4 of 6 and 4 of 7 must agree. With 3 or 4 intervals this is F = 1.
+clock passes the majority rule, F = (n - 1) / 2 rounded down, but never
+so many that fewer than 3 agree (`nts.QuorumWrong`): 3 of 3, 3 of 4, 3 of 5,
+4 of 6 and 4 of 7 must agree. With 4 intervals this is F = 1, with 3 it is
+F = 0. Without that floor 2 of 3 would do, and a host that drops answers
+until 3 are fresh could let 2 wrong operators set the time.
 Each bound first grows by rho times its age at `now`. [lo, hi] spans the
 points that at least n - F intervals cover (the intersection of RFC 5905
 section 11.2.1, without clustering); no such point is an error. Result:
@@ -105,8 +114,10 @@ response framing, ALPN, exporter label and contexts; an opaque `snts_assoc`
 (keys and up to 8 cookies, wiped on free) made from a KE response and the two
 exported keys; `snts_ntp_request` (takes the oldest cookie, asks for enough
 placeholders to hold 8 again, gives an `snts_request` handle) and
-`snts_ntp_verify` (checks, keeps the new cookies, measures); `snts_quorum`
-over a pointer-free array of intervals. The caller passes buffers with their
+`snts_ntp_verify` (checks, keeps the new cookies, measures);
+`snts_plain_request`, `snts_plain_verify` and `snts_plain_free` for plain
+NTP (an `snts_plain` handle, 8 random octets, the same `snts_sample` with no
+cookie counts); `snts_quorum` over a pointer-free array of intervals. The caller passes buffers with their
 lengths, the random octets (56 per request) and every time. Return codes are
 `SNTS_*`; refusals carry a `reason` (kind << 16 | value) and
 `snts_reason_text` names it. No panic crosses the boundary: `panic =
@@ -124,12 +135,14 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   clock stops the exchange before the dial, and during the handshake
   becomes `nts.NoTrustedTime` (1970), which no certificate covers. Go's
   `crypto/x509` would read a zero time as `time.Now()`); `Association.Query` over a connected UDP socket
-  (refused packets do not end the wait: they may be forgeries); pinned roots
+  (refused packets do not end the wait: they may be forgeries); `QueryPlain`,
+  the same exchange with plain NTP; pinned roots
   per operator in `roots/` with their source in `roots.go`.
 - `trusted-time/clock.NTS`: polls each server every 16 s (RFC 5905 MINPOLL),
   doubles a server's interval on RATE up to 1024 s, stops asking a server
   for 1024 s on DENY or RSTR (a Kiss-o'-Death is not authenticated, so a
-  forged one must not stop it for good), runs NTS-KE again on NTSN, feeds
+  forged one must not stop it for good), runs NTS-KE again on NTSN (or
+  "NTS" and a zero octet, which nts1.ntp.hr sends for a stale cookie), feeds
   the latest sample of each server to the Rust quorum if it is at most 46 s
   old with the defaults (60 s minus the 4 s tick of `Run` with the
   defaults and the 10 s a refresh can take for one NTS-KE and one query,
@@ -156,9 +169,10 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   restart waits for a fresh quorum. What lags: a client certificate that
   expired during the lag is still accepted, and a key imported during it
   gets a restart floor that is too low for history it built elsewhere.
-  A healthy server answers every 16 s, so after one lost answer its
-  sample is usually still under 46 s when the next answer comes; a
-  quorum needs 3 of the 4 operators. If every server is out of reach, signing stops within
+  Without the 60 s schedule (a library user; the runner always runs it,
+  next item) a healthy server answers every 16 s, so after one lost answer its sample is usually
+  still under 46 s when the next answer comes; with 4 servers a quorum
+  needs 3 of them. If every server is out of reach, signing stops within
   60 s and resumes with the next quorum: within about one interval after a
   short outage, later after a long one, when the cookies ran out and NTS-KE
   backs off (up to 1024 s; before the first quorum of a run NTS-KE is tried
@@ -189,7 +203,158 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   `Date` headers itself, move the coarse clock, and with it the time NTS-KE
   checks certificates at. Without such certificates, setting the system
   clock moves neither. HTTPS-date is no longer a signing clock, but it
-  is still the coarse check, so this residual stays.
+  is still the coarse check, so this residual stays. The certificates
+  must come from the roots of each host's own catalog entry (see "In the
+  clouds" below), not from any root the image trusts.
+- Shift schedule (`clock.NTS.Shifts` or `ScheduleSeed`, `ntsshift.go`; off
+  by default). The runner always turns it on and refuses fewer than 4
+  servers (with 3, one slow server would stop the quorum). Below 7
+  servers every server is active, each asked once per 60 s on the same
+  grid (the one exception: after the first quorum, a lost answer may get one retry 20 s later, at most one per lost contact and within the 120 per hour cap, so the worst case per operator is two requests per 60 s while its answers are lost), and nothing hands over: a small set (a region with few close
+  operators) is asked no more often than a shift asks. From 7 servers:
+  4 actives and 3 kept for fallbacks with 7, 5 actives from 8 on
+  (`clock.ShiftActives`). With 4 actives the quorum is 3 of 4, so two
+  wrong at once (a leap smear plus one more) stop it: 15.6 % of the time
+  against 0.07 % with 5 actives, in a simulation of 10 runs of 6 h. The
+  newcomer of a handover is asked at once, off its slot, and its next slot
+  can come up to 116 s later, so that first sample ages out before it and
+  exactly 3 are fresh for up to about 40 s. Fewer than 4 fresh starts a
+  burst (`NTSShiftBurstBelow`), so that gap does not leave a quorum of 3
+  that one wrong operator stops; in the simulation this adds about one
+  burst per handover. Seeded with an HMAC of the sealing
+  key (`platform.ScheduleSeed`), which the host does not know, so the
+  order cannot be computed ahead from public data, and signers with other
+  keys spread over the operators in other orders. It does not keep the
+  order from the host. The order stays the same after a restart, and the
+  host sees where each query goes, so after one round of handovers (n
+  times 15 minutes) it knows the next active sets. Every start also
+  begins at the same window, so a host that restarts the signer within
+  each shift keeps the same actives for as long as it likes, and by timing
+  a restart chooses which window is active when. That gives it nothing it
+  does not have already: a host that drops answers chooses which servers
+  form the quorum, and 3 must still agree. The catalog's default set has
+  6 servers, all active; with one more from the image's command
+  (`-nts-terms-confirmed`) they hand over.
+  It asks public servers less
+  often and keeps the quorum alive when operators fail:
+  - Time is counted in ticks of 4 s since the start round. The start round
+    asks every operator once, after a random wait under 10 s. Until the
+    first quorum, an operator that did not answer (and sent no RATE) may
+    be asked again 20 s after its last try (`NTSShiftStartRetry`), so a
+    relay that comes up late gets up to 5 tries in the 90 s start wait,
+    not 2. A server that does not answer gets those tries once per run
+    (per restart), then the full 60 s gap.
+  - `ShiftActives(n)` operators are active (all below 7, 4 of 7, 5 from 8), each asked
+    on its own slot of a 60 s grid (slots 12 s apart with 5, 12 to 16 s
+    with 4, the phase from the seed). Two contacts with one
+    operator start at least 60 s apart, except those start retries and
+    the retry of a lost answer below: after the first quorum, a lost answer may get one retry 20 s later, at most one per lost contact and within the 120 per hour cap, so the worst case per operator is two requests per 60 s while its answers are lost (a contact that runs NTS-KE first
+    sends its query a few seconds later); a RATE doubles that operator's
+    gap up to 1024 s.
+    Without a seed every operator is active.
+  - Every 15 minutes the window of actives moves one place along an order
+    drawn from the seed. The outgoing leaves on time; its last sample stays
+    until it ages out. An incoming that does not answer is not replaced.
+  - A lost answer of an active gets one fallback at once to a random
+    operator not asked in 60 s that can be asked (not stopped by DENY or
+    RSTR, not in an NTS-KE backoff), at most 120 per hour. With fewer than
+    4 fresh samples, every such operator not asked in 60 s is asked (a
+    burst), at most 120 burst contacts per hour (`NTSShiftBurstCap`, a cap
+    of their own: sharing the fallbacks' cap left two down actives of 7
+    operators without fallbacks, 5.7 % blocked in the simulation). A set under 7 has no operator for a
+    fallback: there, and wherever none is free, a lost answer gets one
+    retry of the same operator 20 s later (`NTSShiftStartRetry`), after
+    the first quorum, within the same 120 per hour. Its next slot stays 60 s
+    after the lost contact, so a lost answer costs at most one more query.
+    In a simulation of 4 servers, 30 % loss blocked signing 18 % of the
+    time without the retry and under 1 % with it; one server down and 10 %
+    loss on the others, 17 % and 1 %. A wide answer and a RATE get no
+    retry (the server answered), nor does an operator in a RATE backoff, a
+    contact that sent nothing, or one that cannot be asked when the retry
+    is due (DENY, RSTR, NTS-KE backoff). A retry more than a tick late, or
+    within 20 s of the operator's next slot, is dropped. HEALTH counts only
+    requests that went out.
+  - NTP queries time out after 1 s; the NTP host is resolved once at
+    NTS-KE (default dialer only). NTS-KE keeps 5 s.
+  - `MaxAge` is 90 s. Each tick ends within 10 s, as a refresh without
+    shifts does, so a sample joins a quorum while it is at most 76 s old
+    (90 s minus the 4 s tick and the 10 s) and stays under 90 s until the
+    next quorum. On a counter the host can set, the fast-counter lead is
+    up to 90 s instead of 60 s; the 106 s case above does not depend on
+    it, and the restart floor's 384 s epoch covers both.
+  - The quorum is the majority rule over the fresh samples, so 5 actives
+    give a time with 2 of them wrong or missing, and 4 actives with 1.
+  - Consecutive quorums share most members, so a jump of the local
+    counter first shows as outvoted samples. In the simulation a 2 s jump
+    was served for 24 to 32 s before the drift check refused it, inside
+    the lead the age limit allows anyway.
+  - `NTSSummary` adds the active operators, per-operator counts (queries,
+    answers, losses, fallbacks, bursts, RATE answers, handovers, failed
+    handovers, fallbacks that needed NTS-KE first, retries of a lost
+    answer) and the fallbacks the cap refused. Fallbacks to an operator that often need NTS-KE mean its
+    cookies expire while it idles; an operator can idle for about (n -
+    ShiftActives(n)) x 15 minutes: 45 minutes with 7 or 8 operators.
+- Server list swap (`clock.NTS.SetServers`, for setup format 6, where the
+  approvers change the extra time servers with a fast config update). The
+  running clock takes the new list without a restart. It refuses fewer
+  than 4 servers (or the caller's minimum, if higher), more than
+  `nts.MaxServers`, an operator label outside 1 to `nts.MaxOperatorLen`
+  octets, an operator named twice, and a host or NTP address named twice
+  (one server, two votes), and then changes nothing. Refresh refuses a
+  start list over `nts.MaxServers`, with a bad label or with an operator
+  named twice too, since `nts.Quorum` would refuse every quorum of it. A
+  Refresh in flight finishes on the old list; SetServers waits for it,
+  and the next tick uses the new one. An operator that stays with the
+  same host, addresses and roots keeps everything: association and
+  cookies, sample, poll interval, RATE gap, Kiss-o'-Death stop, loss
+  streak, health counters and last contact. Any other operator gets a new
+  peer (new NTS-KE, no sample). A removed operator's association is
+  closed. Its sample, and the old sample of a changed operator, leave the
+  quorum at once: if one was a member of the quorum in force, that quorum
+  stops serving in the same lock hold as the swap and forms again from
+  the samples left. If that fails (too few samples, no coarse time, a
+  check refuses it), the clock serves no time until a Refresh forms a
+  quorum, and is back in its start state until then (20 s start retries,
+  NTS-KE retried after 12 to 20 s).
+  A server that leaves (removed, or changed under its label) is kept by
+  label and by host for `NTSMaxPoll`. If its label comes back, with any
+  host, or its host comes back under a new label, the new peer keeps its
+  DENY or RSTR stop and its last contact in local time, and under shifts
+  its last contact, gap and RATE count. So under shifts a changed,
+  returning or relabelled server is asked at its next slot past its gap,
+  not at once, and no server is asked twice within its gap across a
+  swap. A server new by label and host is asked at the next tick, as in
+  the start round, then on the 60 s rule. Without shifts there are no
+  gaps: every new peer is asked at the next Refresh unless it is stopped.
+  Under shifts the seed and the grid phase stay; the order and the active
+  slots are drawn again for the new count (`ShiftActives`), so the
+  handover position starts over. `NTSSummary.ServerSwaps`
+  counts the swaps. In the simulation swaps from 7 to 8, 8 to 7, 6 to 7
+  and 8 to 9 servers on a healthy set never stopped the time.
+- HEALTH `clock_nts.operators` has one entry per server the clock dials,
+  with or without shifts, servers that never answered included:
+  `operator`, `host`, `active`, `queries`, `answers`, `losses`, `wide`
+  (losses that were answers over the sample cap), `ke_ok`,
+  `ke_fail`, `last_answer_age_ms` (-1: no answer yet), `off` (a DENY or
+  RSTR stop), `last_error` (cut at 256 octets), and under shifts
+  `fallbacks`, `bursts`, `rates`, `handovers`, `failed_handovers`,
+  `fallback_ke` and `retries`.
+  `clock_nts.fallbacks_capped` counts the fallbacks the hourly cap refused.
+  A server with no answers and either queries or `ke_fail` is dead from
+  this signer's network before it costs a refusal: `queries` counts NTP
+  queries only, so a server whose NTS-KE fails (TCP 4460 blocked, a bad
+  certificate) shows `queries` 0 and `ke_fail` growing. A query that the
+  tick's 10 s deadline cut counts as no loss, no loss streak and no
+  `last_error`; its request went out, so its cookie is used and the
+  contact counts for the 60 s gap. Under shifts `queries` and `retries`
+  count only requests that went out.
+  `clock_nts.coarse` has one entry per HTTPS-date host of the coarse
+  check: `source`, `queries`, `answers`, `failures`, `last_answer_age_ms`
+  (-1: no answer yet), `last_diff_ms` (its Date minus the coarse quorum's
+  answer, from the last round that formed a quorum, in whole seconds) and
+  `last_error` (empty after an answer). Without
+  a coarse time there is no NTS time, so a host that fails or lags matters
+  as much as an NTS server.
 - `tee-signer/platforms_nts.go`: `-nts-clock` (or `RUNNER_NTS_CLOCK=1`) gives a
   tagged runner the NTS clock, with `-nts-coarse-urls`, `-nts-wait` and
   `-nts-max-bound` (or their variables; a set flag wins). The runner
@@ -208,14 +373,69 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   80 s (16 s rounded up to the loop): 5 in 90 s, 2 in the 30 s of the
   e2e tests. Now the loop starts up to 5 s later and a retry comes 15 or
   20 s after a try: at the latest 5, 25, 45, 65 and 85 s, so as many tries
-  as before.
+  as before. Under the 60 s schedule, which every runner runs, the start
+  retries above give a server that did not answer a try every 20 s until
+  the first quorum.
   The clock dials through the platform (`platform.Platform.Dial`; nil is
   the default dialer). `runner -nts-clock-check`
-  queries the servers once, with no start wait, and prints the result. A debug build (tag debugimport) can name
+  runs the start round of the runner's schedule once (every server, the
+  1 s query timeout of the shift schedule), with no start wait, and prints
+  the result, so a server that answers in 1 to 5 s fails the check as it
+  would fail the runner. A debug build (tag debugimport) can name
   test servers instead of the public ones (`RUNNER_NTS_TEST_SERVERS`,
   `RUNNER_NTS_TEST_ROOTS`, `nts_servers_debug.go`); a release build cannot.
 - `trusted-time/nts/ntstest`: a loopback NTS-KE and NTP server for the tests,
   with its own AES-SIV from RFC 5297 (checked against appendix A.1).
+- `trusted-time/ntscatalog/catalog.json`: the image's NTS servers, one entry
+  per operator, embedded in the binary. Each entry has its pinned root
+  files, Nitro vsock port, status (active, retired, withdrawn), `terms`,
+  `regions`, optional `alt` hosts and a `note`.
+  - `terms`: `open` when the operator's published terms allow use without
+    contact and state no limit the clock breaks; `ask` when the operator
+    wants contact first, states a limit the polling exceeds (TimeNL: one
+    query per 1024 s), or publishes no terms. `terms_url` is the page they
+    were read from (required for `open`). The image never decides for a
+    user: an `ask` operator is for a setup whose writer asked it.
+  - `regions`: `global` (anycast), or some of `eu`, `na`, `sa`, `apac`,
+    where the median NTP round trip was under 180 ms from every test point
+    (the 100 ms bound limit is about half the round trip plus the server's
+    root distance). Measured 2026-11 from GCP europe-west3, -west4, -west9,
+    us-east4, us-west1, southamerica-east1, asia-northeast1, asia-southeast1
+    and australia-southeast1. `ForRegion` lists what a new setup for a
+    region may name; signer-admin will suggest from it.
+  - Open servers per region today: eu and na 7, sa 4 (Cloudflare, Meta,
+    Wiktel, NIC.br). Asia and Oceania have no NTS operator close enough of
+    their own. Their open set is the two anycast services, Cloudflare and
+    Meta, under the quorum's 3; a setup there needs `ask` operators
+    (TimeNL's any.time.nl is anycast; MBIX is at the edge of the bound).
+  - `alt`: other hosts of the same operator (more sites, anycast). They count
+    as the same operator. The runner dials one only when a deployment
+    names it as `id@host` (see below).
+  - `default`: dialed while setups cannot name servers. Only open
+    operators of eu and na (or global): Cloudflare, Netnod, PTB, BEV, Meta
+    and Wiktel. Earlier images dialed Cloudflare, Netnod, PTB and TimeNL;
+    TimeNL left the set for its terms, FER for failing NTS-KE in a live run.
+    The six are all active, each asked once per 60 s (one retry 20 s
+    after a lost answer aside, see the shift schedule above). A deployment adds
+    operators whose terms it confirmed with `-nts-terms-confirmed` in the
+    image's measured command (for example `time.nl@any.time.nl`, TimeNL's
+    anycast host); from seven servers they hand over in shifts. Outside eu and na this set gives fewer close servers (Asia
+    and Oceania: Cloudflare and Meta only), so a deployment there adds more.
+    Where no NTS server is close, the samples of distant ones are wide
+    (about half the round trip): such a deployment raises `-nts-max-bound`
+    and `-nts-max-sample-bound` in its image command, up to 250 ms, which
+    fits round trips up to about 500 ms.
+    Once setups can name servers, the same choice moves into the setup.
+  - `alt` hosts with a `nitro_port` can be chosen in place of the entry's
+    host (`id@host`). The Nitro parent routes every entry and every such alt
+    host (`Endpoints`), and its UDP relay allows their NTP host names, since
+    it cannot see the enclave's command; the enclave dials only its choice.
+  - `ntp_names`: NTP host names an NTS-KE server names other than its own
+    (Meta's names time.meta.com). The Nitro UDP relay allows them.
+  - `plain_ntp_host` (optional): the host plain NTP asks on port 123
+    (`-clock-protocol ntp`) when the operator answers plain NTP on another
+    name (Netnod: `ntp.se`, FER: `ntp.hr`). A host name, not the entry's
+    own, once in the catalog like every host. The Nitro UDP relay allows it.
 
 Untrusted bytes are read only through checked reads (`core/src/bytes.rs`),
 with no indexing, `unwrap` or `expect` on parsed data, and every allocation
@@ -239,7 +459,8 @@ has a fixed upper bound:
 trusted-time/rust/Cargo.toml, Cargo.lock    the workspace; the lock pins the 20 crates.io crates
 trusted-time/rust/crates.allow              the crates Cargo.lock may hold, name and version
 trusted-time/rust/src/                      signer-nts: the C exports (lib.rs), the association
-                              (assoc.rs), reason codes (reason.rs), tests (tests.rs)
+                              (assoc.rs), plain NTP (plain.rs), reason codes (reason.rs),
+                              tests (tests.rs)
 trusted-time/rust/include/signer_nts.h      the C header, written by hand
 trusted-time/rust/core/src/                 signer-nts-core: ke, ntp, sample, quorum, keys, cookie, time, selftest
 trusted-time/rust/core/tests/               requests, answers and refusals against a test server,
@@ -255,11 +476,11 @@ scripts/build-nts.sh          builds libsigner_nts.a for both architectures, run
 scripts/nts-container.sh      the part of build-nts.sh that runs in the container
 scripts/build-runner-nts.sh   builds the runners with the build tag nts
 scripts/test-nts.sh           all of it, then the Go test on each architecture
-scripts/nts-interop.sh        the interop test against the four public operators (network)
+scripts/nts-interop.sh        the interop test against the default public servers (network)
 trusted-time/nts/                   the cgo binding, NTS-KE, NTP, pinned roots, tests (tag nts)
 trusted-time/clock/nts*.go          the NTS clock and its tests (tag nts)
 tee-signer/nts_on.go              -nts-selftest and -nts-clock-check (tag nts)
-tee-signer/platforms_nts.go       -nts-clock and RUNNER_NTS_CLOCK=1 (tag nts)
+tee-signer/platforms_nts.go       -nts-clock and RUNNER_NTS_CLOCK=1, -clock-protocol (tag nts)
 tee-signer/nts_servers_*.go       the servers: public in release builds, test servers in debug builds
 platform-aws/udprelay/              the UDP relay: protocol, allowlist, rate limits, client (Nitro)
 platform-aws/cmd/udprelay/          the relay program on the Nitro parent
@@ -414,6 +635,99 @@ cloud builds link `trusted-time/nts` and the dev builds do not, and
 `build-runner.sh` that only the cloud builds hold the library and the
 `-nts-*` flags, and only their debug builds the test server variables.
 
+## Plain NTP (unauthenticated)
+
+`-clock-protocol ntp` (or `RUNNER_CLOCK_PROTOCOL=ntp`) runs the same clock
+with plain NTP (RFC 5905) in place of NTS. `-nts-clock` still turns the
+clock on; `-clock-protocol` only picks how it asks the servers. The default
+is `nts`, and any other value stops the runner at start, also with the
+clock off. `-nts-clock-check` reads `RUNNER_CLOCK_PROTOCOL` too (see the
+release rule below). For now
+the image command carries the choice; setup format 6 will move it into the
+setup's locked group. No cloud image sets it today, so they all run NTS.
+
+It is a fallback for a deployment where NTS does not work, for example a
+path that blocks NTS-KE on TCP 4460. It is not a second kind of NTS.
+
+The risk. Nothing authenticates the answers. The request carries a random
+64-bit transmit timestamp and the answer must echo it, so a party that does
+not see the request cannot answer it. The host sees every request. It can
+answer each one with any time it likes, for every operator at once, and the
+path to the servers can do the same (on Nitro the parent's UDP relay, on
+Azure and GCP the network between the cloud and the servers). The quorum,
+the error bound, the sample cap and the drift check then measure the
+forged answers, not real time. The one check the host cannot forge is the
+coarse check: the HTTPS-date quorum, over TLS to pinned roots. So against a
+hostile host the time is only as good as the coarse check. The check allows
+-30 s to +31 s against the coarse clock (`NTSMaxCoarseDiff` and the
+one-second resolution), and the coarse clock is itself off real time:
+
+- Behind: an HTTP Date names the second the server was in, up to 1 s
+  before the answer, and `HTTPSDate.Fetch` has no round-trip cap, so a
+  host that holds every answer up to the 15 s timeout of `Anchored.Run`
+  puts the coarse clock about 16 s behind. With the 30 s window that is
+  about 46 s behind real time.
+- Ahead, with a local counter the host cannot set: the coarse clock is
+  never ahead, so under 31 s.
+- Ahead, where the host sets the counter: the coarse clock runs up to 75 s
+  ahead (`Anchored.MaxAdvance`, while the host blocks HTTPS), a forged
+  quorum may stand 31 s past it, and `Now` then serves that quorum's offset
+  plus the counter until its samples are 90 s old on the counter
+  (`NTSShiftMaxAge`). Forged samples are fresh at the quorum, and no drift
+  check catches it: the host makes all the samples. That is 75 + 31 + 90,
+  about 196 s ahead of real time. Behind has no limit there, as for NTS.
+
+The restart floor (signer-core/README.md, "Restart floor") needs the lead
+before a restart plus the lag after it under one epoch, and with plain NTP
+the host sets both: up to about 196 s ahead before a restart and 46 s
+behind at the first quorum after it, a swing of about 242 s. With a counter
+the host cannot set it is about 31 + 46 = 77 s. Both are under the 384 s
+epoch of mainnet and Hoodi. The host can move the time anywhere in this
+range, slowly enough that the drift
+check, which compares quorums of its own answers, sees nothing. HEALTH's
+`bound_now_ms` does not bound that error. Plain NTP also trusts DNS:
+whoever answers DNS for an NTP name (the runner's resolver on Azure and
+GCP, the Nitro parent's relay) receives the request and can forge the
+answer. Against an honest host and path, plain NTP is as precise as NTS.
+
+In a release build only the measured `-clock-protocol` flag picks the
+protocol: `RUNNER_CLOCK_PROTOCOL` stops the runner at start, except on the
+dev platform. Debug builds and `-nts-clock-check` take the variable.
+
+What changes against NTS: no NTS-KE, no cookies, no TLS to the time
+servers. The NTS-KE retries, the NTS-KE after lost queries and the NTSN
+kiss do not apply. Each server is asked on UDP port 123 at the catalog
+entry's `plain_ntp_host` (Netnod: `ntp.se`, FER: `ntp.hr`), else at its
+first `ntp_names` entry when its NTS-KE server names another NTP host
+(Meta: `time.meta.com`), else at the entry's host. Operators pick servers from
+the same catalog as for NTS: the default set plus `-nts-terms-confirmed`.
+The Nitro relay already allows those names and port 123. Everything else
+is the same: the 60 s schedule and its shifts, the quorum (at least 3
+agree, `nts.QuorumWrong`), the sample cap, the coarse check, the drift
+check, `MaxAge` and HEALTH.
+
+How the runner marks it, so no reader takes it for NTS:
+
+- the clock source is `ntp(op,...)` instead of `nts(op,...)` (HEALTH
+  `clock_source`, the start lines);
+- HEALTH has `clock_nts.protocol` = `"ntp"` (`"nts"` otherwise; missing
+  from older runners);
+- every log line of the clock carries `protocol=ntp-unauthenticated`, and
+  the `nts: status` line `protocol=ntp`;
+- at start the runner logs a WARN line: "plain NTP: the host can forge
+  every answer; the time is only as good as the coarse check (up to about
+  46 s behind and 31 s ahead of real time; where the host sets the local
+  counter, 196 s ahead and behind without a limit)".
+
+The clock still counts as trusted (`Trusted()`): the runner starts on a
+cloud platform with it, because the coarse check bounds the time.
+
+Measured on 2026-11-11 (plain NTP to port 123 from WSL): 11 of the 13
+catalog hosts answer. `nts.netnod.se` (Netnod) and `nts1.ntp.hr` (FER)
+time out. Their plain NTP hosts answer: `ntp.se` for Netnod (also
+`sth1`, `sth2`, `gbg1`, `mmo1`, `lul1`, `svl1.ntp.se` and `ntp.netnod.se`)
+and `ntp.hr` for FER, so their entries set `plain_ntp_host`.
+
 ## In the clouds
 
 Each cloud image runs the NTS clock from its measured command, so the host
@@ -421,16 +735,48 @@ cannot turn it off or point it elsewhere:
 
 | Image | Where the flags are | Coarse check URLs | Path to the NTS servers |
 | --- | --- | --- | --- |
-| AWS EIF | `platform-aws/deploy/enclave/Dockerfile` (PCR0, PCR2) | KMS, STS, `www.cloudflare.com`, through the platform's vsock-proxy routes | NTS-KE through vsock-proxy (vsock 8005 to 8008, TCP 4460), NTP through `udprelay` on the parent (vsock 7102) |
+| AWS EIF | `platform-aws/deploy/enclave/Dockerfile` (PCR0, PCR2) | KMS, STS, `www.cloudflare.com`, through the platform's vsock-proxy routes | NTS-KE through vsock-proxy (catalog ports 8005 to 8018, one per catalog host, TCP 4460), NTP through `udprelay` on the parent (vsock 7102) |
 | Azure | `platform-azure/deploy/aci-template.json` command (CCE policy hash) | `login.microsoftonline.com`, `management.azure.com`, `www.cloudflare.com` | ACI's default outbound access, direct |
 | GCP | `platform-gcp/deploy/Dockerfile` entrypoint (image digest) | `cloudkms.googleapis.com`, `sts.googleapis.com`, `www.cloudflare.com` | the VM's external address, direct (implied allow-all egress) |
 
-The coarse URLs are hosts the platform's egress already allows. Each
-command also sets `-nts-wait 90s` and `-nts-max-bound 100ms` (the
+A sample whose own bound is over `-nts-max-sample-bound` joins no
+quorum (`clock.NTS.MaxSampleBound`). At receipt it counts as a lost answer,
+so a fallback may follow, and HEALTH counts it in `wide`; it ends a loss
+streak (the cookies work) and gets no start retry. A sample under the cap
+at receipt joins for its whole join age (76 s): its bound, aged by rho as
+the quorum ages it, may pass the cap by that aging, at most 38 ms. Without
+that allowance a sample with bound B would join for only 2 x (cap - B)
+seconds, 30 s at 85 ms, and leave before its operator's next contact 60 s
+later. The default is `-nts-max-bound`; it may
+be raised up to 1 s, where the cap is off, but not set below the max
+bound. Why: a host that delays the one honest answer of a small fresh set
+widens its bound, and two wrong servers can then place the time anywhere
+inside it while the quorum's bound looks small. The bound is a
+half-width, and the host's delay can put the true time at either edge, so
+the error is up to twice the aged cap: about 2 x (100 + 38) ms, 276 ms,
+at the default 100 ms, against about 1 s each way without the cap (RFC
+5905 MAXDIST, beyond which the core refuses a sample). An image that
+raises the sample cap above `-nts-max-bound` gives part of that back. The
+images name both flags, so a far deployment raises both, and that error
+grows with them (about 2 x (250 + 38) ms, 576 ms, at 250 ms).
+
+The coarse URLs are hosts the platform's egress already allows. Each is
+an entry of the `coarse` list in `trusted-time/ntscatalog/catalog.json`,
+with the roots it may chain to: a cloud's pinned set
+(`platform/cloudroots`: `aws`, `google`, `azure`) and root files of
+`trusted-time/nts/roots`. Each HTTPS-date source trusts its own entry's
+roots and no others, so a certificate for the KMS host from Cloudflare's
+CA, or for `www.cloudflare.com` from Amazon's, is refused. On a platform
+with pinned roots the runner refuses a coarse URL that is not in the list;
+a debug build takes others (the tests' servers) with the platform's roots
+and the NTS operators'. `www.cloudflare.com` chained to ISRG Root X1 on
+2026-11-11; Cloudflare's edge certificates also come from Google Trust
+Services and SSL.com, so its entry has the ISRG, SSL.com and Google roots.
+Each command also sets `-nts-wait 90s` , `-nts-max-bound 100ms` and `-nts-max-sample-bound 100ms` (the
 defaults), so no environment variable of the host or the launcher can
 change them. The build scripts check the flags (`nitro-eif.sh`,
 `gcp/build-image.sh`, `azure/deploy.sh render`), refuse a command without
-`-nts-clock`, `-nts-wait` or `-nts-max-bound`, and refuse one that has
+`-nts-clock`, `-nts-wait`, `-nts-max-bound` or `-nts-max-sample-bound`, and refuse one that has
 `-clock`. The runner itself refuses to start on a cloud platform whose
 clock the host can set (`checkClock` in `tee-signer/main.go`). Only the
 dev platform and debug builds may run on the system clock.
@@ -438,11 +784,11 @@ dev platform and debug builds may run on the system clock.
 The UDP relay (`platform-aws/udprelay`, `platform-aws/deploy/README.md`, "NTS clock in the
 enclave"): one vsock connection per NTP query; frames of a u16 length and
 1 to 2048 octets; the destination first, then a status, then datagrams. It
-sends only to ports 123 and 4123, and only to one of the four NTS-KE host
-names (resolved by the relay), an address those names resolve to, or
+sends only to ports 123 and 4123, and only to one of the catalog hosts'
+NTP host names (resolved by the relay; `udprelay.DefaultNames`), an address those names resolve to, or
 Netnod's NTP block `194.58.200.0/21`. Rate limits per session, per address
 and in all. It cannot forge an answer (NTS authenticates every one), only
-delay or drop it.
+delay or drop it. With plain NTP it can forge every answer.
 
 Not checked on a cloud: the delays and bounds there, UDP 123 and 4123 out of
 ACI and Confidential Space, and the relay and proxies on EC2.

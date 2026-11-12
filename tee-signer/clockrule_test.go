@@ -34,12 +34,13 @@ func TestCloudPlatformNeedsATrustedClock(t *testing.T) {
 	}
 }
 
-// The three image commands run the NTS clock with -nts-wait and
-// -nts-max-bound written into the measured command, at the values the
-// runner takes when neither the flag nor its variable is set (90s and
-// clock.NTSMaxBound, platforms_nts.go). With the
-// flags in the command, the host environment (RUNNER_NTS_WAIT,
-// RUNNER_NTS_MAX_BOUND) cannot change them.
+// The three image commands run the NTS clock with -nts-wait,
+// -nts-max-bound and -nts-max-sample-bound written into the measured
+// command, at the values the runner takes when neither the flag nor its
+// variable is set (90s, clock.NTSMaxBound and the max bound,
+// platforms_nts.go). With the flags in the command, the host environment
+// (RUNNER_NTS_WAIT, RUNNER_NTS_MAX_BOUND, RUNNER_NTS_MAX_SAMPLE_BOUND)
+// cannot change them.
 func TestImageCommandsFixTheNTSClock(t *testing.T) {
 	quoted := regexp.MustCompile(`"([^"]*)"`)
 	for _, f := range []string{
@@ -69,7 +70,7 @@ func TestImageCommandsFixTheNTSClock(t *testing.T) {
 		if !slices.Contains(tok, "-nts-clock") {
 			t.Errorf("%s: no -nts-clock", f)
 		}
-		for flag, want := range map[string]time.Duration{"-nts-wait": 90 * time.Second, "-nts-max-bound": 100 * time.Millisecond} {
+		for flag, want := range map[string]time.Duration{"-nts-wait": 90 * time.Second, "-nts-max-bound": 100 * time.Millisecond, "-nts-max-sample-bound": 100 * time.Millisecond} {
 			got, err := time.ParseDuration(value(flag))
 			if err != nil || got != want {
 				t.Errorf("%s: %s %q (%v), want %v", f, flag, value(flag), err, want)

@@ -152,6 +152,15 @@ type Health struct {
 // NTS), measured inside the TEE when the answer is made. Durations are in
 // milliseconds.
 type ClockNTS struct {
+	// Protocol is how the clock asks its servers: "nts", or "ntp" for plain
+	// NTP. Plain NTP is not authenticated: the host can forge every answer,
+	// so against a hostile host the time is only as good as the coarse
+	// check, whatever BoundNowMS says: up to about 46 s behind and 31 s
+	// ahead of real time; where the host sets the local counter, 196 s ahead
+	// and behind without a limit (trusted-time/docs/nts.md, "Plain NTP").
+	// Missing from older runners,
+	// which run NTS only.
+	Protocol string `json:"protocol,omitempty"`
 	// Quorum is true when the clock answers: a quorum that passed every
 	// check is in force, BoundNowMS is within MaxBoundMS and SampleAgeMS
 	// within MaxSampleAgeMS. With no quorum yet, BoundNowMS,
@@ -197,6 +206,74 @@ type ClockNTS struct {
 	// quorum (0 to 1000 ms with honest sources: the coarse time is whole
 	// seconds).
 	CoarseDiffMS float64 `json:"coarse_diff_ms"`
+	// Operators has one entry per NTS server the clock dials, in the
+	// clock's order, including servers that never answered, so a dead
+	// server shows before it costs refusals. Missing from older runners.
+	Operators []ClockNTSOperator `json:"operators,omitempty"`
+	// FallbacksCapped counts the fallbacks the shift schedule's hourly cap
+	// refused.
+	FallbacksCapped int64 `json:"fallbacks_capped,omitempty"`
+	// Coarse has one entry per HTTPS-date host of the coarse check. Without
+	// a coarse time the clock gives no NTS time either, so a host that
+	// fails or lags shows here first. Missing from older runners.
+	Coarse []ClockNTSCoarse `json:"coarse,omitempty"`
+}
+
+// ClockNTSCoarse is one HTTPS-date host of the coarse check. Counts are
+// since the runner started.
+type ClockNTSCoarse struct {
+	Source   string `json:"source"`
+	Queries  int64  `json:"queries"`
+	Answers  int64  `json:"answers"`
+	Failures int64  `json:"failures"`
+	// LastAnswerAgeMS is the time since the last answer, -1 for none yet.
+	LastAnswerAgeMS float64 `json:"last_answer_age_ms"`
+	// LastDiffMS is its reading minus the coarse quorum's answer, from the
+	// last round that formed a quorum, in whole seconds as Date headers
+	// are. A round without a quorum leaves it as it was.
+	LastDiffMS float64 `json:"last_diff_ms"`
+	// LastError is its last failure, empty after an answer.
+	LastError string `json:"last_error,omitempty"`
+}
+
+// ClockNTSOperator is one NTS server in ClockNTS. Counts are since the
+// runner started.
+type ClockNTSOperator struct {
+	Operator string `json:"operator"`
+	Host     string `json:"host"`
+	// Active: the shift schedule asks it on a slot now. Always true
+	// without the shift schedule, which asks every server.
+	Active bool `json:"active"`
+	// Queries counts NTP queries, Answers those that gave a sample, Losses
+	// the rest (timeouts, errors, Kiss-o'-Death).
+	Queries int64 `json:"queries"`
+	Answers int64 `json:"answers"`
+	Losses  int64 `json:"losses"`
+	// Wide counts the losses that were answers with a bound over the
+	// sample cap (-nts-max-sample-bound): a host that delays one operator
+	// shows here, one that drops it does not.
+	Wide int64 `json:"wide,omitempty"`
+	// KEOK and KEFail count NTS-KE sessions.
+	KEOK   int64 `json:"ke_ok"`
+	KEFail int64 `json:"ke_fail"`
+	// LastAnswerAgeMS is the time since the last answer, -1 for none yet.
+	LastAnswerAgeMS float64 `json:"last_answer_age_ms"`
+	// Off is the Kiss-o'-Death code (DENY, RSTR) that stopped the server
+	// for now; LastError the last failure, empty after an answer.
+	Off       string `json:"off,omitempty"`
+	LastError string `json:"last_error,omitempty"`
+	// Shift schedule only: contacts made as a fallback or in a recovery
+	// burst, RATE answers, shifts it came in at and those where it then
+	// did not answer, fallbacks that ran NTS-KE first (cookies that
+	// expired while it was idle), and retries: this operator asked again
+	// 20 s after a lost answer that found no fallback (sets under 7).
+	Fallbacks       int64 `json:"fallbacks,omitempty"`
+	Bursts          int64 `json:"bursts,omitempty"`
+	Rates           int64 `json:"rates,omitempty"`
+	Handovers       int64 `json:"handovers,omitempty"`
+	FailedHandovers int64 `json:"failed_handovers,omitempty"`
+	FallbackKE      int64 `json:"fallback_ke,omitempty"`
+	Retries         int64 `json:"retries,omitempty"`
 }
 
 // SignerStats are the counters of the signer core (sc_signer_stats).
