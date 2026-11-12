@@ -156,6 +156,47 @@ func TestWarnWhenThresholdMet(t *testing.T) {
 	waitLog(t, logs, "signer=signer-1 type=ATTESTATION pubkey="+short+` result=error reason=failed detail="connection reset"`)
 }
 
+// dialRefusal is the error a remote client returns when the peer on the
+// signer's address answers IDENTITY with a refusal, before any
+// attestation check.
+func dialRefusal(r error) error {
+	return fmt.Errorf("remote: dial 10.0.0.1:7100: %w", fmt.Errorf("remote: 10.0.0.1:7100: %w", fmt.Errorf("identity: %w", r)))
+}
+
+// A refusal inside a failed dial comes from a peer that passed no
+// attestation check: it is an error of the dial, not the signer's denial,
+// and the detail keeps the stage, also when the refusal's detail is cut.
+func TestDialRefusalIsNoDenial(t *testing.T) {
+	k := splitKey(t, 2, 3)
+	fakes := cluster([]*testKey{k}, 3)
+	setRoot(fakes)
+	s, logs := newLoggedSigners(t, fakes)
+	fakes[0].set(func(f *fakeRunner) { f.err = dialRefusal(proto.Refused(proto.StatusSlashTarget, "double vote")) })
+	if _, err := signWith(t, s, k.pk); err != nil {
+		t.Fatal(err)
+	}
+	short := fmt.Sprintf("%#x", k.pk[:4])
+	waitLog(t, logs, "signer=signer-1 type=ATTESTATION pubkey="+short+
+		` result=error reason=failed detail="remote: dial 10.0.0.1:7100: remote: 10.0.0.1:7100: identity: `)
+
+	long := strings.Repeat("x", 2*wire.MaxDetail)
+	for _, f := range fakes[:2] {
+		f.set(func(f *fakeRunner) { f.err = dialRefusal(proto.Refused(proto.StatusSlashTarget, "%s", long)) })
+	}
+	_, err := signWith(t, s, k.pk)
+	var se *SignError
+	var denied *DeniedError
+	if !errors.As(err, &se) || errors.As(err, &denied) {
+		t.Fatalf("want a SignError that is no denial, got %T %v", err, err)
+	}
+	for _, o := range se.Outcomes[:2] {
+		if o.Result != ResultError || o.Reason != "failed" || !strings.HasPrefix(o.Detail, "remote: dial 10.0.0.1:7100: ") ||
+			!strings.Contains(o.Detail, ": identity: ") || strings.Contains(o.Detail, long[:wire.MaxDetail+1]) {
+			t.Errorf("%s: %+v, want an error of the dial with the stage and a cut detail", o.Signer, o)
+		}
+	}
+}
+
 // All signers sign: no warning.
 func TestNoWarnWhenAllSign(t *testing.T) {
 	k := splitKey(t, 2, 3)

@@ -81,14 +81,44 @@ func (e *SignError) LogAttr() slog.Attr {
 
 // capDetail cuts the detail of a refusal to wire.MaxDetail bytes, the most
 // a signer may send, before any log line or error text has it. A refusal
-// over the limit comes back as a bare RefusedError with its code.
+// over the limit comes back as a RefusedError with its code and the cut
+// detail, under the text that wrapped it (such as a failed dial's).
 func capDetail(err error) error {
 	var r *proto.RefusedError
 	if !errors.As(err, &r) || len(r.Detail) <= wire.MaxDetail {
 		return err
 	}
+	cut := &proto.RefusedError{Code: r.Code, Detail: strings.ToValidUTF8(r.Detail[:wire.MaxDetail], "")}
+	if prefix, ok := strings.CutSuffix(err.Error(), r.Error()); ok && prefix != "" {
+		return &prefixedError{prefix: prefix, err: cut}
+	}
 
-	return &proto.RefusedError{Code: r.Code, Detail: strings.ToValidUTF8(r.Detail[:wire.MaxDetail], "")}
+	return cut
+}
+
+// prefixedError is err under the text that wrapped it.
+type prefixedError struct {
+	prefix string
+	err    error
+}
+
+func (e *prefixedError) Error() string { return e.prefix + e.err.Error() }
+
+func (e *prefixedError) Unwrap() error { return e.err }
+
+// signerRefusal returns the refusal a signer answered with. A refusal
+// inside a failed dial is none: the peer on the signer's address sent it
+// before the dial's checks passed (dialFailure).
+func signerRefusal(err error) (*proto.RefusedError, bool) {
+	var r *proto.RefusedError
+	if !errors.As(err, &r) {
+		return nil, false
+	}
+	if failed, _ := dialFailure(err); failed {
+		return nil, false
+	}
+
+	return r, true
 }
 
 // limitReason is the reason warnLimit keys on: unknown status codes share
@@ -105,19 +135,20 @@ func limitReason(err error, reason string) string {
 // outcomeOf turns a signer's answer into an Outcome.
 func outcomeOf(name string, err error) Outcome {
 	o := Outcome{Signer: name, Result: ResultError}
-	var r *proto.RefusedError
-	switch {
-	case err == nil:
+	if err == nil {
 		o.Result = ResultSigned
 
 		return o
-	case errors.As(err, &r):
+	}
+	if r, ok := signerRefusal(err); ok {
 		if isDenial(err) {
 			o.Result = ResultDenied
 		}
 		o.Reason, o.Detail = r.Code.String(), r.Detail
 
 		return o
+	}
+	switch {
 	case errors.Is(err, errBadPartial):
 		o.Reason = "bad_partial"
 	case errors.Is(err, context.DeadlineExceeded):

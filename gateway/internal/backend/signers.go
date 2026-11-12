@@ -547,10 +547,10 @@ func notEnough(g group, good int, denied, failed []string) error {
 // isDenial reports whether a signer refused the request on its rules:
 // slashing protection or its floor, policy, domain, or a request it would
 // not take. Anything else (not ready, a platform failure, an unknown key,
-// the connection) is a failure.
+// the connection, a refusal inside a failed dial) is a failure.
 func isDenial(err error) bool {
-	var r *proto.RefusedError
-	if !errors.As(err, &r) {
+	r, ok := signerRefusal(err)
+	if !ok {
 		return false
 	}
 	switch c := r.Code; {
