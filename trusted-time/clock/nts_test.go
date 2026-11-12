@@ -916,7 +916,9 @@ func TestNTSWorstBoundWithThreeSamples(t *testing.T) {
 	for _, p := range n.Status().Peers {
 		widest = max(widest, p.Sample.Bound)
 	}
-	if widest < 20*time.Millisecond || sum.WorstBoundNow < 2*widest || sum.WorstBoundNow < sum.BoundNow {
+	// A root dispersion of 20 ms comes back as about 19.998 ms (NTP short
+	// format, 1/65536 s); the delay adds a little on top, or not.
+	if widest < 19*time.Millisecond || sum.WorstBoundNow < 2*widest || sum.WorstBoundNow < sum.BoundNow {
 		t.Fatalf("3 samples: worst %v, bound %v, widest member %v", sum.WorstBoundNow, sum.BoundNow, widest)
 	}
 	fs4 := newServers(t, map[string]ntstest.NTPOptions{"a": wider}, "a", "b", "c", "d")
