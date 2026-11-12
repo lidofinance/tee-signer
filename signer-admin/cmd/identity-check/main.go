@@ -102,7 +102,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			if h, err := healthOnce(&conn, *timeout); err != nil {
 				fmt.Fprintf(stdout, "build: %v\n", err)
 			} else {
-				fmt.Fprintf(stdout, "build: %s (version %s)\n", runnerchain.FromVersion(h.Version), h.Version)
+				fmt.Fprintf(stdout, "build: %s (version %s, protocol %d)\n", runnerchain.FromVersion(h.Version), h.Version, h.EffectiveProtocol())
 			}
 		}
 		if accepted == 1 && id.Attestation != nil && id.Attestation.Format == "gcp-confidential-space-jwt" {

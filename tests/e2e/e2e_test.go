@@ -369,6 +369,9 @@ func TestE2E(t *testing.T) {
 		waitReady(t, o)
 	}
 	t.Logf("runner-a ready: platform=%s restart_mode=%s clock=%s", h.Platform, h.RestartMode, h.ClockSource)
+	if h.Protocol != backend.ProtocolLevel {
+		t.Fatalf("health protocol %d, want %d", h.Protocol, backend.ProtocolLevel)
+	}
 	// The system clock: the time in milliseconds, no NTS state.
 	if h.NTS != nil || h.ClockUnixMS == 0 || h.ClockUnixMS/1000 != h.ClockUnix {
 		t.Fatalf("health clock: nts %+v, clock_unix_ms %d, clock_unix %d", h.NTS, h.ClockUnixMS, h.ClockUnix)

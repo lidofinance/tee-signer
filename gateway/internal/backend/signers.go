@@ -84,6 +84,10 @@ type Signers struct {
 	// modes is the signing_mode each signer's HEALTH last reported, ""
 	// before the first. Only a signer that lists a whole key is asked.
 	modes []string
+	// newerLevel is the protocol level above proto.ProtocolLevel each
+	// signer's HEALTH last reported and the gateway warned about, 0 before
+	// one. A level is warned about once per signer.
+	newerLevel []int
 	// derived caches deriveGroup by validator key, share keys and modes.
 	derived map[string]derivedGroup
 }
@@ -154,7 +158,7 @@ func newSigners(names []string, nodes []runner, maxIndex int, timeout time.Durat
 		maxIndex = len(nodes)
 	}
 	s := &Signers{nodes: nodes, names: names, maxIndex: min(maxIndex, maxShareIndex), timeout: timeout, log: log,
-		listed: make([][]proto.ValidatorKey, len(nodes)), modes: make([]string, len(nodes)), derived: map[string]derivedGroup{}, m: metrics.New(),
+		listed: make([][]proto.ValidatorKey, len(nodes)), modes: make([]string, len(nodes)), newerLevel: make([]int, len(nodes)), derived: map[string]derivedGroup{}, m: metrics.New(),
 		warns: newWarnLimit(warnEvery)}
 	s.keys = newKeyList(s.loadKeys, keysMaxAge, log)
 
@@ -188,15 +192,18 @@ func (s *Signers) Close() error {
 // loadKeys asks every signer for PUBLIC_KEYS at once and builds the
 // groups: for each validator key the shares the signers hold, their
 // indices and the threshold (deriveGroup). A key whose shares do not fit
-// is left out and logged once. A signer that lists a whole key is also
-// asked for HEALTH: a whole key is served only from a signer that reports
-// signing_mode = single (checkWhole).
+// is left out and logged once. Every signer that answered is also asked
+// for HEALTH: its protocol level, and for a signer that lists a whole key
+// its signing_mode (a whole key is served only from a signer that reports
+// signing_mode = single, checkWhole).
 func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, error) {
 	type answer struct {
 		keys    []proto.ValidatorKey
 		err     error
-		asked   bool // HEALTH was asked: the signer lists a whole key
+		asked   bool // HEALTH was asked: the signer answered PUBLIC_KEYS
+		whole   bool // the signer lists a whole key: its signing_mode counts
 		mode    string
+		level   int // HEALTH's EffectiveProtocol
 		modeErr error
 	}
 	answers := make([]answer, len(s.nodes))
@@ -207,10 +214,13 @@ func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, err
 			keys, err := n.PublicKeys(cctx)
 			cancel()
 			answers[i] = answer{keys: keys, err: capDetail(err)}
-			if err != nil || !listsWholeKey(keys) {
+			if err != nil {
 				return
 			}
-			answers[i].asked = true
+			// HEALTH of every signer: its protocol level, and for a signer
+			// that lists a whole key its signing mode (rv-93s.1: a threshold
+			// cluster was never asked, so a newer level went unseen).
+			answers[i].asked, answers[i].whole = true, listsWholeKey(keys)
 			cctx, cancel = context.WithTimeout(ctx, s.timeout)
 			defer cancel()
 			h, err := n.Health(cctx)
@@ -220,7 +230,7 @@ func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, err
 			case h == nil:
 				answers[i].modeErr = errors.New("no HEALTH answer")
 			default:
-				answers[i].mode = h.SigningMode
+				answers[i].mode, answers[i].level = h.SigningMode, h.EffectiveProtocol()
 			}
 		})
 	}
@@ -243,7 +253,16 @@ func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, err
 			// Keep the last mode: a whole key it served stays served.
 			s.log.Warn("signer health failed", "signer", s.names[i], "err", a.modeErr.Error())
 		case a.asked:
-			s.modes[i] = a.mode
+			if a.whole {
+				s.modes[i] = a.mode
+			}
+			// A runner newer than this gateway may answer in ways it reads
+			// wrongly (signer-protocol/docs/protocol.md, "Protocol level").
+			if a.level > proto.ProtocolLevel && a.level != s.newerLevel[i] {
+				s.newerLevel[i] = a.level
+				s.log.Warn("signer reports a newer protocol level; update the gateway", "signer", s.names[i],
+					"protocol", a.level, "gateway_protocol", proto.ProtocolLevel)
+			}
 		}
 	}
 	shares := map[phase0.BLSPubKey][]share{}

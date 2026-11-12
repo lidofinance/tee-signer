@@ -91,6 +91,7 @@ type fakeRunner struct {
 	mode      string // the signing_mode HEALTH reports
 	healthErr error  // HEALTH fails with it
 	health    int    // HEALTH calls
+	protocol  int    // the protocol level HEALTH reports
 }
 
 func (f *fakeRunner) Health(context.Context) (*proto.Health, error) {
@@ -101,7 +102,7 @@ func (f *fakeRunner) Health(context.Context) (*proto.Health, error) {
 		return nil, f.healthErr
 	}
 
-	return &proto.Health{Ready: true, SigningMode: f.mode}, nil
+	return &proto.Health{Ready: true, SigningMode: f.mode, Protocol: f.protocol}, nil
 }
 
 func (f *fakeRunner) PublicKeys(context.Context) ([]proto.ValidatorKey, error) {
@@ -473,13 +474,69 @@ func TestWholeKeyNeedsSingleMode(t *testing.T) {
 		if !c.served && !strings.Contains(logs.String(), "signing_mode") {
 			t.Errorf("signing_mode %q: the refusal does not name signing_mode: %s", c.mode, logs.String())
 		}
+		// The threshold signers are asked for HEALTH too (their protocol
+		// level), but their signing_mode never decides a whole key.
 		for i, f := range fakes[:3] {
 			f.set(func(f *fakeRunner) {
-				if f.health != 0 {
-					t.Errorf("threshold signer %d got %d HEALTH calls", i+1, f.health)
+				if f.health == 0 {
+					t.Errorf("threshold signer %d got no HEALTH call", i+1)
 				}
 			})
 		}
+	}
+}
+
+// A signer whose HEALTH reports a protocol level above the gateway's gets
+// one warning, however many refreshes see it; a signer at the gateway's
+// level or without a level gets none.
+func TestNewerProtocolLevelWarnsOnce(t *testing.T) {
+	newer, same, none := splitKey(t, 1, 1), splitKey(t, 1, 1), splitKey(t, 1, 1)
+	fakes := []*fakeRunner{cluster([]*testKey{newer}, 1)[0], cluster([]*testKey{same}, 1)[0], cluster([]*testKey{none}, 1)[0]}
+	fakes[0].protocol, fakes[1].protocol = proto.ProtocolLevel+1, proto.ProtocolLevel
+	runners, names := make([]runner, len(fakes)), make([]string, len(fakes))
+	for i, f := range fakes {
+		runners[i], names[i] = f, fmt.Sprintf("signer-%d", i+1)
+	}
+	var logs strings.Builder
+	s := newSigners(names, runners, 0, 2*time.Second, slog.New(slog.NewTextHandler(&logs, nil)))
+	for range 3 {
+		if _, err := s.Refresh(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const msg = "newer protocol level"
+	if n := strings.Count(logs.String(), msg); n != 1 || !strings.Contains(logs.String(), "signer=signer-1") {
+		t.Fatalf("%d warnings, want 1 for signer-1:\n%s", n, logs.String())
+	}
+	if !s.HasKey(context.Background(), newer.pk) {
+		t.Fatal("a signer with a newer level is not served")
+	}
+}
+
+// In a threshold cluster no signer lists a whole key; a signer with a newer
+// protocol level still gets one warning, and the key is still served
+// (rv-93s.1).
+func TestNewerProtocolLevelWarnsInAThresholdCluster(t *testing.T) {
+	k := splitKey(t, 2, 3)
+	fakes := cluster([]*testKey{k}, 3)
+	fakes[1].protocol = proto.ProtocolLevel + 1
+	runners, names := make([]runner, len(fakes)), make([]string, len(fakes))
+	for i, f := range fakes {
+		runners[i], names[i] = f, fmt.Sprintf("signer-%d", i+1)
+	}
+	var logs strings.Builder
+	s := newSigners(names, runners, 0, 2*time.Second, slog.New(slog.NewTextHandler(&logs, nil)))
+	for range 3 {
+		if _, err := s.Refresh(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const msg = "newer protocol level"
+	if n := strings.Count(logs.String(), msg); n != 1 || !strings.Contains(logs.String(), "signer=signer-2") {
+		t.Fatalf("%d warnings, want 1 for signer-2:\n%s", n, logs.String())
+	}
+	if !s.HasKey(context.Background(), k.pk) {
+		t.Fatal("the 2 of 3 key is not served")
 	}
 }
 
