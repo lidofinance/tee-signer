@@ -35,9 +35,15 @@ doc, err := attest.VerifyNitro(raw, attest.NitroOptions{
 // doc.PCR(0..8), doc.UserData, doc.Nonce, doc.PublicKey
 ```
 
-`identity.Config.Verify` has the signature of `remote.VerifyFunc`, so a
-client can pass it where it passes `remote.DevVerifier` today. It fills
-in the per-call binding the runner uses (code in `platform`):
+A client that connects to a runner uses `runnerclient` (next section).
+It checks the setup pin (`setup_sha256`), the GCP `hwmodel` rule and the
+chain the runner's certificate names on top of the platform document.
+
+`identity.Config.Verify` is a lower-level part: it checks the platform
+document and its binding to the identity, and nothing else. It does not
+check the runner's setup, so on its own it accepts the right image run
+with any setup. No code outside the tests uses it. It fills in the
+per-call binding the runner uses (code in `platform`):
 
 - nitro: document `nonce` = client nonce, `user_data` =
   `backend.IdentityUserData(nonce, id)`.
@@ -206,8 +212,12 @@ and the
   `disabled-since-boot` (`enabled` only with `AllowDebug`),
   `submods.confidential_space.support_attributes` contains `STABLE` (or
   the configured list), `submods.container.image_digest` in the allowed
-  list, every expected nonce in `eat_nonce` (string or array), optional
-  `hwmodel` and service account.
+  list, every expected nonce in `eat_nonce` (string or array), `hwmodel`
+  in the configured list (default `GCP_AMD_SEV`, `GCP_AMD_SEV_ES` or
+  `GCP_INTEL_TDX`, never `GCP_SHIELDED_VM`), optional service account.
+- `submods.container.env_override`, `cmd_override` and `args_override`
+  absent or empty: an operator override changes what the measured image
+  runs.
 
 Azure (`VerifyMAA`), claims from
 [Microsoft: claim sets](https://learn.microsoft.com/en-us/azure/attestation/claim-sets),
@@ -250,7 +260,7 @@ end-to-end test.
 | Nitro document parsing, chain to the real AWS root, ES384 signature | yes: 5 public sample documents (2 normal, 3 debug mode) verify against the pinned root at their own timestamps | yes: same format from a local P-384 test CA |
 | Nitro refusals | on the real documents: flipped signature bit, flipped PCR1 bit, today's date (leaf expired), local CA as root, stale timestamp, wrong nonce, wrong PCR0, debug mode | also: wrong root, chain that names the root but does not reach it, expired leaf, wrong/missing PCR, stale and future timestamps, wrong user data, missing nonce, debug mode, ES256 header, missing PCR8, 32-byte PCR, duplicate CBOR key, trailing bytes, tagged form |
 | GCP key set | Google's real key set (`testdata/jwks/`) parses; a locally signed token under a real Google kid fails with `ErrSignature` | yes |
-| GCP token claims | no real token (none found in a public repository with a usable license) | layout from Google's claims reference; good token and tampered signature, tampered payload, wrong key, unknown kid, alg none/HS256/PS256, wrong issuer, wrong audience, expired, not yet valid, old iat, wrong digest, stale nonce, debug image, missing dbgstat, no STABLE, swname GCE, secboot false, hwmodel, service account, duplicate JSON member |
+| GCP token claims | no real token (none found in a public repository with a usable license) | layout from Google's claims reference; good token and tampered signature, tampered payload, wrong key, unknown kid, alg none/HS256/PS256, wrong issuer, wrong audience, expired, not yet valid, old iat, wrong digest, stale nonce, debug image, missing dbgstat, no STABLE, swname GCE, secboot false, env/cmd/args override, hwmodel, service account, duplicate JSON member |
 | MAA key set | the shared West Europe provider's real set (`testdata/jwks/`, 4 keys) parses, `n`/`e` match `x5c`; a locally signed token under a real kid fails with `ErrSignature` | yes |
 | MAA token claims | no real token | layouts from Microsoft's SEV-SNP sample and SKR examples: ACI with our rendered SKR template, CVM guest attestation with SKR example 2 (VM id), HCL shape; refusals: tampered signature and payload, other provider's key, wrong issuer, expired, debuggable (top level and nested, also caught by the policy), missing is-debuggable, CVM token where ACI expected, wrong host data, stale runtime data, VMPL 2, non-SNP type, wrong VM id, policy for another authority, unsupported policy operators |
 | identity adapter | no | Nitro, GCP and Azure identities bound like the runner does; replay with another nonce, changed HPKE key, STS audience, unconfigured platform refused |

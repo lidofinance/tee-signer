@@ -83,8 +83,9 @@ func OpenPGPEd25519Keys(data []byte) ([]OpenPGPKey, error) {
 	return keys, nil
 }
 
-// SelectOpenPGPKey picks the approver key from keys: the one whose
-// fingerprint or key ID ends in want, or, with want empty, the one Ed25519
+// SelectOpenPGPKey picks the approver key from keys: the one whose v4
+// fingerprint is want (all 40 hex digits; a key ID is refused, as a second
+// key can be made to match 64 bits), or, with want empty, the one Ed25519
 // subkey that can sign (or the primary key when no subkey can).
 func SelectOpenPGPKey(keys []OpenPGPKey, want string) (OpenPGPKey, error) {
 	want = strings.ToUpper(strings.TrimPrefix(strings.ReplaceAll(want, " ", ""), "0x"))
@@ -92,7 +93,7 @@ func SelectOpenPGPKey(keys []OpenPGPKey, want string) (OpenPGPKey, error) {
 	for _, k := range keys {
 		switch {
 		case want != "":
-			if len(want) >= 16 && strings.HasSuffix(strings.ToUpper(hex.EncodeToString(k.Fingerprint[:])), want) {
+			if strings.ToUpper(hex.EncodeToString(k.Fingerprint[:])) == want {
 				c = append(c, k)
 			}
 		case k.CanSign && k.Subkey:
@@ -110,13 +111,13 @@ func SelectOpenPGPKey(keys []OpenPGPKey, want string) (OpenPGPKey, error) {
 	case len(c) == 1:
 		return c[0], nil
 	case want != "":
-		return OpenPGPKey{}, fmt.Errorf("no Ed25519 key with fingerprint or key ID %s (at least 16 hex digits)", want)
+		return OpenPGPKey{}, fmt.Errorf("no Ed25519 key with fingerprint %s (all 40 hex digits)", want)
 	case len(c) == 0:
 		return OpenPGPKey{}, errors.New("no Ed25519 key with the sign flag")
 	}
 	var ids []string
 	for _, k := range c {
-		ids = append(ids, k.KeyID())
+		ids = append(ids, strings.ToUpper(hex.EncodeToString(k.Fingerprint[:])))
 	}
 	return OpenPGPKey{}, fmt.Errorf("%d Ed25519 signing keys (%s); name one with -fingerprint", len(c), strings.Join(ids, ", "))
 }

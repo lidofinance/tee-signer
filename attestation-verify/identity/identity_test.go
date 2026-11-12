@@ -75,7 +75,7 @@ func TestGCPIdentity(t *testing.T) {
 			"iss": attest.ConfidentialSpaceIssuer, "aud": aud,
 			"iat": now.Unix(), "exp": now.Add(time.Hour).Unix(),
 			"eat_nonce": hex.EncodeToString(ud), "secboot": true,
-			"swname": "CONFIDENTIAL_SPACE", "dbgstat": "disabled-since-boot",
+			"swname": "CONFIDENTIAL_SPACE", "dbgstat": "disabled-since-boot", "hwmodel": "GCP_INTEL_TDX",
 			"submods": map[string]any{
 				"confidential_space": map[string]any{"support_attributes": []string{"STABLE"}},
 				"container":          map[string]any{"image_digest": digest},

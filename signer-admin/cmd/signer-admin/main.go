@@ -51,7 +51,7 @@
 //	    signing key, which signs the hashed form only. -expect-sha256 is
 //	    required: it takes the direct form's sha256 that show printed and
 //	    refuses another body.
-//	signer-admin approver-key -key FILE|openpgp:KEYGRIP | -openpgp FILE [-fingerprint HEX]
+//	signer-admin approver-key -key FILE|openpgp:KEYGRIP | -openpgp FILE [-fingerprint SUBKEY_FPR]
 //	    Print an approver's public key as the setup's approvers line,
 //	    from the key, gpg-agent's copy of a card key's public key or an
 //	    exported OpenPGP public key. Needs no card.
@@ -193,7 +193,7 @@ const usage = `usage:
   signer-admin draft -cluster cluster.json -group locked|open [-margin 10m] [-drop-running-image NAME,...] [-out update.bin] FILE
   signer-admin show [-active FILE] FILE
   signer-admin sign -key FILE|openpgp:KEYGRIP [-hashed] -expect-sha256 HEX [-out FILE] update.bin|import.bin
-  signer-admin approver-key -key FILE|openpgp:KEYGRIP | -openpgp FILE [-fingerprint HEX]
+  signer-admin approver-key -key FILE|openpgp:KEYGRIP | -openpgp FILE [-fingerprint SUBKEY_FPR]
   signer-admin assemble [-active FILE] [-out update.signed] update.bin SIG...
   signer-admin push -cluster cluster.json [-raise-min] [-signers NAME,...] [-drop-running-image NAME,...] update.signed
   signer-admin probe -cluster cluster.json [-signers NAME,...]

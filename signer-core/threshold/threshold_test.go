@@ -1,6 +1,7 @@
 package threshold_test
 
 import (
+	"encoding/hex"
 	"testing"
 
 	"github.com/lidofinance/tee-signer/signer-core/core"
@@ -145,5 +146,66 @@ func TestRecoveryRejectsMalformedShares(t *testing.T) {
 	}
 	if _, err := threshold.RecoverPubkey([]uint64{1}, []backend.Pubkey{{}}); err == nil {
 		t.Fatal("accepted malformed public key")
+	}
+}
+
+// Compressed generators of G1 and G2, and the compressed point at infinity.
+var (
+	g1   = mustHex48("97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb")
+	g2   = mustHex96("93e02b6052719f607dacd3a088274f65596bd0d09920b61ab5da61bbdc7f5049334cf11213945d57e5ac7d055d042b7e024aa2b2f08f0a91260805272dc51051c6e47ad4fa403b02b4510b647ae3d1770bac0326a805bbefd48056c8c121bdb8")
+	inf1 = backend.Pubkey{0xc0}
+	inf2 = backend.Signature{0xc0}
+)
+
+func mustHex48(s string) (p backend.Pubkey) {
+	b, err := hex.DecodeString(s)
+	if err != nil || len(b) != len(p) {
+		panic(s)
+	}
+	copy(p[:], b)
+	return p
+}
+
+func mustHex96(s string) (p backend.Signature) {
+	b, err := hex.DecodeString(s)
+	if err != nil || len(b) != len(p) {
+		panic(s)
+	}
+	copy(p[:], b)
+	return p
+}
+
+func TestRecoveryRejectsIDZeroAndInfinity(t *testing.T) {
+	// A single share with ID 1 has Lagrange coefficient 1, so a valid point
+	// comes back unchanged.
+	if got, err := threshold.RecoverSignature([]uint64{1}, []backend.Signature{g2}); err != nil || got != g2 {
+		t.Fatalf("valid partial: %x, %v", got, err)
+	}
+	if got, err := threshold.RecoverPubkey([]uint64{1}, []backend.Pubkey{g1}); err != nil || got != g1 {
+		t.Fatalf("valid share key: %x, %v", got, err)
+	}
+	if _, err := threshold.RecoverSignature([]uint64{0}, []backend.Signature{g2}); err == nil {
+		t.Error("accepted signature share ID 0")
+	}
+	if _, err := threshold.RecoverSignature([]uint64{0, 2}, []backend.Signature{g2, g2}); err == nil {
+		t.Error("accepted signature share ID 0 among others")
+	}
+	if _, err := threshold.RecoverPubkey([]uint64{0}, []backend.Pubkey{g1}); err == nil {
+		t.Error("accepted public key share ID 0")
+	}
+	if _, err := threshold.RecoverPubkey([]uint64{2, 0}, []backend.Pubkey{g1, g1}); err == nil {
+		t.Error("accepted public key share ID 0 among others")
+	}
+	if _, err := threshold.RecoverSignature([]uint64{1}, []backend.Signature{inf2}); err == nil {
+		t.Error("accepted a partial signature at infinity")
+	}
+	if _, err := threshold.RecoverSignature([]uint64{1, 2}, []backend.Signature{g2, inf2}); err == nil {
+		t.Error("accepted a partial signature at infinity among others")
+	}
+	if _, err := threshold.RecoverPubkey([]uint64{1}, []backend.Pubkey{inf1}); err == nil {
+		t.Error("accepted a share key at infinity")
+	}
+	if _, err := threshold.RecoverPubkey([]uint64{1, 2}, []backend.Pubkey{g1, inf1}); err == nil {
+		t.Error("accepted a share key at infinity among others")
 	}
 }

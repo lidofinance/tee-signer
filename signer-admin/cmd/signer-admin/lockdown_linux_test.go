@@ -5,19 +5,20 @@ package main
 import (
 	"io"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/lidofinance/tee-signer/signer-admin/internal/lockdown"
 )
 
-// memoryLocks counts the calls of lockMemory. The tests run in one process
+// memoryLocks counts the calls of lockdown.LockMemory. The tests run in one process
 // and mlockall would hold the whole test binary in RAM for the rest of the
 // run, so they count the call instead of making it.
 var memoryLocks int
 
 func init() {
-	lockMemory = func(io.Writer) { memoryLocks++ }
+	lockdown.LockMemory = func(io.Writer) { memoryLocks++ }
 }
 
 // coreDumpsOff reports whether the process can no longer write a core
@@ -73,22 +74,6 @@ func TestSplitDisablesCoreDumps(t *testing.T) {
 	if memoryLocks != locks+1 {
 		t.Fatalf("split locked memory %d times, want once", memoryLocks-locks)
 	}
-}
-
-// The real lockMemory: under a finite RLIMIT_MEMLOCK it locks nothing and
-// says so; under an unlimited one (root) it locks, which this process
-// cannot undo, so that case is left to the operator machine.
-func TestLockMemoryWarnsUnderLimit(t *testing.T) {
-	var rl unix.Rlimit
-	if err := unix.Getrlimit(unix.RLIMIT_MEMLOCK, &rl); err != nil {
-		t.Fatal(err)
-	}
-	if rl.Max == unix.RLIM_INFINITY {
-		t.Skip("RLIMIT_MEMLOCK is unlimited here; lockMemoryOS would lock the test process")
-	}
-	var b strings.Builder
-	lockMemoryOS(&b)
-	wantIn(t, b.String(), "warning: the locked memory limit is", "memory is not locked, keep swap off")
 }
 
 // import turns core dumps off before it reads the plaintext shares file,

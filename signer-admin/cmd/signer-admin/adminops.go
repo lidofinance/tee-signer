@@ -23,6 +23,7 @@ import (
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	adminapprover "github.com/lidofinance/tee-signer/signer-admin/approver"
 	admincluster "github.com/lidofinance/tee-signer/signer-admin/cluster"
+	"github.com/lidofinance/tee-signer/signer-admin/internal/lockdown"
 	remoteadmin "github.com/lidofinance/tee-signer/signer-admin/remote/admin"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-core/threshold"
@@ -569,7 +570,7 @@ func cmdImport(args []string, out io.Writer) error {
 			"[-order import.signed -commitments FILE] -shares FILE [-interchange FILE] [-skip-loaded]")
 	}
 	// The shares file is plaintext: no core dumps from here on.
-	if err := lockSecrets(os.Stderr); err != nil {
+	if err := lockdown.Secrets(os.Stderr); err != nil {
 		return err
 	}
 	var (

@@ -501,7 +501,7 @@ root: 1 miss, 63 hits.
 
 | Input | Version | Integrity |
 | --- | --- | --- |
-| supranational/blst | v0.3.16 | commit e7f90de551e8df682f3cc99067d204d8b90d27ad |
+| supranational/blst | v0.3.17 | commit 54e6e55674722fc2797ebb4bbb71b26d881eb4b8 |
 | consensus-spec-tests `minimal.tar.gz` (ssz_static) | v1.6.0-beta.0 | sha256 c28c30c3... (GitHub asset digest) |
 | consensus-spec-tests `general.tar.gz` (bls/sign) | v1.5.0 | sha256 708f8325... (recorded on first download) |
 | eth-clients/slashing-protection-interchange-tests | v5.3.0 | commit bb7900688eecd287d8723154faac6addb5e63336 |

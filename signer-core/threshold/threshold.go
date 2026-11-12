@@ -33,8 +33,20 @@ func scalarBytes(k *big.Int) [32]byte {
 	return b
 }
 
+// compressedInfinity is the flag bit of a compressed point (byte 0) that
+// marks the point at infinity. An encoding with it set is either infinity or
+// does not decode.
+const compressedInfinity = 0x40
+
 // lagrangeAtZero returns little-endian scalars l_i = prod_{j!=i} x_j/(x_j-x_i) mod r.
+// It refuses share ID 0: share i is the polynomial's value at x = i, and the
+// value at 0 is the secret itself.
 func lagrangeAtZero(ids []uint64) ([]byte, error) {
+	for _, x := range ids {
+		if x == 0 {
+			return nil, errors.New("threshold: share id 0")
+		}
+	}
 	out := make([]byte, 0, 32*len(ids))
 	for i, xi := range ids {
 		num, den := big.NewInt(1), big.NewInt(1)
@@ -59,7 +71,8 @@ func lagrangeAtZero(ids []uint64) ([]byte, error) {
 }
 
 // RecoverSignature combines t partial signatures (share IDs ids) into the
-// signature of the full key, by Lagrange interpolation in G2.
+// signature of the full key, by Lagrange interpolation in G2. It refuses
+// share ID 0 and a partial signature at infinity.
 func RecoverSignature(ids []uint64, sigs []backend.Signature) (backend.Signature, error) {
 	var out backend.Signature
 	if len(ids) == 0 || len(ids) != len(sigs) {
@@ -71,6 +84,9 @@ func RecoverSignature(ids []uint64, sigs []backend.Signature) (backend.Signature
 	}
 	pts := make([]byte, 0, 96*len(sigs))
 	for _, s := range sigs {
+		if s[0]&compressedInfinity != 0 {
+			return out, errors.New("threshold: partial signature at infinity")
+		}
 		pts = append(pts, s[:]...)
 	}
 	if C.threshold_p2_lincomb(u8(pts), u8(scalars), C.size_t(len(ids)), u8(out[:])) != 0 {
@@ -79,7 +95,8 @@ func RecoverSignature(ids []uint64, sigs []backend.Signature) (backend.Signature
 	return out, nil
 }
 
-// RecoverPubkey combines share public keys into the full public key.
+// RecoverPubkey combines share public keys into the full public key. It
+// refuses share ID 0 and a share key at infinity.
 func RecoverPubkey(ids []uint64, pks []backend.Pubkey) (backend.Pubkey, error) {
 	var out backend.Pubkey
 	if len(ids) == 0 || len(ids) != len(pks) {
@@ -91,6 +108,9 @@ func RecoverPubkey(ids []uint64, pks []backend.Pubkey) (backend.Pubkey, error) {
 	}
 	pts := make([]byte, 0, 48*len(pks))
 	for _, p := range pks {
+		if p[0]&compressedInfinity != 0 {
+			return out, errors.New("threshold: share public key at infinity")
+		}
 		pts = append(pts, p[:]...)
 	}
 	if C.threshold_p1_lincomb(u8(pts), u8(scalars), C.size_t(len(ids)), u8(out[:])) != 0 {

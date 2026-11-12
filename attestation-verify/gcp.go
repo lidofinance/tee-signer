@@ -24,6 +24,11 @@ const (
 	csDefaultSupport = "STABLE"
 )
 
+// csConfidentialHWModels are the hwmodel values of VMs with memory
+// encryption, accepted when ConfidentialSpaceOptions.HWModels is empty.
+// GCP_SHIELDED_VM is not one: the host can read that VM's memory.
+var csConfidentialHWModels = []string{"GCP_AMD_SEV", "GCP_AMD_SEV_ES", "GCP_INTEL_TDX"}
+
 // ConfidentialSpaceOptions configures VerifyConfidentialSpace.
 type ConfidentialSpaceOptions struct {
 	// Issuer is the token issuer. Empty means ConfidentialSpaceIssuer.
@@ -49,7 +54,9 @@ type ConfidentialSpaceOptions struct {
 	// Nonces must all appear in eat_nonce. Either Nonces or MaxAge must
 	// be set.
 	Nonces []string
-	// HWModels, if set, lists the accepted hwmodel values.
+	// HWModels lists the accepted hwmodel values. Empty means the models
+	// with memory encryption: GCP_AMD_SEV, GCP_AMD_SEV_ES and GCP_INTEL_TDX,
+	// never GCP_SHIELDED_VM.
 	HWModels []string
 	// ServiceAccount, if set, must appear in google_service_accounts.
 	ServiceAccount string
@@ -137,6 +144,13 @@ func VerifyConfidentialSpace(token string, o ConfidentialSpaceOptions) (*Confide
 	if sb, ok := c.boolean("secboot"); !ok || !sb {
 		return nil, fmt.Errorf("%w: secboot is not true", ErrClaim)
 	}
+	// An operator override changes the command, arguments or environment
+	// of the measured image. Absent, null or empty only.
+	for _, name := range []string{"env_override", "cmd_override", "args_override"} {
+		if v, ok := c.path("submods.container." + name); ok && !emptyClaim(v) {
+			return nil, fmt.Errorf("%w: submods.container.%s is set", ErrClaim, name)
+		}
+	}
 	want := o.SupportAttributes
 	if want == nil && !o.AllowDebug {
 		want = []string{csDefaultSupport}
@@ -146,8 +160,12 @@ func VerifyConfidentialSpace(token string, o ConfidentialSpaceOptions) (*Confide
 			return nil, fmt.Errorf("%w: support_attributes %v lack %q", ErrClaim, t.SupportAttributes, a)
 		}
 	}
-	if len(o.HWModels) > 0 && !contains(o.HWModels, t.HWModel) {
-		return nil, fmt.Errorf("%w: hwmodel %q not in %v", ErrClaim, t.HWModel, o.HWModels)
+	hw := o.HWModels
+	if len(hw) == 0 {
+		hw = csConfidentialHWModels
+	}
+	if !contains(hw, t.HWModel) {
+		return nil, fmt.Errorf("%w: hwmodel %q not in %v", ErrClaim, t.HWModel, hw)
 	}
 	if !o.AcceptAnyImage && !contains(o.ImageDigests, t.ImageDigest) {
 		return nil, fmt.Errorf("%w: image_digest %q not in %v", ErrMeasurement, t.ImageDigest, o.ImageDigests)
@@ -164,4 +182,17 @@ func VerifyConfidentialSpace(token string, o ConfidentialSpaceOptions) (*Confide
 		}
 	}
 	return t, nil
+}
+
+// emptyClaim reports whether a claim value is null, {} or [].
+func emptyClaim(v any) bool {
+	switch v := v.(type) {
+	case nil:
+		return true
+	case map[string]any:
+		return len(v) == 0
+	case []any:
+		return len(v) == 0
+	}
+	return false
 }

@@ -187,8 +187,11 @@ func TestOpenPGPRealAgent(t *testing.T) {
 		if p, err := SelectOpenPGPKey(keys, fpr); err != nil || p.Subkey {
 			t.Fatalf("by the primary's fingerprint: %+v %v", p, err)
 		}
-		if p, err := SelectOpenPGPKey(keys, subFpr[24:]); err != nil || !p.Subkey {
-			t.Fatalf("by the subkey's key ID: %+v %v", p, err)
+		if p, err := SelectOpenPGPKey(keys, subFpr); err != nil || !p.Subkey {
+			t.Fatalf("by the subkey's fingerprint: %+v %v", p, err)
+		}
+		if p, err := SelectOpenPGPKey(keys, subFpr[24:]); err == nil {
+			t.Fatalf("by the subkey's key ID: picked %+v, want a refusal", p)
 		}
 	}
 }

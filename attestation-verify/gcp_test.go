@@ -177,6 +177,17 @@ func TestConfidentialSpace(t *testing.T) {
 			t.Fatalf("matching project: %v", err)
 		}
 	})
+	t.Run("no HWModels: confidential models only", func(t *testing.T) {
+		for _, m := range []string{"GCP_AMD_SEV", "GCP_AMD_SEV_ES", "GCP_INTEL_TDX"} {
+			if _, err := VerifyConfidentialSpace(resign("hwmodel", m), opts()); err != nil {
+				t.Errorf("%s: %v", m, err)
+			}
+		}
+		for _, m := range []any{"GCP_SHIELDED_VM", "", nil} {
+			_, err := VerifyConfidentialSpace(resign("hwmodel", m), opts())
+			wantErr(t, err, ErrClaim)
+		}
+	})
 	t.Run("duplicate claim", func(t *testing.T) {
 		// Hand-built payload with dbgstat twice; the signature is valid.
 		raw := `{"iss":"` + ConfidentialSpaceIssuer + `","dbgstat":"enabled","dbgstat":"disabled-since-boot"}`
