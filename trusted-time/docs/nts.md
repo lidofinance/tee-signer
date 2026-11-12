@@ -70,6 +70,12 @@ expanded AES keys and the CMAC state are wiped on drop), `subtle`, `zeroize`.
   time. Otherwise `Response::Time` with the four timestamps, root delay, root
   dispersion, precision, stratum, leap indicator and the cookies. One
   accepted response per request; a second is refused as a replay.
+- `build_plain_request(transmit)` and `PlainRequest::verify_response(packet)`:
+  plain NTP without NTS (see "Plain NTP" below). The request is the 48-octet
+  header alone. The response gets the same header checks (length caps,
+  version 4, mode 4, origin, KoD on stratum 0, leap indicator 3, stratum
+  above 15) and anything after the header is ignored. No cookies, and
+  nothing is authenticated.
 
 `keys`: `C2sKey`, `S2cKey`, wiped on drop, not printed by `Debug`.
 `cookie`: `Cookie`, 1 to 1024 octets, wiped on drop. `time`: `NtpTimestamp`,
@@ -108,8 +114,10 @@ response framing, ALPN, exporter label and contexts; an opaque `snts_assoc`
 (keys and up to 8 cookies, wiped on free) made from a KE response and the two
 exported keys; `snts_ntp_request` (takes the oldest cookie, asks for enough
 placeholders to hold 8 again, gives an `snts_request` handle) and
-`snts_ntp_verify` (checks, keeps the new cookies, measures); `snts_quorum`
-over a pointer-free array of intervals. The caller passes buffers with their
+`snts_ntp_verify` (checks, keeps the new cookies, measures);
+`snts_plain_request`, `snts_plain_verify` and `snts_plain_free` for plain
+NTP (an `snts_plain` handle, 8 random octets, the same `snts_sample` with no
+cookie counts); `snts_quorum` over a pointer-free array of intervals. The caller passes buffers with their
 lengths, the random octets (56 per request) and every time. Return codes are
 `SNTS_*`; refusals carry a `reason` (kind << 16 | value) and
 `snts_reason_text` names it. No panic crosses the boundary: `panic =
@@ -127,7 +135,8 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   clock stops the exchange before the dial, and during the handshake
   becomes `nts.NoTrustedTime` (1970), which no certificate covers. Go's
   `crypto/x509` would read a zero time as `time.Now()`); `Association.Query` over a connected UDP socket
-  (refused packets do not end the wait: they may be forgeries); pinned roots
+  (refused packets do not end the wait: they may be forgeries); `QueryPlain`,
+  the same exchange with plain NTP; pinned roots
   per operator in `roots/` with their source in `roots.go`.
 - `trusted-time/clock.NTS`: polls each server every 16 s (RFC 5905 MINPOLL),
   doubles a server's interval on RATE up to 1024 s, stops asking a server
@@ -285,6 +294,43 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
     answer) and the fallbacks the cap refused. Fallbacks to an operator that often need NTS-KE mean its
     cookies expire while it idles; an operator can idle for about (n -
     ShiftActives(n)) x 15 minutes: 45 minutes with 7 or 8 operators.
+- Server list swap (`clock.NTS.SetServers`, for setup format 6, where the
+  approvers change the extra time servers with a fast config update). The
+  running clock takes the new list without a restart. It refuses fewer
+  than 4 servers (or the caller's minimum, if higher), more than
+  `nts.MaxServers`, an operator label outside 1 to `nts.MaxOperatorLen`
+  octets, an operator named twice, and a host or NTP address named twice
+  (one server, two votes), and then changes nothing. Refresh refuses a
+  start list over `nts.MaxServers`, with a bad label or with an operator
+  named twice too, since `nts.Quorum` would refuse every quorum of it. A
+  Refresh in flight finishes on the old list; SetServers waits for it,
+  and the next tick uses the new one. An operator that stays with the
+  same host, addresses and roots keeps everything: association and
+  cookies, sample, poll interval, RATE gap, Kiss-o'-Death stop, loss
+  streak, health counters and last contact. Any other operator gets a new
+  peer (new NTS-KE, no sample). A removed operator's association is
+  closed. Its sample, and the old sample of a changed operator, leave the
+  quorum at once: if one was a member of the quorum in force, that quorum
+  stops serving in the same lock hold as the swap and forms again from
+  the samples left. If that fails (too few samples, no coarse time, a
+  check refuses it), the clock serves no time until a Refresh forms a
+  quorum, and is back in its start state until then (20 s start retries,
+  NTS-KE retried after 12 to 20 s).
+  A server that leaves (removed, or changed under its label) is kept by
+  label and by host for `NTSMaxPoll`. If its label comes back, with any
+  host, or its host comes back under a new label, the new peer keeps its
+  DENY or RSTR stop and its last contact in local time, and under shifts
+  its last contact, gap and RATE count. So under shifts a changed,
+  returning or relabelled server is asked at its next slot past its gap,
+  not at once, and no server is asked twice within its gap across a
+  swap. A server new by label and host is asked at the next tick, as in
+  the start round, then on the 60 s rule. Without shifts there are no
+  gaps: every new peer is asked at the next Refresh unless it is stopped.
+  Under shifts the seed and the grid phase stay; the order and the active
+  slots are drawn again for the new count (`ShiftActives`), so the
+  handover position starts over. `NTSSummary.ServerSwaps`
+  counts the swaps. In the simulation swaps from 7 to 8, 8 to 7, 6 to 7
+  and 8 to 9 servers on a healthy set never stopped the time.
 - HEALTH `clock_nts.operators` has one entry per server the clock dials,
   with or without shifts, servers that never answered included:
   `operator`, `host`, `active`, `queries`, `answers`, `losses`, `wide`
@@ -386,6 +432,10 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
     it cannot see the enclave's command; the enclave dials only its choice.
   - `ntp_names`: NTP host names an NTS-KE server names other than its own
     (Meta's names time.meta.com). The Nitro UDP relay allows them.
+  - `plain_ntp_host` (optional): the host plain NTP asks on port 123
+    (`-clock-protocol ntp`) when the operator answers plain NTP on another
+    name (Netnod: `ntp.se`, FER: `ntp.hr`). A host name, not the entry's
+    own, once in the catalog like every host. The Nitro UDP relay allows it.
 
 Untrusted bytes are read only through checked reads (`core/src/bytes.rs`),
 with no indexing, `unwrap` or `expect` on parsed data, and every allocation
@@ -409,7 +459,8 @@ has a fixed upper bound:
 trusted-time/rust/Cargo.toml, Cargo.lock    the workspace; the lock pins the 20 crates.io crates
 trusted-time/rust/crates.allow              the crates Cargo.lock may hold, name and version
 trusted-time/rust/src/                      signer-nts: the C exports (lib.rs), the association
-                              (assoc.rs), reason codes (reason.rs), tests (tests.rs)
+                              (assoc.rs), plain NTP (plain.rs), reason codes (reason.rs),
+                              tests (tests.rs)
 trusted-time/rust/include/signer_nts.h      the C header, written by hand
 trusted-time/rust/core/src/                 signer-nts-core: ke, ntp, sample, quorum, keys, cookie, time, selftest
 trusted-time/rust/core/tests/               requests, answers and refusals against a test server,
@@ -429,7 +480,7 @@ scripts/nts-interop.sh        the interop test against the default public server
 trusted-time/nts/                   the cgo binding, NTS-KE, NTP, pinned roots, tests (tag nts)
 trusted-time/clock/nts*.go          the NTS clock and its tests (tag nts)
 tee-signer/nts_on.go              -nts-selftest and -nts-clock-check (tag nts)
-tee-signer/platforms_nts.go       -nts-clock and RUNNER_NTS_CLOCK=1 (tag nts)
+tee-signer/platforms_nts.go       -nts-clock and RUNNER_NTS_CLOCK=1, -clock-protocol (tag nts)
 tee-signer/nts_servers_*.go       the servers: public in release builds, test servers in debug builds
 platform-aws/udprelay/              the UDP relay: protocol, allowlist, rate limits, client (Nitro)
 platform-aws/cmd/udprelay/          the relay program on the Nitro parent
@@ -584,6 +635,99 @@ cloud builds link `trusted-time/nts` and the dev builds do not, and
 `build-runner.sh` that only the cloud builds hold the library and the
 `-nts-*` flags, and only their debug builds the test server variables.
 
+## Plain NTP (unauthenticated)
+
+`-clock-protocol ntp` (or `RUNNER_CLOCK_PROTOCOL=ntp`) runs the same clock
+with plain NTP (RFC 5905) in place of NTS. `-nts-clock` still turns the
+clock on; `-clock-protocol` only picks how it asks the servers. The default
+is `nts`, and any other value stops the runner at start, also with the
+clock off. `-nts-clock-check` reads `RUNNER_CLOCK_PROTOCOL` too (see the
+release rule below). For now
+the image command carries the choice; setup format 6 will move it into the
+setup's locked group. No cloud image sets it today, so they all run NTS.
+
+It is a fallback for a deployment where NTS does not work, for example a
+path that blocks NTS-KE on TCP 4460. It is not a second kind of NTS.
+
+The risk. Nothing authenticates the answers. The request carries a random
+64-bit transmit timestamp and the answer must echo it, so a party that does
+not see the request cannot answer it. The host sees every request. It can
+answer each one with any time it likes, for every operator at once, and the
+path to the servers can do the same (on Nitro the parent's UDP relay, on
+Azure and GCP the network between the cloud and the servers). The quorum,
+the error bound, the sample cap and the drift check then measure the
+forged answers, not real time. The one check the host cannot forge is the
+coarse check: the HTTPS-date quorum, over TLS to pinned roots. So against a
+hostile host the time is only as good as the coarse check. The check allows
+-30 s to +31 s against the coarse clock (`NTSMaxCoarseDiff` and the
+one-second resolution), and the coarse clock is itself off real time:
+
+- Behind: an HTTP Date names the second the server was in, up to 1 s
+  before the answer, and `HTTPSDate.Fetch` has no round-trip cap, so a
+  host that holds every answer up to the 15 s timeout of `Anchored.Run`
+  puts the coarse clock about 16 s behind. With the 30 s window that is
+  about 46 s behind real time.
+- Ahead, with a local counter the host cannot set: the coarse clock is
+  never ahead, so under 31 s.
+- Ahead, where the host sets the counter: the coarse clock runs up to 75 s
+  ahead (`Anchored.MaxAdvance`, while the host blocks HTTPS), a forged
+  quorum may stand 31 s past it, and `Now` then serves that quorum's offset
+  plus the counter until its samples are 90 s old on the counter
+  (`NTSShiftMaxAge`). Forged samples are fresh at the quorum, and no drift
+  check catches it: the host makes all the samples. That is 75 + 31 + 90,
+  about 196 s ahead of real time. Behind has no limit there, as for NTS.
+
+The restart floor (signer-core/README.md, "Restart floor") needs the lead
+before a restart plus the lag after it under one epoch, and with plain NTP
+the host sets both: up to about 196 s ahead before a restart and 46 s
+behind at the first quorum after it, a swing of about 242 s. With a counter
+the host cannot set it is about 31 + 46 = 77 s. Both are under the 384 s
+epoch of mainnet and Hoodi. The host can move the time anywhere in this
+range, slowly enough that the drift
+check, which compares quorums of its own answers, sees nothing. HEALTH's
+`bound_now_ms` does not bound that error. Plain NTP also trusts DNS:
+whoever answers DNS for an NTP name (the runner's resolver on Azure and
+GCP, the Nitro parent's relay) receives the request and can forge the
+answer. Against an honest host and path, plain NTP is as precise as NTS.
+
+In a release build only the measured `-clock-protocol` flag picks the
+protocol: `RUNNER_CLOCK_PROTOCOL` stops the runner at start, except on the
+dev platform. Debug builds and `-nts-clock-check` take the variable.
+
+What changes against NTS: no NTS-KE, no cookies, no TLS to the time
+servers. The NTS-KE retries, the NTS-KE after lost queries and the NTSN
+kiss do not apply. Each server is asked on UDP port 123 at the catalog
+entry's `plain_ntp_host` (Netnod: `ntp.se`, FER: `ntp.hr`), else at its
+first `ntp_names` entry when its NTS-KE server names another NTP host
+(Meta: `time.meta.com`), else at the entry's host. Operators pick servers from
+the same catalog as for NTS: the default set plus `-nts-terms-confirmed`.
+The Nitro relay already allows those names and port 123. Everything else
+is the same: the 60 s schedule and its shifts, the quorum (at least 3
+agree, `nts.QuorumWrong`), the sample cap, the coarse check, the drift
+check, `MaxAge` and HEALTH.
+
+How the runner marks it, so no reader takes it for NTS:
+
+- the clock source is `ntp(op,...)` instead of `nts(op,...)` (HEALTH
+  `clock_source`, the start lines);
+- HEALTH has `clock_nts.protocol` = `"ntp"` (`"nts"` otherwise; missing
+  from older runners);
+- every log line of the clock carries `protocol=ntp-unauthenticated`, and
+  the `nts: status` line `protocol=ntp`;
+- at start the runner logs a WARN line: "plain NTP: the host can forge
+  every answer; the time is only as good as the coarse check (up to about
+  46 s behind and 31 s ahead of real time; where the host sets the local
+  counter, 196 s ahead and behind without a limit)".
+
+The clock still counts as trusted (`Trusted()`): the runner starts on a
+cloud platform with it, because the coarse check bounds the time.
+
+Measured on 2026-11-11 (plain NTP to port 123 from WSL): 11 of the 13
+catalog hosts answer. `nts.netnod.se` (Netnod) and `nts1.ntp.hr` (FER)
+time out. Their plain NTP hosts answer: `ntp.se` for Netnod (also
+`sth1`, `sth2`, `gbg1`, `mmo1`, `lul1`, `svl1.ntp.se` and `ntp.netnod.se`)
+and `ntp.hr` for FER, so their entries set `plain_ntp_host`.
+
 ## In the clouds
 
 Each cloud image runs the NTS clock from its measured command, so the host
@@ -644,7 +788,7 @@ sends only to ports 123 and 4123, and only to one of the catalog hosts'
 NTP host names (resolved by the relay; `udprelay.DefaultNames`), an address those names resolve to, or
 Netnod's NTP block `194.58.200.0/21`. Rate limits per session, per address
 and in all. It cannot forge an answer (NTS authenticates every one), only
-delay or drop it.
+delay or drop it. With plain NTP it can forge every answer.
 
 Not checked on a cloud: the delays and bounds there, UDP 123 and 4123 out of
 ACI and Confidential Space, and the relay and proxies on EC2.

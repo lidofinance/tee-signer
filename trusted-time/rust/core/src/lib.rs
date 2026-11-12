@@ -8,7 +8,8 @@
 //! - [`ke`]: NTS-KE records (RFC 8915 section 4) and the TLS exporter
 //!   values for the two keys (section 5.1).
 //! - [`ntp`]: the NTPv4 client request and the check of the server response,
-//!   with the NTS extension fields (RFC 8915 section 5, RFC 7822, RFC 5905).
+//!   with the NTS extension fields (RFC 8915 section 5, RFC 7822, RFC 5905),
+//!   and the same without NTS (plain NTP, unauthenticated).
 //! - [`keys`]: the C2S and S2C keys, wiped when dropped.
 //! - [`cookie`]: the cookies the server hands out (RFC 8915 sections 4.1.6, 5.4).
 //! - [`time`]: the NTP timestamp formats with era-safe conversion

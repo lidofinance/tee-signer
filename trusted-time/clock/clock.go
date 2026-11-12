@@ -32,12 +32,45 @@ func (s System) Source() string {
 }
 func (s System) Trusted() bool { return false }
 
+// Protocol is how the NTS clock asks its servers for time. It is here,
+// without the build tag nts, with NTSSummary.
+type Protocol string
+
+const (
+	// ProtocolNTS is NTP with NTS (RFC 8915): every answer is authenticated
+	// with keys from an NTS-KE session over TLS. The default.
+	ProtocolNTS Protocol = "nts"
+	// ProtocolNTP is plain NTP (RFC 5905) without NTS: no NTS-KE, no
+	// cookies, and nothing authenticates the answers. The host, or anyone
+	// on the path, can forge every answer. Against them the time is only as
+	// good as the coarse check: -30 s to +31 s against the coarse clock with
+	// the default MaxCoarseDiff, which is itself off real time (about 46 s
+	// behind to 196 s ahead in all; behind without a limit where the host
+	// sets the local counter; trusted-time/docs/nts.md "Plain NTP").
+	// Plain NTP adds precision only against an honest host.
+	ProtocolNTP Protocol = "ntp"
+)
+
+// ParseProtocol reads "nts" or "ntp". "" is ProtocolNTS.
+func ParseProtocol(s string) (Protocol, error) {
+	switch Protocol(s) {
+	case "", ProtocolNTS:
+		return ProtocolNTS, nil
+	case ProtocolNTP:
+		return ProtocolNTP, nil
+	}
+	return "", fmt.Errorf("clock: protocol %q: want nts or ntp", s)
+}
+
 // NTSSummary is the part of the NTS clock's state that HEALTH reports. It
 // is here, without the build tag nts, so the server can ask any clock for
 // it (NTSReporter); only the NTS clock has it. SampleAge is the age of the
 // oldest sample of the last quorum. Refused says why the clock gives no
 // time now; it is empty when Quorum is true.
 type NTSSummary struct {
+	// Protocol is how the clock asks its servers: ProtocolNTS, or
+	// ProtocolNTP (plain NTP, unauthenticated).
+	Protocol       Protocol
 	Quorum         bool
 	Refused        string
 	BoundNow       time.Duration
@@ -53,6 +86,8 @@ type NTSSummary struct {
 	DriftBaseline  time.Duration
 	RhoViolations  int64
 	CoarseDiff     time.Duration
+	// ServerSwaps counts the server lists NTS.SetServers took since start.
+	ServerSwaps int64
 	// With the shift schedule (NTS.Shifts): the active operators
 	// now, counts per operator since start, and the fallbacks
 	// NTSShiftFallbackCap refused.

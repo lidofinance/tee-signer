@@ -66,7 +66,12 @@ type NTSServer struct {
 	NTPNets []string
 	// NTPNames are NTP host names the NTS-KE server names other than its
 	// own (Meta's names time.meta.com). The Nitro UDP relay allows them.
-	NTPNames  []string
+	NTPNames []string
+	// PlainNTP is the host plain NTP asks (-clock-protocol ntp) when that is
+	// not the entry's own host or first NTP name: the operator answers
+	// plain NTP on another name (Netnod: ntp.se). The Nitro UDP relay
+	// allows it. Empty: see Endpoint.PlainNTPName.
+	PlainNTP  string
 	NitroPort uint32 // vsock port of its vsock-proxy route on the Nitro parent
 	Status    Status
 	// Terms says whether a signer may use the server as the operator's
@@ -112,7 +117,20 @@ type Endpoint struct {
 	Roots     []string
 	NTPNames  []string
 	NTPNets   []string
+	PlainNTP  string
 	NitroPort uint32
+}
+
+// PlainNTPName is the host plain NTP asks on port 123: PlainNTP, else the
+// first NTP name, else the host.
+func (e Endpoint) PlainNTPName() string {
+	switch {
+	case e.PlainNTP != "":
+		return e.PlainNTP
+	case len(e.NTPNames) > 0:
+		return e.NTPNames[0]
+	}
+	return e.Host
 }
 
 // Endpoints are every host a runner of this image may dial, in catalog
@@ -142,7 +160,7 @@ func (e NTSServer) altEndpoint(a AltHost) Endpoint {
 		roots = e.Roots
 	}
 	return Endpoint{ID: e.ID, Operator: e.Operator, Host: a.Host, Roots: slices.Clone(roots), NTPNames: slices.Clone(e.NTPNames),
-		NTPNets: slices.Clone(e.NTPNets), NitroPort: a.NitroPort}
+		NTPNets: slices.Clone(e.NTPNets), PlainNTP: e.PlainNTP, NitroPort: a.NitroPort}
 }
 
 // Terms of an operator, as its own published pages state them.
@@ -245,6 +263,7 @@ type jsonServer struct {
 	Roots     []string `json:"roots"`
 	NTPNets   []string `json:"ntp_nets"`
 	NTPNames  []string `json:"ntp_names"`
+	PlainNTP  string   `json:"plain_ntp_host"`
 	NitroPort uint32   `json:"nitro_port"`
 	Status    string   `json:"status"`
 	Terms     string   `json:"terms"`
@@ -295,7 +314,7 @@ func Parse(b []byte) (Catalog, error) {
 			return Catalog{}, fmt.Errorf("ntscatalog: NTS server %q: %w", r.ID, err)
 		}
 		e := NTSServer{ID: r.ID, Host: r.Host, Operator: r.Operator, Roots: r.Roots,
-			NTPNets: r.NTPNets, NTPNames: r.NTPNames, NitroPort: r.NitroPort, Status: s, Terms: t, TermsURL: r.TermsURL,
+			NTPNets: r.NTPNets, NTPNames: r.NTPNames, PlainNTP: r.PlainNTP, NitroPort: r.NitroPort, Status: s, Terms: t, TermsURL: r.TermsURL,
 			Regions: r.Regions, Default: r.Default, Note: r.Note}
 		for _, a := range r.Alt {
 			e.Alt = append(e.Alt, AltHost{Host: a.Host, Roots: a.Roots, NitroPort: a.NitroPort, Note: a.Note})
@@ -316,7 +335,7 @@ func Parse(b []byte) (Catalog, error) {
 var formatKeys = map[string][]string{
 	"":           {"nts", "coarse"},
 	"coarse[]":   {"id", "url", "roots", "cloud_roots", "note"},
-	"nts[]":      {"id", "host", "operator", "roots", "ntp_nets", "ntp_names", "nitro_port", "status", "terms", "terms_url", "regions", "alt", "default", "note"},
+	"nts[]":      {"id", "host", "operator", "roots", "ntp_nets", "ntp_names", "plain_ntp_host", "nitro_port", "status", "terms", "terms_url", "regions", "alt", "default", "note"},
 	"nts[]alt[]": {"host", "roots", "nitro_port", "note"},
 }
 
@@ -403,13 +422,16 @@ const MaxServers = 16
 
 // NTPHosts are the NTP host names a runner that dials endpoints can be
 // sent to: each host, which the client uses when NTS-KE names no NTP
-// server (RFC 8915 section 4.1.7), then its NTPNames. The Nitro UDP relay
-// allows them for Endpoints.
+// server (RFC 8915 section 4.1.7), then its NTPNames, then its PlainNTP
+// host if set. The Nitro UDP relay allows them for Endpoints.
 func NTPHosts(eps []Endpoint) []string {
 	var out []string
 	for _, e := range eps {
 		out = append(out, e.Host)
 		out = append(out, e.NTPNames...)
+		if e.PlainNTP != "" {
+			out = append(out, e.PlainNTP)
+		}
 	}
 	return out
 }
@@ -499,7 +521,7 @@ func (c *Catalog) WithConfirmed(specs []string) ([]Endpoint, error) {
 
 func (e NTSServer) endpoint() Endpoint {
 	return Endpoint{ID: e.ID, Operator: e.Operator, Host: e.Host, Roots: slices.Clone(e.Roots), NTPNames: slices.Clone(e.NTPNames),
-		NTPNets: slices.Clone(e.NTPNets), NitroPort: e.NitroPort}
+		NTPNets: slices.Clone(e.NTPNets), PlainNTP: e.PlainNTP, NitroPort: e.NitroPort}
 }
 
 // ForRegion are the active entries a new setup for region may name, in
@@ -586,11 +608,11 @@ func checkRoots(roots []string) error {
 // Check is the catalog's own consistency: valid unique IDs, one
 // NTS server per operator, operator labels of the ID rule, a known status
 // and terms, a terms URL for open terms, host and roots set, hosts in lower
-// case and every host (alt hosts too) once in the catalog, root file names,
-// known regions (RegionGlobal alone), NTP nets that parse, a distinct Nitro
-// vsock port for every server, and a default set of 1 to MaxServers. Parse
-// runs it on every catalog it reads, so an empty catalog ("{}", null) is
-// refused too.
+// case and every host (alt hosts and plain NTP hosts too) once in the
+// catalog, root file names, known regions (RegionGlobal alone), NTP nets
+// that parse, a distinct Nitro vsock port for every server, and a default
+// set of 1 to MaxServers. Parse runs it on every catalog it reads, so an
+// empty catalog ("{}", null) is refused too.
 func (c *Catalog) Check() error {
 	ids := map[string]bool{}
 	ops := map[string]string{}
@@ -658,6 +680,15 @@ func (c *Catalog) Check() error {
 			if !validHost(n) || n == e.Host {
 				return fmt.Errorf("ntscatalog: NTS server %s: NTP name %q: a lower-case DNS name other than the server's own", e.ID, n)
 			}
+		}
+		if n := e.PlainNTP; n != "" {
+			if !validHost(n) || n == e.Host {
+				return fmt.Errorf("ntscatalog: NTS server %s: plain_ntp_host %q: a lower-case DNS name other than the server's own", e.ID, n)
+			}
+			if prev, dup := hosts[n]; dup {
+				return fmt.Errorf("ntscatalog: host %s in %s and %s", n, prev, e.ID)
+			}
+			hosts[n] = e.ID
 		}
 		for _, n := range e.NTPNets {
 			if p, err := netip.ParsePrefix(n); err != nil || p != p.Masked() {

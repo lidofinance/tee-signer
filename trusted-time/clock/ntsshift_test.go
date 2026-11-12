@@ -651,6 +651,61 @@ func TestShiftsRetryBookedAndDropped(t *testing.T) {
 	}
 }
 
+// A swap carries a pending retry of a lost answer with its operator: one
+// that stays keeps it under its new index and asks it once, a new one has
+// none, and one that leaves takes its retry with it.
+func TestShiftsSwapCarriesRetry(t *testing.T) {
+	retries := func(s *ntsShifts) map[int]int {
+		got := map[int]int{}
+		for range s.retry + 2 {
+			for _, a := range s.next() {
+				if a.role == roleRetry {
+					got[a.op]++
+				}
+			}
+		}
+		return got
+	}
+
+	// Two new operators, at index 0 and 5: the 4 old ones move up by one.
+	s, lost, _ := warmLost(t)
+	s.fallback(lost.op, 1, true, allOps(s))
+	at := s.retryAt[lost.op]
+	if at == never {
+		t.Fatal("no retry booked")
+	}
+	s.swap([]int{-1, 0, 1, 2, 3, -1}, make([]*ntsShiftState, 6))
+	moved := lost.op + 1
+	if len(s.retryAt) != 6 || s.retryAt[moved] != at || s.retryAt[0] != never || s.retryAt[5] != never {
+		t.Fatalf("after the swap: retryAt %v, want %d at %d", s.retryAt, at, moved)
+	}
+	if got := retries(s); len(got) != 1 || got[moved] != 1 {
+		t.Fatalf("retries after the swap: %v, want one of %d", got, moved)
+	}
+
+	// The operator with the retry leaves: no retry goes out.
+	s2, lost2, _ := warmLost(t)
+	s2.fallback(lost2.op, 1, true, allOps(s2))
+	if s2.retryAt[lost2.op] == never {
+		t.Fatal("no retry booked")
+	}
+	var keep []int
+	for op := range s2.last {
+		if op != lost2.op {
+			keep = append(keep, op)
+		}
+	}
+	s2.swap(keep, make([]*ntsShiftState, len(keep)))
+	for op, r := range s2.retryAt {
+		if r != never {
+			t.Fatalf("after the swap: a retry of %d at %d", op, r)
+		}
+	}
+	if got := retries(s2); len(got) != 0 {
+		t.Fatalf("retries after the operator left: %v", got)
+	}
+}
+
 // Each burst contact counts toward NTSShiftBurstCap, and a burst stops when
 // it is reached. A full fallback cap does not stop it.
 func TestShiftsBurstCountsTowardItsCap(t *testing.T) {

@@ -126,7 +126,8 @@ type ntsShifts struct {
 	shift0     int // ticks added before dividing into shifts
 	startDelay time.Duration
 	rnd        *rand.Rand
-	seeded     bool // tests
+	seed       []byte // of the order; swap draws the order again from it
+	seeded     bool
 
 	started  bool
 	warm     bool  // a quorum formed in this run
@@ -206,6 +207,7 @@ func ShiftActives(n int) int {
 // setOrder draws the order, the grid phase and the shift phase from seed,
 // with every operator active.
 func (s *ntsShifts) setOrder(seed []byte, n int) {
+	s.seed = seed
 	s.rnd = rand.New(rand.NewChaCha8(sha256.Sum256(seed)))
 	s.order = s.rnd.Perm(n)
 	s.phase = s.rnd.IntN(s.gap)
@@ -235,6 +237,70 @@ func (s *ntsShifts) reseed(seed []byte) {
 	s.setSlots()
 	clear(s.incoming)
 	s.seeded = true
+}
+
+// ntsShiftState is what a swap carries of one operator's schedule when its
+// peer goes: the last contact and gap in ticks, and its RATE answers (a
+// RATE before the first quorum rules out the start retry).
+type ntsShiftState struct {
+	last, gap int
+	rates     int64
+}
+
+// state returns operator op's schedule state, for a swap that removes it.
+func (s *ntsShifts) state(op int) ntsShiftState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return ntsShiftState{s.last[op], s.gaps[op], s.counts[op].Rates}
+}
+
+// cold puts the schedule back in its start state (no quorum yet in this
+// run): an operator that missed its last contact may be asked again after
+// NTSShiftStartRetry until the next quorum.
+func (s *ntsShifts) cold() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.warm = false
+}
+
+// swap moves the schedule to a new operator set: keep[i] is the old index
+// of new operator i, or -1. Operators kept keep their last contact, gap,
+// missed flag, pending retry of a lost answer and counts. A new operator with carry[i] set (one the
+// clock knew before, by label or by host) starts from that last contact,
+// gap and RATE count; one without has no last contact, so the next plan
+// asks it. The order and the slots are drawn again from the same seed for
+// the new count; the grid and shift phases stay, so the slots of the
+// operators that stay active move as little as the new order allows. The
+// handover position starts over: no incoming carries over.
+func (s *ntsShifts) swap(keep []int, carry []*ntsShiftState) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := len(keep)
+	last, gaps := make([]int, n), make([]int, n)
+	missed, counts := make([]bool, n), make([]NTSOperatorCounts, n)
+	retryAt := make([]int, n)
+	for i, j := range keep {
+		retryAt[i] = never
+		switch {
+		case j >= 0:
+			last[i], gaps[i], missed[i], counts[i] = s.last[j], s.gaps[j], s.missed[j], s.counts[j]
+			retryAt[i] = s.retryAt[j]
+		case carry[i] != nil:
+			last[i], gaps[i] = carry[i].last, max(carry[i].gap, s.gap)
+			counts[i].Rates = carry[i].rates
+		default:
+			last[i], gaps[i] = never, s.gap
+		}
+	}
+	s.last, s.gaps, s.missed, s.counts, s.retryAt = last, gaps, missed, counts, retryAt
+	s.incoming = make([]bool, n)
+	phase, shift0 := s.phase, s.shift0
+	s.setOrder(s.seed, n)
+	s.phase, s.shift0 = phase, shift0
+	if s.seeded {
+		s.actives = ShiftActives(n)
+	}
+	s.setSlots()
 }
 
 func mod(a, m int) int { return (a%m + m) % m }
@@ -280,6 +346,14 @@ func (s *ntsShifts) plan(now int64, can []bool) []ntsAsk {
 		if s.q >= s.due(k, op) {
 			s.mark(op, s.q)
 			out = append(out, ntsAsk{op, roleActive})
+		}
+	}
+	// An operator a swap added gets its start-round contact now, active
+	// or not. Those with a slot were asked just above.
+	for op, l := range s.last {
+		if l == never {
+			s.mark(op, s.q)
+			out = append(out, ntsAsk{op, roleStart})
 		}
 	}
 	for op, at := range s.retryAt {

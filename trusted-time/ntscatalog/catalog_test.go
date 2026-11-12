@@ -39,13 +39,63 @@ func TestDefaultSet(t *testing.T) {
 
 func TestNTPHostsAndNets(t *testing.T) {
 	eps := []Endpoint{{Host: "a.example", NTPNets: []string{"192.0.2.0/24"}},
-		{Host: "b.example", NTPNames: []string{"ntp.b.example"}, NTPNets: []string{"192.0.2.0/24", "198.51.100.0/24"}}}
-	if got := NTPHosts(eps); strings.Join(got, ",") != "a.example,b.example,ntp.b.example" {
+		{Host: "b.example", NTPNames: []string{"ntp.b.example"}, NTPNets: []string{"192.0.2.0/24", "198.51.100.0/24"}, PlainNTP: "plain.b.example"}}
+	if got := NTPHosts(eps); strings.Join(got, ",") != "a.example,b.example,ntp.b.example,plain.b.example" {
 		t.Fatalf("NTPHosts %v", got)
 	}
 	if got := NTPNets(eps); strings.Join(got, ",") != "192.0.2.0/24,198.51.100.0/24" {
 		t.Fatalf("NTPNets %v", got)
 	}
+}
+
+// Plain NTP asks PlainNTP, else the first NTP name, else the host. Netnod
+// and FER answer plain NTP only on other names (measured 2026-11-11), and
+// alt endpoints carry the name as they carry the NTP names.
+func TestPlainNTPName(t *testing.T) {
+	for _, tc := range []struct {
+		e    Endpoint
+		want string
+	}{
+		{Endpoint{Host: "a.example"}, "a.example"},
+		{Endpoint{Host: "a.example", NTPNames: []string{"n1.example", "n2.example"}}, "n1.example"},
+		{Endpoint{Host: "a.example", NTPNames: []string{"n1.example"}, PlainNTP: "p.example"}, "p.example"},
+	} {
+		if got := tc.e.PlainNTPName(); got != tc.want {
+			t.Errorf("%+v: %s, want %s", tc.e, got, tc.want)
+		}
+	}
+	want := map[string]string{"netnod": "ntp.se", "fer": "ntp.hr", "meta": "time.meta.com", "cloudflare": "time.cloudflare.com"}
+	seen := map[string]bool{}
+	for _, e := range Builtin.Endpoints() {
+		if w, ok := want[e.ID]; ok && e.Host == hostOf(e.ID) {
+			if got := e.PlainNTPName(); got != w {
+				t.Errorf("%s: plain NTP host %s, want %s", e.ID, got, w)
+			}
+			seen[e.ID] = true
+		}
+		if e.ID == "netnod" && e.PlainNTP != "ntp.se" {
+			t.Errorf("netnod endpoint %s: PlainNTP %q", e.Host, e.PlainNTP)
+		}
+	}
+	if len(seen) != len(want) {
+		t.Fatalf("found %v of %v", seen, want)
+	}
+	hosts := NTPHosts(Builtin.Endpoints())
+	for _, h := range []string{"ntp.se", "ntp.hr"} {
+		if !slices.Contains(hosts, h) {
+			t.Errorf("NTPHosts lacks %s", h)
+		}
+	}
+}
+
+// hostOf is the entry's own host.
+func hostOf(id string) string {
+	for _, e := range Builtin.NTS {
+		if e.ID == id {
+			return e.Host
+		}
+	}
+	return ""
 }
 
 func confirmCatalog() Catalog {
@@ -174,6 +224,13 @@ func TestCheckRefuses(t *testing.T) {
 		"ntp name is host": {func(c *Catalog) { c.NTS[0].NTPNames = []string{"a.example"} }, "NTP name"},
 		"ntp name port":    {func(c *Catalog) { c.NTS[0].NTPNames = []string{"ntp.a.example:123"} }, "NTP name"},
 		"ntp name case":    {func(c *Catalog) { c.NTS[0].NTPNames = []string{"NTP.a.example."} }, "NTP name"},
+		"plain is host":    {func(c *Catalog) { c.NTS[0].PlainNTP = "a.example" }, "plain_ntp_host"},
+		"plain with port":  {func(c *Catalog) { c.NTS[0].PlainNTP = "ntp.a.example:123" }, "plain_ntp_host"},
+		"plain with space": {func(c *Catalog) { c.NTS[0].PlainNTP = "ntp a.example" }, "plain_ntp_host"},
+		"plain case":       {func(c *Catalog) { c.NTS[0].PlainNTP = "NTP.a.example." }, "plain_ntp_host"},
+		"plain is a host":  {func(c *Catalog) { c.NTS[1].PlainNTP = "a.example" }, "host a.example"},
+		"plain is an alt":  {func(c *Catalog) { c.NTS[1].PlainNTP = "a2.example" }, "host a2.example"},
+		"plain in two":     {func(c *Catalog) { c.NTS[0].PlainNTP = "ntp.example"; c.NTS[1].PlainNTP = "ntp.example" }, "host ntp.example"},
 		"no port":          {func(c *Catalog) { c.NTS[0].NitroPort = 0 }, "no vsock port"},
 		"shared port":      {func(c *Catalog) { c.NTS[1].NitroPort = 9001 }, "vsock port 9001"},
 		"alt shares port":  {func(c *Catalog) { c.NTS[0].Alt[0].NitroPort = 9002 }, "vsock port 9002"},

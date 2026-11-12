@@ -28,7 +28,9 @@ import (
 //	                         (RUNNER_NTS_COARSE_URLS; RUNNER_NTS_REGION fills
 //	                         in {region}), the start round of the runner's
 //	                         schedule (one NTS-KE and one query per public
-//	                         server, the 1 s query timeout), the quorum. Prints the status
+//	                         server, with RUNNER_CLOCK_PROTOCOL=ntp one plain
+//	                         NTP query and no NTS-KE; the 1 s query timeout),
+//	                         the quorum. Prints the status
 //	                         and exits 0 if a quorum formed with a bound under
 //	                         the limit. For a pre-flight from the network the
 //	                         runner will run in.
@@ -66,8 +68,8 @@ func ntsClockCheck() int {
 // schedule, so a server that answers in 1 to 5 s fails here as it would in
 // the runner. It refuses the server counts the runner refuses at start,
 // and has no start wait, so it contacts the servers at once.
-func ntsCheckClock(client *http.Client, dial nts.DialFunc, log *slog.Logger) (*clock.NTS, *clock.Anchored, error) {
-	n, coarse, err := newNTSClock(client, dial, os.Getenv("RUNNER_NTS_REGION"), log)
+func ntsCheckClock(client *http.Client, dial nts.DialFunc, protocol clock.Protocol, log *slog.Logger) (*clock.NTS, *clock.Anchored, error) {
+	n, coarse, err := newNTSClock(client, dial, os.Getenv("RUNNER_NTS_REGION"), protocol, log)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -81,7 +83,16 @@ func ntsCheckClock(client *http.Client, dial nts.DialFunc, log *slog.Logger) (*c
 // ntsClockCheckWith is ntsClockCheck with the coarse client and the dialer
 // as parameters, for the test.
 func ntsClockCheckWith(client *http.Client, dial nts.DialFunc, log *slog.Logger) int {
-	n, coarse, err := ntsCheckClock(client, dial, log)
+	// The pre-flight signs nothing, so it takes the variable in any build.
+	protocol, err := clockProtocol(true)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "runner:", err)
+		return 2
+	}
+	if protocol == clock.ProtocolNTP {
+		log.Warn(plainNTPWarning)
+	}
+	n, coarse, err := ntsCheckClock(client, dial, protocol, log)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "runner:", err)
 		return 2
@@ -94,7 +105,7 @@ func ntsClockCheckWith(client *http.Client, dial nts.DialFunc, log *slog.Logger)
 	}
 	rerr := n.Refresh(ctx)
 	st := n.Status()
-	fmt.Println(nts.Version())
+	fmt.Println(nts.Version(), "protocol="+string(protocol))
 	for _, s := range n.Servers {
 		p := st.Peers[s.Operator]
 		line := fmt.Sprintf("%-10s %-20s ke=%d queries=%d samples=%d", s.Operator, s.Host, p.Stats.KEOK, p.Stats.Queries, p.Stats.Samples)

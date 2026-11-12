@@ -18,9 +18,11 @@
 #![deny(unsafe_code)]
 
 mod assoc;
+mod plain;
 mod reason;
 
 pub use assoc::{Association, Verified};
+pub use plain::PLAIN_RANDOM_LEN;
 
 use core::ffi::{c_char, c_int};
 
@@ -29,7 +31,8 @@ pub mod code {
     use core::ffi::c_int;
     /// Done.
     pub const OK: c_int = 0;
-    /// `snts_ntp_verify`: the response is a Kiss-o'-Death; no time.
+    /// `snts_ntp_verify`, `snts_plain_verify`: the response is a
+    /// Kiss-o'-Death; no time.
     pub const KISS: c_int = 1;
     /// `snts_ke_response_length`: the message is not complete yet.
     pub const MORE: c_int = 2;
@@ -45,7 +48,8 @@ pub mod code {
     pub const E_NO_COOKIE: c_int = -5;
     /// The NTP response is refused; `*reason` says why.
     pub const E_NTP: c_int = -6;
-    /// The NTP response is authentic but fails an RFC 5905 check; `*reason`.
+    /// The NTP response is authentic (or, for plain NTP, passed the header
+    /// checks) but fails an RFC 5905 check; `*reason`.
     pub const E_SAMPLE: c_int = -7;
     /// No quorum; `*reason` says why.
     pub const E_QUORUM: c_int = -8;
@@ -117,7 +121,7 @@ mod ffi {
     use super::code::*;
     use super::*;
     use signer_nts_core::ke;
-    use signer_nts_core::ntp::PendingRequest;
+    use signer_nts_core::ntp::{PendingRequest, PlainRequest};
     use signer_nts_core::quorum::{MAX_SERVERS, QuorumError};
     use signer_nts_core::selftest::aes_siv_selftest;
 
@@ -125,6 +129,8 @@ mod ffi {
     pub struct SntsAssoc(pub(crate) Association);
     /// `snts_request` in C.
     pub struct SntsRequest(pub(crate) PendingRequest);
+    /// `snts_plain` in C.
+    pub struct SntsPlain(pub(crate) PlainRequest);
 
     /// `len` octets at `p`; null is fine for 0 octets.
     unsafe fn input<'a>(p: *const u8, len: usize) -> Option<&'a [u8]> {
@@ -356,7 +362,13 @@ mod ffi {
         if out.is_null() {
             return E_NULL;
         }
-        match a.0.verify(&mut r.0, packet, t1_local_ns, t4_local_ns, pivot_unix_ns) {
+        let v = a.0.verify(&mut r.0, packet, t1_local_ns, t4_local_ns, pivot_unix_ns);
+        unsafe { verified(v, out, reason) }
+    }
+
+    /// Writes a verify result to `out` (and `reason`) and returns its code.
+    unsafe fn verified(v: Result<Verified, (c_int, u32)>, out: *mut Sample, reason: *mut u32) -> c_int {
+        match v {
             Ok(Verified::Time(s)) => {
                 unsafe { out.write(s) };
                 OK
@@ -370,6 +382,55 @@ mod ffi {
                 code
             }
         }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn snts_plain_request(
+        random: *const u8,
+        random_len: usize,
+        out: *mut u8,
+        cap: usize,
+        out_len: *mut usize,
+        req: *mut *mut SntsPlain,
+    ) -> c_int {
+        let Some(random) = (unsafe { input(random, random_len) }) else { return E_NULL };
+        if out_len.is_null() || req.is_null() {
+            return E_NULL;
+        }
+        let Ok(random) = <&[u8; PLAIN_RANDOM_LEN]>::try_from(random) else { return E_ARG };
+        let (packet, pending) = plain::request(random);
+        let rc = unsafe { output(&packet, out, cap, out_len) };
+        if rc == OK {
+            unsafe { req.write(Box::into_raw(Box::new(SntsPlain(pending)))) };
+        }
+        rc
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn snts_plain_free(r: *mut SntsPlain) {
+        if !r.is_null() {
+            drop(unsafe { Box::from_raw(r) });
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn snts_plain_verify(
+        r: *mut SntsPlain,
+        packet: *const u8,
+        packet_len: usize,
+        t1_local_ns: i64,
+        t4_local_ns: i64,
+        pivot_unix_ns: i64,
+        out: *mut Sample,
+        reason: *mut u32,
+    ) -> c_int {
+        let Some(r) = (unsafe { r.as_mut() }) else { return E_NULL };
+        let Some(packet) = (unsafe { input(packet, packet_len) }) else { return E_NULL };
+        if out.is_null() {
+            return E_NULL;
+        }
+        let v = plain::verify(&mut r.0, packet, t1_local_ns, t4_local_ns, pivot_unix_ns);
+        unsafe { verified(v, out, reason) }
     }
 
     #[unsafe(no_mangle)]

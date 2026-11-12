@@ -4,10 +4,11 @@
 // Go owns the sockets and the clock; Rust owns the protocol bytes.
 //
 //   - nts.go: the cgo binding (NTS-KE records, associations with keys and
-//     cookies in Rust memory, NTP requests and their check, the quorum).
+//     cookies in Rust memory, NTP requests and their check, plain NTP
+//     requests without NTS, the quorum).
 //   - ke.go: NTS-KE over crypto/tls (TLS 1.3, ALPN ntske/1, the RFC 8915
 //     section 5.1 exporter), with a caller-given clock for certificates.
-//   - query.go: one NTP query over UDP.
+//   - query.go: one NTP query over UDP, with NTS or plain (unauthenticated).
 //   - roots.go, roots/: the pinned roots per operator and the public servers.
 //   - ntstest/: a loopback NTS-KE and NTP server for tests, with its own
 //     AES-SIV.

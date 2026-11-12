@@ -121,6 +121,7 @@ Every metric has the label `runner`, the name given on the command line.
 | `tee_signer_watermark_writes_total` | counter | Slashing mark writes since start |
 | `tee_signer_exact_repeats_total` | counter | Exact repeats signed again since start |
 | `tee_signer_hash_cache_hits_total`, `_misses_total` | counter | Signing root cache hits and misses since start |
+| `tee_signer_nts_protocol_info{protocol}` | gauge | Always 1; `protocol` is `nts`, or `ntp` for plain NTP, whose answers the host can forge, so the bounds below hold only against an honest host |
 | `tee_signer_nts_quorum` | gauge | The NTS clock answers |
 | `tee_signer_nts_bound_seconds`, `_max_bound_seconds` | gauge | Current NTS error bound, and the limit above which the runner signs nothing |
 | `tee_signer_nts_sample_age_seconds`, `_max_sample_age_seconds` | gauge | Age of the oldest sample in the quorum, and its limit |

@@ -60,7 +60,8 @@ type resolved struct {
 // DefaultNames are the NTP host names of every NTS-KE host a runner of this
 // image may dial (trusted-time/ntscatalog Endpoints and NTPHosts): each
 // host's own name, which the client uses when NTS-KE names none, and the
-// names NTS-KE servers name instead (Meta: time.meta.com). The parent cannot
+// names NTS-KE servers name instead (Meta: time.meta.com), and the hosts
+// plain NTP asks in their place (Netnod: ntp.se, FER: ntp.hr). The parent cannot
 // see which servers the enclave's command chose, so it allows all of them.
 var DefaultNames = ntscatalog.NTPHosts(ntscatalog.Builtin.Endpoints())
 

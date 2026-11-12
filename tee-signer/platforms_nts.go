@@ -26,7 +26,17 @@ package main
 //	                                                         the default set, whose operators' terms the deployment's
 //	                                                         writer confirmed; id@host picks an alt host with a Nitro
 //	                                                         port (time.nl@any.time.nl)
+//	-clock-protocol nts|ntp    RUNNER_CLOCK_PROTOCOL=ntp     how the clock asks its servers: nts (the default) or
+//	                                                         plain NTP, unauthenticated: the host can forge every
+//	                                                         answer, and the time is only as good as the coarse check
+//	                                                         (trusted-time/docs/nts.md, "Plain NTP"); the variable
+//	                                                         only on the dev platform and in debug builds
 //	                           RUNNER_NTS_STATUS_EVERY=60s   period of the "nts: status" log line
+//
+// -nts-clock turns the network clock on; -clock-protocol picks the protocol
+// of every server. Plain NTP asks port 123 of each catalog entry's
+// plain_ntp_host, else its first ntp_names entry, else its host. The image
+// command carries the choice for now.
 //
 // The clock dials through the platform (platform.Platform.Dial): on Nitro,
 // NTS-KE goes through vsock-proxy routes and NTP through the parent's UDP
@@ -70,7 +80,36 @@ var (
 	// ntsMaxSampleFlag: see ntsMaxSampleBoundCap.
 	ntsMaxSampleFlag = flag.Duration("nts-max-sample-bound", 0, "an NTS sample with a wider bound joins no quorum, from -nts-max-bound to 1s; 0 = RUNNER_NTS_MAX_SAMPLE_BOUND or -nts-max-bound")
 	ntsConfirmFlag   = flag.String("nts-terms-confirmed", "", "comma-separated NTS catalog IDs (id or id@alt-host) whose operators' terms the deployment confirmed, dialed next to the default set; default RUNNER_NTS_TERMS_CONFIRMED")
+	clockProtoFlag   = flag.String("clock-protocol", "", "protocol of the -nts-clock servers: nts (default) or ntp (plain NTP, unauthenticated: only as good as the coarse check); default RUNNER_CLOCK_PROTOCOL")
 )
+
+// plainNTPWarning is logged at start when the clock runs plain NTP. The
+// numbers are worked out in trusted-time/docs/nts.md, "Plain NTP".
+const plainNTPWarning = "plain NTP: the host can forge every answer; the time is only as good as the coarse check " +
+	"(up to about 46 s behind and 31 s ahead of real time; where the host sets the local counter, 196 s ahead and behind without a limit)"
+
+// clockProtocol is -clock-protocol, or RUNNER_CLOCK_PROTOCOL: nts (also
+// when neither is set) or ntp. Any other value is an error. The variable
+// counts only with envOK (the dev platform, the -nts-clock-check
+// pre-flight) or in a debug build (clockProtocolEnvAllowed): a release
+// runner on a cloud takes the protocol from its measured command alone, so
+// the host cannot switch it to plain NTP.
+func clockProtocol(envOK bool) (clock.Protocol, error) {
+	v := *clockProtoFlag
+	if v == "" {
+		if e := os.Getenv("RUNNER_CLOCK_PROTOCOL"); e != "" {
+			if !envOK && !clockProtocolEnvAllowed {
+				return "", fmt.Errorf("RUNNER_CLOCK_PROTOCOL=%q: a release build takes the clock protocol only from -clock-protocol; set the flag in the image command", e)
+			}
+			v = e
+		}
+	}
+	p, err := clock.ParseProtocol(v)
+	if err != nil {
+		return "", fmt.Errorf("-clock-protocol (RUNNER_CLOCK_PROTOCOL) %q: want nts or ntp", v)
+	}
+	return p, nil
+}
 
 // ntsConfirmed is -nts-terms-confirmed, or RUNNER_NTS_TERMS_CONFIRMED.
 func ntsConfirmed() []string {
@@ -105,7 +144,7 @@ const ntsMaxSampleBoundCap = time.Second
 
 func init() {
 	for name, f := range platforms {
-		platforms[name] = ntsSwitch(f)
+		platforms[name] = ntsSwitch(name, f)
 	}
 }
 
@@ -113,13 +152,19 @@ func init() {
 func ntsOn() bool { return *ntsClockFlag || os.Getenv("RUNNER_NTS_CLOCK") == "1" }
 
 // ntsSwitch runs f, and adds the NTS clock when it is on. The flags are
-// parsed by then: main calls the platform after flag.Parse.
-func ntsSwitch(f platformFunc) platformFunc {
+// parsed by then: main calls the platform after flag.Parse. A bad
+// -clock-protocol is refused also with the clock off. name is the
+// platform's: only dev takes RUNNER_CLOCK_PROTOCOL in a release build.
+func ntsSwitch(name string, f platformFunc) platformFunc {
 	return func(o platform.Options) (*platform.Platform, error) {
+		protocol, err := clockProtocol(name == "dev")
+		if err != nil {
+			return nil, err
+		}
 		if !ntsOn() {
 			return f(o)
 		}
-		return withNTSClock(f)(o)
+		return withNTSClock(f, protocol)(o)
 	}
 }
 
@@ -146,7 +191,7 @@ func envDuration(name string, def time.Duration) (time.Duration, error) {
 	return d, nil
 }
 
-func withNTSClock(f platformFunc) platformFunc {
+func withNTSClock(f platformFunc, protocol clock.Protocol) platformFunc {
 	return func(o platform.Options) (*platform.Platform, error) {
 		p, err := f(o)
 		if err != nil {
@@ -157,7 +202,7 @@ func withNTSClock(f platformFunc) platformFunc {
 		if p.Dial != nil {
 			dial = p.Dial
 		}
-		n, err := startNTSClock(context.Background(), p.HTTPClient, dial, o.Param("region", ""), p.NTSScheduleSeed, log)
+		n, err := startNTSClock(context.Background(), p.HTTPClient, dial, o.Param("region", ""), p.NTSScheduleSeed, protocol, log)
 		if err != nil {
 			// main never gets this platform, so it cannot report the
 			// error to the host (Nitro: the enclave has no console).
@@ -177,8 +222,9 @@ func withNTSClock(f platformFunc) platformFunc {
 // newNTSClock builds the NTS clock over publicNTSServers (a debug build
 // can name test servers, nts_servers_debug.go) with an HTTPS-date quorum
 // (majority of the URLs) as its coarse clock. dial nil: the default dialer.
-// region replaces {region} in the URLs.
-func newNTSClock(client *http.Client, dial nts.DialFunc, region string, log *slog.Logger) (*clock.NTS, *clock.Anchored, error) {
+// region replaces {region} in the URLs. protocol is clock.ProtocolNTS or
+// clock.ProtocolNTP (clockProtocol).
+func newNTSClock(client *http.Client, dial nts.DialFunc, region string, protocol clock.Protocol, log *slog.Logger) (*clock.NTS, *clock.Anchored, error) {
 	urls, err := ntsCoarseURLs(region)
 	if err != nil {
 		return nil, nil, err
@@ -211,7 +257,7 @@ func newNTSClock(client *http.Client, dial nts.DialFunc, region string, log *slo
 	if maxSample < maxBound || maxSample > ntsMaxSampleBoundCap {
 		return nil, nil, fmt.Errorf("nts clock: -nts-max-sample-bound (RUNNER_NTS_MAX_SAMPLE_BOUND) %v: from -nts-max-bound (%v) to %v", maxSample, maxBound, ntsMaxSampleBoundCap)
 	}
-	n := &clock.NTS{Coarse: coarse, MaxBound: maxBound, MaxSampleBound: maxSample, Log: log, Dial: dial}
+	n := &clock.NTS{Protocol: protocol, Coarse: coarse, MaxBound: maxBound, MaxSampleBound: maxSample, Log: log, Dial: dial}
 	if n.Servers, err = ntsServers(); err != nil {
 		return nil, nil, err
 	}
@@ -366,6 +412,10 @@ func coarseHostKey(raw string) (string, error) {
 
 // publicNTSServers are the catalog's default set plus the entries named in
 // -nts-terms-confirmed (ntscatalog WithConfirmed), with their pinned roots.
+// The plain NTP address is the entry's plain_ntp_host (Netnod: ntp.se),
+// else its first NTP name (Meta's NTS-KE names time.meta.com), else its
+// host, on port 123 (ntscatalog Endpoint.PlainNTPName). The Nitro relay
+// allows all of these names and port 123.
 func publicNTSServers() ([]clock.NTSServer, error) {
 	eps, err := ntscatalog.Builtin.WithConfirmed(ntsConfirmed())
 	if err != nil {
@@ -377,7 +427,7 @@ func publicNTSServers() ([]clock.NTSServer, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, clock.NTSServer{Host: e.Host, Operator: e.Operator, Roots: pool})
+		out = append(out, clock.NTSServer{Host: e.Host, Operator: e.Operator, Roots: pool, NTPAddr: net.JoinHostPort(e.PlainNTPName(), "123")})
 	}
 	return out, nil
 }
@@ -429,8 +479,8 @@ func ntsEnoughServers(n *clock.NTS) error {
 // the wait is an error: the runner does not start without the clock. The
 // clock runs the 60 s schedule (ntsSchedule) with seed
 // (platform.Platform.NTSScheduleSeed; nil: every server active, with a
-// random phase).
-func startNTSClock(ctx context.Context, client *http.Client, dial nts.DialFunc, region string, seed []byte, log *slog.Logger) (*clock.NTS, error) {
+// random phase). protocol is clockProtocol's.
+func startNTSClock(ctx context.Context, client *http.Client, dial nts.DialFunc, region string, seed []byte, protocol clock.Protocol, log *slog.Logger) (*clock.NTS, error) {
 	wait, err := ntsDuration(*ntsWaitFlag, "RUNNER_NTS_WAIT", 90*time.Second)
 	if err != nil {
 		return nil, err
@@ -439,14 +489,17 @@ func startNTSClock(ctx context.Context, client *http.Client, dial nts.DialFunc, 
 	if err != nil {
 		return nil, err
 	}
-	n, coarse, err := newNTSClock(client, dial, region, log)
+	n, coarse, err := newNTSClock(client, dial, region, protocol, log)
 	if err != nil {
 		return nil, err
 	}
 	if err := ntsSchedule(n, seed); err != nil {
 		return nil, err
 	}
-	log.Info("nts: clock starting", "library", nts.Version(), "servers", n.Source(), "shifts", n.Shifts, "max_bound", n.MaxBound, "wait", wait)
+	if protocol == clock.ProtocolNTP {
+		log.Warn(plainNTPWarning, "servers", n.Source(), "max_coarse_diff", clock.NTSMaxCoarseDiff)
+	}
+	log.Info("nts: clock starting", "library", nts.Version(), "protocol", protocol, "servers", n.Source(), "shifts", n.Shifts, "max_bound", n.MaxBound, "wait", wait)
 	deadline := time.Now().Add(wait)
 	for {
 		rctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -494,6 +547,7 @@ func startNTSClock(ctx context.Context, client *http.Client, dial nts.DialFunc, 
 // time minus the coarse (HTTPS-date) clock at the last quorum.
 func statusAttrs(st clock.NTSStatus) []any {
 	return []any{
+		"protocol", st.Protocol,
 		"bound_now", st.BoundNow, "bound_at_quorum", st.Bound, "quorum_age", st.AgeOfQuorum.Round(time.Millisecond),
 		"sample_age", st.SampleAge.Round(time.Millisecond),
 		"offset_from_host", st.OffsetFromHost, "members", strings.Join(st.Members, ","), "refusals", st.Refusals,
