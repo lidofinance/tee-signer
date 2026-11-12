@@ -1000,3 +1000,42 @@ func TestAttestationJSONNames(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// rv-b9e.3: a runner in a project with a domain-scoped ID
+// (example.com:signer-project) passes a client set to that ID, and no
+// other: not another ID in the domain, not the ID part alone.
+func TestGCPDomainScopedProject(t *testing.T) {
+	ca := newTestCA(t)
+	env := newMAAEnv(t, mainKeySet(t))
+	const id = "example.com:signer-project"
+	f := startFakeRunner(t, ca, env.gcpAttest(gcpSpec{claims: func(c map[string]any) { setPath(c, "submods.gce.project_id", id) }}))
+	for _, c := range []struct {
+		conf string
+		ok   bool
+	}{
+		{id, true},
+		{"example.com:signer-other", false},
+		{"example.org:signer-project", false},
+		{"signer-project", false},
+	} {
+		cn := gcpConn(t, ca, f, env)
+		cn.Attestation.GCPProjectID = c.conf
+		if err := cn.Validate(); err != nil {
+			t.Errorf("%s: config refused: %v", c.conf, err)
+			continue
+		}
+		err := health(t, cn, verify.WithHTTPClient(env.srv.Client()))
+		switch {
+		case c.ok && err != nil:
+			t.Errorf("%s: %v", c.conf, err)
+		case !c.ok && !errors.Is(err, attest.ErrClaim):
+			t.Errorf("%s: %v, want %v", c.conf, err, attest.ErrClaim)
+		}
+	}
+	for _, bad := range []string{"example.com:", ":signer-project", "example:signer-project", "Example.com:signer-project",
+		"example..com:signer-project", "x.org:example.com:signer-project", "example.com:sig", "example.com/signer-project"} {
+		cn := gcpConn(t, ca, f, env)
+		cn.Attestation.GCPProjectID = bad
+		wantErr(t, cn.Validate(), "gcp_project_id")
+	}
+}

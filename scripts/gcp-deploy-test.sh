@@ -17,7 +17,8 @@
 #            addresses, a subnet-create on the running signer's subnet, a
 #            bad previous digest, wif-create and provider-update without
 #            a valid runner.digest, amd-sev on mainnet, a VM self-link
-#            over 127 bytes
+#            over 127 bytes, a malformed PROJECT_ID
+#   domain   a domain-scoped PROJECT_ID: service account and registry path
 #
 # deploy.sh runs in a copy of the repo's scripts and cloud folders with a
 # fake gcloud that records its arguments, as in side-by-side-test.sh, so no
@@ -164,6 +165,17 @@ run_rc dep CHAIN=ci-test bash "$DEPLOY" provider-update </dev/null
 [ "$rc" = 3 ] && has "on hardware GCP_AMD_SEV" "$out" && [ ! -s "$work/gcloud.calls" ] && ok "provider-update gate names the hwmodel" || bad "provider-update gate: rc $rc $out"
 : >"$work/gcloud.calls"
 
+# ---- domain-scoped project ----------------------------------------------------
+# rv-b9e.3: PROJECT_ID=example.com:signer names the KMS key by that ID, the
+# service account as signer.example.com and the registry path as
+# example.com/signer.
+p="$(dep PROJECT_ID=example.com:signer bash "$DEPLOY" plan 2>&1)"
+miss=""
+for w in "--project=example.com:signer" "signer-workload@signer.example.com.iam.gserviceaccount.com"   "europe-west4-docker.pkg.dev/example.com/signer/signer/runner"; do
+  has "$w" "$p" || miss+=" [$w]"
+done
+[ -z "$miss" ] && ok "domain-scoped project: the service account and registry path" || bad "domain-scoped plan lacks$miss"
+
 # ---- refused ----------------------------------------------------------------
 refused() { # refused WHAT PATTERN ENV... -- CMD
   local what="$1" pat="$2" envs=()
@@ -189,6 +201,8 @@ refused "subnet-create on the running signer's subnet" "is the running signer's"
 refused "a bad PREV_IMAGE_DIGEST" "PREV_IMAGE_DIGEST=sha256:abc is not" PREV_IMAGE_DIGEST=sha256:abc -- provider-update
 refused "amd-sev on mainnet" "HARDWARE=amd-sev is for a non-prod CHAIN" HARDWARE=amd-sev CHAIN=mainnet -- plan
 refused "amd-sev on mainnet, wif-create" "HARDWARE=amd-sev is for a non-prod CHAIN" HARDWARE=amd-sev CHAIN=mainnet -- wif-create
+refused "a malformed domain-scoped PROJECT_ID" "is not a project ID" PROJECT_ID=Example.com:signer -- plan
+refused "a PROJECT_ID with two domains" "is not a project ID" PROJECT_ID=x.org:example.com:signer -- plan
 refused "a VM self-link over 127 bytes" "the WIF subject limit" PROJECT_ID=example-validator-staking-prod VM=signer-node-replacement-production -- plan
 refused "an unknown HARDWARE" "HARDWARE must be intel-tdx or amd-sev" HARDWARE=amd-sev-snp CHAIN=ci-test -- plan
 

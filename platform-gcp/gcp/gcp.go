@@ -251,10 +251,19 @@ func (k *KMS) checkProject(tok string) error {
 // The resource names checkProject takes, whole: the KMS key goes into the
 // request path as it is, so a name with more segments or with "..", whose
 // first segment names this project, could reach a key of another.
+//
+// The key's project segment is a project number, a project ID, or a
+// domain-scoped project ID: a domain name, ":", then a project ID of 6 to
+// 30 characters (example.com:signer, rv-b9e.3). The domain form has no "/"
+// and no empty label, so it stays one path segment.
 var (
 	wifProviderRE = regexp.MustCompile(`^//iam\.googleapis\.com/projects/([0-9]+)/locations/global/workloadIdentityPools/[a-z0-9-]+/providers/[a-z0-9-]+$`)
-	kmsKeyRE      = regexp.MustCompile(`^projects/([a-z0-9-]+)/locations/[a-z0-9-]+/keyRings/[A-Za-z0-9_-]+/cryptoKeys/[A-Za-z0-9_-]+$`)
+	kmsKeyRE      = regexp.MustCompile(`^projects/([a-z0-9-]+|` + domainProjectID + `)/locations/[a-z0-9-]+/keyRings/[A-Za-z0-9_-]+/cryptoKeys/[A-Za-z0-9_-]+$`)
 )
+
+// domainProjectID is a domain-scoped project ID, as attestation-verify's
+// gcpProjectID takes it.
+const domainProjectID = `[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+:[a-z][a-z0-9-]{4,28}[a-z0-9]`
 
 func or(v, def string) string {
 	if v != "" {

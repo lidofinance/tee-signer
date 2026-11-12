@@ -21,7 +21,11 @@ func TestCheckSetupProject(t *testing.T) {
 		// rv-d18: Cloud KMS takes a key by project ID only. The key release
 		// ties the ID to the number through the launcher token (checkProject).
 		{"key by project ID", prov, "projects/signer-prod/locations/europe-west4/keyRings/signer/cryptoKeys/sealing", "123456789", ""},
-		{"key by domain-scoped project ID", prov, "projects/example.com:signer/locations/l/keyRings/r/cryptoKeys/k", "123456789", "not a KMS key name"},
+		// rv-b9e.3: domain-scoped project IDs pass; checkProject ties the ID to
+		// the number. A malformed one is no KMS key name.
+		{"key by domain-scoped project ID", prov, "projects/example.com:signer/locations/l/keyRings/r/cryptoKeys/k", "123456789", ""},
+		{"key by malformed domain-scoped ID", prov, "projects/example.com:signer:x/locations/l/keyRings/r/cryptoKeys/k", "123456789", "not a KMS key name"},
+		{"key by domain without ID", prov, "projects/example.com:/locations/l/keyRings/r/cryptoKeys/k", "123456789", "not a KMS key name"},
 		{"provider of another project", strings.Replace(prov, "123456789", "987654321", 1), key, "123456789", "wif_provider"},
 		{"key of another project number", prov, "projects/987654321/locations/europe-west4/keyRings/signer/cryptoKeys/sealing", "123456789", "KMS key of project 987654321"},
 		{"key with more segments", prov, "projects/123456789/locations/l/keyRings/r/cryptoKeys/k/../../../../projects/9/locations/l/keyRings/r/cryptoKeys/k", "123456789", "not a KMS key name"},

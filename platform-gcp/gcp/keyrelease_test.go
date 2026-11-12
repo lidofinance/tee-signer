@@ -235,3 +235,52 @@ func TestKeyReleaseNeedsTheProjectClaims(t *testing.T) {
 		}
 	}
 }
+
+// rv-b9e.3: a project with a domain-scoped ID (example.com:signer) names
+// its KMS key by that ID. The key release takes it when the launcher
+// token names the same project, and refuses a key of any other project,
+// domain-scoped or plain.
+func TestKeyReleaseDomainScopedProject(t *testing.T) {
+	g := fakeGoogle(t)
+	defer g.Close()
+	const prov = "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/q"
+	key := func(project string) string { return "projects/" + project + "/locations/l/keyRings/r/cryptoKeys/k" }
+	for _, c := range []struct{ name, tokenID, key, err string }{
+		{"domain-scoped key of the VM's project", "example.com:signer", key("example.com:signer"), ""},
+		{"key by number in a domain-scoped project", "example.com:signer", key("1"), ""},
+		{"plain key of the VM's project", "signer-prod", key("signer-prod"), ""},
+		{"domain-scoped key, other ID in the domain", "example.com:signer", key("example.com:signer-two"), "kms_key"},
+		{"domain-scoped key, other domain", "example.com:signer", key("example.org:signer"), "kms_key"},
+		{"plain key with the ID part only", "example.com:signer", key("signer"), "kms_key"},
+		{"domain-scoped key, VM in a plain project", "signer-prod", key("example.com:signer-prod"), "kms_key"},
+		{"key with two domains", "example.com:signer", key("x.org:example.com:signer"), "kms_key"},
+		{"domain with an empty label", "example..com:signer", key("example..com:signer"), "kms_key"},
+		{"domain without a dot", "example:signer", key("example:signer"), "kms_key"},
+		{"domain in capitals", "Example.com:signer", key("Example.com:signer"), "kms_key"},
+		{"ID part too short", "example.com:sig", key("example.com:sig"), "kms_key"},
+	} {
+		sock := filepath.Join(t.TempDir(), "teeserver.sock")
+		l, err := net.Listen("unix", sock)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gce := map[string]any{"project_id": c.tokenID, "project_number": "1"}
+		srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(fakeJWT(map[string]any{"aud": stsAudience, "iat": 1, "swname": "CONFIDENTIAL_SPACE", "submods": map[string]any{"gce": gce}})))
+		})}
+		go srv.Serve(l)
+		t.Cleanup(func() { srv.Close() })
+		k := testKMS(t, g)
+		k.L, k.Provider, k.Key, k.ProjectNumber = NewLauncher(sock), prov, c.key, "1"
+		if err := checkSetupProject(k.Provider, k.Key, k.ProjectNumber); c.err == "" && err != nil {
+			t.Errorf("%s: setup check: %v", c.name, err)
+		}
+		_, err = k.accessToken(context.Background())
+		switch {
+		case c.err == "" && err != nil:
+			t.Errorf("%s: %v", c.name, err)
+		case c.err != "" && (err == nil || !strings.Contains(err.Error(), c.err)):
+			t.Errorf("%s: %v, want an error naming %s", c.name, err, c.err)
+		}
+	}
+}

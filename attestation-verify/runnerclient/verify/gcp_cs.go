@@ -29,8 +29,10 @@ const (
 	gcpIntelTDX = "GCP_INTEL_TDX"
 )
 
-// gcpProjectID is the form of a GCP project ID.
-var gcpProjectID = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
+// gcpProjectID is the form of a GCP project ID: 6 to 30 characters, or a
+// domain-scoped one, a domain name, ":" and such an ID
+// (example.com:signer-project). As platform-gcp's kmsKeyRE takes it.
+var gcpProjectID = regexp.MustCompile(`^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+:)?[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
 
 // gcpSettings are the gcp-cs settings in the form the verifier uses.
 type gcpSettings struct {
@@ -89,7 +91,7 @@ func (a *Attestation) gcp() (gcpSettings, error) {
 	}
 
 	if a.GCPProjectID != "" && !gcpProjectID.MatchString(a.GCPProjectID) {
-		return s, fmt.Errorf("attestation.gcp_project_id: %q is not a project ID (6 to 30 of a-z, 0-9 and -)", a.GCPProjectID)
+		return s, fmt.Errorf("attestation.gcp_project_id: %q is not a project ID (6 to 30 of a-z, 0-9 and -, optionally after a domain and a colon)", a.GCPProjectID)
 	}
 
 	if a.GCPJWKSFile != "" {
