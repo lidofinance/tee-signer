@@ -59,6 +59,10 @@ const (
 	// before it contacts anyone, so signers that restart together do not
 	// reach the servers in the same second.
 	NTSStartDelay = 5 * time.Second
+	// NTSStartWait is how long the start state lasts after a server swap
+	// or a policy change left the clock without a quorum (NTS.StartWait):
+	// the runner's default wait for the first quorum of a start.
+	NTSStartWait = 90 * time.Second
 	// ntsDriftBaselinePolls times Interval is the baseline of the drift
 	// reading: the check also compares each quorum with the oldest quorum
 	// kept, at least this old.
@@ -98,7 +102,10 @@ type NTSServer struct {
 //     has been served; until then NTS-KE is tried again after a random
 //     3/4 to 5/4 Interval (12 to 20 s), so a relay that comes up late does
 //     not push the first quorum past the runner's start wait, and signers
-//     that failed together do not try again together.
+//     that failed together do not try again together. A server swap or
+//     a policy change that leaves no quorum brings these start retries
+//     back for StartWait at most; then the backoff applies again, with
+//     or without a quorum.
 //   - The latest sample of each server goes to the Rust quorum if it will
 //     stay under MaxAge until the next quorum (n is the count of such
 //     fresh samples, not of the servers; up to (n - 1) / 2 of them may be
@@ -189,6 +196,12 @@ type NTS struct {
 	// (newNTSShifts). Refresh refuses an empty seed: every signer would
 	// share its order.
 	ScheduleSeed []byte
+	// StartWait limits the start state the clock goes back to when a
+	// server swap or a policy change leaves it without a quorum
+	// (SetServers, SetPolicy). 0: NTSStartWait. The runner sets its
+	// -nts-wait, the time a real start has before the runner gives up. Set
+	// before the first Refresh.
+	StartWait time.Duration
 
 	minPoll time.Duration // 0: NTSMinPoll; tests set it lower
 	maxPoll time.Duration // 0: NTSMaxPoll; tests set it lower
@@ -199,6 +212,9 @@ type NTS struct {
 	sleep func(d time.Duration)
 	// started is set by the first Refresh, after its start wait. Under rmu.
 	started bool
+	// coldUntil is the local time the start state of cold ends at without
+	// a quorum, 0 outside that state. Under rmu.
+	coldUntil int64
 
 	shifts *ntsShifts // set by init when ScheduleSeed is set
 	// queryTimeout replaces the NTP query timeout in tests; 0: the default.
@@ -217,7 +233,8 @@ type NTS struct {
 	peers  []*ntsPeer
 	result *ntsResult // served by Now; nil until a quorum passes all checks
 	// served is set once a quorum has passed; before that NTS-KE is tried
-	// again after about Interval (3/4 to 5/4 of it), without backoff.
+	// again after about Interval (3/4 to 5/4 of it), without backoff. cold
+	// clears it, and endCold sets it again when the start wait is over.
 	served atomic.Bool
 	// hist holds the quorums of the drift check, oldest first: the last one
 	// (served or refused) at the end, the baseline at index 0. A refused
@@ -556,7 +573,8 @@ func leftKeys(s NTSServer) [2]string { return [2]string{"op\x00" + s.Operator, "
 // member of the quorum in force, that quorum stops serving and forms
 // again from the samples left. If that fails (too few samples left, no
 // coarse time, a check refuses it), Now fails until a Refresh forms a
-// quorum, and the start retries apply again until then.
+// quorum, and the start retries apply again until then, for StartWait at
+// most (cold).
 //
 // A server that left (removed, or changed under its label) is kept by
 // label and by host for NTSMaxPoll. If its label or its host comes back,
@@ -717,7 +735,7 @@ func sameServer(a, b NTSServer) bool {
 // is closed, every sample and the quorum in force are dropped, and so is
 // the drift history, which the other protocol's answers made. Now fails
 // until a Refresh forms a quorum on the new protocol, and the start
-// retries apply until then. What limits the contacts stays: the schedule
+// retries apply until then, for StartWait at most (cold). What limits the contacts stays: the schedule
 // seed, the grid, each server's last contact and gap, its poll interval and
 // its DENY or RSTR stop. Now still never goes back.
 func (n *NTS) SetPolicy(protocol Protocol, maxBound, maxSampleBound time.Duration) error {
@@ -783,13 +801,36 @@ func (n *NTS) SetPolicy(protocol Protocol, maxBound, maxSampleBound time.Duratio
 	return nil
 }
 
-// cold puts the clock back in its start state until a quorum forms: the
-// start retries (NTSShiftStartRetry, NTS-KE after 12 to 20 s) apply.
+// cold puts the clock back in its start state: the start retries
+// (NTSShiftStartRetry, NTS-KE after 12 to 20 s) apply until a quorum
+// forms, or until StartWait is over (endCold). A real start has the same
+// limit: the runner gives up after its start wait. Without it a host that
+// drops the answers after a swap would keep the clock on the start
+// retries, with no NTS-KE backoff, for as long as it liked. The caller
+// holds rmu.
 func (n *NTS) cold() {
 	n.served.Store(false)
+	n.coldUntil = n.local() + int64(cmpOr(n.StartWait, NTSStartWait))
 	if n.shifts != nil {
 		n.shifts.cold()
 	}
+}
+
+// endCold ends the start state of cold once StartWait is over without a
+// quorum. The clock goes on as after a start that formed one: NTS-KE
+// failures back off, and under the shift schedule every gap is the full
+// one, with the retry of a lost answer and the bursts under their hourly
+// caps. Now still fails until a quorum forms. Refresh calls it, under rmu.
+func (n *NTS) endCold() {
+	if n.coldUntil == 0 || n.local() < n.coldUntil {
+		return
+	}
+	n.coldUntil = 0
+	n.served.Store(true)
+	if n.shifts != nil {
+		n.shifts.quorum()
+	}
+	n.logf(slog.LevelWarn, "nts: still no quorum after the start wait; the start retries end", "wait", cmpOr(n.StartWait, NTSStartWait))
 }
 
 // startWait is the wait of the first Refresh before it contacts anyone: a
@@ -891,6 +932,7 @@ func (n *NTS) Refresh(ctx context.Context) error {
 		n.setErr(err)
 		return err
 	}
+	n.endCold()
 	if n.shifts != nil {
 		return n.refreshShifts(ctx)
 	}
@@ -1498,6 +1540,7 @@ func (n *NTS) combine(coarse time.Time, coarseLocal int64) error {
 	n.lastErr = nil
 	n.mu.Unlock()
 	n.served.Store(true)
+	n.coldUntil = 0
 	// Every quorum at debug level; a change of members at info.
 	level := slog.LevelDebug
 	if joined := strings.Join(members, ","); joined != prev {

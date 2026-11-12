@@ -18,7 +18,9 @@ package main
 //	                                                         from the setup), so one image serves every region; each
 //	                                                         must be in the coarse catalog (ntscatalog), whose roots
 //	                                                         its source trusts
-//	-nts-wait 90s              RUNNER_NTS_WAIT=90s           how long start-up waits for the first quorum
+//	-nts-wait 90s              RUNNER_NTS_WAIT=90s           how long start-up waits for the first quorum; also how
+//	                                                         long the start retries last after a server swap or a
+//	                                                         policy change that left no quorum
 //	-nts-max-bound 100ms       RUNNER_NTS_MAX_BOUND=100ms    Now fails above this error bound; at most 250ms
 //	-nts-max-sample-bound 100ms RUNNER_NTS_MAX_SAMPLE_BOUND   the sample cap: a sample joins no quorum when its bound
 //	                                                         plus the aging over the join age (38 ms) is over it; from
@@ -720,6 +722,9 @@ func startNTSClock(ctx context.Context, client *http.Client, dial nts.DialFunc, 
 	if err := ntsSchedule(n, seed); err != nil {
 		return nil, err
 	}
+	// A swap or policy change that leaves no quorum gets the start retries
+	// for as long as this start does.
+	n.StartWait = wait
 	if protocol == clock.ProtocolNTP {
 		log.Warn(plainNTPWarning, "servers", n.Source(), "max_coarse_diff", clock.NTSMaxCoarseDiff)
 	}

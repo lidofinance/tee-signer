@@ -179,7 +179,9 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   short outage, later after a long one, when the cookies ran out and NTS-KE
   backs off (up to 1024 s; before the first quorum of a run NTS-KE is tried
   again after a random 12 to 20 s, so a relay that comes up late does not
-  push the first quorum past the runner's start wait). The first refresh
+  push the first quorum past the runner's start wait; a server swap or
+  policy change that leaves no quorum brings these retries back for the
+  start wait at most, see the server list swap below). The first refresh
   of a run waits a random time under 5 s before it contacts anyone, so
   signers that restart together (a release, a region outage) do not reach
   every server in the same second; the retries keep the spread. HEALTH reports `sample_age_ms`, `max_sample_age_ms` and, while the
@@ -256,7 +258,9 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
     be asked again 20 s after its last try (`NTSShiftStartRetry`), so a
     relay that comes up late gets up to 5 tries in the 90 s start wait,
     not 2. A server that does not answer gets those tries once per run
-    (per restart), then the full 60 s gap.
+    (per restart), then the full 60 s gap. A server swap or a policy
+    change that leaves no quorum starts them again, for the start wait
+    at most.
   - `ShiftActives(n)` operators are active (all below 7, 4 of 7, 5 from 8), each asked
     on its own slot of a 60 s grid (slots 12 s apart with 5, 12 to 16 s
     with 4, the phase from the seed). Two contacts with one
@@ -328,7 +332,20 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   the samples left. If that fails (too few samples, no coarse time, a
   check refuses it), the clock serves no time until a Refresh forms a
   quorum, and is back in its start state until then (20 s start retries,
-  NTS-KE retried after 12 to 20 s).
+  NTS-KE retried after 12 to 20 s), for the start wait at most
+  (`clock.NTS.StartWait`, which the runner sets to `-nts-wait`; 90 s by
+  default). A real start has that limit because the runner gives up
+  after `-nts-wait`; a running clock had none, so a host that dropped
+  the answers at a swap could hold it on the start retries, with NTS-KE
+  to failing servers every 12 to 20 s, for as long as it liked. Once
+  the start wait is over without a quorum, the first Refresh puts the
+  clock back on the normal schedule, as after a start that formed a
+  quorum: NTS-KE failures back off from 16 s to 1024 s, and under
+  shifts each operator's gap is the full 60 s again, with one retry of
+  a lost answer and the bursts under their caps of 120 per hour. The
+  clock still serves no time until a quorum forms, and a quorum ends
+  the start state early. A second swap that fails gets a start wait of
+  its own; each swap needs a signed update.
   A server that leaves (removed, or changed under its label) is kept by
   label and by host for `NTSMaxPoll`. If its label comes back, with any
   host, or its host comes back under a new label, the new peer keeps its
@@ -357,7 +374,7 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   every association is closed, every sample, the quorum in force and the
   drift history (made of the other protocol's answers) are dropped, and
   the clock is back in its start state until a quorum forms on the new
-  protocol. The schedule seed, the grid, each server's last contact and
+  protocol, for the start wait at most, as after a swap. The schedule seed, the grid, each server's last contact and
   gap, its poll interval and its DENY or RSTR stop stay, so no server is
   asked within its gap. `Now` still never goes back. In the simulation the
   next tick formed the new quorum, with a burst to the servers past their
