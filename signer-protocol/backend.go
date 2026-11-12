@@ -57,12 +57,20 @@ type Attestation struct {
 	Document []byte `json:"document"`
 }
 
+// ProtocolLevel is the wire semantics level this code speaks, sent in
+// HEALTH as protocol. It goes up by one whenever a client would read a
+// refusal or a message differently (docs/protocol.md, "Protocol level").
+const ProtocolLevel = 2
+
 // Health reports the state of a backend.
 type Health struct {
-	Platform   string `json:"platform"`
-	Version    string `json:"version"`
-	Ready      bool   `json:"ready"`
-	Validators int    `json:"validators"`
+	Platform string `json:"platform"`
+	Version  string `json:"version"`
+	// Protocol is the runner's ProtocolLevel. Runners before it leave it
+	// out; EffectiveProtocol reads that as level 1.
+	Protocol   int  `json:"protocol,omitempty"`
+	Ready      bool `json:"ready"`
+	Validators int  `json:"validators"`
 	// ConfigHash is the hash of the backend's config: Setup.SetupHash on a
 	// runner.
 	ConfigHash Root `json:"config_hash"`
@@ -162,6 +170,15 @@ type UpdatePath struct {
 	// delay) or "emergency-removal" (every approver in force except the
 	// one it removes, no delay).
 	Path string `json:"path"`
+}
+
+// EffectiveProtocol is the protocol level h stands for: Protocol, or 1
+// when the runner did not send it.
+func (h *Health) EffectiveProtocol() int {
+	if h.Protocol < 1 {
+		return 1
+	}
+	return h.Protocol
 }
 
 // ClockNTS is what HEALTH reports of the runner's NTS clock (trusted-time/clock

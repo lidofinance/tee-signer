@@ -1574,6 +1574,7 @@ func (s *Server) health() (*backend.Health, error) {
 	h := &backend.Health{
 		Platform:     s.Platform.Name,
 		Version:      Version,
+		Protocol:     backend.ProtocolLevel,
 		Ready:        true,
 		Validators:   s.Signer.KeyCount(),
 		ConfigHash:   setup.SetupHash,

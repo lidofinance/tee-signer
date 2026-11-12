@@ -5,9 +5,11 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"go/parser"
 	"go/token"
 	"io"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -343,6 +345,52 @@ func TestResponses(t *testing.T) {
 	_, err = DecodeResponse(EncodeError(errors.New("boom")))
 	if backend.StatusOf(err) != backend.StatusInternal {
 		t.Fatal(err)
+	}
+}
+
+// HEALTH carries protocol; an answer without it (a runner before it)
+// decodes with 0, which EffectiveProtocol reads as level 1.
+func TestHealthProtocolRoundTrip(t *testing.T) {
+	b, err := EncodeHealth(&backend.Health{Platform: "dev", Version: "0.1.0", Protocol: backend.ProtocolLevel})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := fmt.Sprintf(`"protocol":%d`, backend.ProtocolLevel); !bytes.Contains(b, []byte(want)) {
+		t.Fatalf("HEALTH without %s: %s", want, b)
+	}
+	out, err := DecodeHealth(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Protocol != backend.ProtocolLevel || out.EffectiveProtocol() != backend.ProtocolLevel {
+		t.Fatalf("protocol %d (effective %d), want %d", out.Protocol, out.EffectiveProtocol(), backend.ProtocolLevel)
+	}
+	old, err := DecodeHealth([]byte(`{"platform":"azure","version":"0.1.0","ready":true,"validators":3}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old.Protocol != 0 || old.EffectiveProtocol() != 1 {
+		t.Fatalf("an answer without protocol: protocol %d, effective %d, want 0 and 1", old.Protocol, old.EffectiveProtocol())
+	}
+}
+
+// The level table of docs/protocol.md has a row for every level up to
+// backend.ProtocolLevel and none above it.
+func TestProtocolLevelTable(t *testing.T) {
+	doc, err := os.ReadFile(filepath.Join("..", "docs", "protocol.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, sec, ok := strings.Cut(string(doc), "\n### Protocol level\n")
+	if !ok {
+		t.Fatal(`docs/protocol.md has no "Protocol level" section`)
+	}
+	sec, _, _ = strings.Cut(sec, "\n#")
+	for l := 1; l <= backend.ProtocolLevel+1; l++ {
+		has := strings.Contains(sec, fmt.Sprintf("\n| %d | ", l))
+		if has != (l <= backend.ProtocolLevel) {
+			t.Errorf("level %d: row in docs/protocol.md %v, backend.ProtocolLevel %d", l, has, backend.ProtocolLevel)
+		}
 	}
 }
 

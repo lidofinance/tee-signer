@@ -128,6 +128,7 @@ Every metric has the label `runner`, the name given on the command line.
 | `tee_signer_health_errors_total` | counter | Polls that failed. A call that fails on a connection the last poll left open, as when the runner closes idle connections, is retried once on a new connection and counts only if the retry fails too |
 | `tee_signer_attestations_verified_total` | counter | Runner identities verified, one per new connection |
 | `tee_signer_info` | gauge | Always 1; labels `platform`, `version`, `signing_mode`, `single_key`, `clock_source`, `key_lock`, `restart_mode` |
+| `tee_signer_protocol` | gauge | Wire semantics level the runner reports in HEALTH `protocol`; 1 for a runner that sends none (signer-protocol/docs/protocol.md, "Protocol level") |
 | `tee_signer_ready` | gauge | The runner reports it can sign |
 | `tee_signer_not_ready_reason` | gauge | 1 while a reason holds; label `reason`: `load_failed`, `state_copy_failed`, `mark_log_lost`, `request_panic` |
 | `tee_signer_image_check` | gauge | 1, with label `state`: the runner's check of its own image (`allowed`, `not_allowed`, `restart_needed`, `key_rule_unlisted`, `unknown`, `override`, `not_applicable`) |

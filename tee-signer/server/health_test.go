@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -13,7 +14,7 @@ import (
 )
 
 // HEALTH reports the setup state, unattested, and config_hash is its
-// setup_hash.
+// setup_hash. It also carries the version and the protocol level.
 func TestHealthCarriesTheSetupState(t *testing.T) {
 	want := backend.SetupState{SetupHash: backend.Root{0xcc}, Locked: backend.ConfigGroup{Version: 2, Hash: backend.Root{1},
 		Pending: backend.PendingUpdate{Version: 3, Hash: backend.Root{2}, EffectiveAt: 1_800_000_000}}, ApproverSetHash: backend.Root{4}}
@@ -30,6 +31,9 @@ func TestHealthCarriesTheSetupState(t *testing.T) {
 	got, err := wire.DecodeHealth(b)
 	if err != nil || got.Setup == nil || *got.Setup != want || got.ConfigHash != want.SetupHash {
 		t.Fatalf("health %+v %v, want setup %+v", got, err, want)
+	}
+	if got.Version != Version || got.Protocol != backend.ProtocolLevel || !strings.Contains(string(b), fmt.Sprintf(`"protocol":%d`, backend.ProtocolLevel)) {
+		t.Fatalf("version %q, protocol %d, want %q and %d: %s", got.Version, got.Protocol, Version, backend.ProtocolLevel, b)
 	}
 }
 

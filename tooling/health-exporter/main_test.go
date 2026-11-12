@@ -131,6 +131,15 @@ func TestRenderCountersAndConfig(t *testing.T) {
 	}
 }
 
+// tee_signer_protocol is the level HEALTH reports, and 1 for a runner that
+// sends none.
+func TestRenderProtocol(t *testing.T) {
+	out := rendered(&runner{name: "a", h: &backend.Health{Protocol: 2}})
+	wantLine(t, out, `tee_signer_protocol{runner="a"} 2`)
+	out = rendered(&runner{name: "a", h: &backend.Health{}})
+	wantLine(t, out, `tee_signer_protocol{runner="a"} 1`)
+}
+
 // writeConn writes a connection file for r with the dev verifier and, if
 // pin is set, a setup pin.
 func writeConn(t *testing.T, addr string, r *fakerunner.Runner, pin string) string {

@@ -206,13 +206,38 @@ was lost and set up again.
 A client that knows only the codes before 1008 sees an unknown code. The
 gateway answers `FLOOR` and `FLOOR_UNPROVEN` with HTTP 412, as a slashing
 refusal. Update the gateway with or before the runners: a gateway from
-before these codes answers them with HTTP 500.
+before these codes answers them with HTTP 500. A runner with these codes
+reports protocol level 2 in HEALTH ("Protocol level").
+
+### Protocol level
+
+HEALTH's `protocol` is the runner's protocol level: what its answers
+mean, apart from their bytes. `backend.ProtocolLevel`
+(`signer-protocol/backend.go`) holds it. It goes up by one whenever a
+client would read a refusal or a message differently, even when the bytes
+stay the same. The same change adds the new row below.
+
+| Level | Meaning |
+| --- | --- |
+| 1 | before `FLOOR` and `FLOOR_UNPROVEN`: a refusal at or below a floor has a slashing code, and its `detail` names the floor |
+| 2 | a refusal at or below a floor is `FLOOR` (1008) or `FLOOR_UNPROVEN` (1009); no slashing refusal names a floor ("Floor refusals") |
+
+Runners before level 2 send no `protocol`. A client reads a HEALTH answer
+without it as level 1 (`Health.EffectiveProtocol`). A level above the
+highest one a client knows means answers the client may misread, so the
+client warns its operator. HEALTH is not attested, so `protocol` is the
+runner's own claim; the image measurement in ATTEST and IDENTITY is the
+proof of the build.
+
+HEALTH's `version` is `0.1.0`, plus `+<chain>` on a non-prod build
+(`signer-protocol/buildchain`). It names the chain, not the build: every
+mainnet build has the same `version`.
 
 ## Messages
 
 | Type | Name | Request payload | OK body |
 | --- | --- | --- | --- |
-| 0x01 | HEALTH | empty | JSON of `backend.Health`; `setup` holds the setup state, `key_lock` the key rule lock and `single_key` the single-key acceptance and `signing_mode` the setup's signing mode ("Key rule lock"), `image` the image check ("Image check"), `last_update_path` how the newest config update in force since the start came in (`normal`, `break-glass` or `emergency-removal`, with its group and version), all unattested |
+| 0x01 | HEALTH | empty | JSON of `backend.Health`; `protocol` is the protocol level ("Protocol level"), `setup` holds the setup state, `key_lock` the key rule lock and `single_key` the single-key acceptance and `signing_mode` the setup's signing mode ("Key rule lock"), `image` the image check ("Image check"), `last_update_path` how the newest config update in force since the start came in (`normal`, `break-glass` or `emergency-removal`, with its group and version), all unattested |
 | 0x02 | PUBLIC_KEYS | empty | `count:u32` then `count` x key |
 | 0x03 | SIGN | `pubkey[48] kind:u8 domain[32] message`; kind 5: `pubkey[48] kind:u8 message` | `signature[96]` |
 | 0x04 | ATTEST | `nonce_len:u16 nonce version:u8` (nonce at most 1024 bytes, version 1) | `version:u8 setup_state attestation`, see below |

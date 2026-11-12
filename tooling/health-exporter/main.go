@@ -302,6 +302,7 @@ func render(w io.Writer, rs []*runner) {
 		gauge("tee_signer_info", "Runner build and settings; always 1.",
 			fmt.Sprintf(`{%s,platform="%s",version="%s",signing_mode="%s",single_key="%s",clock_source="%s",key_lock="%s",restart_mode="%s"}`,
 				l, q(h.Platform), q(h.Version), q(h.SigningMode), q(h.SingleKey), q(h.ClockSource), q(h.KeyLock), q(h.RestartMode)), 1)
+		gauge("tee_signer_protocol", "Wire semantics level the runner reports; 1 when it reports none.", one, float64(h.EffectiveProtocol()))
 		gauge("tee_signer_ready", "1 if the runner reports it can sign.", one, b2f(h.Ready))
 		for _, nr := range []struct{ reason, why string }{
 			{"load_failed", h.LoadFailed}, {"state_copy_failed", h.StateCopyFailed},
