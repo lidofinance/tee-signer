@@ -212,7 +212,7 @@ before these codes answers them with HTTP 500.
 
 | Type | Name | Request payload | OK body |
 | --- | --- | --- | --- |
-| 0x01 | HEALTH | empty | JSON of `backend.Health`; `setup` holds the setup state, `key_lock` the key rule lock and `single_key` the single-key acceptance and `signing_mode` the setup's signing mode ("Key rule lock"), `image` the image check ("Image check"), all unattested |
+| 0x01 | HEALTH | empty | JSON of `backend.Health`; `setup` holds the setup state, `key_lock` the key rule lock and `single_key` the single-key acceptance and `signing_mode` the setup's signing mode ("Key rule lock"), `image` the image check ("Image check"), `last_update_path` how the newest config update in force since the start came in (`normal`, `break-glass` or `emergency-removal`, with its group and version), all unattested |
 | 0x02 | PUBLIC_KEYS | empty | `count:u32` then `count` x key |
 | 0x03 | SIGN | `pubkey[48] kind:u8 domain[32] message`; kind 5: `pubkey[48] kind:u8 message` | `signature[96]` |
 | 0x04 | ATTEST | `nonce_len:u16 nonce version:u8` (nonce at most 1024 bytes, version 1) | `version:u8 setup_state attestation`, see below |
@@ -624,7 +624,10 @@ active (the `Updates` view that also feeds the core, with
 effective times from `setupwire.EffectiveActivation`). A pending update
 that adds the image counts only from its effective time, which is at least
 the images minimum (7 days, 7 minutes in a non-prod build) after it
-arrived. An entry of another kind with the same bytes does not match.
+arrived. An update that every approver signed adds an image with no wait
+(break-glass), but only when the approver set has been in force for the
+images minimum; so a new image never counts sooner than the images
+minimum after the approver set that signed it took over. An entry of another kind with the same bytes does not match.
 
 The start order:
 
@@ -1004,10 +1007,18 @@ order (the status of each refusal in brackets):
    and above n/2), time lock at most 30 days, withdrawal credentials, gas
    limits.
 2. `cluster_id` and the chain hash are the setup's.
-3. The clock is trusted and answers: the NTS clock with a quorum
-   (`SC_ERR_CLOCK` otherwise). The dev platform takes its untrusted clock.
-   The clock comes before the version checks because it decides which
-   pending update is in force already.
+3. The clock is trusted and answers: the NTS clock with a quorum, or
+   while it has none its coarse clock, the HTTPS-date quorum over pinned
+   TLS, within about -30 s to +31 s of the true time (`SC_ERR_CLOCK` when
+   neither reads). The dev platform takes its untrusted clock. The clock
+   comes before the version checks because it decides which pending
+   update is in force already. The coarse clock's error is small against
+   change delays of days, and an update may come into force up to that
+   much early. Without it, a time update the NTS clock cannot meet (a
+   bound below what its servers give, NTS where NTS-KE is blocked) would
+   stop every later update, the one that undoes it included. An update
+   that changes the slot times or the fork schedule still waits for the
+   NTS quorum, as the core's rules read it, and every signature needs it.
 4. The core exists (`NOT_READY` otherwise). The group's pending or active update sent again skips to
    its signatures (pending) or straight to the body write (active), and
    answers `outcome` 2. This comes before the floor of step 5, so an
@@ -1033,6 +1044,11 @@ order (the status of each refusal in brackets):
    48 hours when the group names none; on a prod chain never less than
    that, whatever the group in force names), at least the image's minimum
    of 7 days when the allowed-images list gains an entry; for `open` 0.
+   The change rules (`setupwire.Update.Decide`) set W to 0 for an update
+   that only tightens and on the fast paths. One of them, break-glass
+   (every approver signed), adds no image until the approver set in force
+   has been so for the wait of an image addition: after any change of the
+   set, such an update waits W as on the normal path.
    `activate_at` is at most now + W + 30 days. Sums saturate.
    (`BAD_REQUEST`)
 10. The core takes the values, and its status goes out as it is: the
@@ -1147,6 +1163,40 @@ request on the connection. Once the trusted clock passes the earliest
 `NotAfter` of the verified chains, the next request gets `FORBIDDEN` and
 the connection closes (ATTEST-ROLES-01). A client reconnects with a valid
 certificate.
+
+The runner refuses a client whose verified chain holds a revoked
+certificate. An entry of `revoked_client_certs` (open group) is one of
+two hashes:
+
+- the SHA-256 of a certificate's DER, which revokes that one certificate;
+- the SHA-256 of a DER SubjectPublicKeyInfo, which revokes every
+  certificate of that key.
+
+An entry may name a leaf, an intermediate or a CA, and a revoked CA
+refuses every certificate below it. A certificate hash is per
+certificate: a second certificate for the same key, such as a reissued
+leaf or a cross-signed intermediate, passes. For a compromised key, list
+its public key hash, or the hash of every certificate of it. The list in
+force is the open group's in force (version 0 is the setup's own list)
+plus the pending open update's, so a revocation applies as soon as the
+runner takes its CONFIG_UPDATE, before its effective time. A rotation
+that comes into force drops a pending open update, but not its
+revocations: the runner keeps them in its mark log records and enforces
+them until the next open update comes into force. An update that drops
+an entry of these lists needs every approver in force, also an update
+that replaces a pending one and leaves out an entry only the pending one
+or the kept list holds; the entry goes once that update is in force. The
+runner checks the list in the handshake and again before
+every request, HEALTH too: a revocation also closes the connections
+already open, with `FORBIDDEN` on their next request. For a handshake
+without trusted time the runner checks the chain it built without the
+dates, CA included. While a body the config in force needs is unreadable
+(the open update in force, the pending one, a locked one coming into
+force), the runner does not know every revocation. It
+keeps every entry it knew, and a TLS client gets `FORBIDDEN` for any
+request but HEALTH, IDENTITY, ATTEST and CONFIG_UPDATE until that update
+is sent again. IDENTITY stays because a client sends it first on each new
+connection (signer-protocol/remote), before the CONFIG_UPDATE.
 
 While the trusted clock gives no reading, the runner answers `HEALTH` and
 nothing else, so a watchdog or a client can see why: `clock_unix` is 0 and

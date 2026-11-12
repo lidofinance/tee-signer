@@ -1,4 +1,4 @@
-# Attestation statement: setup format 5
+# Attestation statement: setup format 6
 
 This file gives the exact bytes. The golden vectors are in `attestation-verify/docs/attestation-statement-vectors.json`; `governance/setupwire` makes them (`go test -run TestStatementVectors -update`), except the human forms, which `governance/setuptext` makes (`go test -run TestStatementHuman -update`), and `TestStatementVectors` recomputes every value in the file from the formulas below without the package's helpers.
 
@@ -49,7 +49,7 @@ Each leaf has its own 32-byte salt. A salt of 32 zero bytes is refused everywher
 
 | # | Name | Value |
 | --- | --- | --- |
-| 0 | `setup_format_version` | u8, 5 |
+| 0 | `setup_format_version` | u8, 6 |
 | 1 | `cluster_id` | 32 bytes, not zero |
 | 2 | `handover_generation` | u64, 1 or more |
 | 3 | `genesis_validators_root` | 32 bytes |
@@ -67,7 +67,7 @@ Each leaf has its own 32-byte salt. A salt of 32 zero bytes is refused everywher
 | 15 | `slashing_log_min_lock_days` | u32, 1 to 36500 |
 | 16 | `signing_mode` | u8: 1 threshold (shares of t-of-n splits, n >= 2), 2 single (whole keys, 1 of 1 import orders only) |
 
-`locked`, 16 leaves:
+`locked`, 15 leaves:
 
 | # | Name | Value |
 | --- | --- | --- |
@@ -79,23 +79,24 @@ Each leaf has its own 32-byte salt. A salt of 32 zero bytes is refused everywher
 | 5 | `builder_gas_limit_min` | u64 |
 | 6 | `builder_gas_limit_max` | u64 |
 | 7 | `builder_registration_max_future_seconds` | u64 |
-| 8 | `min_activation_balance` | u64 Gwei |
-| 9 | `max_effective_balance` | u64 Gwei |
-| 10 | `withdrawal_credentials` | 32 bytes, prefix 0x01 or 0x02 |
-| 11 | `allowed_deposit_amounts` | count:u8 (0 to 8), then u64 Gwei, sorted |
-| 12 | `allow_unverified_nonslashable_signing` | u8, 0 or 1 |
-| 13 | `bare_root_domains` | u16; bit n set allows domain type 0x0n000000; only bits 2, 5, 6, 7, 8, 9 |
-| 14 | `slot_time_changes` | count:u8 (0 to 16), then per change epoch:u64 and seconds_per_slot:u64, ascending epochs (section 4) |
-| 15 | `allowed_builder_request_auth_data_roots` | count:u8 (0 to 16), then 32-byte roots, sorted; each is hash_tree_root of a BuilderRequestAuth `data` field as SSZ ByteList[4096] (builder-specs, Gloas). The signer signs a BuilderRequestAuth only when the root of its data is on the list; empty means it signs none |
+| 8 | `allow_unverified_nonslashable_signing` | u8, 0 or 1 |
+| 9 | `bare_root_domains` | u16; bit n set allows domain type 0x0n000000; only bits 2, 5, 6, 7, 8, 9 |
+| 10 | `slot_time_changes` | count:u8 (0 to 16), then per change epoch:u64 and seconds_per_slot:u64, ascending epochs (section 4) |
+| 11 | `allowed_builder_request_auth_data_roots` | count:u8 (0 to 16), then 32-byte roots, sorted; each is hash_tree_root of a BuilderRequestAuth `data` field as SSZ ByteList[4096] (builder-specs, Gloas). The signer signs a BuilderRequestAuth only when the root of its data is on the list; empty means it signs none |
+| 12 | `time_policy` | version:u8 (1), protocol:u8 (1 nts, 2 ntp), max_bound_ms:u16 (1 to 250), max_sample_bound_ms:u16 (max(max_bound_ms, 80) to 1000) |
+| 13 | `deposit_policy` | version:u8 (1), count:u8 (1 to 16) then 32-byte withdrawal credentials (prefix 0x01 or 0x02, 11 zero bytes, an address that is not zero), sorted; count:u8 (0 to 8) then allowed deposit amounts u64 Gwei, sorted, each 1 to max_effective_balance; min_activation_balance:u64 Gwei (1 to max_effective_balance); max_effective_balance:u64 Gwei. The runner does not use it yet |
+| 14 | `exit_policy` | version:u8 (1), count:u16 then 48-byte validator keys, stake_cap_per_day:u64 Gwei, approvals_needed:u8. Exit approvals are not in format 6: the count, the cap and approvals_needed must be 0, so the value is always `0x01` and 11 zero bytes |
 
-`open`, 2 leaves:
+`open`, 4 leaves:
 
 | # | Name | Value |
 | --- | --- | --- |
 | 0 | `fork_schedule` | count:u8 (0 to 16), then per fork epoch:u64 and version[4], ascending epochs, one fork per epoch |
 | 1 | `gloas_fork_epoch` | has:u8 (0 or 1), then u64 if has is 1; must be the epoch of a fork in `fork_schedule` |
+| 2 | `revoked_client_certs` | version:u8 (1), count:u8 (0 to 128), then SHA-256 hashes the runner refuses, sorted, none zero: of the DER of a client certificate (leaf, intermediate or CA), which revokes that certificate, or of a DER SubjectPublicKeyInfo, which revokes every certificate of that key. An update adds entries with the usual count; dropping one needs every approver in force (section 4) |
+| 3 | `time_servers` | version:u8 (1), count:u8 (0 to 10), then per server a str: a catalog ID (1 to 32 of a-z, 0-9, '.', '-'), alone or with `@` and an alt host name; sorted by bytes, each ID once. The servers the clock dials besides the image's default set |
 
-Every list without an order of its own is sorted and holds no repeats, so one set of values has one encoding. An optional field keeps its leaf when absent: the value is the single byte 0.
+Every list without an order of its own is sorted and holds no repeats, so one set of values has one encoding. An optional field keeps its leaf when absent: the value is the single byte 0. A leaf value that starts with a version byte (`time_policy`, `deposit_policy`, `exit_policy`, `revoked_client_certs`, `time_servers`) is read only at version 1 for now. A later image may read a higher version of a field, and a config update can then move the field to it without a new setup format.
 
 ### The tree
 
@@ -105,7 +106,7 @@ Each group has its own root:
 group_root = MerkleRoot(leaf_hash[0], ..., leaf_hash[n-1])
 ```
 
-MerkleRoot pads the list with 32-byte zero hashes up to the next power of two P, then hashes pairs level by level, `node = H(CTX_NODE, left || right)`, until one hash is left. One leaf is its own root. So `public` (17 leaves, padded to 32) has depth 5, `locked` (16 leaves, padded to 16) depth 4 and `open` (2 leaves) depth 1. A zero hash cannot pose as a leaf or node hash, which would need a SHA-256 preimage of zero.
+MerkleRoot pads the list with 32-byte zero hashes up to the next power of two P, then hashes pairs level by level, `node = H(CTX_NODE, left || right)`, until one hash is left. One leaf is its own root. So `public` (17 leaves, padded to 32) has depth 5, `locked` (15 leaves, padded to 16) depth 4 and `open` (4 leaves) depth 2. A zero hash cannot pose as a leaf or node hash, which would need a SHA-256 preimage of zero.
 
 ```
 policy_root = H(CTX_POLICY, public_root || locked_root || open_root)
@@ -129,11 +130,11 @@ store    = nitro: bucket:str region:str
 sealing_key_release = nitro: region:str kms_key_id:str has:u8 [kms_key_creation_date:u64]
          | azure: maa_endpoint:str akv_endpoint:str kid:str
          | gcp:   wif_provider:str kms_key:str attest_audience:str no_lock_accepted:u8
-                 unsafe_single_key_accepted:u8
+                 unsafe_single_key_accepted:u8 has:u8 [project_number:u64]
          | dev:   (nothing)
 ```
 
-`platform` is 1 nitro, 2 azure, 3 gcp, 4 dev. `ca_count` is 1 to 4 DER CA certificates (`allowed_client_ca`), sorted by their bytes. `no_lock_accepted` (`sealing_key_release.no_lock_accepted`) and `unsafe_single_key_accepted` (`sealing_key_release.unsafe_single_key_accepted`, the setup accepts that the signer holds keys alone, 1 of 1) are GCP only, 0 or 1. `kms_key_creation_date` (`sealing_key_release.kms_key_creation_date`, Nitro only) is optional: a presence byte, then the KMS key's `CreationDate` in Unix seconds, not 0. A setup of a prod chain on Nitro must have it.
+`platform` is 1 nitro, 2 azure, 3 gcp, 4 dev. `ca_count` is 1 to 4 DER CA certificates (`allowed_client_ca`), sorted by their bytes. `no_lock_accepted` (`sealing_key_release.no_lock_accepted`) and `unsafe_single_key_accepted` (`sealing_key_release.unsafe_single_key_accepted`, the setup accepts that the signer holds keys alone, 1 of 1) are GCP only, 0 or 1. `kms_key_creation_date` (`sealing_key_release.kms_key_creation_date`, Nitro only) is optional: a presence byte, then the KMS key's `CreationDate` in Unix seconds, not 0. A setup of a prod chain on Nitro must have it. `project_number` (`sealing_key_release.project_number`, GCP only) is optional the same way: a presence byte, then the number of the Google Cloud project that holds the stores, not 0. A setup of a prod chain on GCP must have it.
 
 The private part is at most 2560 bytes (`MaxPlatformPrivate`). The attestation circuits hash it with that fixed bound (`MAX_PRIVATE` in `circuits/lib/src/platform.nr`), so a longer one could never be proven, and `signer-admin setup` and the decoder refuse it. Four P-256 CA certificates take about 2.07 KB of it.
 
@@ -149,7 +150,7 @@ There is one platform salt per signer, drawn by `signer-admin setup`.
 setup_hash = H(CTX_SETUP, policy_root || platform_commitment)
 ```
 
-The input is 81 bytes: 2 + 15 + 32 + 32. This is setup_hash v4. It goes into every key-release context, the mark log paths and AADs, the state copy and the network-entry state, and into the setup state of IDENTITY, ATTEST and HEALTH (section 5). Verifiers pin it as `setup_sha256`.
+The input is 81 bytes: 2 + 15 + 32 + 32. This is setup_hash for setup format 6. It goes into every key-release context, the mark log paths and AADs, the state copy and the network-entry state, and into the setup state of IDENTITY, ATTEST and HEALTH (section 5). Verifiers pin it as `setup_sha256`.
 
 The setup the host hands over at every start is one byte string:
 
@@ -158,7 +159,7 @@ setup = 'S' public_values public_salts locked_values locked_salts open_values op
         platform_salt[32] private
 ```
 
-`X_values` is the concatenation of the leaf values of group X in leaf order (section 1), and `X_salts` the concatenation of its salts in the same order (17, 16 and 2 salts). `public_values` is 147 bytes and starts with the format byte 4, so the setup's first two bytes are `0x53 0x04`. The decoder refuses trailing bytes, counts above a cap, presence bytes other than 0 or 1, unknown enum values, unsorted lists, any value the rules refuse, a zero salt, and any input that does not encode back to the same bytes. A setup larger than 64 KiB is refused, and so is one whose private part is above 2560 bytes (section 2).
+`X_values` is the concatenation of the leaf values of group X in leaf order (section 1), and `X_salts` the concatenation of its salts in the same order (17, 15 and 4 salts). `public_values` is 147 bytes and starts with the format byte 6, so the setup's first two bytes are `0x53 0x06`. The decoder refuses trailing bytes, counts above a cap, presence bytes other than 0 or 1, unknown enum values, unsorted lists, any value the rules refuse, a zero salt, and any input that does not encode back to the same bytes. A setup larger than 64 KiB is refused, and so is one whose private part is above 2560 bytes (section 2).
 
 
 ## 4. Config updates
@@ -166,21 +167,23 @@ setup = 'S' public_values public_salts locked_values locked_salts open_values op
 The hash of a group at version 0, in the setup state and as the `prev_hash` of the group's first update, is the root of its salted leaves: `locked_root` or `open_root` of the setup. An update carries the full new group and a fresh salt for each of its leaves. The approvers sign a header that names the root of the new group's salted leaves instead of its values, so a signature and the update's hash check out against published leaves while other leaves stay withheld, after any number of updates.
 
 ```
-body   = 'B' 1:u8 cluster_id[32] chain_hash[32] group:u8 config_version:u64
+body   = 'B' 2:u8 cluster_id[32] chain_hash[32] group:u8 config_version:u64
          prev_hash[32] activate_at:u64 group_values group_salts
 header = cluster_id[32] chain_hash[32] group:u8 config_version:u64
          prev_hash[32] activate_at:u64 group_root[32]
-update = 'U' 1:u8 body_len:u32 body sig_count:u8 {position:u8 signature[64]}
+update = 'U' 2:u8 body_len:u32 body sig_count:u8 {position:u8 signature[64]}
          new_count:u8 {position:u8 signature[64]}
 ```
 
-- `group` is 1 locked or 2 open. `group_values` are the group's leaf values as in a setup, `group_salts` one salt per leaf of that group (16 or 2), in leaf order. `group_root` is MerkleRoot over the leaves of `group_values` with `group_salts`.
+- `group` is 1 locked or 2 open. `group_values` are the group's leaf values as in a setup, `group_salts` one salt per leaf of that group (15 or 4), in leaf order. The version byte is 2 since setup format 6: a body or update of version 1 (format 5 groups) is refused. `group_root` is MerkleRoot over the leaves of `group_values` with `group_salts`.
 - `chain_hash = H(CTX_CHAIN, genesis_validators_root || genesis_fork_version || genesis_time:u64 || seconds_per_slot:u64 || slots_per_epoch:u64 || preset:u8 || voluntary_exit_fork_version)`, the chain fields of the public group in order (61 bytes).
 - The header is 145 bytes. Each signature is Ed25519 over `len(CTX_UPDATE):u16 || CTX_UPDATE || header`.
 - `update_hash = H(CTX_UPDATE, header)`. The next update of the group names it as `prev_hash`, and the setup state carries it as the group's hash once the update is active or pending.
 - `signer-admin draft` draws the salts of each update. They are not secret from the approvers (`signer-admin show` prints them), and they reach every signer of the cluster in the same signed update.
 
 A watchdog that has the header fields of an update, its signatures, and for each leaf either name, value and salt or only the leaf hash, rebuilds `group_root`, the header and `update_hash`, checks the signatures against the approver set in force, and compares `update_hash` with the setup state.
+
+How soon a locked update comes into force depends on its changed leaves (`setupwire.Update.Decide`, governance/setupwire/changes.go). A change that only tightens (removing an image, a fee recipient or a root; NTP back to NTS; lower time bounds) needs `approvals_needed` signatures and no wait. A loosening change waits the change delay. So do three changes that do less but could stop the cluster at once: any change of `approvals_needed` or the change delay, up or down, and an update that leaves `allowed_image_measurements` empty. Three loosening changes are break-glass: adding an image measurement, NTS to NTP, and raising either time bound; signed by every approver in force, they need no wait. An update that removes one approver and loosens nothing else needs no wait when every approver but the removed one signs. `builder_registration_max_future_seconds` 0 turns its check off, so a change to 0 loosens and a change from 0 to a limit tightens; an empty `deposit_policy.allowed_deposit_amounts` counts as no limit the same way. An open update never waits. It adds entries to `revoked_client_certs` (at most 128) with the usual count; an update that drops an entry, for example to make room in a full list or for an expired certificate, needs every approver in force, with no wait, and is refused with fewer. Within one change delay after a locked update in force that removed one approver (in the shape of an emergency removal, on any path), break-glass is no path: a locked break-glass change waits the change delay, and a dropped revocation is refused. With `approvals_needed` = n-1 the usual count could otherwise remove the one other approver and then skip every wait as "every approver"; the runner keeps the removal time in its mark log records. After any change of the approver set in force (other keys, another order or another `approvals_needed`; a removal too), a break-glass update adds no image until the new set has been in force for the images wait (the change delay or the images minimum, whichever is larger): until then an update that adds an image takes the normal path and waits. k approvers of n could otherwise rotate to their own k keys, which waits one change delay, and then add an image as "every approver" before the images minimum. The runner keeps the time of the newest such change in its mark log records too. The bytes above do not change with the path: a verifier who wants to know the path compares the update's leaves with those in force. The runner applies these rules to every update it has not seen (`Updates.Accept`).
 
 ### Slot time changes
 
@@ -333,4 +336,4 @@ The design fixes the split and the field names. This file adds these points, and
 6. Key origin counts are u32 and are part of the setup state, so they are in IDENTITY and ATTEST alike. Every byte of the setup state is a public output; keys_hash is the one private input from the signer.
 7. The slot time rule compares the new changes with the ones in force and is checked at arrival with T the effective activation time; the core takes the new slot times at T. The fork rule counts epochs under the slot times in force and those pending, in both orders of arrival (section 4).
 8. The ranges: `max_sign_epochs_ahead_of_clock` 1 to 16, `slashing_mark_prewrite.block_slots` 0 to 64, `source_epochs` and `target_epochs` 0 to 8 (the design's proposed numbers, lower bounds this file's).
-9. `signing_mode` is a public leaf (format 2), the last of `public`, so the leaf numbers of format 1 stay. Format 3 dropped the exit approval leaves of `locked` (`exit_allowed_validators`, `exit_stake_cap_per_day`, `exit_approvals_needed`); the later `locked` leaves moved up by three. Format 4 dropped `peer_attestation_hosts`, the last field of the private part; the leaves did not change. Format 5 added `kms_key_creation_date` to the Nitro key release in the private part; the leaves did not change. A verifier who gets the published leaves reads whether the signer holds shares or whole keys, checked against the attested policy_root, and the mode cannot change without a new setup.
+9. `signing_mode` is a public leaf (format 2), the last of `public`, so the leaf numbers of format 1 stay. Format 3 dropped the exit approval leaves of `locked` (`exit_allowed_validators`, `exit_stake_cap_per_day`, `exit_approvals_needed`); the later `locked` leaves moved up by three. Format 4 dropped `peer_attestation_hosts`, the last field of the private part; the leaves did not change. Format 5 added `kms_key_creation_date` to the Nitro key release in the private part; the leaves did not change. Format 6 folded `min_activation_balance`, `max_effective_balance`, `withdrawal_credentials` and `allowed_deposit_amounts` of `locked` into `deposit_policy`, with a list of withdrawal credentials in place of one; added `time_policy`, `deposit_policy` and `exit_policy` as the last three `locked` leaves (`allow_unverified_nonslashable_signing` and the leaves after it moved up by four), `revoked_client_certs` and `time_servers` as the last two `open` leaves (the open tree is one level deeper), and `project_number` to the GCP key release; CONFIG_UPDATE went to version 2. A verifier who gets the published leaves reads whether the signer holds shares or whole keys, checked against the attested policy_root, and the mode cannot change without a new setup.

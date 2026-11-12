@@ -10,20 +10,22 @@ import (
 // signing_mode = single must say that it accepts a key held alone (an
 // import order with t = n = 1); Check and CheckThresholdOn refuse it
 // otherwise. It is a flag byte after
-// no_lock_accepted, the last byte of the setup; setup_hash covers it. The human
+// no_lock_accepted, before project_number; setup_hash covers it. The human
 // form is checked in governance/setuptext.
 func TestUnsafeSingleKeyAccepted(t *testing.T) {
 	plain := samples(t)["setup-gcp"]
 	plain.SigningMode = SigningModeSingle
+	plain.Platform.SealingKeyRelease.ProjectNumber = 0
 	before := rawSetup(plain)
 	accepted := samples(t)["setup-gcp"]
 	accepted.SigningMode = SigningModeSingle
+	accepted.Platform.SealingKeyRelease.ProjectNumber = 0
 	accepted.Platform.SealingKeyRelease.UnsafeSingleKeyAccepted = true
 	b, err := accepted.Encode()
 	if err != nil {
 		t.Fatal(err)
 	}
-	at := len(before) - 1 // the flag, the last byte
+	at := len(before) - 2 // the flag, then the project_number presence 0
 	if len(b) != len(before) || before[at] != 0 || b[at] != 1 || !bytes.Equal(b[:at], before[:at]) || !bytes.Equal(b[at+1:], before[at+1:]) {
 		t.Fatalf("encoding: want the setup without it with the flag byte 1")
 	}

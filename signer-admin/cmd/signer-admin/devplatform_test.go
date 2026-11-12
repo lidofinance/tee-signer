@@ -21,7 +21,7 @@ import (
 // platform member with the dev verifier is what every other test uses.
 func TestDevVerifierNeedsDevPlatform(t *testing.T) {
 	const name = "gsigner-2" // the Nitro signer of cloudSetupText
-	shared, section := signerSection(t, cloudSetupText(t, 5, "single", "", ""), name)
+	shared, section := signerSection(t, cloudSetupText(t, 6, "single", "", ""), name)
 	dir := t.TempDir()
 	file := writeFile(t, filepath.Join(dir, "setup.conf"), shared+"\n[signer "+name+"]"+section)
 	mustTool(t, "setup", "-out", filepath.Join(dir, "setups"), file)

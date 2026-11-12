@@ -253,10 +253,20 @@ func (f *FileLog) List(_ context.Context, prefix string) ([]Entry, error) {
 	rel, _ := filepath.Rel(f.dir, dir)
 	var out []Entry
 	for _, e := range ents {
-		if e.IsDir() || strings.HasPrefix(e.Name(), ".tmp-") || !strings.HasPrefix(e.Name(), base) {
+		if strings.HasPrefix(e.Name(), ".tmp-") || !strings.HasPrefix(e.Name(), base) {
 			continue
 		}
-		out = append(out, Entry{Name: filepath.ToSlash(filepath.Join(rel, e.Name()))})
+		name := filepath.ToSlash(filepath.Join(rel, e.Name()))
+		if e.IsDir() {
+			// Every object under prefix, as the cloud stores list them.
+			sub, err := f.List(context.Background(), name+"/")
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, sub...)
+			continue
+		}
+		out = append(out, Entry{Name: name})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil

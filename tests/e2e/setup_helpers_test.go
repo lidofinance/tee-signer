@@ -92,9 +92,10 @@ func devSetupFor(t *testing.T, c chain, dir, caFile, name string, cluster [32]by
 	if err != nil || len(addr) != 20 {
 		t.Fatalf("withdrawal address: %v", err)
 	}
-	l.WithdrawalCredentials = backend.Root{0x02}
-	copy(l.WithdrawalCredentials[12:], addr)
-	l.AllowedDepositAmounts = []uint64{32_000_000_000}
+	wc := backend.Root{0x02}
+	copy(wc[12:], addr)
+	l.DepositPolicy.WithdrawalCredentials = []backend.Root{wc}
+	l.DepositPolicy.AllowedDepositAmounts = []uint64{32_000_000_000}
 	s.Open = setupwire.Open{}
 	for _, f := range cfg.Forks {
 		s.Open.ForkSchedule = append(s.Open.ForkSchedule, setupwire.Fork{Epoch: f.Epoch, Version: f.Version})

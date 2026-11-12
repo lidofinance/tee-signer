@@ -237,14 +237,12 @@ safety. No clock at the load refuses the validator (`SC_ERR_CLOCK`).
 
 That condition limits the epoch length. A clock that reads some time ahead
 before a restart and some time behind after it can read one epoch lower
-only if an epoch is shorter than the two together. The NTS clock allows up to
-about 91 s ahead on Nitro, where the host cannot set the counter it ages on
-(its 90 s sample age limit under the 60 s schedule, which every runner runs,
-plus its bound), and reads within its bound after a restart, which waits
-for a fresh quorum. On a platform whose counter the
-host can set, a drift refusal resets the clock's history and the coarse
-clock can itself run 75 s ahead, so the lead can reach about 106 s
-(trusted-time/docs/nts.md). With plain NTP (`-clock-protocol ntp`) the host
+only if an epoch is shorter than the two together. The NTS clock reads at
+most about 90 s ahead where the host can set the counter it ages on (its
+90 s sample age limit under the 60 s schedule, which every runner runs,
+plus its bound), and within its bound where the host cannot (Nitro).
+After a restart it reads within its bound, since the start waits for a
+fresh quorum (trusted-time/docs/nts.md). With plain NTP (`-clock-protocol ntp`) the host
 forges the time within the coarse check: up to about 196 s ahead before a
 restart and 46 s behind after it, a swing of about 242 s (77 s with a
 counter the host cannot set). The floor holds for epochs longer than the

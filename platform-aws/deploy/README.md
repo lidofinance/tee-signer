@@ -688,9 +688,10 @@ What the parent reports for the running enclave is the real check:
   ([Evervault](https://evervault.com/blog/how-we-built-enclaves-resolving-clock-drift-in-nitro-enclaves)),
   which is exactly what the floor must not trust. The image runs the NTS
   clock instead (`-nts-clock`, next section): the six default NTS
-  operators and any the image's command confirms (`-nts-terms-confirmed`;
-  from seven a shift schedule), a quorum with an error bound, signing refused above
-  100 ms or when the samples are over 90 s old. The parent can delay or
+  operators and any the setup adds (`time_servers`; from seven a shift
+  schedule), a quorum with an error bound, signing refused above the
+  setup's `time_policy` bound (100 ms by default) or when the samples are
+  over 90 s old. The parent can delay or
   drop that traffic but not forge it. The same clock checks the dates of
   client certificates. HTTPS Date readings over vsock-proxy are its coarse
   check.
@@ -728,7 +729,7 @@ destination it accepted.
 The destination's port must be 123 or 4123. A name must be one of the NTP
 host names of every catalog host (`udprelay.DefaultNames`: each
 server's own name, `time.meta.com`, and the plain NTP hosts `ntp.se` and
-`ntp.hr` that `-clock-protocol ntp` asks for Netnod and FER); the relay resolves it itself and
+`ntp.hr` that plain NTP asks for Netnod and FER); the relay resolves it itself and
 sends to the first public address, IPv4 first. An address must lie in `194.58.200.0/21` or be a public one that one of the
 allowed names resolves to now (cached 5 minutes, a failed lookup 30 s).
 Public means global unicast, not private (RFC 1918, fc00::/7) and not
@@ -776,17 +777,19 @@ that TLS session (AES-SIV-CMAC-256). It can send unauthenticated
 Kiss-o'-Death packets with our unique identifier, which may disable a server
 (RFC 8915 section 5.7 allows the client to act on them). A disabled
 active's slots go to fallbacks among the other servers; with too few
-servers answering, signing stops: fail closed. The host also runs
-the enclave's CPU counter, the clock's local time (`CLOCK_MONOTONIC_RAW`);
-the drift check against a quorum 17 minutes old refuses a rate beyond
-500 ppm. While it blocks the servers, a counter it runs fast moves the time
-ahead by less than the 90 s sample age limit, see `trusted-time/docs/nts.md`.
+servers answering, signing stops: fail closed. The parent does not run
+the enclave's CPU counter, the clock's local time (`CLOCK_MONOTONIC_RAW`):
+the enclave's CPUs are taken away from the parent, and the Nitro
+hypervisor, which AWS runs, keeps the counter. So the parent cannot move
+the time ahead by running the counter fast; the lead stays within the
+bound (`trusted-time/docs/nts.md`). The drift check against a quorum
+17 minutes old still refuses a rate beyond 500 ppm.
 
-With `-clock-protocol ntp` (plain NTP, no NTS) none of this holds: the
+With `time_policy` protocol ntp (plain NTP, no NTS) none of this holds: the
 parent sees every request and can forge every answer. The time is then
 only as good as the coarse check, up to about 46 s behind and 31 s ahead
-of real time, 196 s ahead with a counter it runs fast
-(`trusted-time/docs/nts.md`, "Plain NTP").
+of real time (`trusted-time/docs/nts.md`, "Plain NTP"); the 196 s case
+there needs a counter the host can run fast, which the parent cannot.
 
 ### Security group
 
@@ -903,7 +906,9 @@ in its attested identity. The parent can hand over a setup with its own CA.
 That runner shows another setup_hash and finds another, empty mark log, so it
 stops while this signer's shares are stored, and the shares do not open for
 it. Its KMS calls carry its own setup_hash, so it does not get the sealing
-key either. `test-client-ca.pem` is the root of a test PKI made by
+key either. The runner refuses a client certificate listed in the setup's
+`revoked_client_certs`, one of a listed public key, or one below a listed CA
+(`signer-protocol/docs/protocol.md`, "Client roles"). `test-client-ca.pem` is the root of a test PKI made by
 `scripts/make-test-ca.sh`. Its private key is not in the repo.
 
 ### Client certificates, the clock and the CA

@@ -27,11 +27,12 @@ var coarseTestURLs = true
 //	                                                                     and plain NTP address (-clock-protocol ntp)
 //	RUNNER_NTS_TEST_ROOTS=file.pem                                      the roots of all of them
 //
-// Release builds have neither (nts_servers_release.go).
-func ntsServers() ([]clock.NTSServer, error) {
+// Release builds have neither (nts_servers_release.go). The test servers
+// replace the confirmed entries too.
+func ntsServers(confirmed []string, from string) ([]clock.NTSServer, error) {
 	spec := os.Getenv("RUNNER_NTS_TEST_SERVERS")
 	if spec == "" {
-		return publicNTSServers()
+		return publicNTSServersFor(confirmed, from)
 	}
 	pem, err := os.ReadFile(os.Getenv("RUNNER_NTS_TEST_ROOTS"))
 	if err != nil {

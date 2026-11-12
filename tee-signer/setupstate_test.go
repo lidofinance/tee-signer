@@ -214,7 +214,7 @@ func TestSetupState(t *testing.T) {
 		t.Fatal(err)
 	}
 	log := &fakeLog{state: ms.First}
-	updates, err := newConfigUpdates(st, log, fixedClock{time.Unix(1_790_000_000, 0)}, "nitro", nil)
+	updates, err := newConfigUpdates(st, log, &platform.Platform{Clock: fixedClock{time.Unix(1_790_000_000, 0)}}, "nitro", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +233,7 @@ func TestSetupState(t *testing.T) {
 	h, _ := u.Body.Hash()
 	// A new log state, as after a restart: the runner reads it afresh.
 	state := func() backend.SetupState {
-		updates, err := newConfigUpdates(st, log, fixedClock{time.Unix(1_790_000_000, 0)}, "nitro", nil)
+		updates, err := newConfigUpdates(st, log, &platform.Platform{Clock: fixedClock{time.Unix(1_790_000_000, 0)}}, "nitro", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -269,7 +269,7 @@ func TestSetupState(t *testing.T) {
 	// Only a handover writes the order slot: a log state with an order
 	// does not start.
 	log.state.Order = &markstore.Order{Kind: markstore.OrderHandover, Hash: [32]byte{8}, ActAt: 1_900_000_000}
-	if _, err := newConfigUpdates(st, log, fixedClock{time.Unix(1_790_000_000, 0)}, "nitro", nil); err == nil || !strings.Contains(err.Error(), "handover order") {
+	if _, err := newConfigUpdates(st, log, &platform.Platform{Clock: fixedClock{time.Unix(1_790_000_000, 0)}}, "nitro", nil); err == nil || !strings.Contains(err.Error(), "handover order") {
 		t.Fatalf("a log state with an order in the slot: %v", err)
 	}
 }

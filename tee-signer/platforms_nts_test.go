@@ -28,12 +28,12 @@ import (
 func TestNTSClockWrapperNeedsCoarseURLs(t *testing.T) {
 	base := func(platform.Options) (*platform.Platform, error) { return &platform.Platform{}, nil }
 	t.Setenv("RUNNER_NTS_COARSE_URLS", "https://a.example/,https://b.example/")
-	if _, err := withNTSClock(base, clock.ProtocolNTS)(platform.Options{}); err == nil || !strings.Contains(err.Error(), "3 or more") {
+	if _, err := withNTSClock(base, mustFlagSettings(t))(platform.Options{}); err == nil || !strings.Contains(err.Error(), "3 or more") {
 		t.Fatalf("two coarse URLs: %v", err)
 	}
 	t.Setenv("RUNNER_NTS_COARSE_URLS", "https://a.example/,https://b.example/,https://c.example/")
 	t.Setenv("RUNNER_NTS_WAIT", "soon")
-	if _, err := withNTSClock(base, clock.ProtocolNTS)(platform.Options{}); err == nil || !strings.Contains(err.Error(), "RUNNER_NTS_WAIT") {
+	if _, err := withNTSClock(base, mustFlagSettings(t))(platform.Options{}); err == nil || !strings.Contains(err.Error(), "RUNNER_NTS_WAIT") {
 		t.Fatalf("bad wait: %v", err)
 	}
 	t.Setenv("RUNNER_NTS_WAIT", "")
@@ -148,7 +148,7 @@ func TestNTSClockStartFailsWithoutQuorum(t *testing.T) {
 	t.Setenv("RUNNER_NTS_COARSE_URLS", "https://127.0.0.1:1/,https://127.0.0.1:2/,https://127.0.0.1:3/")
 	t.Setenv("RUNNER_NTS_WAIT", "1s")
 	start := time.Now()
-	n, err := startNTSClock(context.Background(), &http.Client{Timeout: time.Second}, nil, "", nil, clock.ProtocolNTS, slog.New(slog.DiscardHandler))
+	n, err := startNTSClock(context.Background(), &http.Client{Timeout: time.Second}, nil, "", nil, mustFlagSettings(t), slog.New(slog.DiscardHandler))
 	if err == nil || !strings.Contains(err.Error(), "no quorum") {
 		t.Fatalf("started without a quorum: %v %v", n, err)
 	}
@@ -168,7 +168,7 @@ func TestNTSClockStartFailureIsReported(t *testing.T) {
 		return &platform.Platform{HTTPClient: &http.Client{Timeout: time.Second},
 			ReportExit: func(s string) { reported = s }, Close: func() error { closed = true; return nil }}, nil
 	}
-	if _, err := withNTSClock(base, clock.ProtocolNTS)(platform.Options{}); err == nil {
+	if _, err := withNTSClock(base, mustFlagSettings(t))(platform.Options{}); err == nil {
 		t.Fatal("started without a quorum")
 	}
 	if !strings.Contains(reported, "no quorum") || !closed {
@@ -370,8 +370,8 @@ func TestNTSClockCheckPlainNTP(t *testing.T) {
 	}
 }
 
-// -nts-max-sample-bound defaults to -nts-max-bound, may be raised to 1 s
-// (no cap), and is refused below the max bound or above 1 s.
+// -nts-max-sample-bound defaults to -nts-max-bound and at least 80 ms, may
+// be raised to 1 s (no cap), and is refused below that or above 1 s.
 func TestNTSMaxSampleBound(t *testing.T) {
 	t.Setenv("RUNNER_NTS_COARSE_URLS", "https://a.example/,https://b.example/,https://c.example/")
 	t.Setenv("RUNNER_NTS_MAX_BOUND", "")
@@ -385,6 +385,8 @@ func TestNTSMaxSampleBound(t *testing.T) {
 		{250 * time.Millisecond, 0, 250 * time.Millisecond, ""},
 		{0, time.Second, time.Second, ""},
 		{0, 50 * time.Millisecond, 0, "-nts-max-sample-bound"},
+		{50 * time.Millisecond, 0, 80 * time.Millisecond, ""},
+		{50 * time.Millisecond, 79 * time.Millisecond, 0, "at least 80ms"},
 		{0, 2 * time.Second, 0, "-nts-max-sample-bound"},
 	} {
 		*ntsMaxBoundFlag, *ntsMaxSampleFlag = tc.bound, tc.sample

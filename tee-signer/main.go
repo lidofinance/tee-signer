@@ -292,11 +292,16 @@ func run() (err error) {
 	// force by the log's state and the clock, not the setup's first values.
 	var updates *server.Updates
 	if boot.setup != nil && claimed.log != nil {
-		if updates, err = newConfigUpdates(boot.setup, claimed.log, plat.Clock, *platformName, log); err != nil {
+		if updates, err = newConfigUpdates(boot.setup, claimed.log, plat, *platformName, log); err != nil {
 			return err
 		}
 		if cfg, err = updates.StartConfig(cfg); err != nil {
 			return fmt.Errorf("config in force: %w", err)
+		}
+		// StartConfig may have switched the clock to other time values;
+		// the shares load only once it has time on them.
+		if err := updates.WaitClock(ctx, startClockWait(), time.Second); err != nil {
+			return err
 		}
 	}
 
@@ -325,7 +330,12 @@ func run() (err error) {
 		// Shares are sealed under setup_hash and the log's log_id. IDENTITY,
 		// ATTEST and HEALTH carry setup_hash and the config state in force.
 		srv.SetupHash, srv.LogID = boot.setup.SHA256, claimed.logID
+		// The revoked client certificates in force (server/revoked.go):
+		// the config updates keep them current, else the setup's list.
+		srv.Revoked = &attls.Revoked{}
+		srv.Revoked.Set(boot.setup.Wire.Open.RevokedClientCerts)
 		if updates != nil {
+			updates.UseRevoked(srv.Revoked)
 			updates.Attach(signer)
 			srv.Updates, srv.State = updates, updates.SetupState
 			go updates.Run(ctx, configSyncEvery)
@@ -351,13 +361,16 @@ func run() (err error) {
 	}
 	var tlsCfg *tls.Config
 	if caPEM != nil {
-		if tlsCfg, srv.TLSKeyHash, err = attls.ServerConfig(caPEM, plat.Clock.Now, chainMark(cfg)); err != nil {
+		if tlsCfg, srv.TLSKeyHash, err = attls.ServerConfig(caPEM, plat.Clock.Now, chainMark(cfg), attls.WithRevoked(srv.Revoked)); err != nil {
 			return err
 		}
 		srv.ClientCAs = tlsCfg.ClientCAs
+		if srv.UndatedRoots, err = attls.UndatedRoots(caPEM); err != nil {
+			return err
+		}
 	}
 	// A sealing key from a stored blob seals nothing until every stored
-	// share opens under it (AWS-KMS-02, server.ProveSealingKey).
+	// share opens under it (Nitro and GCP, server.ProveSealingKey).
 	srv.SealingKeyUnproven = plat.SealingKeyStored
 	var n int
 	imageState := "not_applicable"
@@ -411,7 +424,7 @@ func run() (err error) {
 		"restart_mode", mode.String(), "floor_margin", margin,
 		"clock", plat.Clock.Source(), "clock_trusted", plat.Clock.Trusted(),
 		"record", hooks.MarkLogStatus(), "state_copy", copyStore.status(), "shares_loaded", n, "plaintext_import", plainImportStatus(), "sealed_import", *sealedImport,
-		"tls_key_sha256", fmt.Sprintf("%x", srv.TLSKeyHash), "image_check", imageState,
+		"tls_key_sha256", fmt.Sprintf("%x", srv.TLSKeyHash), "revoked_client_certs", srv.Revoked.Len(), "image_check", imageState,
 		"max_conns", *maxConns, "max_handshakes", *maxHandshakes, "max_inflight_mib", *maxInflight, "idle_timeout", idleTimeout.String())
 	if !plat.Clock.Trusted() && mode.Floor && !mode.Persist {
 		log.Warn("restart floor relies on a clock the host controls; a host that moves it can get double votes signed")
@@ -496,7 +509,10 @@ func setupMarkLog(ctx context.Context, plat *platform.Platform, hooks *state.Hoo
 		if opts.Setup, err = markstore.SetupOf(st.Wire, st.SHA256); err != nil {
 			return markClaim{}, err
 		}
-		opts.Clock = plat.Clock.Now
+		// The NTS time, or the coarse time while it has no quorum, so a
+		// config update the coarse clock checked is stored too
+		// (server.ConfigTime).
+		opts.Clock = server.ConfigTime(plat.Clock)
 		if platformName != "dev" {
 			lctx, lcancel := context.WithTimeout(ctx, 60*time.Second)
 			err := markstore.CheckLock(lctx, l, st.Wire.SlashingLogMinLockDays)
@@ -505,6 +521,9 @@ func setupMarkLog(ctx context.Context, plat *platform.Platform, hooks *state.Hoo
 				return markClaim{}, err
 			}
 			opts.LockDays = st.Wire.SlashingLogMinLockDays
+		}
+		if err := checkStoreProject(ctx, l, st.Wire.Platform.SealingKeyRelease.ProjectNumber, "mark log"); err != nil {
+			return markClaim{}, err
 		}
 	}
 	m, err := markstore.New(l, signerID, plat.Keys, opts)

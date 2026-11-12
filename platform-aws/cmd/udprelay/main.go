@@ -7,8 +7,8 @@
 // The defaults allow every NTS server of the image's catalog: their NTP host names,
 // ports 123 and 4123, and Netnod's NTP server block 194.58.200.0/21. The
 // relay cannot forge time: NTS authenticates every answer. It can delay or
-// drop datagrams, as any network on the path can. With -clock-protocol ntp
-// (plain NTP) on the enclave it can forge every answer, within the coarse
+// drop datagrams, as any network on the path can. With plain NTP (the
+// setup's time_policy protocol ntp) it can forge every answer, within the coarse
 // check's window (trusted-time/docs/nts.md, "Plain NTP").
 //
 // Build it with -tags platform_aws: only that build has vsock

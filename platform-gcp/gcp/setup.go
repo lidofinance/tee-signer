@@ -21,8 +21,16 @@ const MetadataSetupURL = "http://metadata.google.internal/computeMetadata/v1/ins
 // and the host can hand over any bytes; other bytes make another signer.
 type MetadataSetup struct {
 	URL   string        // MetadataSetupURL; tests use a fake
-	HTTP  *http.Client  // nil: a client with a 10 s timeout
+	HTTP  *http.Client  // nil: metadataClient
 	Retry time.Duration // pause between tries; 0: 2 s
+}
+
+// metadataClient is the client for the metadata server: a 10 s timeout,
+// and no proxy, since the server is link-local.
+func metadataClient() *http.Client {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.Proxy = nil
+	return &http.Client{Timeout: 10 * time.Second, Transport: t}
 }
 
 // maxAttribute bounds the answer: a setup's base64 and some white space.
@@ -34,7 +42,7 @@ const maxAttribute = 128 << 10
 func (m MetadataSetup) Read(ctx context.Context) ([]byte, error) {
 	client := m.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
+		client = metadataClient()
 	}
 	retry := m.Retry
 	if retry <= 0 {

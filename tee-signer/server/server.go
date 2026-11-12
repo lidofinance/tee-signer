@@ -29,6 +29,7 @@ import (
 	"github.com/lidofinance/tee-signer/signer-protocol/wire"
 	wireadmin "github.com/lidofinance/tee-signer/signer-protocol/wire/admin"
 	"github.com/lidofinance/tee-signer/slashing-log"
+	"github.com/lidofinance/tee-signer/tee-signer/attls"
 	"github.com/lidofinance/tee-signer/tee-signer/state"
 	"github.com/lidofinance/tee-signer/trusted-time/clock"
 )
@@ -77,7 +78,18 @@ type Server struct {
 	// time has its chain checked against it once the clock has a reading
 	// (roles.go). nil: such a connection gets HEALTH only.
 	ClientCAs *x509.CertPool
-	Log       *slog.Logger
+	// UndatedRoots are the same CAs without their dates
+	// (attls.UndatedRoots). For a handshake without trusted time the server
+	// keeps the chains to them, CA certificates included, for the
+	// revocation check of each frame (roles.go). nil: it keeps the
+	// certificates the client sent.
+	UndatedRoots *x509.CertPool
+	// Revoked is the set of revoked client certificates in force
+	// (revoked.go), the one the TLS configuration refuses at the handshake
+	// (attls.WithRevoked). Every frame of a TLS client checks it again.
+	// nil: none.
+	Revoked *attls.Revoked
+	Log     *slog.Logger
 	// Updates, if set, takes CONFIG_UPDATE and keeps the core at the config
 	// in force (config.go): a runner with a setup. nil: CONFIG_UPDATE is
 	// UNSUPPORTED.
@@ -238,7 +250,8 @@ func (s *Server) LoadShares() (int, error) {
 }
 
 // ProveSealingKey checks a sealing key that came from a stored blob
-// (platform.Platform.SealingKeyStored, AWS-KMS-02) against the stored
+// (platform.Platform.SealingKeyStored: AWS-KMS-02 on Nitro, a planted
+// data key on GCP) against the stored
 // shares of names (from ListShares): it needs at least one, and every one
 // must unseal under the key. The host can put any object under shares/
 // next to the blob, and a share that does not open means the blob or the
@@ -247,17 +260,20 @@ func (s *Server) LoadShares() (int, error) {
 // this signer that does not open for another reason: one left from an
 // earlier life of the mark log (sealed under an older log_id) or restored
 // from another signer by mistake. LoadListedShares would log and skip it;
-// here it stops the start, the error names it, and the operator removes
-// it from shares/ before the restart. On success SealingKeyUnproven is
-// cleared. Call it before Serve, and only when the image check lets the
-// shares load.
+// here it stops the start, the error names it, and the error says what
+// the operator can do on this platform (proveFix). On success
+// SealingKeyUnproven is cleared. Call it before Serve, and only when the
+// image check lets the shares load.
 //
 // The check has a limit. A key admin who made the blob before the key
 // policy was locked knows the key, can seal a share under it and, before
 // the lock, a mark log record too: such a blob passes, and every later
 // share is sealed under a key the admin holds. Only the deploy rule
 // prevents that (create the key with its final, locked policy,
-// platform-aws/deploy/README.md); the runner cannot check it.
+// platform-aws/deploy/README.md); the runner cannot check it. On GCP a
+// holder of the encrypter role can do the same at any time; only keeping
+// the role to the WIF principal set prevents it
+// (platform-gcp/deploy/README.md).
 func (s *Server) ProveSealingKey(keys []string) error {
 	if err := s.checkLogID(); err != nil {
 		return err
@@ -285,12 +301,25 @@ func (s *Server) ProveSealingKey(keys []string) error {
 	}
 	if len(bad) > 0 {
 		return fmt.Errorf("the stored sealing key opens %d of %d stored shares; %s did not open. "+
-			"A sealing key that does not open every stored share may be one the key admin made before the key policy was locked (AWS-KMS-02), "+
-			"so this runner seals nothing under it. Remove what does not belong under shares/ on the host, or, if no share opens, "+
-			"move the sealing blob aside too, and restart", len(keys)-len(bad), len(keys), strings.Join(bad, ", "))
+			"A sealing key that does not open every stored share may be one that someone outside the TEE planted, "+
+			"so this runner seals nothing under it. %s", len(keys)-len(bad), len(keys), strings.Join(bad, ", "), proveFix(s.Platform.Name))
 	}
 	s.SealingKeyUnproven = false
 	return nil
+}
+
+// proveFix says what the operator can do after ProveSealingKey refused.
+func proveFix(platformName string) string {
+	if platformName == "gcp" {
+		// The store is the container's file system and the state copy is
+		// encrypted and restored as a whole commit: nobody outside the VM
+		// can edit either. A new setup has a new setup_hash, so a new
+		// state copy path and a new sealing AAD.
+		return "The store and its state copy cannot be edited from outside the VM: " +
+			"start over with a new setup and import the shares again"
+	}
+	return "Remove what does not belong under shares/ on the host, or, if no share opens, " +
+		"move the sealing blob aside too, and restart"
 }
 
 // SetStateCopyFailed records the result of a state copy refresh: an error
@@ -741,7 +770,7 @@ func (s *Server) handleConn(ctx context.Context, c net.Conn) {
 			return
 		}
 		cs := tc.ConnectionState()
-		cl = clientOf(&cs)
+		cl = s.clientOf(&cs)
 		if cl.undated {
 			s.Log.Warn("tls handshake without trusted time: HEALTH only until the clock has a reading", "remote", c.RemoteAddr().String(),
 				"cert_sha256", hex.EncodeToString(cl.cert[:8]))
@@ -1564,6 +1593,7 @@ func (s *Server) health() (*backend.Health, error) {
 	if s.Updates != nil {
 		w := s.Updates.SetupWire()
 		h.SingleKey, h.SigningMode = singleKey(&w.Platform), w.SigningMode.String()
+		h.LastUpdatePath = s.Updates.lastUpdatePath()
 	}
 	st := s.Signer.Stats()
 	h.Stats = &backend.SignerStats{
@@ -1615,7 +1645,7 @@ func healthNTS(s clock.NTSSummary) *backend.ClockNTS {
 	ms := func(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
 	out := &backend.ClockNTS{
 		Protocol: string(s.Protocol),
-		Quorum:   s.Quorum, Refused: s.Refused, BoundNowMS: ms(s.BoundNow), MaxBoundMS: ms(s.MaxBound), OffsetFromHostMS: ms(s.OffsetFromHost),
+		Quorum:   s.Quorum, Refused: s.Refused, BoundNowMS: ms(s.BoundNow), WorstBoundMS: ms(s.WorstBoundNow), MaxBoundMS: ms(s.MaxBound), OffsetFromHostMS: ms(s.OffsetFromHost),
 		Members: s.Members, QuorumAgeMS: ms(s.AgeOfQuorum), SampleAgeMS: ms(s.SampleAge), MaxSampleAgeMS: ms(s.MaxSampleAge),
 		Refusals: s.Refusals,
 		DriftPPM: s.DriftPPM, DriftErrPPM: s.DriftErrPPM, DriftBaselineS: s.DriftBaseline.Seconds(), RhoViolations: s.RhoViolations,

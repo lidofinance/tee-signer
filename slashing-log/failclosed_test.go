@@ -243,7 +243,7 @@ func TestUnreadableRecordOnWriteLatchesLost(t *testing.T) {
 	// (a) The newer image's record at version 5: this instance's next
 	// write must latch ErrLost and write nothing.
 	l, a, prev := written()
-	newer := recordBy(other, prev, 5, '3')
+	newer := recordBy(other, prev, 5, '4')
 	if _, err := Parse(newer); err == nil {
 		t.Fatal("this reader parses the newer record")
 	}
@@ -263,8 +263,8 @@ func TestUnreadableRecordOnWriteLatchesLost(t *testing.T) {
 	// instance's readable record 6 above the newer image's record 5. A
 	// start must refuse with ErrUnreadable, not take record 6.
 	l, a, prev = written()
-	l.objs[Name(setup, "signer-1", 5)] = [][]byte{recordBy(other, prev, 5, '3')}
-	l.objs[Name(setup, "signer-1", 6)] = [][]byte{recordBy(a, prev, 6, '2')}
+	l.objs[Name(setup, "signer-1", 5)] = [][]byte{recordBy(other, prev, 5, '4')}
+	l.objs[Name(setup, "signer-1", 6)] = [][]byte{recordBy(a, prev, 6, '3')}
 	m2, _ := New(l, "signer-1", testKey(1), opt)
 	if _, _, err := m2.Claim(ctx, true); !errors.Is(err, ErrUnreadable) || !strings.Contains(err.Error(), "version 5") {
 		t.Errorf("claim over a newer image's record below the newest: %v, want ErrUnreadable at version 5", err)

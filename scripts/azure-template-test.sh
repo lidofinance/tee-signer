@@ -3,7 +3,8 @@
 # renders and deploys it, without a build overlay:
 #
 #   render   the runner alone, on tcp:0.0.0.0:7100 with port 7100 declared
-#            and the fixed NTS flags. The three signers' containers are
+#            and the fixed NTS flags, without the clock flags the setup
+#            gives (a template with one is refused). The three signers' containers are
 #            the same. The subnet and the log workspace are optional
 #            parameters that no container uses, so SUBNET_ID_N and the
 #            workspace settings leave the rendered file unchanged.
@@ -57,15 +58,30 @@ tpl() { echo "$out_az/signer-$1/template.json"; }
 for n in 1 2 3; do
   dep bash "$DEPLOY" render "$n" >/dev/null 2>"$work/render.log" || { cat "$work/render.log"; bad "render $n"; }
 done
-grep -q 'signer 3: clock protocol nts' "$work/render.log" && ok "render: states the clock protocol (nts)" ||
+grep -q 'signer 3: clock protocol and bounds from the setup' "$work/render.log" && ok "render: states that the setup gives the clock protocol" ||
   bad "render: no clock protocol line: $(cat "$work/render.log")"
 t="$(tpl 1)"
 c='.resources[0].properties.containers'
 if jq -e "$c | length == 1 and .[0].name == \"runner\"" "$t" >/dev/null; then ok "render: the runner alone"; else bad "render: containers $(jq -c "[${c}[].name]" "$t")"; fi
 cmd="$(jq -c "${c}[0].properties.command" "$t")"
-for w in '"-listen","tcp:0.0.0.0:7100"' '"-nts-wait","90s"' '"-nts-max-bound","100ms"' '"-nts-max-sample-bound","100ms"' '"-setup","platform"'; do
+for w in '"-listen","tcp:0.0.0.0:7100"' '"-nts-wait","90s"' '"-setup","platform"'; do
   grep -qF -- "$w" <<<"$cmd" || bad "render: runner command lacks $w: $cmd"
 done
+for w in '"-clock-protocol' '"-nts-max-bound' '"-nts-max-sample-bound' '"-nts-terms-confirmed'; do
+  ! grep -qF -- "$w" <<<"$cmd" || bad "render: runner command has ${w#\"}, which the setup gives: $cmd"
+done
+# A template that sets one of them is refused: the setup gives them.
+tpl_src="$work/platform-azure/deploy/aci-template.json"
+cp "$tpl_src" "$work/aci-template.orig"
+for f in -clock-protocol -nts-max-bound -nts-max-sample-bound=1s -nts-terms-confirmed; do
+  jq --arg f "$f" '.resources[0].properties.containers[0].properties.command |= (.[:-1] + [$f] + .[-1:])' \
+    "$work/aci-template.orig" >"$tpl_src"
+  run_rc dep bash "$DEPLOY" render 1
+  [ "$rc" -ne 0 ] && grep -q 'which the setup gives' <<<"$out" && ok "render: refuses ${f%%=*} in the command" ||
+    bad "render: ${f%%=*} in the command: rc $rc: $out"
+done
+cp "$work/aci-template.orig" "$tpl_src"
+dep bash "$DEPLOY" render 1 >/dev/null 2>&1 || bad "render 1 again on the template as it is"
 jq -e "${c}[0].properties.ports == [{port: 7100, protocol: \"TCP\"}]" "$t" >/dev/null &&
   ok "render: tcp:0.0.0.0:7100, port 7100 declared, the fixed NTS flags" || bad "render: runner ports $(jq -c "${c}[0].properties.ports" "$t")"
 p='.resources[0].properties'

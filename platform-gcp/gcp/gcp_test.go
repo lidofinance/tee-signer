@@ -29,6 +29,10 @@ func fakeJWT(claims map[string]any) string {
 	return "eyJhbGciOiJSUzI1NiJ9." + base64.RawURLEncoding.EncodeToString(p) + ".c2ln"
 }
 
+// testGCE is the submods.gce claim of the fake launcher's tokens: the
+// project of testKMS's WIF provider (by number) and KMS key (by ID).
+var testGCE = map[string]any{"project_id": "p", "project_number": "1", "zone": "europe-west4-a", "instance_id": "123"}
+
 // fakeLauncher serves POST /v1/token on a unix socket like the
 // Confidential Space launcher (request fields from Google's docs).
 func fakeLauncher(t *testing.T, iat int64) string {
@@ -48,7 +52,7 @@ func fakeLauncher(t *testing.T, iat int64) string {
 			return
 		}
 		w.Write([]byte(fakeJWT(map[string]any{"aud": req.Audience, "iat": iat, "eat_nonce": req.Nonces,
-			"swname": "CONFIDENTIAL_SPACE"})))
+			"swname": "CONFIDENTIAL_SPACE", "submods": map[string]any{"gce": testGCE}})))
 	})}
 	go srv.Serve(l)
 	t.Cleanup(func() { srv.Close() })
@@ -166,11 +170,12 @@ func TestFlowsAgainstFakes(t *testing.T) {
 		STSURL: g.URL, IAMURL: g.URL, KMSURL: g.URL}
 	store, _ := filestore.New(t.TempDir())
 	ctx := context.Background()
-	d1, err := k.dataKey(ctx, store, [32]byte{1})
+	d1, _, err := k.dataKey(ctx, store, [32]byte{1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	d2, err := k.dataKey(ctx, store, [32]byte{1})
+	store.Put(sharePrefix+"aa01", []byte("sealed share"))
+	d2, _, err := k.dataKey(ctx, store, [32]byte{1})
 	if err != nil || !bytes.Equal(d1, d2) || len(d1) != 32 {
 		t.Fatalf("data key not stable: %v", err)
 	}
@@ -228,5 +233,17 @@ func TestIdentityAudience(t *testing.T) {
 		"kms_key":      "projects/p/locations/l/keyRings/r/cryptoKeys/k"}})
 	if err == nil || !strings.Contains(err.Error(), "STS audience") {
 		t.Fatalf("New with the STS audience: %v", err)
+	}
+}
+
+// The runner's clients ignore proxy variables, as the Azure runner's do:
+// Google's APIs and the metadata server are reached directly, never
+// through a proxy the VM's environment names.
+func TestClientsIgnoreProxyVariables(t *testing.T) {
+	for name, c := range map[string]*http.Client{"google": googleClient(), "metadata": metadataClient()} {
+		tr, ok := c.Transport.(*http.Transport)
+		if !ok || tr.Proxy != nil {
+			t.Errorf("%s client: transport %T with a proxy function", name, c.Transport)
+		}
 	}
 }

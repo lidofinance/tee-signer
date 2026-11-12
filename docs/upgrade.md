@@ -47,11 +47,53 @@ refuses the others, and the format is part of `setup_hash`. So across a
 format change no signer can move on its old setup: each one moves as a
 new signer, as above.
 
+Format 6 is the current one. A format 6 image refuses format 5 setups.
+It changed:
+
+- Locked group: `min_activation_balance`, `max_effective_balance`,
+  `withdrawal_credentials` and `allowed_deposit_amounts` moved into
+  `deposit_policy` (`deposit_policy.min_activation_balance` and so on),
+  with a list of withdrawal credentials in place of one. New are
+  `time_policy` (`time_policy.protocol`, `time_policy.max_bound_ms`,
+  `time_policy.max_sample_bound_ms`) and `exit_policy` (empty).
+- Open group: new are `revoked_client_certs` (hashes of client
+  certificates or public keys the runner refuses) and `time_servers` (NTS
+  catalog IDs the clock dials besides the image's default set, at most
+  10).
+- GCP key release: new `sealing_key_release.project_number`, required on
+  a prod chain. With it, `wif_provider` names that project number and
+  `kms_key` the project ID, the only form Cloud KMS takes
+  (platform-gcp/deploy/README.md, "Setup").
+- The clock's protocol, bounds and servers come from the setup. An image
+  command no longer sets `-clock-protocol`, `-nts-max-bound`,
+  `-nts-max-sample-bound` or `-nts-terms-confirmed`, and a cloud runner
+  with a setup refuses to start when one of them, or its variable, is set.
+- CONFIG_UPDATE is version 2. Each changed field has a class
+  (`setupwire.Update.Decide`): a tightening is in force at once with the
+  usual count, a loosening waits the change delay (so does any change of
+  `approvals_needed` or the change delay, and an empty image list), and a
+  few loosenings
+  (an image added, NTS to NTP, a higher time bound, a dropped revocation)
+  are in force at once when every approver signs (break-glass). Within one
+  change delay after an update that removed an approver, break-glass is
+  not available. After any change of the approver set, break-glass adds
+  no image until the new set has been in force for the images minimum
+  (or the change delay, when that is longer). `attestation-verify/docs/attestation-statement.md` has
+  the full rules.
+
 Format 5 added `sealing_key_release.kms_key_creation_date` (AWS-KMS-02),
-required for Nitro on a prod chain. A new image refuses format 4 setups.
+required for Nitro on a prod chain.
 
 1. Build `signer-admin` and `setup-tool` from the new commit.
-2. Nitro on a prod chain: check the key's CloudTrail history
+2. Rewrite each setup file for format 6: rename the four deposit fields
+   to their `deposit_policy.` names, and add `time_policy.*` with the
+   protocol and bounds the image command gave before (defaults: `nts`,
+   100 and 100). Move the IDs of `-nts-terms-confirmed` to
+   `time_servers`. On GCP, add `sealing_key_release.project_number`, and
+   keep `kms_key` by project ID: Cloud KMS refuses a key name with the
+   project number. `setup-tool show` on an encoded
+   setup prints every field with a note, as a check.
+3. Nitro on a prod chain: check the key's CloudTrail history
    ([platform-aws/deploy/README.md](../platform-aws/deploy/README.md#setup),
    "Setup", the bullet "The setup pins the key's creation"). Then add
    `sealing_key_release.kms_key_creation_date = <terraform output
@@ -60,21 +102,33 @@ required for Nitro on a prod chain. A new image refuses format 4 setups.
    Nitro off prod: the date is optional. A key made with
    `key_policy_locked = false` fails the CloudTrail check by design, so
    skip the check. Pinning the date still binds the setup to that key.
-3. Set `setup_format_version = 5` and run
+4. Set `setup_format_version = 6` and run
    `signer-admin setup -out DIR FILE`. It prints each new `setup_sha256`.
-4. The approvers read each setup with `setup-tool show FILE` and approve
+5. The approvers read each setup with `setup-tool show FILE` and approve
    its `setup_sha256`.
-5. Put the new setups in force one signer at a time, as new signers:
+6. Put the new setups in force one signer at a time, as new signers:
    stop the old signer and start the new one on its setup (above, and
    "Rules" below). No locked update comes first: a locked update applies under
    the old setup_hash, and each new setup lists the new image in its own
-   `allowed_image_measurements`.
-6. Import the shares again under new import orders. An import order names
+   `allowed_image_measurements`. Drop the four clock flags from the
+   image command of the new image.
+7. Import the shares again under new import orders. An import order names
    the setup_hash of its target (`target_setup_hash`), so no order signed
    for the old setup works on the new one: `approvals_needed` approvers
    sign a new order for each signer, then `assemble` and `import`
    ([signer-admin/README.md](../signer-admin/README.md#splitting-existing-keys),
    "Splitting existing keys", steps 1 to 4).
+
+## A new image withdraws a time server
+
+A new image's NTS catalog may withdraw an entry, or drop an alt host's
+Nitro port. If the `time_servers` in force name it, the runner on that
+image starts (the starting values skip the entry with a warning), but the
+clock refuses the values in force, and the runner signs nothing until an
+open update names a list the new catalog takes. So send that open update
+first, under the old image (usual count, no wait), then roll out the new
+image. `signer-admin draft` and `show` check a list against the catalog
+of the signer-admin build, which should be the new image's.
 
 ## A cloud moves to a new TLS root
 
@@ -195,8 +249,11 @@ Then:
 7. Wait for `activate_at`. `signer-admin status -cluster cluster.json`
    shows it as `pending=locked:vN/...@TIME`. It is now plus the wait plus
    the `draft -margin` (default 10 minutes). For a new image the wait is
-   at least the images minimum (7 days on a prod chain, 7 minutes off
-   prod). On a prod chain the change delay never drops below the build's
+   at least the images minimum (7 days in the mainnet build, 7 minutes
+   in a non-prod build). Every approver can sign a new image in with no
+   wait (break-glass), but only once the approver set has been in force
+   for that long: after a rotation or a removal such an update waits as
+   any other. On a prod chain the change delay never drops below the build's
    default time lock.
 8. `signer-admin status -cluster cluster.json` shows `locked=vN/...` with
    the new version and no `pending=` on every signer.

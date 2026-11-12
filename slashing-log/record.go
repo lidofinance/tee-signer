@@ -1,12 +1,14 @@
 package markstore
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -15,8 +17,9 @@ import (
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
-// Record is one entry of a signer's mark log, magic SMARK2 (SMARK1 reads
-// as a record without Shares). Every record carries the full config state, so no record needs an earlier one for the
+// Record is one entry of a signer's mark log, magic SMARK3 (SMARK1 reads
+// as a record without Shares, SMARK1 and SMARK2 without the config history,
+// ConfigState.RemovedAt, ApproversAt and Carried). Every record carries the full config state, so no record needs an earlier one for the
 // config.
 type Record struct {
 	Setup       [32]byte          // setup_hash; zero on the flag path without a setup
@@ -44,7 +47,9 @@ type Record struct {
 	Sig    [ed25519.SignatureSize]byte
 
 	body []byte // the signed bytes, as read (Parse)
-	v1   bool   // read as SMARK1 (Parse): it encodes back without the share set
+	// ver is the format digit Parse read, 1 or 2 for an older record, which
+	// encodes back as it was read; 0 for the newest, recordVersion.
+	ver byte
 }
 
 // ConfigState is the config state a record carries (section 6): per group
@@ -54,6 +59,38 @@ type ConfigState struct {
 	Locked GroupState
 	Open   GroupState
 	Order  *Order // nil: none
+	// RemovedAt is the effective time of the newest locked update in force
+	// that removed one approver (setupwire.EmergencyRemoval), 0 for none. A
+	// break-glass change waits one change delay after it
+	// (setupwire.History).
+	RemovedAt uint64
+	// ApproversAt is the effective time of the newest locked update in
+	// force that changed the approver set (a rotation: other keys, another
+	// order or another approvals_needed; a removal too), 0 for none. A
+	// break-glass update that adds an image waits the images wait after it
+	// (setupwire.History).
+	ApproversAt uint64
+	// Carried are the revoked_client_certs entries of a pending open
+	// update that a rotation dropped, which the runner keeps refusing until
+	// the next open update comes into force (leaving one out of it needed
+	// every approver). Sorted, without repeats, at most MaxCarried.
+	Carried [][32]byte
+	// Paths is the path each update the state names came by
+	// (setupwire.Path; 0 unknown, as for version 0 and an update of an
+	// older record), in bodyIndex order: locked active, locked pending,
+	// open active, open pending. HEALTH reports it after a restart too.
+	Paths [4]setupwire.Path
+}
+
+// Path is the path of group g's active (pending false) or pending update.
+func (s *ConfigState) Path(g setupwire.Group, pending bool) setupwire.Path {
+	return s.Paths[bodyIndex(g, pending)]
+}
+
+// SetPath sets the path of group g's active (pending false) or pending
+// update.
+func (s *ConfigState) SetPath(g setupwire.Group, pending bool, p setupwire.Path) {
+	s.Paths[bodyIndex(g, pending)] = p
 }
 
 // GroupState is one config group's state.
@@ -117,18 +154,19 @@ func (s ConfigState) Clone() ConfigState {
 		o := *c.Order
 		c.Order = &o
 	}
+	c.Carried = slices.Clone(c.Carried)
 	return c
 }
 
-// Equal reports whether two states name the same versions, hashes, times
-// and order.
+// Equal reports whether two states name the same versions, hashes, times,
+// order and config history.
 func (s ConfigState) Equal(o ConfigState) bool {
 	pendEq := func(a, b *Pending) bool { return a == b || a != nil && b != nil && *a == *b }
 	grpEq := func(a, b GroupState) bool {
 		return a.Version == b.Version && a.Hash == b.Hash && pendEq(a.Pending, b.Pending)
 	}
 	ordEq := s.Order == o.Order || s.Order != nil && o.Order != nil && *s.Order == *o.Order
-	return grpEq(s.Locked, o.Locked) && grpEq(s.Open, o.Open) && ordEq
+	return grpEq(s.Locked, o.Locked) && grpEq(s.Open, o.Open) && ordEq && s.RemovedAt == o.RemovedAt && s.ApproversAt == o.ApproversAt && slices.Equal(s.Carried, o.Carried) && s.Paths == o.Paths
 }
 
 // bodyIndex is the position in Record.Copies of a group's active (pending
@@ -145,15 +183,19 @@ func bodyIndex(g setupwire.Group, pending bool) int {
 }
 
 const (
-	// recordMagic is "SMARK" and the format version digit, 2, the one
-	// this image writes; it reads 1 too (recordMagicV1, without the share
-	// set). A record with a higher digit is from a newer image
-	// (RecordHeader).
-	recordMagic   = "SMARK2"
+	// recordMagic is "SMARK" and the format version digit, 3, the one
+	// this image writes; it reads 2 (recordMagicV2, without the config
+	// history) and 1 (recordMagicV1, without the share set either). A
+	// record with a higher digit is from a newer image (RecordHeader).
+	recordMagic   = "SMARK3"
+	recordMagicV2 = "SMARK2"
 	recordMagicV1 = "SMARK1"
-	versionWidth  = 20
-	maxSignerLen  = 128
-	maxKeyBlob    = 1024
+	// MaxCarried bounds ConfigState.Carried: one open update's
+	// revoked_client_certs.
+	MaxCarried   = setupwire.MaxRevokedClientCerts
+	versionWidth = 20
+	maxSignerLen = 128
+	maxKeyBlob   = 1024
 	// MaxRecord bounds an encoded record: the store clients read at most
 	// 1 MiB of an object, a record is about 700 bytes.
 	MaxRecord = 32768
@@ -232,8 +274,11 @@ func putFlag(b []byte, on bool) []byte {
 func (r *Record) encodeBody() []byte {
 	be := binary.BigEndian
 	magic := recordMagic
-	if r.v1 {
+	switch r.ver {
+	case 1:
 		magic = recordMagicV1
+	case 2:
+		magic = recordMagicV2
 	}
 	b := append([]byte(magic), r.Setup[:]...)
 	b = append(b, byte(len(r.Signer)))
@@ -279,7 +324,7 @@ func (r *Record) encodeBody() []byte {
 	if r.SourceGate != nil {
 		b = be.AppendUint64(b, *r.SourceGate)
 	}
-	if r.v1 {
+	if r.ver == 1 {
 		return b
 	}
 	b = putFlag(b, r.Shares != nil)
@@ -289,6 +334,24 @@ func (r *Record) encodeBody() []byte {
 		if s.Pending != nil {
 			b = append(b, s.Pending[:]...)
 		}
+	}
+	if r.ver == 2 {
+		return b
+	}
+	b = putFlag(b, r.State.RemovedAt != 0)
+	if r.State.RemovedAt != 0 {
+		b = be.AppendUint64(b, r.State.RemovedAt)
+	}
+	b = putFlag(b, r.State.ApproversAt != 0)
+	if r.State.ApproversAt != 0 {
+		b = be.AppendUint64(b, r.State.ApproversAt)
+	}
+	b = append(b, byte(len(r.State.Carried)))
+	for _, h := range r.State.Carried {
+		b = append(b, h[:]...)
+	}
+	for _, p := range r.State.Paths {
+		b = append(b, byte(p))
 	}
 	return b
 }
@@ -335,20 +398,26 @@ func (r *recReader) flag() (bool, bool) { v := r.u8(); return v == 1, v <= 1 }
 
 // Parse reads a record's fields without checking its signature: the key
 // that checks it is in KeyBlob, which only the platform's key release
-// opens (Verify). It reads SMARK1 and SMARK2, and refuses any encoding
+// opens (Verify). It reads SMARK1, SMARK2 and SMARK3, and refuses any encoding
 // that does not read back to the same bytes under its own magic and any
 // state the format does not allow.
 func Parse(enc []byte) (*Record, error) {
 	if len(enc) > MaxRecord || len(enc) < len(recordMagic)+ed25519.SignatureSize {
 		return nil, errors.New("markstore: not a mark record")
 	}
-	v2 := string(enc[:len(recordMagic)]) == recordMagic
-	if !v2 && string(enc[:len(recordMagicV1)]) != recordMagicV1 {
+	var ver byte
+	switch string(enc[:len(recordMagic)]) {
+	case recordMagic:
+	case recordMagicV2:
+		ver = 2
+	case recordMagicV1:
+		ver = 1
+	default:
 		return nil, errors.New("markstore: not a mark record")
 	}
 	body := enc[:len(enc)-ed25519.SignatureSize]
 	rd := &recReader{b: body[len(recordMagic):]}
-	r := &Record{v1: !v2}
+	r := &Record{ver: ver}
 	rd.fixed(r.Setup[:])
 	r.Signer = string(rd.take(int(rd.u8())))
 	r.Version, r.PrevVersion = rd.u64(), rd.u64()
@@ -406,7 +475,7 @@ func Parse(enc []byte) (*Record, error) {
 		f := rd.u64()
 		r.SourceGate = &f
 	}
-	if v2 {
+	if ver != 1 {
 		has, valid = rd.flag()
 		ok = ok && valid
 		if has {
@@ -420,6 +489,30 @@ func Parse(enc []byte) (*Record, error) {
 				s.Pending = &p
 			}
 			r.Shares = s
+		}
+	}
+	if ver == 0 {
+		has, valid = rd.flag()
+		ok = ok && valid
+		if has {
+			// Presence with 0 would encode back without it.
+			r.State.RemovedAt = rd.u64()
+			ok = ok && r.State.RemovedAt != 0
+		}
+		has, valid = rd.flag()
+		ok = ok && valid
+		if has {
+			r.State.ApproversAt = rd.u64()
+			ok = ok && r.State.ApproversAt != 0
+		}
+		if n := int(rd.u8()); n > 0 {
+			r.State.Carried = make([][32]byte, n)
+			for i := range r.State.Carried {
+				rd.fixed(r.State.Carried[i][:])
+			}
+		}
+		for i := range r.State.Paths {
+			r.State.Paths[i] = setupwire.Path(rd.u8())
 		}
 	}
 	if rd.bad || len(rd.b) != 0 || !ok {
@@ -529,6 +622,42 @@ func (r *Record) check() error {
 	}
 	if o := r.State.Order; o != nil && o.Kind != OrderHandover {
 		return bad(fmt.Sprintf("order kind %d", o.Kind))
+	}
+	if err := r.State.checkCarried(); err != nil {
+		return bad(err.Error())
+	}
+	if err := r.State.checkPaths(); err != nil {
+		return bad(err.Error())
+	}
+	return nil
+}
+
+// checkPaths: each path is 0 or a known one (up to
+// setupwire.PathEmergencyRemoval), and 0 where the state names no update
+// (version 0, no pending update).
+func (s *ConfigState) checkPaths() error {
+	for gi, g := range []*GroupState{&s.Locked, &s.Open} {
+		active, pending := s.Paths[2*gi], s.Paths[2*gi+1]
+		if active > setupwire.PathEmergencyRemoval || pending > setupwire.PathEmergencyRemoval {
+			return fmt.Errorf("update path %d or %d", active, pending)
+		}
+		if g.Version == 0 && active != 0 || g.Pending == nil && pending != 0 {
+			return errors.New("an update path where the state names no update")
+		}
+	}
+	return nil
+}
+
+// checkCarried: at most MaxCarried carried revocations, sorted, without
+// repeats, none zero.
+func (s *ConfigState) checkCarried() error {
+	if len(s.Carried) > MaxCarried {
+		return fmt.Errorf("%d carried revocations, at most %d", len(s.Carried), MaxCarried)
+	}
+	for i, h := range s.Carried {
+		if h == ([32]byte{}) || i > 0 && bytes.Compare(s.Carried[i-1][:], h[:]) >= 0 {
+			return errors.New("carried revocations not sorted, repeated or zero")
+		}
 	}
 	return nil
 }

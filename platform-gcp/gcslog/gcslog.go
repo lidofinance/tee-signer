@@ -216,6 +216,32 @@ func (l *Log) Lock(ctx context.Context) (markstore.Lock, error) {
 		Retention: time.Duration(secs) * time.Second}, nil
 }
 
+// ProjectNumber reads the number of the project that holds the bucket
+// (buckets.get, fields=projectNumber), with the same permission as Lock.
+// The runner compares it with the setup's project_number.
+func (l *Log) ProjectNumber(ctx context.Context) (uint64, error) {
+	q := url.Values{"fields": {"projectNumber"}}
+	resp, err := l.do(ctx, http.MethodGet, l.base()+"/storage/v1/b/"+url.PathEscape(l.Bucket)+"?"+q.Encode(), nil)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, errorOf(resp)
+	}
+	var b struct {
+		ProjectNumber string `json:"projectNumber"` // uint64 as a string
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&b); err != nil {
+		return 0, fmt.Errorf("gcslog: bucket: %w", err)
+	}
+	n, err := strconv.ParseUint(b.ProjectNumber, 10, 64)
+	if err != nil || n == 0 {
+		return 0, fmt.Errorf("gcslog: bucket %s: project number %q", l.Bucket, b.ProjectNumber)
+	}
+	return n, nil
+}
+
 // Get downloads one generation of an object.
 func (l *Log) Get(ctx context.Context, e markstore.Entry) ([]byte, error) {
 	q := url.Values{"alt": {"media"}}

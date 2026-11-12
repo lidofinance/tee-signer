@@ -583,6 +583,7 @@ func writeDraft(c *cluster, states []*signerState, body *setupwire.UpdateBody, m
 	}
 	switch body.Group {
 	case setupwire.GroupOpen:
+		checkTimeServersNote(out, a.open, body.Open)
 		// The fork rule counts epochs under the slot times in force and those
 		// of a pending locked update, as the runners do.
 		lists := [][]setupwire.SlotTimeChange{a.locked.SlotTimeChanges}

@@ -134,22 +134,15 @@ for not in " -config " " -tls-client-ca " " -platform-opt " " -mark-store " " -s
   " -mark-create" " -state-create" " -record" "service_account="; do
   ! grep -q -F -- "$not" "$OUT/runner.entrypoint" || die "the image entrypoint has$not"
 done
-# The NTS clock with its start wait and error bound, and no -clock flag
-# that would replace it.
+# The NTS clock with its start wait, and no -clock flag that would replace
+# it. The protocol, the bounds and the extra servers come from the setup
+# (time_policy, time_servers), and the runner refuses their flags with one.
 grep -q -F -- " -nts-clock -nts-coarse-urls " "$OUT/runner.entrypoint" || die "the image entrypoint lacks -nts-clock"
-for want in " -nts-wait " " -nts-max-bound " " -nts-max-sample-bound "; do
-  grep -q -F -- "$want" "$OUT/runner.entrypoint" || die "the image entrypoint lacks$want"
-done
+grep -q -F -- " -nts-wait " "$OUT/runner.entrypoint" || die "the image entrypoint lacks -nts-wait"
 ! grep -q -F -- " -clock " "$OUT/runner.entrypoint" || die "the image entrypoint has -clock, which would replace the NTS clock"
-# The clock protocol the entrypoint names: nts without -clock-protocol, or
-# ntp (plain NTP, unauthenticated). The inputs record states it.
-clock_protocol="$(grep -oE -- ' -clock-protocol[ =][^ ]*' "$OUT/runner.entrypoint" | tail -1 | sed -E 's/^ -clock-protocol[ =]//' || true)"
-clock_protocol="${clock_protocol:-nts}"
-case "$clock_protocol" in
-  nts) ;;
-  ntp) log "the image entrypoint runs plain NTP (-clock-protocol ntp): unauthenticated, the host can forge every answer within the coarse check (trusted-time/docs/nts.md, Plain NTP)" ;;
-  *) die "the image entrypoint names -clock-protocol $clock_protocol; want nts or ntp" ;;
-esac
+for not in " -clock-protocol" " -nts-max-bound" " -nts-max-sample-bound" " -nts-terms-confirmed"; do
+  ! grep -q -F -- "$not" "$OUT/runner.entrypoint" || die "the image entrypoint has$not, which the setup gives (time_policy, time_servers)"
+done
 devnet_hook gcp_image_check_entrypoint
 
 {
@@ -158,11 +151,7 @@ devnet_hook gcp_image_check_entrypoint
   (cd "$CTX" && sha256sum licenses/*)
   printf 'image       %s\n' "$d1"
   printf 'network     %s\n' "$NETWORK_ENTRY"
-  if [ "$clock_protocol" = ntp ]; then
-    printf 'clock       ntp (plain NTP, unauthenticated, -clock-protocol ntp)\n'
-  else
-    printf 'clock       nts\n'
-  fi
+  printf 'clock       protocol and bounds from the setup (time_policy)\n'
   devnet_hook gcp_image_inputs "$CTX"
   printf 'setup       per signer, in the metadata attribute signer-setup (deploy.sh vm-create)\n'
 } >"$OUT/runner.inputs"
