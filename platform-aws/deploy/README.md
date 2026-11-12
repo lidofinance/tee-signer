@@ -420,8 +420,11 @@ While the bucket policy stands, the account admins cannot put objects or
 retention under `marks/` and `config/`, and neither a request nor a new
 lifecycle rule adds a delete marker (see "Mark log"). They can still mint
 new access keys or a console password for the user and write records with
-them, and, if they can change the bucket policy, lift the denies. They
-already control the KMS key policy, so this adds no new trusted party.
+them, and, if they can change the bucket policy, lift the denies. This
+path is outside the KMS key lock: with `key_policy_locked` (required on
+mainnet) no principal can change the key policy, but an IAM admin can
+still mint credentials for this user, since the bucket policy names the
+user, not the enclave. "Mark log" lists the CloudTrail alerts for it.
 SigV4 signing uses the enclave's clock; a host that moves it can only make
 AWS refuse the request (the runner then refuses to sign).
 
