@@ -409,7 +409,9 @@ stored), and, while a write is under way, the root of the set after it.
   the set after; if not, it writes a log record at once that vouches for
   the set before only, so a blob the host kept and stores later is not
   vouched for. If that record fails too, the runner takes no share write
-  until a restart.
+  until a restart. With a state copy (`-state-store`) the copy reads its
+  commit back itself (`durable-state.md`, "All or nothing"), and a write
+  whose commit it finds there succeeds.
 - A batch import (IMPORT_SHARES_SEALED) writes one log record whose
   current root is the set before and whose pending root is the set after
   all its records, then the records, 16 at once. A batch adds keys only,

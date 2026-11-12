@@ -656,7 +656,9 @@ What the parent reports for the running enclave is the real check:
   itself. `parent-run.sh` gives the enclave 1 vCPU there (`CPU_COUNT`,
   default 2 on 4 vCPUs or more) and writes it into the allocator config. An
   enclave with 1 vCPU and 512 MiB (`MEMORY_MIB`, the default) runs the
-  runner.
+  runner. The runner sets its Go memory limit to 3/4 of the enclave's
+  memory, so it follows `MEMORY_MIB` (tee-signer/docs/runner.md,
+  "Configuration").
 - `main.tf`: `instance_type` defaults to `c6g.large`, `region` to
   `eu-central-1`, and `ami_id` has to be an Amazon Linux 2023 arm64 AMI of that
   region (an x86_64 AMI does not launch on a c6g). The file looks no AMI up,

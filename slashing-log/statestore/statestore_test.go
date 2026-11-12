@@ -266,10 +266,12 @@ func TestHiddenCommitLoses(t *testing.T) {
 
 // versionedLog writes a commit under a name that is taken as a second
 // version, as a versioned bucket can, and answers with err (nil: the
-// ErrExists the name gives).
+// ErrExists the name gives). With first set the new version is listed
+// before the one already there, as S3 lists versions newest first.
 type versionedLog struct {
 	*memLog
-	err error
+	err   error
+	first bool
 }
 
 func (v versionedLog) Create(ctx context.Context, name string, data []byte) error {
@@ -278,7 +280,11 @@ func (v versionedLog) Create(ctx context.Context, name string, data []byte) erro
 		return err
 	}
 	v.mu.Lock()
-	v.objs[name] = append(v.objs[name], bytes.Clone(data))
+	if v.first {
+		v.objs[name] = append([][]byte{bytes.Clone(data)}, v.objs[name]...)
+	} else {
+		v.objs[name] = append(v.objs[name], bytes.Clone(data))
+	}
 	v.mu.Unlock()
 	if v.err != nil {
 		return v.err
@@ -290,11 +296,17 @@ func (v versionedLog) Create(ctx context.Context, name string, data []byte) erro
 // one version. Finding its own bytes there is no success: the commit
 // fails, after ErrExists or a lost reply alike, and changes nothing.
 func TestOwnCommitNextToAClonesFails(t *testing.T) {
-	for name, err := range map[string]error{"exists": nil, "lost reply": errors.New("injected: the reply was lost")} {
+	lost := errors.New("injected: the reply was lost")
+	for name, vl := range map[string]versionedLog{
+		"exists":                       {},
+		"lost reply":                   {err: lost},
+		"lost reply, own listed first": {err: lost, first: true},
+	} {
 		t.Run(name, func(t *testing.T) {
 			l := newMemLog()
 			la := newLocal(t)
-			a, _ := open(t, la, versionedLog{l, err}, keysOf("image-a"), Options{})
+			vl.memLog = l
+			a, _ := open(t, la, vl, keysOf("image-a"), Options{})
 			if err := a.Put("shares/aa", []byte("x")); err != nil {
 				t.Fatal(err)
 			}

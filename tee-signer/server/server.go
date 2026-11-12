@@ -129,6 +129,9 @@ type Server struct {
 	// copyFailed is why the last state copy refresh failed; nil after one
 	// that succeeded (SetStateCopyFailed).
 	copyFailed atomic.Pointer[string]
+	// keysAnswer is the PUBLIC_KEYS answer of the current key set
+	// (pubkeys.go).
+	keysAnswer keysAnswer
 	// panicHook, tests only, runs before each request is served.
 	panicHook func(wire.Frame)
 	// lostLogged: the loss of the mark log is in the log (lostRefusal).
@@ -779,13 +782,16 @@ func (s *Server) handleConn(ctx context.Context, c net.Conn) {
 		// frameTimeout, not holds the frame's bytes and its slot
 		// (TEE-BUDGET-02).
 		_ = c.SetWriteDeadline(time.Now().Add(frameTimeout))
-		if err := wire.WriteFrame(c, wire.Frame{Type: f.Type | wire.ResponseFlag, ID: f.ID, Payload: payload}); err != nil {
+		if err := wire.WriteSharedFrame(c, wire.Frame{Type: f.Type | wire.ResponseFlag, ID: f.ID, Payload: payload}); err != nil {
 			s.Log.Warn("write", "err", err)
 			return
 		}
 	}
 }
 
+// dispatch runs f and returns the body of its OK answer. For PUBLIC_KEYS
+// it returns the whole answer, status included, which every connection
+// shares (publicKeys); answer sends it as it is.
 func (s *Server) dispatch(ctx context.Context, f wire.Frame) ([]byte, error) {
 	switch f.Type {
 	case wire.TypeHealth, wire.TypePublicKeys, wire.TypeAttest, wire.TypeIdentity:
@@ -837,7 +843,7 @@ func (s *Server) dispatch(ctx context.Context, f wire.Frame) ([]byte, error) {
 		}
 		return wire.EncodeHealth(h)
 	case wire.TypePublicKeys:
-		return wire.EncodeKeys(s.Signer.Keys()), nil
+		return s.publicKeys(), nil
 	case wire.TypeSign:
 		req, err := wire.DecodeSign(f.Payload)
 		if err != nil {
@@ -1540,7 +1546,7 @@ func (s *Server) health() (*backend.Health, error) {
 		Platform:     s.Platform.Name,
 		Version:      Version,
 		Ready:        true,
-		Validators:   len(s.Signer.Keys()),
+		Validators:   s.Signer.KeyCount(),
 		ConfigHash:   setup.SetupHash,
 		Setup:        &setup,
 		ClockSource:  s.Platform.Clock.Source(),

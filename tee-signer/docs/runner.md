@@ -195,6 +195,13 @@ runner -platform dev -config chain.json -listen ... [-tls-client-ca ca.pem] \
        [-mark-store none|file:DIR|s3:...|gcs:...|azblob:... -mark-signer NAME]
 ```
 
+At start the runner sets the Go memory limit to 3/4 of the smallest of
+`MemTotal` and the cgroup memory limit (`memlimit.go`), less than 384 MiB
+in a 512 MiB Nitro enclave, and logs it. The Go runtime then collects
+garbage before the heap fills the enclave. A `GOMEMLIMIT` in the
+environment takes precedence. When neither gives a size the runner logs
+a warning and runs without a limit.
+
 ### Setup
 
 With `-setup` the runner reads the signer's setup before it builds the

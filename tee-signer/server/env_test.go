@@ -18,6 +18,7 @@ import (
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/sealedimport"
 	"github.com/lidofinance/tee-signer/slashing-log"
+	"github.com/lidofinance/tee-signer/slashing-log/statestore"
 	"github.com/lidofinance/tee-signer/tee-signer/state"
 )
 
@@ -77,6 +78,11 @@ type tgtEnv struct {
 	// lands, but its write answers with a timeout, as a lost reply. Not
 	// with lockDays.
 	loseShareRecord bool
+	// copyLog, if set, is the object store of a state copy
+	// (statestore, -state-store) over store, which a start opens as main
+	// does: the runner then reads and writes the copy, store is its local
+	// tier.
+	copyLog markstore.Log
 }
 
 // slowLog is a mark log store whose calls take delay each.
@@ -197,7 +203,14 @@ func (e *tgtEnv) start() {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stored, err := ListShares(e.store)
+	var store platform.Store = e.store
+	if e.copyLog != nil {
+		if store, err = statestore.Open(ctx, e.store, e.copyLog, e.setup.SignerName, dev.NewDevKeys("server test env"),
+			statestore.Options{SetupHash: e.hash, Log: quiet}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stored, err := ListShares(store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +227,7 @@ func (e *tgtEnv) start() {
 		t.Fatal(err)
 	}
 	cfg.DeviceMark = true
-	if e.hooks, err = state.New(cfg, state.Mode{Floor: true, FloorMargin: state.DefaultFloorMargin(cfg), MarkLog: true}, e.clock, e.store, e.sealer, quiet); err != nil {
+	if e.hooks, err = state.New(cfg, state.Mode{Floor: true, FloorMargin: state.DefaultFloorMargin(cfg), MarkLog: true}, e.clock, store, e.sealer, quiet); err != nil {
 		t.Fatal(err)
 	}
 	e.hooks.UseMarkLog(m, mark, found)
@@ -226,7 +239,7 @@ func (e *tgtEnv) start() {
 	t.Cleanup(e.signer.Close)
 	e.upd.Attach(e.signer)
 	e.srv = &Server{Signer: e.signer, Hooks: e.hooks, Log: quiet, Updates: e.upd, State: e.upd.SetupState,
-		Platform:  &platform.Platform{Name: e.platName, Store: e.store, Sealer: e.sealer, Clock: e.clock, Attester: devDocAttester{}},
+		Platform:  &platform.Platform{Name: e.platName, Store: store, Sealer: e.sealer, Clock: e.clock, Attester: devDocAttester{}},
 		SetupHash: e.hash, LogID: m.LogID()}
 	if e.srv.ImportKey, err = sealedimport.Generate(); err != nil {
 		t.Fatal(err)
