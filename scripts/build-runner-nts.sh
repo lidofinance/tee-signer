@@ -45,7 +45,7 @@ for arch in "${archs[@]}"; do
     has_nts "$name" || tags="$tags,nts"
     bin="$out/$name-nts"
     (cd "$ROOT/tee-signer" && \
-      CGO_ENABLED=1 GOOS=linux GOARCH="$(goarch_of "$arch")" CC="$(cc_for "$arch")" \
+      CGO_ENABLED=1 CGO_CFLAGS="$CGO_HARDEN" GOOS=linux GOARCH="$(goarch_of "$arch")" CC="$(cc_for "$arch")" \
       go build -trimpath -buildvcs=false -tags "$tags" -ldflags "$LDFLAGS" -o "$bin" .)
 
     info="$(file -b "$bin")"

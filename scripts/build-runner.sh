@@ -113,7 +113,7 @@ for arch in "${archs[@]}"; do
   mkdir -p "$out"
   for name in "${RUNNER_BINS[@]}"; do
     (cd "$ROOT/tee-signer" && \
-      CGO_ENABLED=1 GOOS=linux GOARCH="$(goarch_of "$arch")" CC="$(cc_for "$arch")" \
+      CGO_ENABLED=1 CGO_CFLAGS="$CGO_HARDEN" GOOS=linux GOARCH="$(goarch_of "$arch")" CC="$(cc_for "$arch")" \
       go build -trimpath -buildvcs=false ${OVERLAY_FLAGS[@]+"${OVERLAY_FLAGS[@]}"} -tags "netgo,osusergo,$(runner_tags "$name")" -ldflags "$LDFLAGS" -o "$out/$name" .)
     check_bin "$out/$name" "$arch"
     log "$arch $name: $(stat -c %s "$out/$name") bytes, sha256 $(sha256sum "$out/$name" | cut -c1-16)..., $(file -b "$out/$name")"
