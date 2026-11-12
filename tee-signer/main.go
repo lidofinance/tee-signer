@@ -204,7 +204,7 @@ func run() (err error) {
 		return fmt.Errorf("platform %s keeps its state elsewhere and takes no -state-store (on Nitro the store is on the parent and survives a restart)", *platformName)
 	}
 	// The key rule the platform read before its key release, and the
-	// mainnet rule once more, before anything sealed is opened.
+	// prod chain rule once more, before anything sealed is opened.
 	rule, err := keyRule(boot.setup != nil, boot.prod, boot.noLockAccepted, plat, log)
 	if err != nil {
 		return err
@@ -475,6 +475,7 @@ func setupMarkLog(ctx context.Context, plat *platform.Platform, hooks *state.Hoo
 		return markClaim{}, errors.New("-mark-store needs -mark-signer")
 	}
 	env := markLogEnv(plat, platformName, st)
+	env.Logger = log
 	if plat.Keys == nil {
 		return markClaim{}, fmt.Errorf("platform %s has no key release for the mark log", platformName)
 	}

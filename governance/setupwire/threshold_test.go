@@ -27,7 +27,7 @@ func TestCheckThreshold(t *testing.T) {
 // CheckThresholdOn: every combination of signing_mode, platform, GCP
 // acceptance, chain and split. A single-mode setup takes 1 of 1 only, on
 // GCP only with the acceptance; a threshold-mode setup refuses 1 of 1 and
-// keeps the threshold rule, the mainnet overlap rule included. 1 of 1
+// keeps the threshold rule, the prod chain overlap rule included. 1 of 1
 // passes on mainnet on every platform whose setup allows it (the GCP
 // runner's start rule, no_lock_accepted, is checked at start, not here).
 func TestThresholdOn(t *testing.T) {

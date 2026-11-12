@@ -54,6 +54,7 @@ func (d *durableCopy) open(ctx context.Context, p *platform.Platform) (platform.
 		return nil, fmt.Errorf("platform %s has no key release for the state copy", p.Name)
 	}
 	env := storeEnv(p, p.Name, d.retainDays)
+	env.Logger = d.log
 	l, err := markstore.Open(d.spec, env)
 	if err != nil {
 		return nil, fmt.Errorf("-state-store: %w", err)

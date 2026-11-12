@@ -377,7 +377,7 @@ func checkKeyID(id, region string) (keyARN, error) {
 	return a, nil
 }
 
-// readKeyRule reads the key rule under the mainnet rule of o
+// readKeyRule reads the key rule under the prod chain rule of o
 // (platform.Options.ReadKeyRule) and returns it with the key ID every
 // later call uses: the ARN DescribeKey answered, or keys.KeyID when the
 // read did not get that far or did not run (the flag path). A kms_key_id

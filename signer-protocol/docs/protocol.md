@@ -429,7 +429,9 @@ so: `signing_mode`, a leaf of the public part of the setup (setup format
 (`setupwire.CheckThresholdOn`, issue #23): a single-mode runner takes
 t = n = 1 only and refuses any share of a split with n > 1; a
 threshold-mode runner refuses t = n = 1 and applies the threshold rule
-(2t > n, and 2t - n >= 2 on mainnet) to every other split. A
+(2t > n, and 2t - n >= 2 on a prod chain, `setupwire.ProdChain`, which
+counts a chain no row of the chain table matches as prod) to every other
+split. A
 threshold-mode runner returns a partial signature that verifies under its
 share public key; this repo has no combiner, so the client combines t
 partial signatures into the validator's signature. Both
@@ -451,6 +453,20 @@ the tools apply this rule (`setupwire.CheckMembers`,
 reads `cluster.json` refuse a single-mode cluster of more than one
 signer, and `import-draft` refuses a split file that gives one index to
 two signers. The approvers check it for each import order they sign.
+
+What the threshold rule protects against: two signing sets of t signers
+overlap in 2t - n signers, and an honest signer in the overlap refuses
+the second side of a conflicting pair, since its mark log holds the
+first. A faulty signer (its mark failed) or a rogue one signs both sides.
+The signers never see each other's requests, so a hostile gateway can
+send each side to a different set. A split is safe against f faulty or
+rogue signers plus a hostile gateway if and only if 2t - n > f. The prod
+rule, 2t - n >= 2, guarantees safety against one such signer, not two:
+3 of 4 and 4 of 6 overlap in two signers, and two rogue ones can sign a
+slashable pair. A split holds against two only with 2t - n >= 3 (4 of
+5). The 2-of-3 splits of devnets and the test networks overlap in one
+signer and have no margin: one rogue signer and a hostile gateway are
+enough.
 
 A GCP signer holds a key alone only with a second, separate acceptance:
 a GCP setup with `signing_mode = single` is refused, so no runner starts
@@ -474,14 +490,14 @@ protection is the project's IAM governance and the watchdog, not the TEE.
 into the setup of a one-signer GCP cluster (the key in the signer's
 section does the same; a threshold setup refuses both),
 refuses a file with one GCP signer without it, and prints a WARNING line
-for every setup that carries it; on mainnet such a setup also needs
+for every setup that carries it; on a prod chain such a setup also needs
 `no_lock_accepted`, or its runner would not start, so `signer-admin
 setup` refuses it without. The human form carries the warning above the
 key; a GCP runner logs it at start and at every 1 of 1 import.
 `signer-admin import-draft` drafts a 1 of 1 order to a GCP signer only
 with `-allow-gcp-unsafe-single-key` and prints the WARNING line, and
 `show` of that order prints it to each approver before `sign`. A
-single-node signer is not a split, so the mainnet overlap rule
+single-node signer is not a split, so the prod chain overlap rule
 (2t - n >= 2) does not apply to it; it applies to every real split.
 Tests: TestThresholdOn, TestSigningMode, TestSigningModeAcceptance,
 TestSampleSigningModes, TestUnsafeSingleKeyAccepted, TestCheckMembers,

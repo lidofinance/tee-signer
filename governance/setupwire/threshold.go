@@ -16,9 +16,13 @@ var MainnetForkVersion = backend.Version{0, 0, 0, 0}
 // in 2t - n signers. Every chain needs 2t > n, so two disjoint groups
 // cannot both sign. A prod chain (ProdChain, chains.go) also needs
 // 2t - n >= 2 (3 of 4, 4 of 5, ...): one signer whose mark fails, plus a
-// hostile gateway, must not be enough for a slashable pair. The rule would
-// give way to a peer mark quorum, which is not built, so nothing turns it off. Devnets and the test
-// networks, the only chains a non-prod build runs on, keep 2-of-3.
+// hostile gateway, must not be enough for a slashable pair. The rule
+// guarantees that for one such signer, not two: 3 of 4 overlaps in two
+// signers (signer-protocol/docs/protocol.md, "Key rule lock"). The rule
+// would give way to a peer mark quorum, which is not built, so nothing
+// turns it off. Devnets and the test networks, the only chains a non-prod
+// build runs on, keep 2-of-3, which has no margin: one rogue signer and a
+// hostile gateway are enough.
 //
 // A single-node signer (t = n = 1) passes on every chain, mainnet
 // included. CheckThresholdOn adds the rules of the setup: t = n = 1 only
@@ -29,7 +33,7 @@ var MainnetForkVersion = backend.Version{0, 0, 0, 0}
 // signing set there is nothing to overlap, and the cut accepts that one
 // signer whose mark fails, plus a hostile gateway, can sign a slashable
 // pair. Its protection is the mark log and the key rule lock, not a
-// quorum. Every real split (n > 1) keeps the mainnet rule.
+// quorum. Every real split (n > 1) keeps the prod chain rule.
 func CheckThreshold(genesisForkVersion backend.Version, genesisValidatorsRoot backend.Root, t, n int) error {
 	if t < 1 || t > n || 2*t <= n {
 		return fmt.Errorf("threshold %d of %d: want more than half and at most all", t, n)
@@ -126,7 +130,7 @@ func CheckShareIndices(n int, shares map[string]uint8) error {
 
 // CheckSingleKeyProd refuses a setup of a prod chain that accepts a key held
 // alone on GCP (sealing_key_release.unsafe_single_key_accepted) without
-// sealing_key_release.no_lock_accepted. A GCP runner starts on mainnet only
+// sealing_key_release.no_lock_accepted. A GCP runner starts on a prod chain only
 // with no_lock_accepted (platform.Options.CheckNoLock), so such a setup
 // makes a runner that never starts. signer-admin setup and setup-tool
 // encode both run it before they write a setup.

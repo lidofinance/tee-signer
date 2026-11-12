@@ -35,18 +35,18 @@ func newConfigUpdates(st *setup.Setup, l server.UpdateLog, clk platform.Clock, p
 // keyRule is the key release self-check (docs/protocol.md, "Key rule
 // lock"): the platform constructor read
 // the rule of the key that releases the sealing key before it released
-// anything (platform.Options.ReadKeyRule), and on mainnet already refused
+// anything (platform.Options.ReadKeyRule), and on a prod chain already refused
 // a rule that is not locked or not readable. AWS and Azure read the key's
 // policy; GCP and dev have no lock (KeyLockNone, zero hash), and on
-// mainnet GCP passes only with the setup's no_lock_accepted. Off mainnet a
+// a prod chain, GCP passes only with the setup's no_lock_accepted. Off a prod chain a
 // failed read gives KeyLockUnread; the log says why and the runner still
 // starts, so a key policy without the read grant does not stop a test
 // signer. key_release_hash stays zero unless the rule is locked: a pin is
 // the hash of a reviewed rule, and the hash of a rule that is not locked
 // or not read must not match it (the Nitro hash leaves the key's grants
 // out, so a key with a grant has the hash of the same key without). No
-// verifier's pin is zero. The mainnet rule runs here once more for a platform that read
-// nothing (nil KeyRule), so no image starts on mainnet without the check.
+// verifier's pin is zero. The prod chain rule runs here once more for a platform that read
+// nothing (nil KeyRule), so no image starts on a prod chain without the check.
 // The flag path (no setup) reads nothing and gives the zero rule.
 func keyRule(hasSetup, prod, noLockAccepted bool, plat *platform.Platform, log *slog.Logger) (platform.KeyRule, error) {
 	if !hasSetup {
