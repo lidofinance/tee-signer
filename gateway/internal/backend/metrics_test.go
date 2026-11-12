@@ -211,7 +211,7 @@ func TestMetricsSigning(t *testing.T) {
 	g.shares = append([]share(nil), g.shares...)
 	g.shares[0].index, g.shares[1].index, g.shares[2].index = 3, 1, 2
 	req := proto.SignRequest{Pubkey: proto.Pubkey(k.pk), Message: &proto.AttestationData{Slot: 1}}
-	if _, err := s.fanOut(ctxShort(t), k.pk, g, req, testRoot); err == nil {
+	if _, err := s.fanOut(ctxShort(t), k.pk, g, req, testRoot, "ATTESTATION"); err == nil {
 		t.Fatal("combined with the wrong indices")
 	}
 	expectMetric(t, "verify", m.CombineFailures.Value("verify"), 1)

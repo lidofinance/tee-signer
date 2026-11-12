@@ -80,14 +80,28 @@ func signRoot(s *blst.SecretKey, root phase0.Root) proto.Signature {
 // fakeRunner is a signer that holds shares and signs the root the test
 // gives it, or fails as the test says.
 type fakeRunner struct {
-	mu     sync.Mutex
-	keys   []proto.ValidatorKey
-	secret map[proto.Pubkey]*blst.SecretKey
-	root   phase0.Root
-	err    error           // every call fails with it
-	signer *blst.SecretKey // signs with this key instead of the share (a bad partial)
-	hang   chan struct{}   // Sign waits until it closes or ctx ends
-	signs  int
+	mu        sync.Mutex
+	keys      []proto.ValidatorKey
+	secret    map[proto.Pubkey]*blst.SecretKey
+	root      phase0.Root
+	err       error           // every call fails with it
+	signer    *blst.SecretKey // signs with this key instead of the share (a bad partial)
+	hang      chan struct{}   // Sign waits until it closes or ctx ends
+	signs     int
+	mode      string // the signing_mode HEALTH reports
+	healthErr error  // HEALTH fails with it
+	health    int    // HEALTH calls
+}
+
+func (f *fakeRunner) Health(context.Context) (*proto.Health, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.health++
+	if f.healthErr != nil {
+		return nil, f.healthErr
+	}
+
+	return &proto.Health{Ready: true, SigningMode: f.mode}, nil
 }
 
 func (f *fakeRunner) PublicKeys(context.Context) ([]proto.ValidatorKey, error) {
@@ -133,11 +147,16 @@ func (f *fakeRunner) set(fn func(f *fakeRunner)) {
 	fn(f)
 }
 
-// cluster is n fake signers that hold share i of each key.
+// cluster is n fake signers that hold share i of each key. A single
+// signer's setup says signing_mode = single, the others' threshold.
 func cluster(keys []*testKey, n int) []*fakeRunner {
 	fakes := make([]*fakeRunner, n)
+	mode := "threshold"
+	if n == 1 {
+		mode = "single"
+	}
 	for i := range fakes {
-		f := &fakeRunner{secret: map[proto.Pubkey]*blst.SecretKey{}}
+		f := &fakeRunner{secret: map[proto.Pubkey]*blst.SecretKey{}, mode: mode}
 		for _, k := range keys {
 			f.keys = append(f.keys, proto.ValidatorKey{Pubkey: proto.Pubkey(k.pk), SharePubkey: proto.Pubkey(pubOf(&k.shares[i])),
 				Index: proto.IndexUnknown})
@@ -405,9 +424,7 @@ func TestWholeKeyOnTwoSignersRefused(t *testing.T) {
 		t.Fatalf("no refusal naming the key in the log: %s", l)
 	}
 
-	fakes = cluster([]*testKey{k}, 3)
-	fakes[0].keys = append(fakes[0].keys, proto.ValidatorKey{Pubkey: proto.Pubkey(w.pk), SharePubkey: proto.Pubkey(w.pk), Index: proto.IndexUnknown})
-	fakes[0].secret[proto.Pubkey(w.pk)] = &w.sk
+	fakes = append(cluster([]*testKey{k}, 3), cluster([]*testKey{w}, 1)...)
 	setRoot(fakes)
 	s = newTestSigners(t, fakes)
 	sig, err := signWith(t, s, w.pk)
@@ -416,6 +433,84 @@ func TestWholeKeyOnTwoSignersRefused(t *testing.T) {
 	}
 	if err := VerifyBLS(w.pk, testRoot, sig); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A whole key is served only from a signer whose setup says signing_mode
+// = single. A share key equal to the validator key is not enough: a
+// signer of a threshold cluster, or one that reports no mode, that lists a
+// whole key is refused for that key. The other keys stay served, and
+// threshold signers get no HEALTH call.
+func TestWholeKeyNeedsSingleMode(t *testing.T) {
+	k := splitKey(t, 2, 3)
+	w := splitKey(t, 1, 1)
+	for _, c := range []struct {
+		mode   string
+		served bool
+	}{{"single", true}, {"threshold", false}, {"", false}} {
+		single := cluster([]*testKey{w}, 1)[0]
+		single.mode = c.mode
+		fakes := append(cluster([]*testKey{k}, 3), single)
+		runners, names := make([]runner, len(fakes)), make([]string, len(fakes))
+		for i, f := range fakes {
+			runners[i], names[i] = f, fmt.Sprintf("signer-%d", i+1)
+		}
+		var logs strings.Builder
+		s := newSigners(names, runners, 0, 2*time.Second, slog.New(slog.NewTextHandler(&logs, nil)))
+		if _, err := s.Refresh(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if got := s.HasKey(context.Background(), w.pk); got != c.served {
+			t.Errorf("signing_mode %q: whole key served %v, want %v", c.mode, got, c.served)
+		}
+		if !s.HasKey(context.Background(), k.pk) {
+			t.Errorf("signing_mode %q: the 2 of 3 key is not served", c.mode)
+		}
+		if !c.served && !strings.Contains(logs.String(), "signing_mode") {
+			t.Errorf("signing_mode %q: the refusal does not name signing_mode: %s", c.mode, logs.String())
+		}
+		for i, f := range fakes[:3] {
+			f.set(func(f *fakeRunner) {
+				if f.health != 0 {
+					t.Errorf("threshold signer %d got %d HEALTH calls", i+1, f.health)
+				}
+			})
+		}
+	}
+}
+
+// A signer whose HEALTH fails at the first load has its whole key refused;
+// once served, the key stays served through a later HEALTH failure, and
+// goes when the signer reports another mode.
+func TestWholeKeyAcrossHealthFailures(t *testing.T) {
+	k := splitKey(t, 2, 3)
+	w := splitKey(t, 1, 1)
+	single := cluster([]*testKey{w}, 1)[0]
+	single.healthErr = errors.New("health down")
+	s := newTestSigners(t, append(cluster([]*testKey{k}, 3), single))
+	if s.HasKey(context.Background(), w.pk) {
+		t.Fatal("a whole key is served before its signer reported a mode")
+	}
+	single.set(func(f *fakeRunner) { f.healthErr = nil })
+	if _, err := s.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !s.HasKey(context.Background(), w.pk) {
+		t.Fatal("the whole key of a single-mode signer is not served")
+	}
+	single.set(func(f *fakeRunner) { f.healthErr = errors.New("health down") })
+	if _, err := s.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !s.HasKey(context.Background(), w.pk) {
+		t.Fatal("a HEALTH failure dropped a whole key served before")
+	}
+	single.set(func(f *fakeRunner) { f.healthErr, f.mode = nil, "threshold" })
+	if _, err := s.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if s.HasKey(context.Background(), w.pk) {
+		t.Fatal("the whole key stays served after its signer reported threshold")
 	}
 }
 

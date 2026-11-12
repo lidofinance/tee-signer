@@ -37,9 +37,10 @@ type group struct {
 // validator key pk. That is the split the shares come from, so partial
 // signatures of any t of them combine with those indices into pk's
 // signature. A key that fits no t and no indices is refused: its
-// signatures would never combine. t = 1 means every share is pk itself.
-// A group with pk next to other shares is refused, and so is one unless
-// 2t > k (checkOverlap).
+// signatures would never combine. t = 1 means every share is pk itself;
+// the caller serves such a group only from a signer that reports
+// signing_mode = single (checkWhole). A group with pk next to other
+// shares is refused, and so is one unless 2t > k (checkOverlap).
 //
 // The search tries the indices in increasing order, so signers listed in
 // the order of their indices match at the first try.
@@ -109,11 +110,18 @@ func deriveGroup(pk phase0.BLSPubKey, shares []share, maxIndex int) (group, erro
 }
 
 // checkOverlap refuses a group of k shares with threshold t unless any two
-// sets of t signers share one: otherwise two signers that never saw each
-// other's request could each sign one side of a conflicting pair, as with
-// a whole key on two signers. The signers check each split at import
+// sets of t signers share one. That shared signer, if honest, refuses the
+// second side of a conflicting pair. Without it, two signers that never
+// saw each other's request could each sign one side, as with a whole key
+// on two signers. The signers check each split at import
 // (governance/setupwire CheckThreshold), but none of them sees the shares
 // the others hold.
+//
+// A rogue shared signer signs both sides, so this check guards against a
+// wrong configuration, not a rogue signer. Two sets of t signers that share
+// at least two, 2t - k >= 2, keep an honest signer in common when one
+// signer is rogue; the signers ask that of prod chains (CheckThreshold),
+// not of test chains.
 func checkOverlap(t, k int) error {
 	if 2*t > k {
 		return nil

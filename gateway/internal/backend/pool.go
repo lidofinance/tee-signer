@@ -26,6 +26,9 @@ const maxConnections = 16
 type runner interface {
 	PublicKeys(ctx context.Context) ([]proto.ValidatorKey, error)
 	Sign(ctx context.Context, req proto.SignRequest) (proto.Signature, error)
+	// Health is asked only of a signer that lists a whole key, for the
+	// signing_mode of its setup.
+	Health(ctx context.Context) (*proto.Health, error)
 	Close() error
 }
 
@@ -506,6 +509,18 @@ func (n *node) PublicKeys(ctx context.Context) ([]proto.ValidatorKey, error) {
 	})
 
 	return keys, err
+}
+
+func (n *node) Health(ctx context.Context) (*proto.Health, error) {
+	var h *proto.Health
+	err := n.do(ctx, func(c runner) error {
+		var err error
+		h, err = c.Health(ctx)
+
+		return err
+	})
+
+	return h, err
 }
 
 func (n *node) Sign(ctx context.Context, req proto.SignRequest) (proto.Signature, error) {

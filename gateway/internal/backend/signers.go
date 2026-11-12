@@ -15,6 +15,7 @@ import (
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient/verify"
 	"github.com/lidofinance/tee-signer/gateway/internal/certreload"
 	"github.com/lidofinance/tee-signer/gateway/internal/metrics"
+	"github.com/lidofinance/tee-signer/governance/setupwire"
 	proto "github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/web3signer-api/signing"
 )
@@ -72,13 +73,18 @@ type Signers struct {
 	// certs is the client certificate in force, nil without reload.
 	certs certSource
 	m     *metrics.Gateway
+	// warns limits the lines about a signer that did not sign.
+	warns *warnLimit
 
 	mu sync.Mutex
 	// listed is each signer's last PUBLIC_KEYS answer, nil before the
 	// first one. A signer that does not answer keeps its last answer, so
 	// its shares stay in the groups and the others still sign.
 	listed [][]proto.ValidatorKey
-	// derived caches deriveGroup by validator key and share keys.
+	// modes is the signing_mode each signer's HEALTH last reported, ""
+	// before the first. Only a signer that lists a whole key is asked.
+	modes []string
+	// derived caches deriveGroup by validator key, share keys and modes.
 	derived map[string]derivedGroup
 }
 
@@ -148,7 +154,8 @@ func newSigners(names []string, nodes []runner, maxIndex int, timeout time.Durat
 		maxIndex = len(nodes)
 	}
 	s := &Signers{nodes: nodes, names: names, maxIndex: min(maxIndex, maxShareIndex), timeout: timeout, log: log,
-		listed: make([][]proto.ValidatorKey, len(nodes)), derived: map[string]derivedGroup{}, m: metrics.New()}
+		listed: make([][]proto.ValidatorKey, len(nodes)), modes: make([]string, len(nodes)), derived: map[string]derivedGroup{}, m: metrics.New(),
+		warns: newWarnLimit(warnEvery)}
 	s.keys = newKeyList(s.loadKeys, keysMaxAge, log)
 
 	return s
@@ -181,20 +188,40 @@ func (s *Signers) Close() error {
 // loadKeys asks every signer for PUBLIC_KEYS at once and builds the
 // groups: for each validator key the shares the signers hold, their
 // indices and the threshold (deriveGroup). A key whose shares do not fit
-// is left out and logged once.
+// is left out and logged once. A signer that lists a whole key is also
+// asked for HEALTH: a whole key is served only from a signer that reports
+// signing_mode = single (checkWhole).
 func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, error) {
 	type answer struct {
-		keys []proto.ValidatorKey
-		err  error
+		keys    []proto.ValidatorKey
+		err     error
+		asked   bool // HEALTH was asked: the signer lists a whole key
+		mode    string
+		modeErr error
 	}
 	answers := make([]answer, len(s.nodes))
 	var wg sync.WaitGroup
 	for i, n := range s.nodes {
 		wg.Go(func() {
 			cctx, cancel := context.WithTimeout(ctx, s.timeout)
-			defer cancel()
 			keys, err := n.PublicKeys(cctx)
-			answers[i] = answer{keys, err}
+			cancel()
+			answers[i] = answer{keys: keys, err: capDetail(err)}
+			if err != nil || !listsWholeKey(keys) {
+				return
+			}
+			answers[i].asked = true
+			cctx, cancel = context.WithTimeout(ctx, s.timeout)
+			defer cancel()
+			h, err := n.Health(cctx)
+			switch {
+			case err != nil:
+				answers[i].modeErr = capDetail(err)
+			case h == nil:
+				answers[i].modeErr = errors.New("no HEALTH answer")
+			default:
+				answers[i].mode = h.SigningMode
+			}
 		})
 	}
 	wg.Wait()
@@ -211,6 +238,13 @@ func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, err
 		}
 		s.listed[i] = a.keys
 		s.m.SignerKeysRefreshed.Set(float64(time.Now().UnixMilli())/1000, s.names[i])
+		switch {
+		case a.modeErr != nil:
+			// Keep the last mode: a whole key it served stays served.
+			s.log.Warn("signer health failed", "signer", s.names[i], "err", a.modeErr.Error())
+		case a.asked:
+			s.modes[i] = a.mode
+		}
 	}
 	shares := map[phase0.BLSPubKey][]share{}
 	answered := false
@@ -227,10 +261,13 @@ func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, err
 	groups := make(map[phase0.BLSPubKey]group, len(shares))
 	derived := make(map[string]derivedGroup, len(shares))
 	for pk, sh := range shares {
-		id := groupID(pk, sh)
+		id := groupID(pk, sh, s.modes)
 		d, ok := s.derived[id]
 		if !ok {
 			d.g, d.err = deriveGroup(pk, sh, s.maxIndex)
+			if d.err == nil {
+				d.err = s.checkWhole(d.g)
+			}
 			if d.err != nil {
 				s.log.Warn("key refused", "pubkey", fmt.Sprintf("%#x", pk), "shares", len(sh), "err", d.err.Error())
 			}
@@ -249,15 +286,48 @@ func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, err
 	return groups, nil
 }
 
-func groupID(pk phase0.BLSPubKey, shares []share) string {
+// groupID is the key of the deriveGroup cache: the validator key, and the
+// signer, its signing_mode and the share key of each share.
+func groupID(pk phase0.BLSPubKey, shares []share, modes []string) string {
 	var b strings.Builder
 	b.Write(pk[:])
 	for _, s := range shares {
-		fmt.Fprintf(&b, "|%d:", s.node)
+		fmt.Fprintf(&b, "|%d:%s:", s.node, modes[s.node])
 		b.Write(s.pub[:])
 	}
 
 	return b.String()
+}
+
+// listsWholeKey reports whether a PUBLIC_KEYS answer has a share key equal
+// to its validator key.
+func listsWholeKey(keys []proto.ValidatorKey) bool {
+	for _, k := range keys {
+		if k.SharePubkey == k.Pubkey {
+			return true
+		}
+	}
+
+	return false
+}
+
+// checkWhole refuses a whole key (threshold 1) unless its signer's HEALTH
+// says signing_mode = single; s.mu is held. Share keys equal to the
+// validator key are not enough: the runner of a threshold setup refuses a
+// whole key at import, so one that lists it is not following its setup,
+// and an old runner or one without a setup does not say. HEALTH is not
+// attested, so this catches a wrong configuration, not a runner that lies.
+// deriveGroup has already refused a whole key on more than one signer.
+func (s *Signers) checkWhole(g group) error {
+	if g.threshold != 1 {
+		return nil
+	}
+	n := g.shares[0].node
+	if m := s.modes[n]; m != setupwire.SigningModeSingle.String() {
+		return fmt.Errorf("the whole key is on signer %s, whose HEALTH says signing_mode = %q; a whole key needs signing_mode = single", s.names[n], m)
+	}
+
+	return nil
 }
 
 // Sign implements Signer.
@@ -277,7 +347,7 @@ func (s *Signers) Sign(ctx context.Context, pubkey phase0.BLSPubKey, job *signin
 	}
 	req := proto.SignRequest{Pubkey: proto.Pubkey(pubkey), Message: msg, Domain: proto.Root(job.Domain)}
 	t0 := time.Now()
-	sig, err := s.fanOut(ctx, pubkey, g, req, job.SigningRoot)
+	sig, err := s.fanOut(ctx, pubkey, g, req, job.SigningRoot, job.Type)
 	if err == nil {
 		s.m.SignDuration.Observe(time.Since(t0).Seconds(), job.Type)
 	}
@@ -298,27 +368,53 @@ type partial struct {
 // the threshold. The calls to the other signers go on until the deadline
 // of ctx: those signers still see the request, and their slashing
 // protection with it.
-func (s *Signers) fanOut(ctx context.Context, pubkey phase0.BLSPubKey, g group, req proto.SignRequest, root phase0.Root) (phase0.BLSSignature, error) {
+//
+// An error is a *SignError with the outcome at every configured signer.
+// When the request signs, each signer that failed or refused, before or
+// after the return, is logged by warnSigner. duty is the request type.
+func (s *Signers) fanOut(ctx context.Context, pubkey phase0.BLSPubKey, g group, req proto.SignRequest, root phase0.Root, duty string) (phase0.BLSSignature, error) {
 	deadline, ok := ctx.Deadline()
 	if !ok {
 		deadline = time.Now().Add(s.timeout)
 	}
 	callCtx, cancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
 	results := make(chan partial, len(g.shares))
+	// end is set once fanOut has its result. A failed answer before that
+	// goes to results; after it, the call logs it itself if the request
+	// signed. A good answer always goes to results, without the lock.
+	var end struct {
+		sync.Mutex
+		done, signed bool
+	}
 	var wg sync.WaitGroup
 	for _, sh := range g.shares {
 		wg.Go(func() {
 			sig, err := s.nodes[sh.node].Sign(callCtx, req)
+			err = capDetail(err)
 			p := partial{share: sh, sig: phase0.BLSSignature(sig), err: err}
 			if err == nil {
 				if verr := VerifyBLS(sh.pub, root, p.sig); verr != nil {
-					p.err = fmt.Errorf("partial signature does not verify under the share key: %w", verr)
+					p.err = fmt.Errorf("%w: %w", errBadPartial, verr)
 					s.m.CombineFailures.Inc("bad_partial")
 					s.log.Warn("bad partial signature", "signer", s.names[sh.node], "pubkey", fmt.Sprintf("%#x", pubkey),
 						"kind", req.Message.Kind().String(), "signing_root", fmt.Sprintf("%#x", root))
 				}
 			}
-			results <- p
+			if p.err == nil {
+				results <- p
+
+				return
+			}
+			end.Lock()
+			done, signed := end.done, end.signed
+			if !done {
+				// The buffer holds an answer from every share: no block.
+				results <- p
+			}
+			end.Unlock()
+			if done && signed {
+				s.warnSigner(duty, pubkey, p)
+			}
 		})
 	}
 	go func() {
@@ -326,7 +422,29 @@ func (s *Signers) fanOut(ctx context.Context, pubkey phase0.BLSPubKey, g group, 
 		cancel()
 	}()
 
-	var good []partial
+	// finish sets end and returns the answers that came in but were not
+	// read yet.
+	finish := func(signed bool) []partial {
+		end.Lock()
+		end.done, end.signed = true, signed
+		end.Unlock()
+		var rest []partial
+		for {
+			select {
+			case p := <-results:
+				rest = append(rest, p)
+			default:
+				return rest
+			}
+		}
+	}
+	fail := func(good, bad []partial, err error) (phase0.BLSSignature, error) {
+		parts := append(append(append([]partial(nil), good...), bad...), finish(false)...)
+
+		return phase0.BLSSignature{}, &SignError{Err: err, Outcomes: s.outcomes(g, parts)}
+	}
+
+	var good, bad []partial
 	var denied, failed []string
 	for got := 0; got < len(g.shares); {
 		select {
@@ -336,26 +454,38 @@ func (s *Signers) fanOut(ctx context.Context, pubkey phase0.BLSPubKey, g group, 
 			case p.err == nil:
 				good = append(good, p)
 			case isDenial(p.err):
+				bad = append(bad, p)
 				denied = append(denied, s.names[p.share.node]+": "+p.err.Error())
 			default:
+				bad = append(bad, p)
 				failed = append(failed, s.names[p.share.node]+": "+p.err.Error())
 			}
 			if len(good) == g.threshold {
-				return s.combineVerified(pubkey, root, good)
+				sig, err := s.combineVerified(pubkey, root, good)
+				if err != nil {
+					return fail(good, bad, err)
+				}
+				for _, p := range append(bad, finish(true)...) {
+					if p.err != nil {
+						s.warnSigner(duty, pubkey, p)
+					}
+				}
+
+				return sig, nil
 			}
 			if len(good)+len(g.shares)-got < g.threshold {
 				s.m.CombineFailures.Inc("below_threshold")
 
-				return phase0.BLSSignature{}, notEnough(g, len(good), denied, failed)
+				return fail(good, bad, notEnough(g, len(good), denied, failed))
 			}
 		case <-ctx.Done():
-			return phase0.BLSSignature{}, fmt.Errorf("%d of %d partial signatures (threshold %d) before the deadline: %w",
-				len(good), len(g.shares), g.threshold, ctx.Err())
+			return fail(good, bad, fmt.Errorf("%d of %d partial signatures (threshold %d) before the deadline: %w",
+				len(good), len(g.shares), g.threshold, ctx.Err()))
 		}
 	}
 	s.m.CombineFailures.Inc("below_threshold")
 
-	return phase0.BLSSignature{}, notEnough(g, len(good), denied, failed)
+	return fail(good, bad, notEnough(g, len(good), denied, failed))
 }
 
 func (s *Signers) combineVerified(pubkey phase0.BLSPubKey, root phase0.Root, parts []partial) (phase0.BLSSignature, error) {

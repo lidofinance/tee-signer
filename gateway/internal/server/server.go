@@ -210,13 +210,13 @@ func (s *Server) sign(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, backend.ErrUnknownKey):
 			writeError(w, http.StatusNotFound, "Not Found")
 		case errors.As(err, &denied):
-			log.Warn("denied by signers", append([]any{"err", err.Error()}, timing...)...)
+			log.Warn("denied by signers", append(append([]any{"err", err.Error()}, timing...), signerOutcomes(err)...)...)
 			writeError(w, http.StatusPreconditionFailed, "Precondition Failed")
 		case errors.As(err, &unverified):
 			log.Error("signature does not verify", append([]any{"signing_root", fmt.Sprintf("%#x", job.SigningRoot), "err", err.Error()}, timing...)...)
 			writeError(w, http.StatusInternalServerError, "Internal Server Error")
 		default:
-			log.Error("signing failed", append([]any{"err", err.Error()}, timing...)...)
+			log.Error("signing failed", append(append([]any{"err", err.Error()}, timing...), signerOutcomes(err)...)...)
 			writeError(w, http.StatusInternalServerError, "Internal Server Error")
 		}
 		return
@@ -233,6 +233,17 @@ func (s *Server) sign(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", contentTypeText)
 	_, _ = io.WriteString(w, signature)
+}
+
+// signerOutcomes is the log group with the outcome at each signer, when
+// err carries them.
+func signerOutcomes(err error) []any {
+	var se *backend.SignError
+	if errors.As(err, &se) {
+		return []any{se.LogAttr()}
+	}
+
+	return nil
 }
 
 // requestResult is the result of a sign request for the metrics, once it

@@ -55,6 +55,12 @@ func (f *fakeSigner) Sign(_ context.Context, _ phase0.BLSPubKey, job *signing.Jo
 
 func newTestServer(t *testing.T) (*httptest.Server, *fakeSigner) {
 	t.Helper()
+
+	return newTestServerLog(t, io.Discard)
+}
+
+func newTestServerLog(t *testing.T, logs io.Writer) (*httptest.Server, *fakeSigner) {
+	t.Helper()
 	pk, ok := parsePubkey(pubHex)
 	if !ok {
 		t.Fatal("bad test key")
@@ -69,7 +75,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *fakeSigner) {
 		t.Fatal(err)
 	}
 	chain := signing.Chain{Hasher: h, SlotsPerEpoch: 32, GenesisForkVersion: phase0.Version{}}
-	srv := httptest.NewServer(New(f, pol, chain, slog.New(slog.NewTextHandler(io.Discard, nil)), 0).Handler())
+	srv := httptest.NewServer(New(f, pol, chain, slog.New(slog.NewTextHandler(logs, nil)), 0).Handler())
 	t.Cleanup(srv.Close)
 
 	return srv, f
@@ -242,6 +248,38 @@ func TestBackendErrors(t *testing.T) {
 		f.err = c.err
 		if code, _, body := post(t, srv, pubHex, "", attestationBody(411400)); code != c.code {
 			t.Errorf("%v: got %d %s, want %d", c.err, code, body, c.code)
+		}
+	}
+}
+
+// A denied or failed line names each signer and what it did.
+func TestBackendErrorsNameSigners(t *testing.T) {
+	outcomes := []backend.Outcome{
+		{Signer: "a", Result: backend.ResultDenied, Reason: "SC_ERR_SLASH_TARGET", Detail: "double vote"},
+		{Signer: "b", Result: backend.ResultError, Reason: "timeout", Detail: "context deadline exceeded"},
+		{Signer: "c", Result: backend.ResultSigned},
+	}
+	for _, c := range []struct {
+		err  error
+		msg  string
+		code int
+	}{
+		{&backend.SignError{Err: &backend.DeniedError{Detail: "not enough signatures"}, Outcomes: outcomes}, `msg="denied by signers"`, 412},
+		{&backend.SignError{Err: errors.New("not enough signatures"), Outcomes: outcomes}, `msg="signing failed"`, 500},
+	} {
+		var logs strings.Builder
+		srv, f := newTestServerLog(t, &logs)
+		f.err = c.err
+		if code, _, body := post(t, srv, pubHex, "", attestationBody(411400)); code != c.code {
+			t.Errorf("%v: got %d %s, want %d", c.err, code, body, c.code)
+		}
+		srv.Close()
+		l := logs.String()
+		for _, w := range []string{c.msg, `signers.a.result=denied signers.a.reason=SC_ERR_SLASH_TARGET signers.a.detail="double vote"`,
+			`signers.b.result=error signers.b.reason=timeout`, `signers.c.result=signed`} {
+			if !strings.Contains(l, w) {
+				t.Errorf("log lacks %s: %s", w, l)
+			}
 		}
 	}
 }
