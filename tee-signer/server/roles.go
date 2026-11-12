@@ -47,6 +47,11 @@ type client struct {
 	// that check.
 	undated bool
 	peer    []*x509.Certificate
+	// revocable are the hashes of the chains for the revocation check of
+	// each frame (stillValid), computed once at the handshake: the verified
+	// chains, or while undated the chains the handshake checked without
+	// their dates (attls.UndatedChains), CA certificates included.
+	revocable []attls.CertHash
 }
 
 // localAdmin is the client of a connection without TLS.
@@ -61,15 +66,33 @@ var localAllows = func() map[wire.MsgType]grant {
 	return m
 }()
 
-// clientOf is the client of a TLS connection after its handshake.
-func clientOf(cs *tls.ConnectionState) *client {
+// incompleteAllows are the types a TLS client may send while the revoked
+// set is incomplete (stillValid). The role table still applies on top.
+var incompleteAllows = map[wire.MsgType]bool{
+	wire.TypeHealth: true, wire.TypeIdentity: true, wire.TypeAttest: true, wireadmin.TypeConfigUpdate: true,
+}
+
+// clientOf is the client of a TLS connection after its handshake. For a
+// handshake without trusted time it checks the chain without its dates
+// against UndatedRoots once more, to keep the chains with their CA
+// certificates; without UndatedRoots, or if that check fails, it keeps the
+// certificates the client sent.
+func (s *Server) clientOf(cs *tls.ConnectionState) *client {
 	cl := &client{role: attls.RoleOf(cs), notAfter: attls.NotAfter(cs)}
+	chains := cs.VerifiedChains
 	if len(cs.PeerCertificates) > 0 {
 		cl.cert = sha256.Sum256(cs.PeerCertificates[0].Raw)
 		if len(cs.VerifiedChains) == 0 {
 			cl.undated, cl.peer = true, cs.PeerCertificates
+			chains = [][]*x509.Certificate{cs.PeerCertificates}
+			if s.UndatedRoots != nil {
+				if c, err := attls.UndatedChains(s.UndatedRoots, cs.PeerCertificates); err == nil {
+					chains = c
+				}
+			}
 		}
 	}
+	cl.revocable = attls.CertHashes(chains)
 	return cl
 }
 
@@ -83,9 +106,28 @@ func clientOf(cs *tls.ConnectionState) *client {
 // handshake had no trusted time has its chain checked with its dates at
 // the first request that has a reading (checkUndated). A local client has
 // no certificate.
+//
+// Every frame, HEALTH too, also checks the chains against the revoked
+// certificates in force (Revoked), so a revocation that a config update
+// brings closes the connections already open. While an open update body
+// is unreadable the runner does not know every revocation
+// (Revoked.Incomplete): a TLS client may then send HEALTH, IDENTITY,
+// ATTEST and CONFIG_UPDATE only (incompleteAllows). CONFIG_UPDATE stays, as
+// sending the update again restores its body, and its authority is the
+// approvers' signatures, not the client certificate. IDENTITY stays
+// because every client of signer-protocol/remote sends it first on a new
+// connection, so without it the fixing CONFIG_UPDATE could not be sent;
+// ATTEST, like IDENTITY, signs nothing and changes nothing.
 func (s *Server) stillValid(cl *client, t wire.MsgType) error {
 	if cl == nil || cl.local {
 		return nil
+	}
+	if err := s.Revoked.CheckHashes(cl.revocable); err != nil {
+		return backend.Refused(backend.StatusForbidden, "%v", err)
+	}
+	if s.Revoked.Incomplete() && !incompleteAllows[t] {
+		return backend.Refused(backend.StatusForbidden,
+			"an open config update body is unreadable, so the revoked client certificates in force are unknown; send that update again to restore its body")
 	}
 	now, err := s.certNow()
 	if err != nil {
@@ -116,8 +158,12 @@ func (s *Server) checkUndated(cl *client, now time.Time) error {
 		return backend.Refused(backend.StatusForbidden,
 			"the client certificate chain, taken without trusted time at the handshake, fails at the trusted time: %v; connect again with a valid certificate", err)
 	}
+	revocable := attls.CertHashes(chains)
+	if err := s.Revoked.CheckHashes(revocable); err != nil {
+		return backend.Refused(backend.StatusForbidden, "%v", err)
+	}
 	cs := &tls.ConnectionState{PeerCertificates: cl.peer, VerifiedChains: chains}
-	cl.role, cl.notAfter, cl.undated, cl.peer = attls.RoleOf(cs), attls.NotAfter(cs), false, nil
+	cl.role, cl.notAfter, cl.undated, cl.peer, cl.revocable = attls.RoleOf(cs), attls.NotAfter(cs), false, nil, revocable
 	s.Log.Info("client certificate checked at trusted time", "role", cl.role.String(), "cert_sha256", hex.EncodeToString(cl.cert[:8]))
 	return nil
 }

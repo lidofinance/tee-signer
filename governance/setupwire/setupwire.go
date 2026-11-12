@@ -17,8 +17,8 @@
 // Integers are big endian. str is len:u8 and 1 to 255 bytes. A list has a
 // count and a cap. An optional field has a presence byte, 0 or 1. Lists
 // without an order of their own (CA certificates, tags, images, fee
-// recipients, deposit amounts, BuilderRequestAuth data
-// roots) are
+// recipients, withdrawal credentials, deposit amounts, BuilderRequestAuth
+// data roots, revoked certificates, time servers) are
 // sorted and hold no duplicates, forks and slot time changes are in
 // ascending epoch order, and the approver list keeps its order, because
 // signatures name positions in it. Enum values start at 1, so a zero byte
@@ -26,7 +26,7 @@
 //
 //	setup    = 'S' public public_salts locked locked_salts open open_salts
 //	           platform_salt[32] private
-//	public   = setup_format_version:u8(5) cluster_id[32] handover_generation:u64
+//	public   = setup_format_version:u8(6) cluster_id[32] handover_generation:u64
 //	           chain safety max_keys:u32 slashing_log_min_lock_days:u32
 //	           signing_mode:u8
 //	chain    = genesis_validators_root[32] genesis_fork_version[4] genesis_time:u64
@@ -37,12 +37,20 @@
 //	           image_count:u8 {kind:u8 measurement[144 nitro, else 32]}
 //	           fee_count:u8 {address[20]} builder_gas_limit_min:u64 builder_gas_limit_max:u64
 //	           builder_registration_max_future_seconds:u64
-//	           min_activation_balance:u64 max_effective_balance:u64
-//	           withdrawal_credentials[32] deposit_count:u8 {amount:u64}
 //	           allow_unverified_nonslashable_signing:u8 bare_root_domains:u16
 //	           slot_time_change_count:u8 {epoch:u64 seconds_per_slot:u64}
 //	           builder_request_auth_count:u8 {data_root[32]}
-//	open    = fork_count:u8 {epoch:u64 version[4]} has:u8 [gloas_fork_epoch:u64]
+//	           time_policy deposit_policy exit_policy
+//	time_policy    = version:u8(1) protocol:u8 max_bound_ms:u16 max_sample_bound_ms:u16
+//	deposit_policy = version:u8(1) credential_count:u8 {withdrawal_credentials[32]}
+//	                 deposit_count:u8 {amount:u64} min_activation_balance:u64
+//	                 max_effective_balance:u64
+//	exit_policy    = version:u8(1) validator_count:u16 {pubkey[48]} stake_cap_per_day:u64
+//	                 approvals_needed:u8
+//	open     = fork_count:u8 {epoch:u64 version[4]} has:u8 [gloas_fork_epoch:u64]
+//	           revoked_client_certs time_servers
+//	revoked_client_certs = version:u8(1) revoked_count:u8 {sha256[32]}
+//	time_servers   = version:u8(1) server_count:u8 {spec:str}
 //	X_salts  = salt[32] for each leaf of group X, in leaf order (policy.go)
 //	private  = signer_name:str platform:u8 ca_count:u8 {der_len:u16 der}
 //	           slashing_log_store has:u8 [encrypted_state_store] sealing_key_release
@@ -52,13 +60,24 @@
 //	sealing_key_release = nitro: region:str kms_key_id:str has:u8 [kms_key_creation_date:u64]
 //	           | azure: maa_endpoint:str akv_endpoint:str kid:str
 //	           | gcp: wif_provider:str kms_key:str attest_audience:str no_lock_accepted:u8
-//	                  unsafe_single_key_accepted:u8
+//	                  unsafe_single_key_accepted:u8 has:u8 [project_number:u64]
 //	           | dev: (nothing)
 //
 // Each field of public, locked and open is one leaf of the policy tree, and
 // its bytes above are the leaf's value. The platform byte decides the
 // layout of the stores and the key release. Amounts are Gwei. update.go has
 // the CONFIG_UPDATE layout.
+//
+// time_policy, deposit_policy, exit_policy, revoked_client_certs and
+// time_servers start with a version byte of their own. This version of the package reads version 1
+// of each and refuses any other. A later image can read a higher version
+// too, and a config update can then move the field to it without a new
+// setup format: an update leaves setup_hash alone.
+//
+// deposit_policy and exit_policy are in place for features that come back
+// later. The runner does not use deposit_policy yet. exit_policy must be
+// empty (no validators, zero cap, zero approvals): Check refuses any other
+// value, so nobody takes it for a rule the runner enforces.
 //
 // The dev platform is for local runners and tests (the runner's -platform
 // dev). It protects nothing. A dev setup differs from a cloud one in two
@@ -95,7 +114,22 @@ const (
 	// private part.
 	// Format 5 added sealing_key_release.kms_key_creation_date to the
 	// Nitro key release.
-	FormatVersion = 5
+	// Format 6 folded min_activation_balance, max_effective_balance,
+	// withdrawal_credentials and allowed_deposit_amounts of the locked
+	// group into deposit_policy (a list of withdrawal credentials), added
+	// time_policy and exit_policy to the locked group, revoked_client_certs
+	// and time_servers to the open group, and
+	// sealing_key_release.project_number to the GCP key release.
+	FormatVersion = 6
+
+	// The versions of the leaf values that carry a version byte of their own.
+	TimePolicyVersion    = 1
+	DepositPolicyVersion = 1
+	ExitPolicyVersion    = 1
+	TimeServersVersion   = 1
+	// RevokedClientCertsVersion lets a later version add, for example, an
+	// expiry to each entry.
+	RevokedClientCertsVersion = 1
 
 	kindSetup  = 'S'
 	kindBody   = 'B'
@@ -127,6 +161,36 @@ const (
 	// MaxLockDays is 100 years, the longest Object Lock retention S3 takes;
 	// a longer one could never pass the runner's lock check.
 	MaxLockDays = 36500
+	// MaxWithdrawalCredentials caps deposit_policy.withdrawal_credentials.
+	MaxWithdrawalCredentials = 16
+	// MaxRevokedClientCerts caps revoked_client_certs. Adding entries is
+	// fast; dropping one needs every approver in force (changes.go), for
+	// example to make room once the list is full.
+	MaxRevokedClientCerts = 128
+	// MaxTimeServers caps time_servers, the servers a setup adds to the
+	// image's default set. The runner dials at most nts.MaxServers (16, the
+	// Rust quorum's limit) in all, the default set (6 today) included, so
+	// this must stay at most nts.MaxServers minus the size of the default
+	// set: a longer list would pass here and fail only at start. Governance
+	// does not import trusted-time; tee-signer's
+	// TestMaxTimeServersFitsTheQuorum ties the numbers together.
+	MaxTimeServers = 10
+	// MaxTimeServerSpec is the longest time_servers entry: an ID of up to
+	// 32 octets (ntscatalog.MaxLabel), '@' and a host name.
+	MaxTimeServerSpec = 255
+)
+
+// Ranges of time_policy, in milliseconds. The runner's clock refuses a
+// larger error bound than 250 ms, and 1 s takes the sample cap off
+// (tee-signer/platforms_nts.go).
+const (
+	DefaultMaxBoundMs   = 100
+	MaxMaxBoundMs       = 250
+	MaxMaxSampleBoundMs = 1000
+	// MinMaxSampleBoundMs is the smallest sample cap: the clock takes a
+	// sample at receipt only while its bound plus the aging over the join
+	// age (38 ms) is within the cap, so a smaller cap leaves little room.
+	MinMaxSampleBoundMs = 80
 )
 
 // MaxKMSKeyCreationDate is 9999-12-31T23:59:59Z, the last time the text
@@ -171,7 +235,7 @@ const (
 type Group uint8
 
 const (
-	GroupLocked Group = 1 // waits for the change delay
+	GroupLocked Group = 1 // a loosening change waits for the change delay (changes.go)
 	GroupOpen   Group = 2 // no change delay
 )
 
@@ -199,12 +263,22 @@ const (
 	SigningModeSingle SigningMode = 2
 )
 
+// ClockProtocol is how the runner's clock asks its time servers
+// (time_policy.protocol). One deployment uses one protocol.
+type ClockProtocol uint8
+
+const (
+	ClockNTS ClockProtocol = 1 // NTS, authenticated (RFC 8915)
+	ClockNTP ClockProtocol = 2 // plain NTP, unauthenticated
+)
+
 var (
-	signingModeNames = []string{SigningModeThreshold: "threshold", SigningModeSingle: "single"}
-	platformNames    = []string{PlatformNitro: "nitro", PlatformAzure: "azure", PlatformGCP: "gcp", PlatformDev: "dev"}
-	presetNames      = []string{PresetMainnet: "mainnet", PresetMinimal: "minimal"}
-	groupNames       = []string{GroupLocked: "locked", GroupOpen: "open"}
-	imageNames       = []string{ImageNitro: "nitro", ImageAzure: "azure", ImageGCP: "gcp", ImageTA: "ta"}
+	clockProtocolNames = []string{ClockNTS: "nts", ClockNTP: "ntp"}
+	signingModeNames   = []string{SigningModeThreshold: "threshold", SigningModeSingle: "single"}
+	platformNames      = []string{PlatformNitro: "nitro", PlatformAzure: "azure", PlatformGCP: "gcp", PlatformDev: "dev"}
+	presetNames        = []string{PresetMainnet: "mainnet", PresetMinimal: "minimal"}
+	groupNames         = []string{GroupLocked: "locked", GroupOpen: "open"}
+	imageNames         = []string{ImageNitro: "nitro", ImageAzure: "azure", ImageGCP: "gcp", ImageTA: "ta"}
 	// rootDomainNames is indexed by bit: bit n is domain type 0x0n000000.
 	rootDomainNames = []string{2: "randao", 5: "selection_proof", 6: "aggregate_and_proof",
 		7: "sync_committee", 8: "sync_committee_selection_proof", 9: "contribution_and_proof"}
@@ -235,6 +309,7 @@ func (k ImageKind) String() string { return enumName(imageNames, uint8(k)) }
 func (m SigningMode) String() string {
 	return enumName(signingModeNames, uint8(m))
 }
+func (p ClockProtocol) String() string { return enumName(clockProtocolNames, uint8(p)) }
 
 // ParseSigningMode reads threshold or single.
 func ParseSigningMode(s string) (SigningMode, error) {
@@ -260,6 +335,7 @@ func ImageKindNames() []string { return slices.Clone(imageNames) }
 func SigningModeNames() []string {
 	return slices.Clone(signingModeNames)
 }
+func ClockProtocolNames() []string { return slices.Clone(clockProtocolNames) }
 
 // RootDomainNames is indexed by bit: bit n is domain type 0x0n000000.
 func RootDomainNames() []string { return slices.Clone(rootDomainNames) }
@@ -384,6 +460,12 @@ type KeyRelease struct {
 	// date and the runner does not start (AWS-KMS-02). Required on a prod
 	// chain (CheckValues).
 	KMSKeyCreationDate uint64
+	// ProjectNumber (GCP only, sealing_key_release.project_number): the
+	// number of the Google Cloud project that holds the stores, so the
+	// runner can check that the mark and state buckets are in it (rv-d3u.6);
+	// 0 when absent. Required on a prod chain (CheckValues), as
+	// KMSKeyCreationDate is on Nitro.
+	ProjectNumber uint64
 }
 
 // Image is an entry of the allowed-images list.
@@ -414,10 +496,6 @@ type Locked struct {
 	BuilderGasLimitMin                  uint64
 	BuilderGasLimitMax                  uint64
 	BuilderRegistrationMaxFutureSeconds uint64
-	MinActivationBalance                uint64 // Gwei
-	MaxEffectiveBalance                 uint64 // Gwei
-	WithdrawalCredentials               backend.Root
-	AllowedDepositAmounts               []uint64 // Gwei, sorted
 	AllowUnverifiedNonslashableSigning  bool
 	BareRootDomains                     RootDomains
 	// SlotTimeChanges are the slot time changes after genesis, ascending
@@ -429,6 +507,42 @@ type Locked struct {
 	// builder API, not only p2p bids and self-build. Sorted, without
 	// repeats; empty: no BuilderRequestAuth is signed.
 	AllowedBuilderRequestAuthDataRoots []backend.Root
+	TimePolicy                         TimePolicy
+	DepositPolicy                      DepositPolicy
+	ExitPolicy                         ExitPolicy
+}
+
+// TimePolicy is how the runner's clock works (time_policy, version 1). The
+// servers are time_servers in the open group, added to the image's
+// default set.
+type TimePolicy struct {
+	Protocol ClockProtocol
+	// MaxBoundMs: the clock fails above this error bound, 1 to 250.
+	MaxBoundMs uint16
+	// MaxSampleBoundMs: a sample with a wider bound joins no quorum, from
+	// MaxBoundMs to 1000 (no cap).
+	MaxSampleBoundMs uint16
+}
+
+// DepositPolicy holds the deposit values (deposit_policy, version 1). The
+// runner does not use them yet: deposits, with key generation in the TEE,
+// come back later.
+type DepositPolicy struct {
+	// WithdrawalCredentials: 1 to MaxWithdrawalCredentials, sorted, each
+	// as CheckCredentials says.
+	WithdrawalCredentials []backend.Root
+	AllowedDepositAmounts []uint64 // Gwei, sorted
+	MinActivationBalance  uint64   // Gwei
+	MaxEffectiveBalance   uint64   // Gwei
+}
+
+// ExitPolicy holds the exit approval values (exit_policy, version 1). Exit
+// approvals are not in this version: every field must be empty or zero
+// (Check), so the policy cannot look enforced.
+type ExitPolicy struct {
+	AllowedValidators []backend.Pubkey
+	StakeCapPerDay    uint64 // Gwei
+	ApprovalsNeeded   uint8
 }
 
 // Fork is one entry of the fork schedule.
@@ -441,6 +555,19 @@ type Fork struct {
 type Open struct {
 	ForkSchedule   []Fork // ascending epochs
 	GloasForkEpoch *uint64
+	// RevokedClientCerts are SHA-256 hashes of client leaf, intermediate or
+	// CA certificates (DER) the runner refuses. Sorted, without repeats, at
+	// most MaxRevokedClientCerts. An update adds entries with the usual
+	// signature count; one that drops an entry needs every approver in
+	// force (Update.Decide).
+	RevokedClientCerts [][32]byte
+	// TimeServers (time_servers, version 1) are the NTS or NTP servers the
+	// clock dials besides the image's default set: catalog IDs, "id" for
+	// the entry's own host or "id@host" for one of its alt hosts
+	// (trusted-time/ntscatalog, Catalog.WithConfirmed). Sorted, without
+	// repeats, an ID at most once. The approvers' signature confirms the
+	// terms of "ask" operators. Which IDs exist is the runner's check.
+	TimeServers []string
 }
 
 // ChangeDelay is the change delay the group sets: ChangeDelaySeconds, or
@@ -921,6 +1048,10 @@ func writeKeyRelease(w *writer, p Platform, k *KeyRelease) {
 		w.str(k.AttestAudience)
 		w.flag(k.NoLockAccepted)
 		w.flag(k.UnsafeSingleKeyAccepted)
+		w.flag(k.ProjectNumber != 0)
+		if k.ProjectNumber != 0 {
+			w.u64(k.ProjectNumber)
+		}
 	}
 }
 
@@ -942,6 +1073,9 @@ func readKeyRelease(r *reader, p Platform, k *KeyRelease) {
 		k.AttestAudience = r.str("sealing_key_release.attest_audience")
 		k.NoLockAccepted = r.flag("sealing_key_release.no_lock_accepted")
 		k.UnsafeSingleKeyAccepted = r.flag("sealing_key_release.unsafe_single_key_accepted")
+		if r.flag("sealing_key_release.project_number presence") {
+			k.ProjectNumber = r.u64()
+		}
 	}
 }
 
@@ -977,15 +1111,6 @@ func (l *Locked) fields() []field {
 		{"builder_gas_limit_min", func(w *writer) { w.u64(l.BuilderGasLimitMin) }},
 		{"builder_gas_limit_max", func(w *writer) { w.u64(l.BuilderGasLimitMax) }},
 		{"builder_registration_max_future_seconds", func(w *writer) { w.u64(l.BuilderRegistrationMaxFutureSeconds) }},
-		{"min_activation_balance", func(w *writer) { w.u64(l.MinActivationBalance) }},
-		{"max_effective_balance", func(w *writer) { w.u64(l.MaxEffectiveBalance) }},
-		{"withdrawal_credentials", func(w *writer) { w.raw(l.WithdrawalCredentials[:]) }},
-		{"allowed_deposit_amounts", func(w *writer) {
-			w.u8(uint8(len(l.AllowedDepositAmounts)))
-			for _, a := range l.AllowedDepositAmounts {
-				w.u64(a)
-			}
-		}},
 		{"allow_unverified_nonslashable_signing", func(w *writer) { w.flag(l.AllowUnverifiedNonslashableSigning) }},
 		{"bare_root_domains", func(w *writer) { w.u16(uint16(l.BareRootDomains)) }},
 		{"slot_time_changes", func(w *writer) {
@@ -1001,6 +1126,44 @@ func (l *Locked) fields() []field {
 				w.raw(r[:])
 			}
 		}},
+		{"time_policy", func(w *writer) {
+			t := &l.TimePolicy
+			w.u8(TimePolicyVersion)
+			w.u8(uint8(t.Protocol))
+			w.u16(t.MaxBoundMs)
+			w.u16(t.MaxSampleBoundMs)
+		}},
+		{"deposit_policy", func(w *writer) {
+			d := &l.DepositPolicy
+			w.u8(DepositPolicyVersion)
+			w.u8(uint8(len(d.WithdrawalCredentials)))
+			for _, wc := range d.WithdrawalCredentials {
+				w.raw(wc[:])
+			}
+			w.u8(uint8(len(d.AllowedDepositAmounts)))
+			for _, a := range d.AllowedDepositAmounts {
+				w.u64(a)
+			}
+			w.u64(d.MinActivationBalance)
+			w.u64(d.MaxEffectiveBalance)
+		}},
+		{"exit_policy", func(w *writer) {
+			e := &l.ExitPolicy
+			w.u8(ExitPolicyVersion)
+			w.u16(uint16(len(e.AllowedValidators)))
+			for _, pk := range e.AllowedValidators {
+				w.raw(pk[:])
+			}
+			w.u64(e.StakeCapPerDay)
+			w.u8(e.ApprovalsNeeded)
+		}},
+	}
+}
+
+// version reads the version byte of a leaf value and refuses any but want.
+func (r *reader) version(what string, want uint8) {
+	if v := r.u8(); r.err == nil && v != want {
+		r.fail(fmt.Errorf("setupwire: %s version %d, want %d", what, v, want))
 	}
 }
 
@@ -1030,12 +1193,6 @@ func readLocked(r *reader, l *Locked) {
 	l.BuilderGasLimitMin = r.u64()
 	l.BuilderGasLimitMax = r.u64()
 	l.BuilderRegistrationMaxFutureSeconds = r.u64()
-	l.MinActivationBalance = r.u64()
-	l.MaxEffectiveBalance = r.u64()
-	r.fixed(l.WithdrawalCredentials[:])
-	for range r.count("allowed_deposit_amounts", MaxDepositAmounts, false) {
-		l.AllowedDepositAmounts = append(l.AllowedDepositAmounts, r.u64())
-	}
 	l.AllowUnverifiedNonslashableSigning = r.flag("allow_unverified_nonslashable_signing")
 	l.BareRootDomains = RootDomains(r.u16())
 	for range r.count("slot_time_changes", MaxSlotTimeChanges, false) {
@@ -1046,6 +1203,30 @@ func readLocked(r *reader, l *Locked) {
 		r.fixed(root[:])
 		l.AllowedBuilderRequestAuthDataRoots = append(l.AllowedBuilderRequestAuthDataRoots, root)
 	}
+	t := &l.TimePolicy
+	r.version("time_policy", TimePolicyVersion)
+	t.Protocol = ClockProtocol(r.u8())
+	t.MaxBoundMs = r.u16()
+	t.MaxSampleBoundMs = r.u16()
+	d := &l.DepositPolicy
+	r.version("deposit_policy", DepositPolicyVersion)
+	for range r.count("deposit_policy.withdrawal_credentials", MaxWithdrawalCredentials, false) {
+		var wc backend.Root
+		r.fixed(wc[:])
+		d.WithdrawalCredentials = append(d.WithdrawalCredentials, wc)
+	}
+	for range r.count("deposit_policy.allowed_deposit_amounts", MaxDepositAmounts, false) {
+		d.AllowedDepositAmounts = append(d.AllowedDepositAmounts, r.u64())
+	}
+	d.MinActivationBalance = r.u64()
+	d.MaxEffectiveBalance = r.u64()
+	e := &l.ExitPolicy
+	r.version("exit_policy", ExitPolicyVersion)
+	// Exit approvals are not in this version: no validator may be listed,
+	// so the count's cap is 0.
+	r.count("exit_policy.allowed_validators", 0, true)
+	e.StakeCapPerDay = r.u64()
+	e.ApprovalsNeeded = r.u8()
 }
 
 // fields are the fields of the open group, in leaf order.
@@ -1064,6 +1245,20 @@ func (o *Open) fields() []field {
 				w.u64(*o.GloasForkEpoch)
 			}
 		}},
+		{"revoked_client_certs", func(w *writer) {
+			w.u8(RevokedClientCertsVersion)
+			w.u8(uint8(len(o.RevokedClientCerts)))
+			for _, h := range o.RevokedClientCerts {
+				w.raw(h[:])
+			}
+		}},
+		{"time_servers", func(w *writer) {
+			w.u8(TimeServersVersion)
+			w.u8(uint8(len(o.TimeServers)))
+			for _, s := range o.TimeServers {
+				w.str(s)
+			}
+		}},
 	}
 }
 
@@ -1076,6 +1271,16 @@ func readOpen(r *reader, o *Open) {
 	if r.flag("gloas_fork_epoch presence") {
 		v := r.u64()
 		o.GloasForkEpoch = &v
+	}
+	r.version("revoked_client_certs", RevokedClientCertsVersion)
+	for range r.count("revoked_client_certs", MaxRevokedClientCerts, false) {
+		var h [32]byte
+		r.fixed(h[:])
+		o.RevokedClientCerts = append(o.RevokedClientCerts, h)
+	}
+	r.version("time_servers", TimeServersVersion)
+	for range r.count("time_servers", MaxTimeServers, false) {
+		o.TimeServers = append(o.TimeServers, r.str("time_servers entry"))
 	}
 }
 
@@ -1172,6 +1377,9 @@ func (s *Setup) CheckValues() error {
 	}
 	if s.Platform.Platform == PlatformNitro && s.Platform.SealingKeyRelease.KMSKeyCreationDate == 0 && s.Chain.Prod() {
 		return errors.New("setup: a prod chain on nitro needs sealing_key_release.kms_key_creation_date, the CreationDate of a KMS key the approvers checked in CloudTrail was created locked (platform-aws/deploy/README.md)")
+	}
+	if s.Platform.Platform == PlatformGCP && s.Platform.SealingKeyRelease.ProjectNumber == 0 && s.Chain.Prod() {
+		return errors.New("setup: a prod chain on gcp needs sealing_key_release.project_number, the number of the project that holds the stores (gcloud projects describe PROJECT --format='value(projectNumber)')")
 	}
 	// The acceptance of a key held alone means nothing in a threshold
 	// setup, whose runner refuses every 1 of 1 order.
@@ -1371,6 +1579,9 @@ func (k *KeyRelease) check(p Platform) error {
 	if k.KMSKeyCreationDate != 0 && p != PlatformNitro {
 		errs = append(errs, fmt.Errorf("sealing_key_release.kms_key_creation_date does not apply to %s", p))
 	}
+	if k.ProjectNumber != 0 && p != PlatformGCP {
+		errs = append(errs, fmt.Errorf("sealing_key_release.project_number does not apply to %s", p))
+	}
 	if k.KMSKeyCreationDate > MaxKMSKeyCreationDate {
 		errs = append(errs, fmt.Errorf("sealing_key_release.kms_key_creation_date %d is after year 9999", k.KMSKeyCreationDate))
 	}
@@ -1446,23 +1657,6 @@ func (l *Locked) Check() error {
 	if l.BuilderGasLimitMin > l.BuilderGasLimitMax {
 		return fmt.Errorf("locked: builder_gas_limit_min %d above builder_gas_limit_max %d", l.BuilderGasLimitMin, l.BuilderGasLimitMax)
 	}
-	if l.MinActivationBalance == 0 || l.MinActivationBalance > l.MaxEffectiveBalance {
-		return errors.New("locked: want 0 < min_activation_balance <= max_effective_balance")
-	}
-	if err := CheckCredentials(l.WithdrawalCredentials); err != nil {
-		return fmt.Errorf("locked: %w", err)
-	}
-	if len(l.AllowedDepositAmounts) > MaxDepositAmounts {
-		return fmt.Errorf("locked: %d allowed_deposit_amounts, at most %d", len(l.AllowedDepositAmounts), MaxDepositAmounts)
-	}
-	if !slices.IsSorted(l.AllowedDepositAmounts) || hasRepeat(l.AllowedDepositAmounts) {
-		return errors.New("locked: allowed_deposit_amounts must be sorted, without repeats")
-	}
-	for _, a := range l.AllowedDepositAmounts {
-		if a == 0 || a > l.MaxEffectiveBalance {
-			return fmt.Errorf("locked: deposit amount %d Gwei, want 1 to max_effective_balance (%d)", a, l.MaxEffectiveBalance)
-		}
-	}
 	for bit := range 16 {
 		if l.BareRootDomains&(1<<bit) != 0 && !enumValid(rootDomainNames, uint8(bit)) {
 			return fmt.Errorf("locked: bare_root_domains: domain type 0x%02x000000 can never be signed as a bare root", bit)
@@ -1490,6 +1684,69 @@ func (l *Locked) Check() error {
 		if bytes.Compare(l.AllowedBuilderRequestAuthDataRoots[i-1][:], l.AllowedBuilderRequestAuthDataRoots[i][:]) >= 0 {
 			return errors.New("locked: allowed_builder_request_auth_data_roots must be sorted, without repeats")
 		}
+	}
+	if err := l.TimePolicy.Check(); err != nil {
+		return fmt.Errorf("locked: %w", err)
+	}
+	if err := l.DepositPolicy.Check(); err != nil {
+		return fmt.Errorf("locked: %w", err)
+	}
+	if err := l.ExitPolicy.Check(); err != nil {
+		return fmt.Errorf("locked: %w", err)
+	}
+	return nil
+}
+
+// Check applies the ranges of time_policy.
+func (t *TimePolicy) Check() error {
+	if !enumValid(clockProtocolNames, uint8(t.Protocol)) {
+		return fmt.Errorf("time_policy.protocol %d, want %d (nts) or %d (ntp)", t.Protocol, ClockNTS, ClockNTP)
+	}
+	if t.MaxBoundMs == 0 || t.MaxBoundMs > MaxMaxBoundMs {
+		return fmt.Errorf("time_policy.max_bound_ms %d, want 1 to %d", t.MaxBoundMs, MaxMaxBoundMs)
+	}
+	if t.MaxSampleBoundMs < max(t.MaxBoundMs, MinMaxSampleBoundMs) || t.MaxSampleBoundMs > MaxMaxSampleBoundMs {
+		return fmt.Errorf("time_policy.max_sample_bound_ms %d, want max(max_bound_ms (%d), %d) to %d", t.MaxSampleBoundMs, t.MaxBoundMs, MinMaxSampleBoundMs, MaxMaxSampleBoundMs)
+	}
+	return nil
+}
+
+// Check applies the rules of deposit_policy: the rules of the format 5
+// fields, with one to MaxWithdrawalCredentials credentials in place of one.
+func (d *DepositPolicy) Check() error {
+	if n := len(d.WithdrawalCredentials); n < 1 || n > MaxWithdrawalCredentials {
+		return fmt.Errorf("deposit_policy: %d withdrawal_credentials, want 1 to %d", n, MaxWithdrawalCredentials)
+	}
+	for i, wc := range d.WithdrawalCredentials {
+		if err := CheckCredentials(wc); err != nil {
+			return fmt.Errorf("deposit_policy: %w", err)
+		}
+		if i > 0 && bytes.Compare(d.WithdrawalCredentials[i-1][:], wc[:]) >= 0 {
+			return errors.New("deposit_policy: withdrawal_credentials must be sorted, without repeats")
+		}
+	}
+	if d.MinActivationBalance == 0 || d.MinActivationBalance > d.MaxEffectiveBalance {
+		return errors.New("deposit_policy: want 0 < min_activation_balance <= max_effective_balance")
+	}
+	if len(d.AllowedDepositAmounts) > MaxDepositAmounts {
+		return fmt.Errorf("deposit_policy: %d allowed_deposit_amounts, at most %d", len(d.AllowedDepositAmounts), MaxDepositAmounts)
+	}
+	if !slices.IsSorted(d.AllowedDepositAmounts) || hasRepeat(d.AllowedDepositAmounts) {
+		return errors.New("deposit_policy: allowed_deposit_amounts must be sorted, without repeats")
+	}
+	for _, a := range d.AllowedDepositAmounts {
+		if a == 0 || a > d.MaxEffectiveBalance {
+			return fmt.Errorf("deposit_policy: deposit amount %d Gwei, want 1 to max_effective_balance (%d)", a, d.MaxEffectiveBalance)
+		}
+	}
+	return nil
+}
+
+// Check refuses an exit_policy that is not empty: exit approvals are not in
+// this version.
+func (e *ExitPolicy) Check() error {
+	if len(e.AllowedValidators) != 0 || e.StakeCapPerDay != 0 || e.ApprovalsNeeded != 0 {
+		return errors.New("exit_policy: exit approvals are not in this version; allowed_validators must be empty, stake_cap_per_day and approvals_needed 0")
 	}
 	return nil
 }
@@ -1542,6 +1799,47 @@ func (o *Open) Check() error {
 	}
 	if o.GloasForkEpoch != nil && !slices.ContainsFunc(o.ForkSchedule, func(f Fork) bool { return f.Epoch == *o.GloasForkEpoch }) {
 		return fmt.Errorf("open: gloas_fork_epoch %d is not the epoch of a fork in fork_schedule", *o.GloasForkEpoch)
+	}
+	if n := len(o.RevokedClientCerts); n > MaxRevokedClientCerts {
+		return fmt.Errorf("open: %d revoked_client_certs, at most %d", n, MaxRevokedClientCerts)
+	}
+	for i, h := range o.RevokedClientCerts {
+		if h == ([32]byte{}) {
+			return errors.New("open: revoked_client_certs: a zero hash names no certificate")
+		}
+		if i > 0 && bytes.Compare(o.RevokedClientCerts[i-1][:], h[:]) >= 0 {
+			return errors.New("open: revoked_client_certs must be sorted, without repeats")
+		}
+	}
+	return checkTimeServers(o.TimeServers)
+}
+
+// timeServerRE is the syntax of a time_servers entry: a catalog ID (1 to
+// 32 of a-z, 0-9, '.' and '-', as ntscatalog's IDs), and for an alt host
+// '@' and a lower-case host name.
+var timeServerRE = regexp.MustCompile(`^[a-z0-9.-]{1,32}(@[a-z0-9]([a-z0-9.-]*[a-z0-9])?)?$`)
+
+// checkTimeServers applies the syntax rules of time_servers: at most
+// MaxTimeServers entries, sorted, without repeats, each ID once. Whether an
+// ID names an entry of the image's catalog, and the minimum number of
+// servers, are the runner's checks.
+func checkTimeServers(specs []string) error {
+	if len(specs) > MaxTimeServers {
+		return fmt.Errorf("open: %d time_servers, at most %d", len(specs), MaxTimeServers)
+	}
+	ids := map[string]bool{}
+	for i, s := range specs {
+		if len(s) > MaxTimeServerSpec || !timeServerRE.MatchString(s) {
+			return fmt.Errorf("open: time_servers entry %q: want ID or ID@HOST, an ID of 1 to 32 of a-z, 0-9, '.' and '-'", s)
+		}
+		if i > 0 && specs[i-1] >= s {
+			return errors.New("open: time_servers must be sorted, without repeats")
+		}
+		id, _, _ := strings.Cut(s, "@")
+		if ids[id] {
+			return fmt.Errorf("open: time_servers names %q twice", id)
+		}
+		ids[id] = true
 	}
 	return nil
 }

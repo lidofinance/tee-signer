@@ -41,6 +41,7 @@ func TestParseSetupRefusals(t *testing.T) {
 	ss := setups(t)
 	nitro := string(must(FormatSetup(ss["setup-nitro"])))
 	azure := string(must(FormatSetup(ss["setup-azure"])))
+	gcp := string(must(FormatSetup(ss["setup-gcp"]))) // with sealing_key_release.project_number
 	pcr := "0x" + strings.Repeat("11", 48)
 	cases := []struct {
 		name string
@@ -55,9 +56,31 @@ func TestParseSetupRefusals(t *testing.T) {
 		{"format set twice", nitro + "setup_format_version = 1\n", "setup_format_version: set again"},
 		{"key missing", replaceLine(t, nitro, "approvals_needed", ""), "approvals_needed is missing"},
 		{"format missing", replaceLine(t, nitro, "setup_format_version", ""), "setup_format_version is missing"},
-		{"format 1", replaceLine(t, nitro, "setup_format_version", "setup_format_version = 1"), `setup_format_version: "1", want 5`},
-		{"format 3", replaceLine(t, nitro, "setup_format_version", "setup_format_version = 3"), `setup_format_version: "3", want 5`},
-		{"format 4", replaceLine(t, nitro, "setup_format_version", "setup_format_version = 4"), `setup_format_version: "4", want 5`},
+		{"format 1", replaceLine(t, nitro, "setup_format_version", "setup_format_version = 1"), `setup_format_version: "1", want 6`},
+		{"format 3", replaceLine(t, nitro, "setup_format_version", "setup_format_version = 3"), `setup_format_version: "3", want 6`},
+		{"format 4", replaceLine(t, nitro, "setup_format_version", "setup_format_version = 4"), `setup_format_version: "4", want 6`},
+		{"format 5", replaceLine(t, nitro, "setup_format_version", "setup_format_version = 5"), `setup_format_version: "5", want 6`},
+		{"format 5 deposit key", nitro + "min_activation_balance = 32 ETH\n", `unknown key "min_activation_balance"`},
+		{"format 5 credentials key", nitro + "withdrawal_credentials = 0x01\n", `unknown key "withdrawal_credentials"`},
+		{"no withdrawal credentials", replaceLine(t, replaceLine(t, nitro, "deposit_policy.withdrawal_credentials", ""), "deposit_policy.withdrawal_credentials", ""),
+			"0 withdrawal_credentials, want 1 to 16"},
+		{"withdrawal credentials twice", nitro + "deposit_policy.withdrawal_credentials = 0x01" + strings.Repeat("00", 11) + strings.Repeat("41", 20) + "\n",
+			"deposit_policy.withdrawal_credentials: repeats the entry of line"},
+		{"deposit balance missing", replaceLine(t, nitro, "deposit_policy.max_effective_balance", ""), "deposit_policy.max_effective_balance is missing"},
+		{"exit policy key", nitro + "exit_policy.stake_cap_per_day = 0\n", `unknown key "exit_policy.stake_cap_per_day"`},
+		{"time protocol unknown", replaceLine(t, nitro, "time_policy.protocol", "time_policy.protocol = roughtime"), `"roughtime": want nts or ntp`},
+		{"time protocol upper case", replaceLine(t, nitro, "time_policy.protocol", "time_policy.protocol = NTS"), "want nts or ntp"},
+		{"max bound out of range", replaceLine(t, nitro, "time_policy.max_bound_ms", "time_policy.max_bound_ms = 300"), "time_policy.max_bound_ms 300, want 1 to 250"},
+		{"max bound above 16 bits", replaceLine(t, nitro, "time_policy.max_bound_ms", "time_policy.max_bound_ms = 65536"), "below 2^16"},
+		{"sample bound below max bound", replaceLine(t, nitro, "time_policy.max_sample_bound_ms", "time_policy.max_sample_bound_ms = 10"), "time_policy.max_sample_bound_ms 10"},
+		{"time server twice", nitro + "time_servers = obspm\n", "time_servers: repeats the entry of line"},
+		{"time server ID twice", nitro + "time_servers = time.nl\n", `names "time.nl" twice`},
+		{"time server bad", nitro + "time_servers = Netnod\n", `time_servers entry "Netnod"`},
+		{"revoked twice", nitro + "revoked_client_certs = 0x71" + strings.Repeat("00", 31) + "\n", "revoked_client_certs: repeats the entry of line"},
+		{"revoked short", nitro + "revoked_client_certs = 0x71\n", "want 32 bytes of hex"},
+		{"project number on nitro", nitro + "sealing_key_release.project_number = 5\n", "project_number does not apply to nitro"},
+		{"project number 0", replaceLine(t, gcp, "sealing_key_release.project_number", "sealing_key_release.project_number = 0"), "want 1 or more, or leave the key out"},
+		{"project number twice", gcp + "sealing_key_release.project_number = 5\n", "sealing_key_release.project_number: set again"},
 		{"signing_mode missing", replaceLine(t, nitro, "signing_mode", ""), "signing_mode is missing"},
 		{"signing_mode unknown", replaceLine(t, nitro, "signing_mode", "signing_mode = solo"), `signing_mode: "solo": want threshold or single`},
 		{"signing_mode as a number", replaceLine(t, nitro, "signing_mode", "signing_mode = 2"), `signing_mode: "2": want threshold or single`},
@@ -78,13 +101,13 @@ func TestParseSetupRefusals(t *testing.T) {
 		{"hex not hex", replaceLine(t, nitro, "cluster_id", "cluster_id = 0x"+strings.Repeat("zz", 32)), "want 32 bytes of hex"},
 		{"bool case", replaceLine(t, nitro, "allow_unverified_nonslashable_signing", "allow_unverified_nonslashable_signing = True"), "want true or false"},
 		{"bool as number", replaceLine(t, nitro, "allow_unverified_nonslashable_signing", "allow_unverified_nonslashable_signing = 1"), "want true or false"},
-		{"amount without unit", replaceLine(t, nitro, "min_activation_balance", "min_activation_balance = 4096"), "want N ETH or N Gwei"},
-		{"amount glued to unit", replaceLine(t, nitro, "min_activation_balance", "min_activation_balance = 4096ETH"), "want N ETH or N Gwei"},
-		{"amount unit case", replaceLine(t, nitro, "min_activation_balance", "min_activation_balance = 4096 eth"), `unit "eth"`},
-		{"amount 10 decimals", replaceLine(t, nitro, "min_activation_balance", "min_activation_balance = 0.1234567891 ETH"), "at most 9 digits"},
-		{"amount fraction of Gwei", replaceLine(t, nitro, "min_activation_balance", "min_activation_balance = 1.5 Gwei"), "want N Gwei"},
-		{"amount too large", replaceLine(t, nitro, "min_activation_balance", "min_activation_balance = 18446744074 ETH"), "too large"},
-		{"amount sign", replaceLine(t, nitro, "min_activation_balance", "min_activation_balance = -1 ETH"), "want N ETH"},
+		{"amount without unit", replaceLine(t, nitro, "deposit_policy.min_activation_balance", "deposit_policy.min_activation_balance = 4096"), "want N ETH or N Gwei"},
+		{"amount glued to unit", replaceLine(t, nitro, "deposit_policy.min_activation_balance", "deposit_policy.min_activation_balance = 4096ETH"), "want N ETH or N Gwei"},
+		{"amount unit case", replaceLine(t, nitro, "deposit_policy.min_activation_balance", "deposit_policy.min_activation_balance = 4096 eth"), `unit "eth"`},
+		{"amount 10 decimals", replaceLine(t, nitro, "deposit_policy.min_activation_balance", "deposit_policy.min_activation_balance = 0.1234567891 ETH"), "at most 9 digits"},
+		{"amount fraction of Gwei", replaceLine(t, nitro, "deposit_policy.min_activation_balance", "deposit_policy.min_activation_balance = 1.5 Gwei"), "want N Gwei"},
+		{"amount too large", replaceLine(t, nitro, "deposit_policy.min_activation_balance", "deposit_policy.min_activation_balance = 18446744074 ETH"), "too large"},
+		{"amount sign", replaceLine(t, nitro, "deposit_policy.min_activation_balance", "deposit_policy.min_activation_balance = -1 ETH"), "want N ETH"},
 		{"number with sign", replaceLine(t, nitro, "builder_gas_limit_min", "builder_gas_limit_min = +5"), "want a decimal number"},
 		{"number in hex", replaceLine(t, nitro, "max_keys", "max_keys = 0x10"), "want a decimal number"},
 		{"number above 32 bits", replaceLine(t, nitro, "max_keys", "max_keys = 4294967296"), "below 2^32"},
@@ -142,6 +165,24 @@ func TestParseSetupRefusals(t *testing.T) {
 	slices.Reverse(want.Locked.Approvers.Keys)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("shuffled file:\n%+v\nwant\n%+v", got, want)
+	}
+}
+
+// The time_policy keys are optional: nts, 100 ms, and max_bound_ms for
+// the sample bound.
+func TestTimePolicyDefaults(t *testing.T) {
+	text := string(must(FormatSetup(setups(t)["setup-azure"])))
+	for _, k := range []string{"time_policy.protocol", "time_policy.max_bound_ms", "time_policy.max_sample_bound_ms"} {
+		text = replaceLine(t, text, k, "")
+	}
+	text = replaceLine(t, dropSalts(text), "signer_name", "signer_name = signer-2\ntime_policy.max_bound_ms = 120")
+	got, err := ParseSetup("setup.conf", []byte(text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := setupwire.TimePolicy{Protocol: setupwire.ClockNTS, MaxBoundMs: 120, MaxSampleBoundMs: 120}
+	if got.Locked.TimePolicy != want {
+		t.Fatalf("time_policy %+v, want %+v", got.Locked.TimePolicy, want)
 	}
 }
 

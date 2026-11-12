@@ -8,6 +8,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/platform-aws/udprelay"
 	"github.com/lidofinance/tee-signer/platform/setup"
 	"github.com/lidofinance/tee-signer/trusted-time/ntscatalog"
@@ -59,5 +60,17 @@ func TestNTSNitroRoutingMatchesTheCatalog(t *testing.T) {
 		if p, ok := routed[e.Host]; !ok || p != e.NitroPort {
 			t.Errorf("%s (%s) is not routed on %d", e.Host, e.ID, e.NitroPort)
 		}
+	}
+}
+
+// A setup's time_servers (at most setupwire.MaxTimeServers) and the
+// catalog's default set must fit the most servers a runner dials
+// (ntscatalog.MaxServers, which trusted-time/nts TestCatalogLimitsMatchTheCore
+// ties to nts.MaxServers, the Rust quorum's limit). Otherwise setupwire
+// takes a list that fails only at the runner's start. Governance does not
+// import trusted-time, so the tie is here.
+func TestMaxTimeServersFitsTheQuorum(t *testing.T) {
+	if d := len(ntscatalog.Builtin.Dialed()); setupwire.MaxTimeServers+d > ntscatalog.MaxServers {
+		t.Fatalf("setupwire.MaxTimeServers %d plus the default set of %d is over ntscatalog.MaxServers %d", setupwire.MaxTimeServers, d, ntscatalog.MaxServers)
 	}
 }

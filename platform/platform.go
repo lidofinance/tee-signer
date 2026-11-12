@@ -162,9 +162,10 @@ type Platform struct {
 	// sealing context before the key policy was locked (AWS-KMS-02). The
 	// runner then uses the key only once every stored share opens under
 	// it, and seals no new share before that (tee-signer
-	// server.ProveSealingKey). false: the key is new at this start, or the
-	// platform does not set it (Azure derives the key inside the TEE; GCP
-	// and dev have no lock to plant before).
+	// server.ProveSealingKey). On GCP any holder of the encrypter role on
+	// the KMS key can wrap a key it knows under the public AAD. false: the
+	// key is new at this start, or the platform does not set it (Azure
+	// derives the key inside the TEE and stores none; dev).
 	SealingKeyStored bool
 	// NTSScheduleSeed seeds the NTS clock's shift schedule
 	// (trusted-time/clock NTS.ScheduleSeed): ScheduleSeed of the sealing
@@ -178,6 +179,10 @@ type Platform struct {
 	// schedule. nil (dev): every server is active on the 60 s grid, with a
 	// random phase. Empty is refused.
 	NTSScheduleSeed []byte
+	// TimeStarted holds the time values the NTS clock started on: the
+	// setup's, or those of Options.TimeFallback. nil without a setup or
+	// without the NTS clock.
+	TimeStarted *TimeValues
 }
 
 // KeyRule is the rule of the key that releases the sealing key, as the
@@ -329,6 +334,29 @@ type Options struct {
 	// (GCP only): on mainnet a key rule without a lock passes
 	// (CheckNoLock).
 	NoLockAccepted bool
+	// Time holds the setup's time values (version 0 of its config groups),
+	// nil without a setup. The NTS clock starts on them (tee-signer, -tags
+	// nts).
+	Time *TimeValues
+	// TimeFallback, if set, returns the newest time values that signed
+	// config updates in the config log give and that are in force by now,
+	// or nil when none changes them. The NTS clock calls it once, with the
+	// built platform and the coarse clock's time (its HTTPS-date quorum,
+	// about 30 s off at most), when no quorum forms on Time within its start
+	// wait.
+	TimeFallback func(p *Platform, now time.Time) (*TimeValues, error)
+}
+
+// TimeValues are a setup's time_policy and time_servers.
+type TimeValues struct {
+	Protocol       string // "nts" or "ntp"
+	MaxBound       time.Duration
+	MaxSampleBound time.Duration
+	// Servers are the catalog IDs (trusted-time/ntscatalog) the clock dials
+	// besides the image's default set: "id" or "id@alt-host".
+	Servers []string
+	// From says where the values come from, for the logs.
+	From string
 }
 
 // UseDurable calls o.Durable if set and returns the store to use.

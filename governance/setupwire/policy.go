@@ -30,8 +30,8 @@ import (
 // Leaf counts of the three groups.
 const (
 	NumPublicLeaves = 17
-	NumLockedLeaves = 16
-	NumOpenLeaves   = 2
+	NumLockedLeaves = 15
+	NumOpenLeaves   = 4
 )
 
 // Salts are the 32-byte salts of a group's leaves, in leaf order.

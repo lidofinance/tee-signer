@@ -21,10 +21,13 @@
 # entry (README, "Network entry") is outside the image: a firewall rule on
 # the VM's external address. The setup's mark log is the clone protection.
 # Clock: the NTS clock (-nts-clock, runner built with the tag nts), with
-# -nts-wait, -nts-max-bound and -nts-max-sample-bound in the command, so the launch environment
-# cannot set them. NTS-KE on
+# -nts-wait in the command, so the launch environment cannot set it. The
+# protocol, the bounds and the servers next to the default set come from
+# the setup (time_policy, time_servers): the runner refuses -clock-protocol,
+# -nts-max-bound, -nts-max-sample-bound and -nts-terms-confirmed, and their
+# variables, with a setup on a cloud platform. NTS-KE on
 # TCP 4460 and NTP on UDP 123 and 4123 to the default servers of
-# trusted-time/ntscatalog plus any -nts-terms-confirmed entries, straight out through the VM's external address
+# trusted-time/ntscatalog plus the setup's time_servers, straight out through the VM's external address
 # (the VPC's implied egress rule allows all). The three HTTPS-date URLs are
 # its coarse check only.
 # Identity tokens carry the audience signer-runner-identity, which the WIF
@@ -61,5 +64,5 @@ ENTRYPOINT ["/runner", \
   "-restart-floor=true", "-persist-watermarks=false", \
   "-nts-clock", \
   "-nts-coarse-urls", "https://cloudkms.googleapis.com/,https://sts.googleapis.com/,https://www.cloudflare.com/", \
-  "-nts-wait", "90s", "-nts-max-bound", "100ms", "-nts-max-sample-bound", "100ms", \
+  "-nts-wait", "90s", \
   "-log-json"]

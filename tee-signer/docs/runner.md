@@ -207,8 +207,11 @@ a warning and runs without a limit.
 With `-setup` the runner reads the signer's setup before it builds the
 platform, decodes it with `governance/setupwire`, refuses one for another
 platform, and takes from it the chain config, the client CA, `max_keys`,
-the mark log (required) and state copy, the signer name and the platform
-options. The images run this way; they are the same for every operator.
+the mark log (required) and state copy, the signer name, the platform
+options and the NTS clock's protocol, bounds and extra servers
+(`time_policy`, `time_servers`; `trusted-time/docs/nts.md`, "Time values
+from the setup"). The images run this way; they are the same for every
+operator.
 The setup format is in `attestation-verify/docs/attestation-statement.md`.
 
 | Platform | `-setup platform` reads | Deploy step |

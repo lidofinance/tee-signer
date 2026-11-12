@@ -69,7 +69,7 @@ func openUpdate(t *testing.T, v uint64, tag byte) []byte {
 	t.Helper()
 	u := setupwire.Update{Body: setupwire.UpdateBody{ClusterID: [32]byte{1}, Group: setupwire.GroupOpen, Version: v,
 		Open:  &setupwire.Open{ForkSchedule: []setupwire.Fork{{Epoch: uint64(tag), Version: backend.Version{tag}}}},
-		Salts: setupwire.Salts{{tag, 1}, {tag, 2}}},
+		Salts: setupwire.Salts{{tag, 1}, {tag, 2}, {tag, 3}, {tag, 4}}},
 		Approvals: []setupwire.Approval{{Position: 0}}}
 	b, err := u.Encode()
 	if err != nil {

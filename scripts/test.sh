@@ -84,6 +84,9 @@ summary() {
 }
 
 bash "$ROOT/scripts/test-modules.sh"
+# The tests behind the nts build tag (trusted-time/clock, trusted-time/nts,
+# tee-signer, the e2e relay test): test-modules.sh runs none of them.
+bash "$ROOT/scripts/test-nts.sh" "$HOST_ARCH"
 
 # bin_env <arch>: the variables that name the runner binaries for tests/e2e.
 bin_env() {

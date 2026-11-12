@@ -914,7 +914,9 @@ mismatch`.
   start, bound to the MAA token through the identity user data
   (`signer-protocol/docs/protocol.md`, "Channel binding"). Client
   certificates must chain to the setup's `allowed_client_ca`, which
-  setup_hash covers.
+  setup_hash covers. The runner refuses a certificate listed in
+  `revoked_client_certs`, one of a listed public key, or one below a listed CA
+  (`signer-protocol/docs/protocol.md`, "Client roles").
 - Shares arrive only sealed with HPKE (ML-KEM-768 + X25519) to the
   runner's attested per-boot key. `build-image.sh` takes the release
   Azure runner (`build/x86_64/bin/runner-azure`, tag `platform_azure`: no

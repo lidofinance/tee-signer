@@ -825,7 +825,7 @@ func TestNTSClockRefusesWideSamples(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := n.Status().Peers["a"]
-	if p.Stats.Wide != 1 || p.Stats.Samples != 0 || !strings.Contains(p.LastErr, "over the 100ms limit") {
+	if p.Stats.Wide != 1 || p.Stats.Samples != 0 || !strings.Contains(p.LastErr, "limit") {
 		t.Fatalf("a: wide %d samples %d err %v", p.Stats.Wide, p.Stats.Samples, p.LastErr)
 	}
 	sum := n.NTSSummary()
@@ -846,31 +846,85 @@ func TestNTSClockRefusesWideSamples(t *testing.T) {
 	}
 }
 
-// A sample under the cap at receipt joins for its whole join age: its
-// bound, aged by rho (500 ppm), may pass the cap by up to the aging of the
-// join age (38 ms at 76 s). One over the cap at receipt never joins.
+// A sample joins for its whole join age, and its bound, aged by rho
+// (500 ppm), never passes the cap while it may join: at receipt it must be
+// within the cap less the aging of the join age (38 ms at 76 s under the
+// shift schedule), 62 ms at the 100 ms cap. One wider at receipt never
+// joins. This keeps the error a host and wrong servers reach at twice the
+// cap (rv-dko.5).
 func TestNTSJoinsAgedBound(t *testing.T) {
-	n := &NTS{MaxSampleBound: 100 * time.Millisecond}
-	p := &ntsPeer{sample: &nts.Sample{Bound: 99 * time.Millisecond, T4: 1}}
-	maxAge := int64(76 * time.Second)
-	for _, age := range []time.Duration{time.Second, 3 * time.Second, 60 * time.Second, 76 * time.Second} {
+	n := &NTS{MaxSampleBound: 100 * time.Millisecond, Shifts: true}
+	maxAge := n.sampleMaxAge()
+	if maxAge != int64(76*time.Second) {
+		t.Fatalf("join age under the shift schedule: %v, the docs say 76 s", time.Duration(maxAge))
+	}
+	if d := nts.Drift(76 * time.Second); d != 38*time.Millisecond {
+		t.Fatalf("aging of 76 s: %v, the docs say 38 ms", d)
+	}
+	rb := n.receiptBound()
+	if rb != 62*time.Millisecond {
+		t.Fatalf("receipt bound %v, want 62 ms", rb)
+	}
+	p := &ntsPeer{sample: &nts.Sample{Bound: rb, T4: 1}}
+	for _, age := range []time.Duration{time.Second, 30 * time.Second, 60 * time.Second, 76 * time.Second} {
 		if !n.joins(p, 1+int64(age), maxAge) {
-			t.Fatalf("99 ms aged %v (%v) refused", age, 99*time.Millisecond+nts.Drift(age))
+			t.Fatalf("a sample at the receipt bound, aged %v, refused", age)
+		}
+		if aged := rb + nts.Drift(age); aged > n.maxSampleBound() {
+			t.Fatalf("aged %v the bound is %v, over the cap", age, aged)
 		}
 	}
-	p.sample.Bound = 100 * time.Millisecond
-	if !n.joins(p, 1+maxAge, maxAge) {
-		t.Fatal("a sample at the cap refused at the join age")
-	}
-	p.sample.Bound = 100*time.Millisecond + 1
+	p.sample.Bound = rb + 1
 	if n.joins(p, 1, maxAge) {
-		t.Fatal("a sample over the cap at receipt joins")
+		t.Fatal("a sample over the receipt bound joins")
 	}
 	p.sample.Bound = 50 * time.Millisecond
 	if n.joins(p, 2+maxAge, maxAge) {
 		t.Fatal("a sample over maxAge joins")
 	}
-	if d := nts.Drift(76 * time.Second); d != 38*time.Millisecond {
-		t.Fatalf("aging of 76 s: %v, the docs say 38 ms", d)
+	// record refuses the same samples, as wide.
+	q := &ntsPeer{stats: NTSPeerStats{Kisses: map[string]int{}}}
+	if n.record(q, nts.Sample{Bound: rb + time.Millisecond}, nil) || q.stats.Wide != 1 {
+		t.Fatalf("an answer over the receipt bound: wide %d", q.stats.Wide)
+	}
+	if !n.record(q, nts.Sample{Bound: rb}, nil) {
+		t.Fatal("an answer at the receipt bound refused")
+	}
+	// A cap under twice the aging (tests only; setups have at least 80 ms)
+	// keeps half of it.
+	small := &NTS{MaxSampleBound: 40 * time.Millisecond, Shifts: true}
+	if got := small.receiptBound(); got != 20*time.Millisecond {
+		t.Fatalf("receipt bound of a 40 ms cap: %v, want 20 ms", got)
+	}
+}
+
+// With exactly 3 fresh samples no wrong one is outvoted, so HEALTH's worst
+// bound is up to twice the widest member's bound, however narrow the
+// overlap; with 4 it is the quorum's bound (rv-dko.4).
+func TestNTSWorstBoundWithThreeSamples(t *testing.T) {
+	wider := ntstest.NTPOptions{RootDisp: 20 * time.Millisecond}
+	fs := newServers(t, map[string]ntstest.NTPOptions{"a": wider}, "a", "b", "c")
+	n := newNTS(fs, &coarseClock{})
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	sum := n.NTSSummary()
+	if len(sum.Members) != 3 {
+		t.Fatalf("members %v, want 3", sum.Members)
+	}
+	widest := time.Duration(0)
+	for _, p := range n.Status().Peers {
+		widest = max(widest, p.Sample.Bound)
+	}
+	if widest < 20*time.Millisecond || sum.WorstBoundNow < 2*widest || sum.WorstBoundNow < sum.BoundNow {
+		t.Fatalf("3 samples: worst %v, bound %v, widest member %v", sum.WorstBoundNow, sum.BoundNow, widest)
+	}
+	fs4 := newServers(t, map[string]ntstest.NTPOptions{"a": wider}, "a", "b", "c", "d")
+	n4 := newNTS(fs4, &coarseClock{})
+	if err := refresh(t, n4); err != nil {
+		t.Fatal(err)
+	}
+	if s4 := n4.NTSSummary(); len(s4.Members) != 4 || s4.WorstBoundNow != s4.BoundNow {
+		t.Fatalf("4 samples: members %v, worst %v, bound %v", s4.Members, s4.WorstBoundNow, s4.BoundNow)
 	}
 }

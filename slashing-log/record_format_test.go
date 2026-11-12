@@ -7,20 +7,21 @@ import (
 	"crypto/sha256"
 	"testing"
 
+	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/platform"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 )
 
-// A record round-trips with its source gate and share set, and
-// Parse refuses trailing bytes, a presence byte of 2 and any magic but
-// SMARK1 and SMARK2.
+// A record round-trips with its source gate, share set and config
+// history, and Parse refuses trailing bytes, a presence byte of 2 and any
+// magic but SMARK1 to SMARK3.
 func TestRecordFormatRoundTrip(t *testing.T) {
 	gate := uint64(1002)
 	r := Record{Setup: [32]byte{0x5e, 1}, Signer: "signer-1", Version: 3, PrevVersion: 2, PrevHash: [32]byte{2}, LogID: [32]byte{1},
 		Mark: mark(20), Time: 1_800_000_000, State: testSetup("signer-1").First.Clone(), SourceGate: &gate,
 		Shares: &ShareSet{Current: [32]byte{0xc1}, Pending: &[32]byte{0xc2}}}
 	enc := signed(t, testKey(1), r)
-	if string(enc[:6]) != "SMARK2" {
+	if string(enc[:6]) != "SMARK3" {
 		t.Fatalf("magic %q", enc[:6])
 	}
 	got, err := decode(enc, testKey(1), r.Setup, r.Signer, 3)
@@ -42,20 +43,62 @@ func TestRecordFormatRoundTrip(t *testing.T) {
 		t.Fatalf("no gate, no share set: %+v, %v", got, err)
 	}
 	// An SMARK1 record (no share set field) reads, with no share set.
-	got, err = decode(signedV1(t, testKey(1), r), testKey(1), r.Setup, r.Signer, 3)
+	got, err = decode(signedOld(t, testKey(1), r, 1), testKey(1), r.Setup, r.Signer, 3)
 	if err != nil || got.Shares != nil {
 		t.Fatalf("SMARK1: %+v, %v", got, err)
+	}
+	// An SMARK2 record (no config history) reads, with none.
+	got, err = decode(signedOld(t, testKey(1), r, 2), testKey(1), r.Setup, r.Signer, 3)
+	if err != nil || got.State.RemovedAt != 0 || got.State.ApproversAt != 0 || got.State.Carried != nil || got.State.Paths != ([4]setupwire.Path{}) {
+		t.Fatalf("SMARK2: %+v, %v", got, err)
+	}
+	// The config history round-trips.
+	h := r
+	h.State = r.State.Clone()
+	h.State.RemovedAt, h.State.ApproversAt, h.State.Carried = 1_800_000_100, 1_800_000_200, [][32]byte{{0x11}, {0x12}}
+	h.State.Locked.Version, h.State.Locked.Hash = 4, [32]byte{0x44}
+	h.Copies[0] = BodyCopy{N: 1, At: 1_800_000_000}
+	h.State.SetPath(setupwire.GroupLocked, false, setupwire.PathEmergencyRemoval)
+	got, err = decode(signed(t, testKey(1), h), testKey(1), r.Setup, r.Signer, 3)
+	if err != nil || !got.State.Equal(h.State) || got.State.ApproversAt != 1_800_000_200 {
+		t.Fatalf("config history: %+v, %v", got, err)
+	}
+	// The approver set time alone (a rotation that is no removal).
+	h.State.RemovedAt = 0
+	got, err = decode(signed(t, testKey(1), h), testKey(1), r.Setup, r.Signer, 3)
+	if err != nil || !got.State.Equal(h.State) || got.State.ApproversAt != 1_800_000_200 || got.State.RemovedAt != 0 {
+		t.Fatalf("approver set time without a removal: %+v, %v", got, err)
+	}
+	other := h.State.Clone()
+	other.ApproversAt++
+	if other.Equal(h.State) {
+		t.Fatal("Equal ignores the approver set time")
+	}
+	for name, c := range map[string][][32]byte{"unsorted": {{2}, {1}}, "repeated": {{1}, {1}}, "zero": {{}}} {
+		h.State.Carried = c
+		if _, err := decode(signed(t, testKey(1), h), testKey(1), r.Setup, r.Signer, 3); err == nil {
+			t.Errorf("carried revocations %s: parsed", name)
+		}
 	}
 
 	enc = signed(t, testKey(1), r)
 	body := enc[:len(enc)-64]
 	cases := map[string][]byte{
-		"trailing byte":     append(bytes.Clone(body), 0),
-		"shares presence 2": append(bytes.Clone(body[:len(body)-1]), 2),
-		// An SMARK1 body with the share set's presence byte.
+		"trailing byte":       append(bytes.Clone(body), 0),
+		"shares presence 2":   append(bytes.Clone(body[:len(body)-8]), 2, 0, 0, 0, 0, 0, 0, 0),
+		"removal presence 2":  append(bytes.Clone(body[:len(body)-7]), 2, 0, 0, 0, 0, 0, 0),
+		"removal at 0":        append(bytes.Clone(body[:len(body)-7]), append([]byte{1}, make([]byte, 14)...)...),
+		"set time presence 2": append(bytes.Clone(body[:len(body)-6]), 2, 0, 0, 0, 0, 0),
+		"set time 0":          append(bytes.Clone(body[:len(body)-6]), append([]byte{1}, make([]byte, 13)...)...),
+		"carried count short": append(bytes.Clone(body[:len(body)-5]), 1, 0, 0, 0, 0),
+		"path 4":              append(bytes.Clone(body[:len(body)-4]), 0, 0, 0, 4),
+		"path of no update":   append(bytes.Clone(body[:len(body)-4]), 1, 0, 0, 0),
+		// An SMARK1 body with the share set's presence byte, an SMARK2 one
+		// with the history.
 		"SMARK1 with a share set": append([]byte("SMARK1"), body[6:]...),
+		"SMARK2 with a history":   append([]byte("SMARK2"), body[6:]...),
 	}
-	for _, d := range []byte{'0', '3'} {
+	for _, d := range []byte{'0', '4'} {
 		b := bytes.Clone(body)
 		b[5] = d
 		cases["magic SMARK"+string(d)] = b
@@ -67,7 +110,7 @@ func TestRecordFormatRoundTrip(t *testing.T) {
 	}
 	// The header of a newer version still reads, so the fail-closed rule
 	// can tell it from an object that is no record; version 0 does not.
-	for d, want := range map[byte]bool{'0': false, '1': true, '2': true, '3': true} {
+	for d, want := range map[byte]bool{'0': false, '1': true, '2': true, '3': true, '4': true} {
 		b := bytes.Clone(enc)
 		b[5] = d
 		if _, ok := RecordHeader(b); ok != want {
@@ -76,12 +119,13 @@ func TestRecordFormatRoundTrip(t *testing.T) {
 	}
 }
 
-// signedV1 makes r (without a share set) as an SMARK1 record: the SMARK2
-// body without the share set's presence byte.
-func signedV1(t *testing.T, keys platform.Keys, r Record) []byte {
+// signedOld makes r (without a share set or config history) as an SMARK1
+// (ver 1: the SMARK3 body without the share set's presence byte and the
+// history) or SMARK2 record (ver 2: without the history).
+func signedOld(t *testing.T, keys platform.Keys, r Record, ver int) []byte {
 	t.Helper()
-	if r.Shares != nil {
-		t.Fatal("an SMARK1 record has no share set")
+	if r.Shares != nil || r.State.RemovedAt != 0 || r.State.ApproversAt != 0 || r.State.Carried != nil {
+		t.Fatal("an old record has no share set or history here")
 	}
 	seed, blob, err := keys.NewKey(context.Background(), KeyAAD(r.Setup, r.Signer))
 	if err != nil {
@@ -89,7 +133,10 @@ func signedV1(t *testing.T, keys platform.Keys, r Record) []byte {
 	}
 	r.KeyBlob = blob
 	b := r.encodeBody()
-	body := append([]byte(recordMagicV1), b[len(recordMagic):len(b)-1]...)
+	body := append([]byte(recordMagicV1), b[len(recordMagic):len(b)-8]...)
+	if ver == 2 {
+		body = append([]byte(recordMagicV2), b[len(recordMagic):len(b)-7]...)
+	}
 	return append(body, ed25519.Sign(ed25519.NewKeyFromSeed(seed), signedMessage(body))...)
 }
 

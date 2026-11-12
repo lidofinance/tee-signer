@@ -153,7 +153,11 @@ func (s *Setup) Options() map[string]string {
 	case setupwire.PlatformAzure:
 		return map[string]string{"maa_endpoint": k.MAAEndpoint, "akv_endpoint": k.AKVEndpoint, "kid": k.KID}
 	case setupwire.PlatformGCP:
-		return map[string]string{"wif_provider": k.WIFProvider, "kms_key": k.KMSKey, "attest_audience": k.AttestAudience}
+		o := map[string]string{"wif_provider": k.WIFProvider, "kms_key": k.KMSKey, "attest_audience": k.AttestAudience}
+		if k.ProjectNumber != 0 {
+			o["project_number"] = strconv.FormatUint(k.ProjectNumber, 10)
+		}
+		return o
 	}
 	return map[string]string{}
 }

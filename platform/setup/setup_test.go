@@ -123,8 +123,13 @@ func TestValuesFromTheSetup(t *testing.T) {
 		o["kid"] != "signer-key" || len(o) != 3 {
 		t.Fatalf("azure options %v", o)
 	}
-	if o := g.Options(); o["kms_key"] == "" || o["wif_provider"] == "" || o["attest_audience"] != "signer-runner-identity" || len(o) != 3 {
+	if o := g.Options(); o["kms_key"] == "" || o["wif_provider"] == "" || o["attest_audience"] != "signer-runner-identity" ||
+		o["project_number"] != "123456789" || len(o) != 4 {
 		t.Fatalf("gcp options %v", o)
+	}
+	g.Wire.Platform.SealingKeyRelease.ProjectNumber = 0
+	if o := g.Options(); len(o) != 3 {
+		t.Fatalf("gcp options without project_number %v", o)
 	}
 }
 

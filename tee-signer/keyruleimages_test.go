@@ -35,7 +35,7 @@ func keyRuleEnv(t *testing.T, change func(*markstore.ConfigState)) (*server.Upda
 	if change != nil {
 		change(&state)
 	}
-	updates, err := newConfigUpdates(st, &fakeLog{state: state}, fixedClock{time.Unix(1_790_000_000, 0)}, "nitro", quietLog)
+	updates, err := newConfigUpdates(st, &fakeLog{state: state}, &platform.Platform{Clock: fixedClock{time.Unix(1_790_000_000, 0)}}, "nitro", quietLog)
 	if err != nil {
 		t.Fatal(err)
 	}

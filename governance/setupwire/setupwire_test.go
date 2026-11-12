@@ -101,21 +101,50 @@ func TestDecodeSetupBytes(t *testing.T) {
 		return c
 	}
 	safetyAt := 2 + 32 + 8 + chainLen
-	// rootsAt is the count byte of allowed_builder_request_auth_data_roots,
-	// the last locked field.
-	rootsAt := o.lockedEnd - 1 - 32*len(s.Locked.AllowedBuilderRequestAuthDataRoots)
+	// The locked group ends with time_policy, deposit_policy and
+	// exit_policy, the open group with revoked_client_certs and
+	// time_servers.
+	lv, ov := leafBytes(s.Locked.fields()), leafBytes(s.Open.fields())
+	nl, no := len(lv), len(ov)
+	exitAt := o.lockedEnd - len(lv[nl-1])
+	depositAt := exitAt - len(lv[nl-2])
+	timeAt := depositAt - len(lv[nl-3])
+	serversAt := o.openEnd - len(ov[no-1])
+	revokedAt := serversAt - len(ov[no-2])
+	// rootsAt is the count byte of allowed_builder_request_auth_data_roots.
+	rootsAt := timeAt - 1 - 32*len(s.Locked.AllowedBuilderRequestAuthDataRoots)
+	gcp := ss["setup-gcp"]
+	gb, _ := gcp.Encode()
+	// The GCP key release ends with the project_number presence byte and
+	// the number.
+	projectAt := len(gb) - 9
 	cases := []struct {
 		name string
 		b    []byte
 		want string
 	}{
 		{"kind", set(0, 'X'), "not a setup"},
-		{"format 0", set(1, 0), "setup format 0, want 5"},
-		{"format 1 (before signing_mode)", set(1, 1), "setup format 1, want 5"},
-		{"format 2 (with the exit approval fields)", set(1, 2), "setup format 2, want 5"},
-		{"format 3 (with peer_attestation_hosts)", set(1, 3), "setup format 3, want 5"},
-		{"format 4 (without kms_key_creation_date)", set(1, 4), "setup format 4, want 5"},
-		{"format 6", set(1, 6), "setup format 6, want 5"},
+		{"format 0", set(1, 0), "setup format 0, want 6"},
+		{"format 1 (before signing_mode)", set(1, 1), "setup format 1, want 6"},
+		{"format 2 (with the exit approval fields)", set(1, 2), "setup format 2, want 6"},
+		{"format 3 (with peer_attestation_hosts)", set(1, 3), "setup format 3, want 6"},
+		{"format 4 (without kms_key_creation_date)", set(1, 4), "setup format 4, want 6"},
+		{"format 5 (before deposit_policy and time_policy)", set(1, 5), "setup format 5, want 6"},
+		{"format 7", set(1, 7), "setup format 7, want 6"},
+		{"time_policy version 0", set(timeAt, 0), "time_policy version 0, want 1"},
+		{"time_policy version 2", set(timeAt, 2), "time_policy version 2, want 1"},
+		{"time_policy protocol 3", set(timeAt+1, 3), "time_policy.protocol 3"},
+		{"deposit_policy version 2", set(depositAt, 2), "deposit_policy version 2, want 1"},
+		{"deposit_policy 17 credentials", set(depositAt+1, 17), "17 deposit_policy.withdrawal_credentials, at most 16"},
+		{"exit_policy version 2", set(exitAt, 2), "exit_policy version 2, want 1"},
+		{"exit_policy with a validator", set(exitAt+2, 1), "1 exit_policy.allowed_validators, at most 0"},
+		{"exit_policy approvals 1", set(exitAt+11, 1), "exit_policy: exit approvals are not in this version"},
+		{"revoked_client_certs version 0", set(revokedAt, 0), "revoked_client_certs version 0, want 1"},
+		{"revoked_client_certs version 2", set(revokedAt, 2), "revoked_client_certs version 2, want 1"},
+		{"revoked count 129", set(revokedAt+1, 129), "129 revoked_client_certs, at most 128"},
+		{"time_servers version 2", set(serversAt, 2), "time_servers version 2, want 1"},
+		{"time_servers count 11", set(serversAt+1, 11), "11 time_servers, at most 10"},
+		{"empty time server", set(serversAt+2, 0), "time_servers entry is empty"},
 		{"empty signer name", set(o.private, 0), "signer_name is empty"},
 		{"oversize", append(slices.Clone(b), make([]byte, MaxSetup)...), "at most 65536"},
 		{"empty", nil, "short"},
@@ -126,7 +155,13 @@ func TestDecodeSetupBytes(t *testing.T) {
 		{"zero locked salt", zero(o.lockedEnd+32*4, 32), "locked: salt 4 is zero"},
 		{"zero open salt", zero(o.openEnd+32, 32), "open: salt 1 is zero"},
 		{"zero platform salt", zero(o.platformSalt, 32), "platform_salt is zero"},
-		{"gloas presence 2", set(o.openEnd-9, 2), "gloas_fork_epoch presence byte is 2"},
+		{"gloas presence 2", set(revokedAt-9, 2), "gloas_fork_epoch presence byte is 2"},
+		{"project_number presence 2", func() []byte { c := slices.Clone(gb); c[projectAt] = 2; return c }(), "project_number presence byte is 2"},
+		{"project_number 0", func() []byte {
+			c := slices.Clone(gb)
+			clear(c[projectAt+1:])
+			return c
+		}(), "does not encode back"},
 		{"allow_unverified 2", set(rootsAt-4, 2), "allow_unverified_nonslashable_signing byte is 2"},
 		{"slot time count 17", set(rootsAt-1, 17), "17 slot_time_changes, at most 16"},
 		{"builder request auth root count 17", set(rootsAt, 17), "17 allowed_builder_request_auth_data_roots, at most 16"},
@@ -242,7 +277,7 @@ func setupRefusals(t testing.TB) []setupRefusal {
 		{"signing mode 0", "", func(s *Setup) { s.SigningMode = 0 }, "signing_mode 0, want 1 (threshold) or 2 (single)", ""},
 		{"signing mode 3", "", func(s *Setup) { s.SigningMode = 3 }, "signing_mode 3", ""},
 		{"public salts missing", "", func(s *Setup) { s.PolicySalts.Public = nil }, "public: no salts", "skip"},
-		{"locked salts short", "", func(s *Setup) { s.PolicySalts.Locked = s.PolicySalts.Locked[:15] }, "locked: 15 salts, want one for each of the 16 leaves", "skip"},
+		{"locked salts short", "", func(s *Setup) { s.PolicySalts.Locked = s.PolicySalts.Locked[:14] }, "locked: 14 salts, want one for each of the 15 leaves", "skip"},
 		{"open salt zero", "", func(s *Setup) { s.PolicySalts.Open[0] = [32]byte{} }, "open: salt 0 is zero", ""},
 		{"platform salt zero", "", func(s *Setup) { s.PlatformSalt = [32]byte{} }, "platform_salt is zero", ""},
 		{"platform 0", "", func(s *Setup) { s.Platform.Platform = 0 }, "platform: 0", "unknown platform 0"},
@@ -319,16 +354,53 @@ func setupRefusals(t testing.TB) []setupRefusal {
 		{"fee recipients unsorted", "", func(s *Setup) { slices.Reverse(s.Locked.AllowedFeeRecipients) }, "allowed_fee_recipients must be sorted", ""},
 		{"fee recipient repeated", "", func(s *Setup) { s.Locked.AllowedFeeRecipients[1] = s.Locked.AllowedFeeRecipients[0] }, "allowed_fee_recipients must be sorted", ""},
 		{"gas min above max", "", func(s *Setup) { s.Locked.BuilderGasLimitMin = s.Locked.BuilderGasLimitMax + 1 }, "builder_gas_limit_min", ""},
-		{"min activation 0", "", func(s *Setup) { s.Locked.MinActivationBalance = 0 }, "min_activation_balance", ""},
-		{"min activation above max", "", func(s *Setup) { s.Locked.MinActivationBalance = s.Locked.MaxEffectiveBalance + 1 }, "min_activation_balance", ""},
-		{"credentials prefix 0", "", func(s *Setup) { s.Locked.WithdrawalCredentials[0] = 0 }, "prefix 0x00", ""},
-		{"credentials prefix 3", "", func(s *Setup) { s.Locked.WithdrawalCredentials[0] = 3 }, "prefix 0x03", ""},
-		{"credentials padding", "", func(s *Setup) { s.Locked.WithdrawalCredentials[5] = 1 }, "bytes 1 to 11", ""},
-		{"credentials zero address", "", func(s *Setup) { s.Locked.WithdrawalCredentials = backend.Root{2} }, "address is zero", ""},
-		{"deposit 0", "", func(s *Setup) { s.Locked.AllowedDepositAmounts[0] = 0 }, "deposit amount 0", ""},
-		{"deposit above max", "", func(s *Setup) { s.Locked.AllowedDepositAmounts[1] = s.Locked.MaxEffectiveBalance + 1 }, "deposit amount 2048000000001", ""},
-		{"deposits unsorted", "", func(s *Setup) { slices.Reverse(s.Locked.AllowedDepositAmounts) }, "allowed_deposit_amounts must be sorted", ""},
-		{"9 deposits", "", func(s *Setup) { s.Locked.AllowedDepositAmounts = []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9} }, "9 allowed_deposit_amounts", "9 allowed_deposit_amounts, at most 8"},
+		{"min activation 0", "", func(s *Setup) { s.Locked.DepositPolicy.MinActivationBalance = 0 }, "min_activation_balance", ""},
+		{"min activation above max", "", func(s *Setup) {
+			s.Locked.DepositPolicy.MinActivationBalance = s.Locked.DepositPolicy.MaxEffectiveBalance + 1
+		}, "min_activation_balance", ""},
+		{"no credentials", "", func(s *Setup) { s.Locked.DepositPolicy.WithdrawalCredentials = nil }, "0 withdrawal_credentials, want 1 to 16", ""},
+		{"17 credentials", "", func(s *Setup) {
+			s.Locked.DepositPolicy.WithdrawalCredentials = nil
+			for i := range 17 {
+				s.Locked.DepositPolicy.WithdrawalCredentials = append(s.Locked.DepositPolicy.WithdrawalCredentials, credentials(0x01, byte(i+1)))
+			}
+		}, "17 withdrawal_credentials", "17 deposit_policy.withdrawal_credentials, at most 16"},
+		{"credentials prefix 0", "", func(s *Setup) { s.Locked.DepositPolicy.WithdrawalCredentials[0][0] = 0 }, "prefix 0x00", ""},
+		{"credentials prefix 3", "", func(s *Setup) { s.Locked.DepositPolicy.WithdrawalCredentials[1][0] = 3 }, "prefix 0x03", ""},
+		{"credentials padding", "", func(s *Setup) { s.Locked.DepositPolicy.WithdrawalCredentials[0][5] = 1 }, "bytes 1 to 11", ""},
+		{"credentials zero address", "", func(s *Setup) { s.Locked.DepositPolicy.WithdrawalCredentials[1] = backend.Root{2} }, "address is zero", ""},
+		{"credentials unsorted", "", func(s *Setup) { slices.Reverse(s.Locked.DepositPolicy.WithdrawalCredentials) }, "withdrawal_credentials must be sorted", ""},
+		{"credentials repeated", "", func(s *Setup) {
+			s.Locked.DepositPolicy.WithdrawalCredentials[1] = s.Locked.DepositPolicy.WithdrawalCredentials[0]
+		}, "withdrawal_credentials must be sorted", ""},
+		{"deposit 0", "", func(s *Setup) { s.Locked.DepositPolicy.AllowedDepositAmounts[0] = 0 }, "deposit amount 0", ""},
+		{"deposit above max", "", func(s *Setup) {
+			s.Locked.DepositPolicy.AllowedDepositAmounts[1] = s.Locked.DepositPolicy.MaxEffectiveBalance + 1
+		}, "deposit amount 2048000000001", ""},
+		{"deposits unsorted", "", func(s *Setup) { slices.Reverse(s.Locked.DepositPolicy.AllowedDepositAmounts) }, "allowed_deposit_amounts must be sorted", ""},
+		{"9 deposits", "", func(s *Setup) { s.Locked.DepositPolicy.AllowedDepositAmounts = []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9} },
+			"9 allowed_deposit_amounts", "9 deposit_policy.allowed_deposit_amounts, at most 8"},
+		{"time protocol 0", "", func(s *Setup) { s.Locked.TimePolicy.Protocol = 0 }, "time_policy.protocol 0", ""},
+		{"time protocol 3", "", func(s *Setup) { s.Locked.TimePolicy.Protocol = 3 }, "time_policy.protocol 3", ""},
+		{"max bound 0", "", func(s *Setup) { s.Locked.TimePolicy.MaxBoundMs = 0 }, "time_policy.max_bound_ms 0, want 1 to 250", ""},
+		{"max bound 251", "", func(s *Setup) { s.Locked.TimePolicy.MaxBoundMs = 251 }, "time_policy.max_bound_ms 251", ""},
+		{"sample bound below max bound", "", func(s *Setup) { s.Locked.TimePolicy.MaxSampleBoundMs = 99 }, "time_policy.max_sample_bound_ms 99, want max(max_bound_ms (100), 80) to 1000", ""},
+		// rv-dko.5: the clock takes a sample at receipt only while its bound
+		// plus 38 ms of aging fits the cap, so the cap is at least 80 ms.
+		{"sample bound under 80 ms", "", func(s *Setup) {
+			s.Locked.TimePolicy.MaxBoundMs, s.Locked.TimePolicy.MaxSampleBoundMs = 50, 79
+		}, "time_policy.max_sample_bound_ms 79, want max(max_bound_ms (50), 80) to 1000", ""},
+		{"sample bound 1001", "", func(s *Setup) { s.Locked.TimePolicy.MaxSampleBoundMs = 1001 }, "time_policy.max_sample_bound_ms 1001", ""},
+		{"exit validator", "", func(s *Setup) { s.Locked.ExitPolicy.AllowedValidators = []backend.Pubkey{{1}} }, "exit approvals are not in this version",
+			"1 exit_policy.allowed_validators, at most 0"},
+		{"exit stake cap", "", func(s *Setup) { s.Locked.ExitPolicy.StakeCapPerDay = 32 * eth }, "exit approvals are not in this version", ""},
+		{"exit approvals", "", func(s *Setup) { s.Locked.ExitPolicy.ApprovalsNeeded = 2 }, "exit approvals are not in this version", ""},
+		{"project number on nitro", "", func(s *Setup) { s.Platform.SealingKeyRelease.ProjectNumber = 1 }, "project_number does not apply to nitro", "skip"},
+		{"gcp prod chain without project number", "setup-gcp", func(s *Setup) {
+			s.Chain = *chainWith(MainnetForkVersion)
+			s.Locked.ChangeDelaySeconds = nil
+			s.Platform.SealingKeyRelease.ProjectNumber = 0
+		}, "a prod chain on gcp needs sealing_key_release.project_number", ""},
 		{"root domain attester", "", func(s *Setup) { s.Locked.BareRootDomains |= 1 << 1 }, "0x01000000", ""},
 		{"root domain 15", "", func(s *Setup) { s.Locked.BareRootDomains |= 1 << 15 }, "0x0f000000", ""},
 		{"slot time at epoch 0", "", func(s *Setup) { s.Locked.SlotTimeChanges = []SlotTimeChange{{0, 4}} }, "epoch 0 is the genesis slot time", ""},
@@ -366,6 +438,28 @@ func setupRefusals(t testing.TB) []setupRefusal {
 		{"forks unsorted", "", func(s *Setup) { slices.Reverse(s.Open.ForkSchedule) }, "ascending epoch order", ""},
 		{"two forks at one epoch", "", func(s *Setup) { s.Open.ForkSchedule[1].Epoch = 0 }, "ascending epoch order", ""},
 		{"gloas not a fork", "", func(s *Setup) { s.Open.GloasForkEpoch = u64p(15) }, "gloas_fork_epoch 15", ""},
+		{"revoked unsorted", "", func(s *Setup) { slices.Reverse(s.Open.RevokedClientCerts) }, "revoked_client_certs must be sorted", ""},
+		{"revoked repeated", "", func(s *Setup) { s.Open.RevokedClientCerts[1] = s.Open.RevokedClientCerts[0] }, "revoked_client_certs must be sorted", ""},
+		{"revoked zero", "", func(s *Setup) { s.Open.RevokedClientCerts[0] = [32]byte{} }, "a zero hash", ""},
+		{"129 revoked", "", func(s *Setup) {
+			s.Open.RevokedClientCerts = nil
+			for i := range 129 {
+				s.Open.RevokedClientCerts = append(s.Open.RevokedClientCerts, [32]byte{byte(i / 256), byte(i), 1})
+			}
+		}, "129 revoked_client_certs", ""},
+		{"17 time servers", "", func(s *Setup) {
+			s.Open.TimeServers = nil
+			for i := range 17 {
+				s.Open.TimeServers = append(s.Open.TimeServers, fmt.Sprintf("s%02d", i))
+			}
+		}, "17 time_servers", ""},
+		{"time servers unsorted", "", func(s *Setup) { slices.Reverse(s.Open.TimeServers) }, "time_servers must be sorted", ""},
+		{"time server repeated", "", func(s *Setup) { s.Open.TimeServers[1] = s.Open.TimeServers[0] }, "time_servers must be sorted", ""},
+		{"time server ID twice", "", func(s *Setup) { s.Open.TimeServers = []string{"ptb", "ptb@ptbtime2.ptb.de"} }, `names "ptb" twice`, ""},
+		{"time server upper case", "", func(s *Setup) { s.Open.TimeServers[0] = "Netnod" }, `time_servers entry "Netnod"`, ""},
+		{"time server empty host", "", func(s *Setup) { s.Open.TimeServers[1] = "ptb@" }, `time_servers entry "ptb@"`, ""},
+		{"time server ID too long", "", func(s *Setup) { s.Open.TimeServers = []string{strings.Repeat("a", 33)} }, "time_servers entry", ""},
+		{"time server port", "", func(s *Setup) { s.Open.TimeServers[1] = "ptb@ptbtime2.ptb.de:4460" }, "time_servers entry", ""},
 	}
 }
 

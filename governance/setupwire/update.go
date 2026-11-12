@@ -15,12 +15,12 @@ import (
 // update's hash, can be checked against published leaves while other
 // leaves stay withheld. The signatures follow the body.
 //
-//	body   = 'B' version:u8(1) cluster_id[32] chain_hash[32] group:u8
+//	body   = 'B' version:u8(2) cluster_id[32] chain_hash[32] group:u8
 //	         config_version:u64 prev_hash[32] activate_at:u64 locked|open
 //	         group_salts (one salt[32] per leaf of the group)
 //	header = cluster_id[32] chain_hash[32] group:u8 config_version:u64
 //	         prev_hash[32] activate_at:u64 group_root[32]
-//	update = 'U' version:u8(1) body_len:u32 body
+//	update = 'U' version:u8(2) body_len:u32 body
 //	         sig_count:u8 {position:u8 signature[64]}
 //	         new_count:u8 {position:u8 signature[64]}
 //
@@ -29,8 +29,14 @@ import (
 // signatures by the active approvers, positions ascending. new_count is 0,
 // or for a rotation the size of the new set with positions 0 to n-1: every
 // new key signs the same header (section 8).
+//
+// The body carries no setup format version: its group follows the leaves
+// of the setup format in force. UpdateVersion moves with every format that
+// changes a group, so an update for another format is refused at its
+// version byte. Version 2 goes with setup format 6. changes.go has the
+// rules for how fast an update comes into force and who must sign it.
 const (
-	UpdateVersion = 1
+	UpdateVersion = 2
 	// HeaderLen is the size of the header the approvers sign.
 	HeaderLen = 32 + 32 + 1 + 8 + 32 + 8 + 32
 	// MaxUpdate bounds a body and a signed update. A locked group at

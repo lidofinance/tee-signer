@@ -33,7 +33,7 @@ func imageLauncher(t *testing.T, digest *string) string {
 			return
 		}
 		w.Write([]byte(fakeJWT(map[string]any{"aud": req.Audience, "iat": 1, "eat_nonce": req.Nonces,
-			"swname": "CONFIDENTIAL_SPACE", "submods": map[string]any{"container": map[string]any{"image_digest": *digest}}})))
+			"swname": "CONFIDENTIAL_SPACE", "submods": map[string]any{"container": map[string]any{"image_digest": *digest}, "gce": testGCE}})))
 	})}
 	go srv.Serve(l)
 	t.Cleanup(func() { srv.Close() })
@@ -55,7 +55,7 @@ func TestSelfImageIsTheSTSTokenDigest(t *testing.T) {
 	}
 	k := newKMS()
 	store, _ := filestore.New(t.TempDir())
-	if _, err := k.dataKey(ctx, store, [32]byte{1}); err != nil {
+	if _, _, err := k.dataKey(ctx, store, [32]byte{1}); err != nil {
 		t.Fatal(err)
 	}
 	im, err := k.Seen.Get(ctx)
@@ -65,7 +65,7 @@ func TestSelfImageIsTheSTSTokenDigest(t *testing.T) {
 
 	// Another digest on a later token.
 	digest = "sha256:" + strings.Repeat("d2", 32)
-	if _, err := k.dataKey(ctx, store, [32]byte{1}); err != nil {
+	if _, _, err := k.dataKey(ctx, store, [32]byte{1}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := k.Seen.Get(ctx); err == nil || !strings.Contains(err.Error(), "two images") {
@@ -76,7 +76,7 @@ func TestSelfImageIsTheSTSTokenDigest(t *testing.T) {
 	for _, d := range []string{"", "sha512:" + strings.Repeat("d2", 32), "sha256:" + strings.Repeat("d2", 31), "sha256:" + strings.Repeat("zz", 32)} {
 		digest = d
 		k := newKMS()
-		if _, err := k.dataKey(ctx, store, [32]byte{1}); err != nil {
+		if _, _, err := k.dataKey(ctx, store, [32]byte{1}); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := k.Seen.Get(ctx); err == nil || !strings.Contains(err.Error(), "image_digest") {
