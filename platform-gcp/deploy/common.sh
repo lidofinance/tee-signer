@@ -48,6 +48,19 @@ need_setup() {
 # `gcloud projects describe`.
 PROJECT_ID="${PROJECT_ID:-<gcp-project>}"
 PROJECT_NUMBER="${PROJECT_NUMBER:-<gcp-project-number>}"
+# A project ID of 6 to 30 characters, or a domain-scoped one: a domain, ":"
+# and such an ID (example.com:signer), as the runner takes it in kms_key
+# (platform-gcp/gcp kmsKeyRE). A domain-scoped project's service accounts
+# are NAME@ID.DOMAIN.iam.gserviceaccount.com and its registry path is
+# DOMAIN/ID.
+if [ "$PROJECT_ID" != "<gcp-project>" ]; then
+  [[ "$PROJECT_ID" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+:)?[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]] ||
+    die "PROJECT_ID=$PROJECT_ID is not a project ID (6 to 30 of a-z, 0-9 and -, optionally after a domain and \":\")"
+fi
+case "$PROJECT_ID" in
+  *:*) PROJECT_SA_HOST="${PROJECT_ID#*:}.${PROJECT_ID%%:*}" PROJECT_AR_PATH="${PROJECT_ID%%:*}/${PROJECT_ID#*:}" ;;
+  *) PROJECT_SA_HOST="$PROJECT_ID" PROJECT_AR_PATH="$PROJECT_ID" ;;
+esac
 REGION="${REGION:-europe-west4}"
 ZONE="${ZONE:-europe-west4-a}"
 
@@ -207,7 +220,7 @@ BOOT_DISK_SIZE=20GB
 BOOT_DISK_TYPE=pd-balanced
 
 # ---- derived names ----------------------------------------------------------
-SERVICE_ACCOUNT="$SA_NAME@$PROJECT_ID.iam.gserviceaccount.com"
+SERVICE_ACCOUNT="$SA_NAME@$PROJECT_SA_HOST.iam.gserviceaccount.com"
 # By project ID: Cloud KMS refuses a key name with the project number (403).
 # The runner ties the ID to the setup's project_number through the launcher
 # token (platform-gcp/gcp/project.go, checkProject; rv-d18).
@@ -219,7 +232,7 @@ WIF_PROVIDER_RESOURCE="//iam.googleapis.com/$WIF_POOL_RESOURCE/providers/$WIF_PR
 # and the buckets grant their roles to this set, never to the service account.
 WIF_PRINCIPAL_SET="principalSet://iam.googleapis.com/$WIF_POOL_RESOURCE/*"
 REGISTRY="$REGION-docker.pkg.dev"
-IMAGE_REPO="$REGISTRY/$PROJECT_ID/$AR_REPO/$IMAGE_NAME"
+IMAGE_REPO="$REGISTRY/$PROJECT_AR_PATH/$AR_REPO/$IMAGE_NAME"
 # A non-prod CHAIN puts "-<chain>" into the build folder and the image name.
 IMAGE_SUFFIX="$(image_suffix)"
 OUT="$OUT$IMAGE_SUFFIX"

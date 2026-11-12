@@ -497,11 +497,11 @@ has passed.
 | | AWS | GCP | Azure |
 | --- | --- | --- | --- |
 | Store | S3 bucket, versioning on, Object Lock default retention in compliance mode | Cloud Storage bucket with a locked retention policy (Bucket Lock) | Blob Storage container with a locked time-based retention policy, container-level (no version-level immutability on the account or the container), no protected append writes, no hierarchical namespace on the account |
-| What the admin cannot do | delete or overwrite a locked version ("can't be overwritten or deleted by any user, including the root user"); with the bucket policy of `platform-aws/deploy/main.tf`, delete any object or set a lifecycle rule (no principal may), or put under `marks/` and `config/` (only the record writer may) | delete or replace a retained object; reduce or remove the locked policy | modify or delete a locked blob ("not even by users with account administrative privileges") |
+| What the admin cannot do | delete or overwrite a locked version ("can't be overwritten or deleted by any user, including the root user"); with the bucket policy of `platform-aws/deploy/main.tf`, delete any object or set a new lifecycle rule (no principal may; a rule set before the policy keeps running), or put under `marks/` and `config/` (only the record writer may) | delete or replace a retained object; reduce or remove the locked policy | modify or delete a locked blob ("not even by users with account administrative privileges") |
 | What the admin can do | with the bucket policy, mint an access key or a console password for the record writer user and write records as it, or change the policy to lift its denies (including the one on lifecycle rules, whose expiration adds delete markers); without it, add versions and delete markers (the reader lists every version); lower or remove the default retention, which the runner's objects do not use (each PUT names its own compliance retention) | create new names | create new names |
 | Client | `platform-aws/s3log`, SigV4 of our own, `platform_aws` | `platform-gcp/gcslog`, JSON API, `platform_gcp` | `platform-azure/azlog`, Blob REST, `platform_azure` |
 | Credentials | the enclave's record credentials (an IAM key only the enclave can decrypt) | the workload's federated token (Confidential Space, WIF; the same as for KMS) | the container group's managed identity, resource `https://storage.azure.com/` |
-| Lock check reads | `GET /?object-lock` (GetObjectLockConfiguration); needs `s3:GetBucketObjectLockConfiguration`; `GET /?lifecycle` (GetBucketLifecycleConfiguration), refused on an enabled transition rule, a warning on an expiration rule; needs `s3:GetLifecycleConfiguration` (without it: a warning, no check); every PUT also needs `s3:PutObjectRetention` | `GET /storage/v1/b/B?fields=retentionPolicy`; needs `storage.buckets.get` | the storage account and the container from the management plane (`immutableStorageWithVersioning`, `immutabilityPolicy`); needs a token for `https://management.azure.com/`, the subscription and the resource group, and Reader on the account |
+| Lock check reads | `GET /?object-lock` (GetObjectLockConfiguration); needs `s3:GetBucketObjectLockConfiguration`; `GET /?lifecycle` (GetBucketLifecycleConfiguration), refused on an enabled transition rule, a warning on an expiration rule; needs `s3:GetLifecycleConfiguration` (any 403 on this read, whatever its code: a warning, no check); every PUT also needs `s3:PutObjectRetention` | `GET /storage/v1/b/B?fields=retentionPolicy`; needs `storage.buckets.get` | the storage account and the container from the management plane (`immutableStorageWithVersioning`, `immutabilityPolicy`); needs a token for `https://management.azure.com/`, the subscription and the resource group, and Reader on the account |
 | `-mark-store` | `s3:bucket=B,region=R[,endpoint=URL]` | `gcs:bucket=B[,endpoint=URL]` | `azblob:account=A,container=C[,endpoint=URL][,subscription=S,resource_group=G[,arm_endpoint=URL]]` |
 
 `file:DIR` is a write-once file log for tests and the dev platform; the
@@ -660,6 +660,19 @@ holds its true mark.
   sets its own compliance retention. What stays open: the check reads the
   default once per start, so a bucket whose default was removed is noticed
   only at the next start. GCS and Azure lock the policy itself.
+- S3 lifecycle rules. The bucket policy denies new rules, but a rule set
+  before it, or after a change that lifts the deny, keeps running. An
+  expiration adds delete markers, which the reader reads past, and a
+  noncurrent version expiration removes a version once its retention
+  ends. The checks after a create (`checkHidden`, `checkMarker`) see a
+  hidden record only while its version exists, and the age check runs
+  only at the claim. So a runner that stays cut off from the bucket for
+  longer than the retention, while a clone claims the log and writes,
+  may find the clone's record gone and write its own in its place,
+  without seeing what the clone signed. The lock check warns of an
+  expiration rule and does not stop on it. It also passes on any 403 to
+  its read of the rules, whatever the error code, so a runner under an
+  older bucket policy still starts; a rule is then not seen.
 - The flag path (`-mark-store` without a setup) runs no lock check and sets
   no per-object retention. Only a setup gets either.
 - Real cloud stores: the tests use local fakes of the three APIs

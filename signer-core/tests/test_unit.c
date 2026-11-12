@@ -4336,6 +4336,15 @@ static void test_restart_floor(void)
         CHECK(st.ram.target_epoch == F + 5 && st.ram.source_epoch == F + 5);
         CHECK_RC(sc_signer_get_state(s, k1.pk, &st), SC_OK);
         CHECK(st.ram.target_epoch == F);
+        /* Each validator reports the floor of its own load. */
+        uint64_t floor = 0;
+        CHECK_RC(sc_signer_get_floor(s, k1.pk, &floor), SC_OK);
+        CHECK(floor == F);
+        CHECK_RC(sc_signer_get_floor(s, k2.pk, &floor), SC_OK);
+        CHECK(floor == F + 5);
+        uint8_t unknown[48] = {0};
+        CHECK_RC(sc_signer_get_floor(s, unknown, &floor), SC_ERR_UNKNOWN_VALIDATOR);
+        CHECK_RC(sc_signer_get_floor(s, k1.pk, NULL), SC_ERR_ARG);
 
         /* A vote signs only with its source at the floor or above: while the
          * chain does not justify epoch F, every vote is refused. */

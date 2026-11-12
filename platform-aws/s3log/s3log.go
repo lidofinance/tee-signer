@@ -490,12 +490,14 @@ func (l *Log) Lock(ctx context.Context) (markstore.Lock, error) {
 // set before it keeps running. An enabled rule with a transition fails the
 // check: a record moved to an archive class cannot be read without a
 // restore, and the next start could not read the log. An expiration rule
-// only adds delete markers, which List and Get read past, and cannot
-// remove a version before its retention ends: a warning, once. A bucket
-// without rules answers 404 NoSuchLifecycleConfiguration. A refused read
-// (403, a bucket policy older than this check) is a warning, once, and
-// passes: the rules only cost liveness. Other errors fail, as the Object
-// Lock read would on them.
+// adds delete markers, which List and Get read past, and a noncurrent
+// version expiration removes versions once their retention ends, never
+// before: a warning, once. A bucket without rules answers 404
+// NoSuchLifecycleConfiguration. Any 403 is a warning, once, and passes,
+// whatever its error code: AccessDenied under a bucket policy older than
+// this check, so that runner still starts, but also RequestTimeTooSkewed
+// or InvalidAccessKeyId. A rule already on the bucket then goes unseen.
+// Other errors fail, as the Object Lock read would on them.
 func (l *Log) lifecycle(ctx context.Context) error {
 	resp, err := l.send(ctx, http.MethodGet, "", url.Values{"lifecycle": {""}}, nil, nil)
 	if err != nil {

@@ -16,9 +16,10 @@ import (
 // release does it with the launcher token, which names the VM's project ID
 // and number (checkProject).
 //
-// Without project_number nothing here parses the names, so any project ID
-// passes, a domain-scoped one ("example.com:signer") too. With it, the key
-// name must be whole: no domain-scoped ID, no extra segments.
+// Without project_number nothing here parses the names. With it, the key
+// name must be whole, with no extra segments. Its project may be a
+// domain-scoped ID ("example.com:signer"); checkProject matches it to the
+// token's project ID like any other ID (rv-b9e.3).
 //
 // The mark log and state buckets get their own check against the same
 // number (tee-signer checkStoreProject).

@@ -267,9 +267,15 @@ dmverity_vhd() {
       die "cannot find the folder of the confcom extension (az extension show -n confcom)"
     bin="$ext/azext_confcom/bin/dmverity-vhd"
   fi
-  [ -x "$bin" ] || die "no executable dmverity-vhd at $bin"
+  [ -f "$bin" ] || die "no dmverity-vhd at $bin"
   [ "$(sha256sum <"$bin" | cut -d' ' -f1)" = "$DMVERITY_VHD_SHA256" ] ||
     die "$bin is not dmverity-vhd v2.2 (SHA-256 $DMVERITY_VHD_SHA256)"
+  # The confcom wheel ships the binary without the exec bit and sets it at
+  # its first acipolicygen run, which comes after this check.
+  if [ ! -x "$bin" ] && [ -z "${DMVERITY_VHD:-}" ]; then
+    chmod u+x "$bin" || die "cannot make $bin executable"
+  fi
+  [ -x "$bin" ] || die "no executable dmverity-vhd at $bin"
   echo "$bin"
 }
 

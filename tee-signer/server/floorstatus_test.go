@@ -52,6 +52,41 @@ func wantConflict(t *testing.T, err error, what string) {
 	}
 }
 
+// The core reads the clock for its restart floor when it loads a key. An
+// epoch that starts between the import floor's clock reading and the
+// core's gives the core a floor one epoch higher; a message that floor
+// alone refuses is still a floor refusal, and above it the key signs.
+func TestFloorStatusEpochStartsDuringImport(t *testing.T) {
+	e := newTgtEnv(t, "dev", nil)
+	f := e.floorOf()
+	// A first key: the device mark and its floor come in with it.
+	skA, pkA := newKey(t)
+	if err := e.importSealed(pkA, skA, 4, nil); err != nil {
+		t.Fatal(err)
+	}
+	sk, pk := newKey(t)
+	// The share write comes after the import floor and before the core's
+	// load: the next epoch starts there.
+	e.store.mu.Lock()
+	e.store.failPut = func(string) bool { e.clock.add(testEpoch); return false }
+	e.store.mu.Unlock()
+	err := e.importSealed(pk, sk, 5, nil)
+	e.store.mu.Lock()
+	e.store.failPut = nil
+	e.store.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.clock.add((f + 1 - e.signer.EpochAt(e.now())) * testEpoch) // the slots of f+1 have started
+	wantFloor(t, e.signMsg(pk, vote(f, f+1)), f+1, "import", "a vote at the core's floor")
+	wantFloor(t, e.signMsg(pk, &backend.BeaconBlockHeader{Slot: (f + 1) * 8, ProposerIndex: 5, BodyRoot: backend.Root{0xb0}}),
+		f+1, "import", "a block at the core's floor")
+	e.clock.add(testEpoch)
+	if err := e.signMsg(pk, vote(f+1, f+2)); err != nil {
+		t.Fatalf("a vote above the core's floor: %v", err)
+	}
+}
+
 // After an import without history only the floors refuse the key's
 // messages at or below them. Once the key votes, a vote that surrounds
 // that vote is a slashing refusal, though the source floor refuses it too.

@@ -652,6 +652,10 @@ int sc_signer_get_state(const sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
 /* The roots an exact repeat of this validator may have. */
 int sc_signer_get_repeat_roots(const sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
                                sc_repeat_roots *out);
+/* The restart floor epoch F that sc_signer_add_validator applied to this
+ * validator, from its own clock reading at the load. */
+int sc_signer_get_floor(const sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
+                        uint64_t *floor_epoch);
 
 /*
  * SC_MARKS_PER_DEVICE: makes the device mark cover attestation targets and
