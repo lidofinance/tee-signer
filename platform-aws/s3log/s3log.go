@@ -532,14 +532,21 @@ func (l *Log) lifecycle(ctx context.Context) error {
 		switch {
 		case r.Status != "Enabled":
 		case len(r.Transition)+len(r.NoncurrentVersionTransition) > 0:
-			return fmt.Errorf("s3log: s3://%s: lifecycle rule %q moves objects to another storage class; remove it", l.Bucket, r.ID)
+			return fmt.Errorf("s3log: s3://%s: lifecycle rule %q moves objects to another storage class; %s", l.Bucket, r.ID, removeRules)
 		case len(r.Expiration)+len(r.NoncurrentVersionExpiration) > 0 && !l.expiryWarned.Swap(true):
-			log.Warn("s3log: a lifecycle rule expires objects in the mark bucket; the log reads past its delete markers, but remove it",
+			log.Warn("s3log: a lifecycle rule expires objects in the mark bucket; the log reads past its delete markers, but "+removeRules,
 				"bucket", l.Bucket, "rule", r.ID)
 		}
 	}
 	return nil
 }
+
+// removeRules says how to clear the lifecycle rules of the mark bucket.
+// NoLifecycleRules denies s3:PutLifecycleConfiguration, which
+// DeleteBucketLifecycle needs too.
+const removeRules = "the mark bucket must have no lifecycle rules. Remove them (aws s3api delete-bucket-lifecycle); " +
+	"while the bucket policy's NoLifecycleRules statement is in force (platform-aws/deploy/main.tf), " +
+	"that needs a bucket policy change first: drop the statement, remove the rules, then put the statement back"
 
 // Get reads one object version.
 func (l *Log) Get(ctx context.Context, e markstore.Entry) ([]byte, error) {
