@@ -26,6 +26,10 @@ import (
 // the background.
 const keysMaxAge = 30 * time.Second
 
+// modeMaxRefreshes is how many key refreshes (keysMaxAge each) a signer's
+// signing_mode stays good for a whole key without a new HEALTH answer.
+const modeMaxRefreshes = 3
+
 // SignerConfig is one TEE signer.
 type SignerConfig struct {
 	// Name names the signer in the log.
@@ -84,17 +88,25 @@ type Signers struct {
 	// modes is the signing_mode each signer's HEALTH last reported, ""
 	// before the first. Only a signer that lists a whole key is asked.
 	modes []string
+	// modesAt is when each signer's HEALTH last gave its mode. A failed
+	// HEALTH keeps the mode but not the time, so the mode ages out.
+	modesAt []time.Time
+	// modeMaxAge is how old a mode may be for a whole key:
+	// modeMaxRefreshes key refreshes.
+	modeMaxAge time.Duration
 	// newerLevel is the protocol level above proto.ProtocolLevel each
 	// signer's HEALTH last reported and the gateway warned about, 0 before
 	// one. A level is warned about once per signer.
 	newerLevel []int
-	// derived caches deriveGroup by validator key, share keys and modes.
+	// derived caches deriveGroup by validator key and share keys.
 	derived map[string]derivedGroup
 }
 
 type derivedGroup struct {
 	g   group
 	err error
+	// refused is the last checkWhole error, logged when it changes.
+	refused string
 }
 
 var _ Signer = (*Signers)(nil)
@@ -158,9 +170,12 @@ func newSigners(names []string, nodes []runner, maxIndex int, timeout time.Durat
 		maxIndex = len(nodes)
 	}
 	s := &Signers{nodes: nodes, names: names, maxIndex: min(maxIndex, maxShareIndex), timeout: timeout, log: log,
-		listed: make([][]proto.ValidatorKey, len(nodes)), modes: make([]string, len(nodes)), newerLevel: make([]int, len(nodes)), derived: map[string]derivedGroup{}, m: metrics.New(),
+		listed: make([][]proto.ValidatorKey, len(nodes)), modes: make([]string, len(nodes)), modesAt: make([]time.Time, len(nodes)),
+		newerLevel: make([]int, len(nodes)), derived: map[string]derivedGroup{}, m: metrics.New(),
 		warns: newWarnLimit(warnEvery)}
 	s.keys = newKeyList(s.loadKeys, keysMaxAge, log)
+	s.modeMaxAge = modeMaxRefreshes * s.keys.maxAge
+	s.keys.check = s.wholeOK
 
 	return s
 }
@@ -194,8 +209,8 @@ func (s *Signers) Close() error {
 // indices and the threshold (deriveGroup). A key whose shares do not fit
 // is left out and logged once. Every signer that answered is also asked
 // for HEALTH: its protocol level, and for a signer that lists a whole key
-// its signing_mode (a whole key is served only from a signer that reports
-// signing_mode = single, checkWhole).
+// its signing_mode (a whole key is served only from a signer that reported
+// signing_mode = single within modeMaxAge, checkWhole).
 func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, error) {
 	type answer struct {
 		keys    []proto.ValidatorKey
@@ -238,6 +253,7 @@ func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, err
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := s.keys.now()
 	var errs []error
 	for i, a := range answers {
 		if a.err != nil {
@@ -250,11 +266,12 @@ func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, err
 		s.m.SignerKeysRefreshed.Set(float64(time.Now().UnixMilli())/1000, s.names[i])
 		switch {
 		case a.modeErr != nil:
-			// Keep the last mode: a whole key it served stays served.
+			// Keep the last mode and its time: a whole key it served stays
+			// served until the mode is modeMaxAge old.
 			s.log.Warn("signer health failed", "signer", s.names[i], "err", a.modeErr.Error())
 		case a.asked:
 			if a.whole {
-				s.modes[i] = a.mode
+				s.modes[i], s.modesAt[i] = a.mode, now
 			}
 			// A runner newer than this gateway may answer in ways it reads
 			// wrongly (signer-protocol/docs/protocol.md, "Protocol level").
@@ -280,21 +297,29 @@ func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, err
 	groups := make(map[phase0.BLSPubKey]group, len(shares))
 	derived := make(map[string]derivedGroup, len(shares))
 	for pk, sh := range shares {
-		id := groupID(pk, sh, s.modes)
+		id := groupID(pk, sh)
 		d, ok := s.derived[id]
 		if !ok {
 			d.g, d.err = deriveGroup(pk, sh, s.maxIndex)
-			if d.err == nil {
-				d.err = s.checkWhole(d.g)
-			}
 			if d.err != nil {
 				s.log.Warn("key refused", "pubkey", fmt.Sprintf("%#x", pk), "shares", len(sh), "err", d.err.Error())
 			}
 		}
-		derived[id] = d
 		if d.err == nil {
-			groups[pk] = d.g
+			// A mode ages without a new answer, so checkWhole runs at every
+			// load, not from the cache.
+			refused := ""
+			if err := s.checkWhole(d.g, now); err != nil {
+				refused = err.Error()
+			} else {
+				groups[pk] = d.g
+			}
+			if refused != "" && refused != d.refused {
+				s.log.Warn("key refused", "pubkey", fmt.Sprintf("%#x", pk), "shares", len(sh), "err", refused)
+			}
+			d.refused = refused
 		}
+		derived[id] = d
 	}
 	s.derived = derived
 	if len(groups) == 0 {
@@ -306,12 +331,12 @@ func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, err
 }
 
 // groupID is the key of the deriveGroup cache: the validator key, and the
-// signer, its signing_mode and the share key of each share.
-func groupID(pk phase0.BLSPubKey, shares []share, modes []string) string {
+// signer and the share key of each share.
+func groupID(pk phase0.BLSPubKey, shares []share) string {
 	var b strings.Builder
 	b.Write(pk[:])
 	for _, s := range shares {
-		fmt.Fprintf(&b, "|%d:%s:", s.node, modes[s.node])
+		fmt.Fprintf(&b, "|%d:", s.node)
 		b.Write(s.pub[:])
 	}
 
@@ -331,13 +356,15 @@ func listsWholeKey(keys []proto.ValidatorKey) bool {
 }
 
 // checkWhole refuses a whole key (threshold 1) unless its signer's HEALTH
-// says signing_mode = single; s.mu is held. Share keys equal to the
-// validator key are not enough: the runner of a threshold setup refuses a
-// whole key at import, so one that lists it is not following its setup,
-// and an old runner or one without a setup does not say. HEALTH is not
-// attested, so this catches a wrong configuration, not a runner that lies.
-// deriveGroup has already refused a whole key on more than one signer.
-func (s *Signers) checkWhole(g group) error {
+// said signing_mode = single at most modeMaxAge before now; s.mu is held.
+// Share keys equal to the validator key are not enough: the runner of a
+// threshold setup refuses a whole key at import, so one that lists it is
+// not following its setup, and an old runner or one without a setup does
+// not say. The age limit stops the mode of a HEALTH that no longer answers
+// from passing the key for good. HEALTH is not attested, so this catches a
+// wrong configuration, not a runner that lies. deriveGroup has already
+// refused a whole key on more than one signer.
+func (s *Signers) checkWhole(g group, now time.Time) error {
 	if g.threshold != 1 {
 		return nil
 	}
@@ -345,8 +372,24 @@ func (s *Signers) checkWhole(g group) error {
 	if m := s.modes[n]; m != setupwire.SigningModeSingle.String() {
 		return fmt.Errorf("the whole key is on signer %s, whose HEALTH says signing_mode = %q; a whole key needs signing_mode = single", s.names[n], m)
 	}
+	if now.Sub(s.modesAt[n]) > s.modeMaxAge {
+		return fmt.Errorf("the whole key is on signer %s, whose last signing_mode from HEALTH is older than %s (%d key refreshes); a whole key needs a recent signing_mode = single",
+			s.names[n], s.modeMaxAge, modeMaxRefreshes)
+	}
 
 	return nil
+}
+
+// wholeOK is checkWhole at the key list's clock. A threshold key passes
+// without the lock, so a sign request does not wait for a key load.
+func (s *Signers) wholeOK(g group) error {
+	if g.threshold != 1 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.checkWhole(g, s.keys.now())
 }
 
 // Sign implements Signer.
@@ -359,6 +402,17 @@ func (s *Signers) Sign(ctx context.Context, pubkey phase0.BLSPubKey, job *signin
 	g, ok := s.keys.get(ctx, pubkey)
 	if !ok {
 		return phase0.BLSSignature{}, ErrUnknownKey
+	}
+	if s.wholeOK(g) != nil {
+		// The signing_mode this whole key was served on aged out since the
+		// last load: wait for a new load and look again.
+		s.keys.fresh(ctx)
+		if g, ok = s.keys.lookup(pubkey); !ok {
+			return phase0.BLSSignature{}, ErrUnknownKey
+		}
+		if err := s.wholeOK(g); err != nil {
+			return phase0.BLSSignature{}, fmt.Errorf("%w: %w", ErrUnknownKey, err)
+		}
 	}
 	msg, err := Message(job)
 	if err != nil {
