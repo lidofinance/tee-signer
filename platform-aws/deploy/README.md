@@ -425,8 +425,10 @@ path is outside the KMS key lock: with `key_policy_locked` (required on
 mainnet) no principal can change the key policy, but an IAM admin can
 still mint credentials for this user, since the bucket policy names the
 user, not the enclave. "Mark log" lists the CloudTrail alerts for it.
-SigV4 signing uses the enclave's clock; a host that moves it can only make
-AWS refuse the request (the runner then refuses to sign).
+SigV4 signing uses the enclave's clock; a host that moves it makes AWS
+refuse the request. A refused record write stops signing above the
+committed mark, but a refused read of the lifecycle rules passes (see
+"Mark log").
 
 The runner had a second clone guard, a DynamoDB record per node
 (`-record dynamodb:...`). The mark log replaced it and the runner no longer
@@ -460,14 +462,17 @@ principal. Before applying this policy, on a new or an existing
 deployment, check that the bucket has no lifecycle rule (`aws s3api
 get-bucket-lifecycle-configuration` returns `NoSuchLifecycleConfiguration`);
 after it, removing one takes a policy change. The runner's lock check
-reads the rules at every start: an enabled rule with a transition stops
-the start (an archive class makes records unreadable), and an expiration
-rule logs a warning. Apply this policy before or with a runner that has
-this check: under an older policy the runner cannot read the rules, logs
-a warning and starts without the check. A lifecycle rule, such as cleanup
-of old versions after the lock ends, takes a policy change that drops
-NoLifecycleRules. That raises the PutBucketPolicy alert, and the runner's
-checks still catch a marker it lets through. Compliance mode keeps
+reads the rules at every start, every hour while it runs, and before a
+write after a failed check. An enabled rule with a transition stops the
+start; found while the runner runs, it stops mark writes, so nothing signs
+above the committed mark until the rule is gone (an archive class makes
+records unreadable). An expiration rule logs a warning. Apply this policy
+before or with a runner that has this check: under an older policy the
+runner cannot read the rules, logs a warning and starts without the
+check. A lifecycle rule, such as cleanup of old versions after the lock
+ends, takes a policy change that drops NoLifecycleRules. That raises the
+PutBucketPolicy alert. The runner's checks catch a delete marker the rule
+adds only while the version under it exists. Compliance mode keeps
 everyone from deleting or overwriting a locked version. An admin who can
 change the bucket policy can lift these denies, and one who mints an
 access key or a console password for the record writer user writes as it
@@ -477,7 +482,7 @@ without changing the policy. So alert in CloudTrail on `PutBucketPolicy`,
 `UpdateLoginProfile` and `CreateUser` for the record writer user. The
 reader lists every version, and the runner's checks after each create
 (s3log `checkHidden`, `checkMarker`) catch a create that a delete marker
-let through either way.
+let through, as long as the version under the marker still exists.
 
 The lock check at start reads the bucket's default retention, but that
 default is a bucket setting: an admin with

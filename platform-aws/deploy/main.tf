@@ -327,8 +327,8 @@ resource "aws_iam_user" "record_writer" {
 # archive classes. A rule set before this policy keeps running, so the
 # bucket must have none when this statement is first applied; the lock
 # check reads the rules (s3:GetLifecycleConfiguration; without it, a
-# warning) and refuses to start on a transition and warns of an
-# expiration. While the
+# warning) and refuses a transition (at start the start fails, later mark
+# writes stop) and warns of an expiration. While the
 # policy stands no request and no new lifecycle rule adds a delete marker;
 # an admin who can change the policy can lift both denies. Versioning
 # cannot be suspended on an Object Lock bucket, and a replication rule
@@ -337,7 +337,7 @@ resource "aws_iam_user" "record_writer" {
 # Credentials minted for the writer user put records as the writer but
 # are denied deletes too. The runner's checks after each
 # create (s3log checkHidden, checkMarker) catch a create that a delete
-# marker let through either way.
+# marker let through, as long as the version under the marker exists.
 # ShortRetention and NoRetention (EDS-FRESH-04) refuse a put that would
 # leave a record with less retention than the setups ask for. The runner
 # dates each put max(slashing_log_min_lock_days, bucket default) days plus
