@@ -90,6 +90,17 @@ func TestGCPIdentity(t *testing.T) {
 	if err := cfg.Verify(context.Background(), []byte("other nonce"), id); err == nil {
 		t.Fatal("replayed identity accepted")
 	}
+	// rv-b9e.12: without HWModels, GCP_AMD_SEV (memory encryption without
+	// register protection) is refused and GCP_AMD_SEV_ES passes.
+	for m, ok := range map[string]bool{"GCP_AMD_SEV": false, "GCP_AMD_SEV_ES": true} {
+		c := claims("signer-runner-identity")
+		c["hwmodel"] = m
+		hw := *id
+		hw.Attestation.Document = []byte(testgen.SignJWT(t, key, "k1", c, nil))
+		if err := cfg.Verify(context.Background(), nonce, &hw); (err == nil) != ok {
+			t.Errorf("default hwmodels, %s: %v, want accepted %v", m, err, ok)
+		}
+	}
 	// The runner's default audience is STS; refuse it for identities.
 	id.Attestation.Document = []byte(testgen.SignJWT(t, key, "k1", claims(attest.STSAudience), nil))
 	cfg.GCP.Audience = attest.STSAudience
