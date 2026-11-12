@@ -13,7 +13,10 @@
 #          key name, key-create refuses a key name that exists (a new
 #          version would take the running group's key), one whose
 #          existence it cannot read and a mutable key on mainnet, and makes
-#          the key immutable unless KEY_IMMUTABLE=false. The render goes to the group's own
+#          the key immutable unless KEY_IMMUTABLE=false. It refuses, before
+#          any key exists, a CCE policy that cce-policy-check.py does not
+#          expect, another az confcom version and a dmverity-vhd other than
+#          the pinned one. The render goes to the group's own
 #          folder with the running group's identity, and group-deploy
 #          takes the new key name and refuses the running group's. After
 #          key-create it takes only a setup that names the created version
@@ -198,26 +201,53 @@ grep -q 'unexpected az call' <<<"$out" && bad "azure key-create went on to anoth
 [ "$rc" != 0 ] && ! grep -q 'cannot tell' <<<"$out" && ok "azure key-create goes past the check for a new name (stops later, at the local image)" ||
   bad "azure key-create, not found: rc $rc $out"
 
-# key-create to the end: a fake docker has every image and a fake az
-# writes a policy, so the create call runs and its arguments are logged.
-mkdir -p "$work/bin-img"
-printf '#!/usr/bin/env bash
-case "$1 $2" in "image inspect" | tag*) exit 0 ;; esac
+# key-create to the end: a fake docker has every image, a fake
+# dmverity-vhd gives one layer hash (the copy's common.sh pins the fake's
+# SHA-256) and a fake az confcom writes the policy that
+# cce-policy-check.py expects, so the create call runs and its arguments
+# are logged.
+mkdir -p "$work/bin-img" "$work/confcom/azext_confcom/bin"
+cat >"$work/bin-img/docker" <<EOF
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "image inspect")
+    case "\$*" in
+      *'{{.Id}}'*) cat "$out_az/runner.digest" ;;
+      *'{{json .Config}}'*) echo '{"Env":["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"],"WorkingDir":"/"}' ;;
+    esac
+    exit 0 ;;
+  tag*) exit 0 ;;
+esac
 exit 99
-' >"$work/bin-img/docker"
-chmod +x "$work/bin-img/docker"
+EOF
+printf '#!/usr/bin/env bash\necho %s\n' "'{\"layers\": [\"$(printf 'ab%.0s' {1..32})\"]}'" >"$work/confcom/azext_confcom/bin/dmverity-vhd"
+chmod +x "$work/bin-img/docker" "$work/confcom/azext_confcom/bin/dmverity-vhd"
+sed -i "s/^DMVERITY_VHD_SHA256=.*/DMVERITY_VHD_SHA256=$(sha256sum <"$work/confcom/azext_confcom/bin/dmverity-vhd" | cut -d' ' -f1)/" \
+  "$work/platform-azure/deploy/common.sh"
 ln -s azure "$work/build/azure-hoodi"
 ver="$(printf '0123456789abcdef%.0s' 1 2)"
-fake_az_create() {
+fake_az_create() { # fake_az_create [MODE]: the policy confcom writes is the expected one, or the string "policy"; [VERSION] of confcom
   cat >"$work/bin/az" <<EOF
 #!/usr/bin/env bash
 echo "az \$*" >>"$work/az.log"
 case "\$1 \$2 \$3" in
   "keyvault key show") echo "ERROR: (KeyNotFound) not found" >&2; exit 3 ;;
   "keyvault key create") echo "https://signer-vault.vault.azure.net/keys/signer-1b-kek/$ver"; exit 0 ;;
+  "extension show -n")
+    case "\$*" in
+      *"--query version"*) echo "${2:-2.3.0}" ;;
+      *"--query path"*) echo "$work/confcom" ;;
+    esac
+    exit 0 ;;
   "confcom acipolicygen -a")
-    jq --arg p "\$(printf policy | base64 -w0)" '.resources[0].properties.confidentialComputeProperties.ccePolicy = \$p' "\$4" >"\$4.new" && mv "\$4.new" "\$4"
-    printf policy | sha256sum | cut -d' ' -f1; exit 0 ;;
+    d="\$(dirname "\$4")"
+    if [ "${1:-expected}" = expected ]; then
+      python3 -I "$work/platform-azure/deploy/cce-policy-check.py" render "\$4" "\$d/policy-images.json" enable >"\$d/fake.rego"
+    else
+      printf policy >"\$d/fake.rego"
+    fi
+    jq --arg p "\$(base64 -w0 <"\$d/fake.rego")" '.resources[0].properties.confidentialComputeProperties.ccePolicy = \$p' "\$4" >"\$4.new" && mv "\$4.new" "\$4"
+    sha256sum <"\$d/fake.rego" | cut -d' ' -f1; exit 0 ;;
 esac
 echo "unexpected az call" >&2
 exit 99
@@ -226,6 +256,22 @@ EOF
   : >"$work/az.log"
 }
 key_create_all() { run_rc env PATH="$work/bin-img:$work/bin:$PATH" CONFIRM=yes "${A1[@]}" "${az_env[@]}" "$@" bash "$work/platform-azure/deploy/deploy.sh" key-create 1; }
+# A policy that is not the one the template and image give (here the
+# string "policy") is refused before any key exists.
+fake_az_create policy
+key_create_all CHAIN=ci-test
+[ "$rc" != 0 ] && grep -q 'CCE policy refused' <<<"$out" && ! grep -q '^az keyvault key create' "$work/az.log" &&
+  ok "azure key-create refuses a CCE policy that is not the expected one" || bad "azure key-create, bad policy: rc $rc $out $(cat "$work/az.log")"
+fake_az_create expected 2.2.0
+key_create_all CHAIN=ci-test
+[ "$rc" != 0 ] && grep -q 'takes confcom 2.3.0 only' <<<"$out" && ! grep -q 'acipolicygen\|key create' "$work/az.log" &&
+  ok "azure key-create refuses another az confcom version" || bad "azure key-create, confcom 2.2.0: rc $rc $out $(cat "$work/az.log")"
+fake_az_create
+printf '#!/usr/bin/env bash\nexit 1\n' >"$work/other-dmverity-vhd"
+chmod +x "$work/other-dmverity-vhd"
+key_create_all CHAIN=ci-test DMVERITY_VHD="$work/other-dmverity-vhd"
+[ "$rc" != 0 ] && grep -q 'is not dmverity-vhd v2.2' <<<"$out" && ! grep -q 'acipolicygen\|key create' "$work/az.log" &&
+  ok "azure key-create refuses a dmverity-vhd other than the pinned one" || bad "azure key-create, other dmverity-vhd: rc $rc $out $(cat "$work/az.log")"
 fake_az_create
 key_create_all CHAIN=ci-test
 [ "$rc" = 0 ] && grep -q '^az keyvault key create .* --immutable true' "$work/az.log" &&

@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"math/big"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -612,5 +613,114 @@ func TestSilentPeersStayCappedPerSource(t *testing.T) {
 	defer extra.Close()
 	if held(extra) {
 		t.Fatal("silent connection 17 from one address stays open over the cap of 16")
+	}
+}
+
+// lockedBuffer is a log sink the forwarder's goroutines can share.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) count(s string) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return strings.Count(b.buf.String(), s)
+}
+
+// A flood of refused connections or failed dials writes one log line per
+// kind, not one per connection: one outside peer must not fill the
+// parent's log. The counts stay exact in Stats.
+func TestRefusalsAndDialFailuresLogOncePerFlood(t *testing.T) {
+	const n = 20
+	// flood dials addr n times; the forwarder closes each connection.
+	flood := func(t *testing.T, addr string) {
+		for range n {
+			c, err := net.Dial("tcp", addr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+			if _, err := c.Read(make([]byte, 1)); err == nil {
+				t.Fatal("a connection over the bound got data")
+			}
+			c.Close()
+		}
+	}
+	// holdOne opens a connection that takes a slot and keeps it.
+	holdOne := func(t *testing.T, addr string) {
+		c, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { c.Close() })
+		// The forwarded byte shows the forwarder holds the connection
+		// before the flood starts.
+		if _, err := io.WriteString(c, "x"); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	alive := func(t *testing.T) string {
+		l := listen(t)
+		go func() {
+			for {
+				c, err := l.Accept()
+				if err != nil {
+					return
+				}
+				go func() { defer c.Close(); io.Copy(io.Discard, c) }()
+			}
+		}()
+		return l.Addr().String()
+	}
+	for _, tc := range []struct {
+		name   string
+		mod    func(*Forwarder)
+		hold   bool
+		target func(*testing.T) string
+		line   string
+		count  func(Stats) uint64
+	}{
+		{"dial failure", nil, false, func(t *testing.T) string {
+			l, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			l.Close() // nothing listens there any more
+			return l.Addr().String()
+		}, "dial failed", func(s Stats) uint64 { return s.DialFailures }},
+		{"max conns", func(f *Forwarder) { f.MaxConns = 1 }, true, alive,
+			"too many connections, closing", func(s Stats) uint64 { return s.RefusedMaxConns }},
+		{"max conns per source", func(f *Forwarder) { f.MaxConnsPerSource = 1 }, true, alive,
+			"too many connections in their handshake window", func(s Stats) uint64 { return s.RefusedPerSource }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := &lockedBuffer{}
+			var f *Forwarder
+			addr := startForwarder(t, tc.target(t), func(x *Forwarder) {
+				x.Log = slog.New(slog.NewTextHandler(logs, nil))
+				if tc.mod != nil {
+					tc.mod(x)
+				}
+				f = x
+			}, nil)
+			if tc.hold {
+				holdOne(t, addr)
+			}
+			flood(t, addr)
+			if got := tc.count(f.Stats()); got != n {
+				t.Fatalf("stats %+v, want %d", f.Stats(), n)
+			}
+			if got := logs.count(tc.line); got != 1 {
+				t.Fatalf("%d log lines for %d, want 1", got, n)
+			}
+		})
 	}
 }

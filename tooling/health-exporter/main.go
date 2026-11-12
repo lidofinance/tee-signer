@@ -23,12 +23,15 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/net/netutil"
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
 	admincluster "github.com/lidofinance/tee-signer/signer-admin/cluster"
@@ -97,10 +100,32 @@ func main() {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		render(w, rs)
 	})
-	srv := &http.Server{Addr: *listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	l, err := net.Listen("tcp", *listen)
+	if err != nil {
+		log.Fatal(err)
+	}
 	log.Printf("serving /metrics on %s for %d runners", *listen, len(rs))
-	log.Fatal(srv.ListenAndServe())
+	log.Fatal(newServer(mux).Serve(limit(l)))
 }
+
+// maxConns bounds the connections to /metrics at once. One Prometheus
+// needs one or two.
+const maxConns = 16
+
+// newServer is the /metrics server. /metrics is plain HTTP without
+// authentication, so it bounds how long a peer may hold a connection.
+func newServer(h http.Handler) *http.Server {
+	return &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 10 * time.Second,
+		WriteTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 8 << 10}
+}
+
+// limit caps l at maxConns open connections, so peers of /metrics cannot
+// use up the file descriptors the polls of the runners need: with none
+// left every runner would show tee_signer_up 0. A silent connection holds
+// its slot for ReadHeaderTimeout, an idle keep-alive one for IdleTimeout.
+// A peer that holds every slot fails the scrapes, which shows as a scrape
+// failure, not as runners down.
+func limit(l net.Listener) net.Listener { return netutil.LimitListener(l, maxConns) }
 
 // newRunner reads the connection file at path. It does not connect.
 func newRunner(name, path string, timeout time.Duration) (*runner, error) {

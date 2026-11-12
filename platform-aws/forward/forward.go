@@ -72,6 +72,31 @@ type Forwarder struct {
 
 	accepted, refusedMax, refusedSource, dialFailed atomic.Uint64
 	open                                            atomic.Int64
+
+	// When each kind of refusal last logged, so a flood logs once per
+	// logEvery.
+	logMax, logSource, logDial logThrottle
+}
+
+// logEvery: a refused connection or a failed dial is logged at most this
+// often for each kind, with the count since start, so one outside peer
+// that keeps connecting does not fill the parent's log. The metrics have
+// the exact counts.
+const logEvery = 10 * time.Second
+
+// clockStart is the base of logThrottle's monotonic times: a step of the
+// wall clock must not silence the log.
+var clockStart = time.Now()
+
+// logThrottle holds when one kind of line last logged, in nanoseconds
+// since clockStart; 0 for never.
+type logThrottle struct{ last atomic.Int64 }
+
+// due reports whether a line may be logged now, and if so takes the slot.
+func (t *logThrottle) due() bool {
+	now := int64(time.Since(clockStart)) + 1 // never 0
+	last := t.last.Load()
+	return (last == 0 || now-last >= int64(logEvery)) && t.last.CompareAndSwap(last, now)
 }
 
 // Stats are the forwarder's counts since it started.
@@ -190,16 +215,20 @@ func (f *Forwarder) Serve(ctx context.Context, l net.Listener) error {
 		f.accepted.Add(1)
 		src := sourceOf(c)
 		if !f.takeSource(src) {
-			f.refusedSource.Add(1)
-			f.Log.Warn("too many connections in their handshake window from one address, closing", "remote", c.RemoteAddr().String(), "max_per_source", f.maxConnsPerSource(), "window", f.handshakeWindow().String())
+			n := f.refusedSource.Add(1)
+			if f.logSource.due() {
+				f.Log.Warn("too many connections in their handshake window from one address, closing", "remote", c.RemoteAddr().String(), "max_per_source", f.maxConnsPerSource(), "window", f.handshakeWindow().String(), "refused_since_start", n)
+			}
 			c.Close()
 			continue
 		}
 		select {
 		case slots <- struct{}{}:
 		default:
-			f.refusedMax.Add(1)
-			f.Log.Warn("too many connections, closing", "remote", c.RemoteAddr().String(), "max", f.maxConns())
+			n := f.refusedMax.Add(1)
+			if f.logMax.due() {
+				f.Log.Warn("too many connections, closing", "remote", c.RemoteAddr().String(), "max", f.maxConns(), "refused_since_start", n)
+			}
 			f.giveSource(src)
 			c.Close()
 			continue
@@ -233,8 +262,10 @@ func (f *Forwarder) handle(ctx context.Context, client net.Conn) {
 	target, err := f.Dial(dctx)
 	cancel()
 	if err != nil {
-		f.dialFailed.Add(1)
-		f.Log.Warn("dial failed, closing the client", "remote", client.RemoteAddr().String(), "err", err)
+		n := f.dialFailed.Add(1)
+		if f.logDial.due() {
+			f.Log.Warn("dial failed, closing the client", "remote", client.RemoteAddr().String(), "err", err, "failed_since_start", n)
+		}
 		return
 	}
 	defer target.Close()

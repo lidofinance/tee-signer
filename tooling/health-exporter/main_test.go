@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -582,5 +583,49 @@ func TestPollLogsUnreadableCertificateOnce(t *testing.T) {
 	r.poll(10 * time.Second)
 	if n := strings.Count(buf.String(), line); n != 2 {
 		t.Fatalf("%d log lines after the error came back, want 2:\n%s", n, buf.String())
+	}
+}
+
+// The /metrics server holds at most maxConns connections: peers that
+// connect and say nothing cannot take more, and a slot frees when one of
+// them goes. The server has every timeout set.
+func TestServerCapsConnections(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := newServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "ok") }))
+	if srv.ReadTimeout == 0 || srv.WriteTimeout == 0 || srv.IdleTimeout == 0 || srv.ReadHeaderTimeout == 0 {
+		t.Fatalf("server without timeouts: %+v", srv)
+	}
+	go srv.Serve(limit(l))
+	t.Cleanup(func() { srv.Close() })
+	addr := "http://" + l.Addr().String() + "/metrics"
+	client := &http.Client{Timeout: 500 * time.Millisecond, Transport: &http.Transport{DisableKeepAlives: true}}
+	var silent []net.Conn
+	for range maxConns {
+		c, err := net.Dial("tcp", l.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		silent = append(silent, c)
+	}
+	if resp, err := client.Get(addr); err == nil {
+		resp.Body.Close()
+		t.Fatalf("served over the cap of %d connections", maxConns)
+	}
+	silent[0].Close()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		resp, err := client.Get(addr)
+		if err == nil {
+			resp.Body.Close()
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no slot after a connection closed: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }

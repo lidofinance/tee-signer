@@ -13,7 +13,9 @@
 #            build-image.sh): deploy.sh policy gives one hash for the three
 #            signers, and acipolicygen gives that same hash on the template
 #            and parameters file that group-deploy hands to ARM, with and
-#            without a subnet and a log workspace, stdio on and off.
+#            without a subnet and a log workspace, stdio on and off. Each
+#            policy that confcom writes passes cce-policy-check.py, so the
+#            check's model of confcom matches the installed confcom.
 #            az confcom runs in a network namespace with only lo (unshare
 #            -rn), so it reads the local image and nothing else. Skipped,
 #            with a line saying so, when az confcom, Docker or unshare is

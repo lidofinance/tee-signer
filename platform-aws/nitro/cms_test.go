@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"os"
 	"os/exec"
@@ -89,5 +90,56 @@ func TestDecryptOpenSSLEnvelopes(t *testing.T) {
 	}
 	if _, err := DecryptEnvelopedData(out, key); err == nil {
 		t.Fatal("SHA-1 OAEP accepted")
+	}
+}
+
+// nested is depth constructed elements with the identifier byte id, each
+// of indefinite length, around an empty OCTET STRING.
+func nested(id byte, depth int) []byte {
+	b := bytes.Repeat([]byte{id, 0x80}, depth)
+	b = append(b, 0x04, 0x00)
+	return append(b, bytes.Repeat([]byte{0, 0}, depth)...)
+}
+
+// chunked is the OCTET STRING "x" inside depth constructed OCTET STRINGs
+// of definite length.
+func chunked(depth int) []byte {
+	b := []byte{0x04, 0x01, 'x'}
+	for range depth {
+		n := len(b)
+		b = append([]byte{0x24, 0x84, byte(n >> 24), byte(n >> 16), byte(n >> 8), byte(n)}, b...)
+	}
+	return b
+}
+
+// The BER reader walks at most maxBERDepth constructed levels, in
+// indefinite lengths (readTLV) and in constructed OCTET STRINGs (octets),
+// so a crafted envelope cannot recurse without bound.
+func TestBERDepthCap(t *testing.T) {
+	for _, id := range []byte{0x30, 0x24} { // SEQUENCE, constructed OCTET STRING
+		if _, _, err := readTLV(nested(id, maxBERDepth)); err != nil {
+			t.Errorf("%#x nested %d deep: %v", id, maxBERDepth, err)
+		}
+		for _, d := range []int{maxBERDepth + 1, 1000} {
+			if _, _, err := readTLV(nested(id, d)); !errors.Is(err, errBERDepth) {
+				t.Errorf("%#x nested %d deep: %v, want %v", id, d, err, errBERDepth)
+			}
+		}
+	}
+	ot, _, err := readTLV(chunked(maxBERDepth))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, err := ot.octets(); err != nil || string(v) != "x" {
+		t.Errorf("OCTET STRING nested %d deep: %q %v", maxBERDepth, v, err)
+	}
+	for _, d := range []int{maxBERDepth + 1, 1000} {
+		ot, _, err := readTLV(chunked(d))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ot.octets(); !errors.Is(err, errBERDepth) {
+			t.Errorf("OCTET STRING nested %d deep: %v, want %v", d, err, errBERDepth)
+		}
 	}
 }

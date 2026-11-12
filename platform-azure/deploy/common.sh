@@ -119,6 +119,18 @@ OUT="$OUT$IMAGE_SUFFIX"
 # by deploy.sh, once ACR_NAME is chosen.
 LOCAL_RUNNER_IMAGE="signer-cloud/azure-runner$IMAGE_SUFFIX:$IMAGE_TAG"
 
+# The policy tool. deploy.sh policy refuses another az confcom version:
+# cce-policy-check.py rebuilds the policy text of this version only. The
+# wheel's SHA-256 is the one in the Azure CLI extension index
+# (sha256Digest of confcom 2.3.0); deploy.sh confcom-install checks it
+# before it installs the wheel. dmverity-vhd computes the layer hashes that the check
+# compares with the policy: the Linux binary of microsoft/integrity-vhd
+# release v2.2, the one confcom 2.3.0 bundles, by its release SHA-256.
+CONFCOM_VERSION=2.3.0
+CONFCOM_WHEEL_URL="https://azcliprod.blob.core.windows.net/cli-extensions/confcom-$CONFCOM_VERSION-py3-none-any.whl"
+CONFCOM_WHEEL_SHA256=1c9f409518c16686046ee893d7d375518ac7a0ccd80ca4bf34ac8ba3186eb75d
+DMVERITY_VHD_SHA256=85b383bcce609e7acf0b0eae4b6e214d795b30c4d9d96c21377ab97ea3161a28
+
 # Regional shared Microsoft Azure Attestation providers. West Europe and
 # North Europe follow the documented pattern of the default providers
 # (Get-AzAttestationDefaultProvider lists sharedeus.eus, sharedeus2.eus2,
