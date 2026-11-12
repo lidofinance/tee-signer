@@ -383,7 +383,8 @@ func activate(st *markstore.ConfigState, g setupwire.Group) {
 //
 // The state also keeps a config history (markstore.ConfigState): the
 // effective time of the newest update in force that removed one approver
-// (RemovedAt, setupwire.History), and the revocations of a pending open
+// (RemovedAt, setupwire.History) and of the newest one that changed the
+// approver set (ApproversAt), and the revocations of a pending open
 // update that a rotation dropped (Carried), which stay enforced until the
 // next open update comes into force (revoked.go).
 func (u *Updates) compute(st markstore.ConfigState, now uint64) view {
@@ -404,6 +405,9 @@ func (u *Updates) compute(st markstore.ConfigState, now uint64) view {
 		activate(&v.state, setupwire.GroupLocked)
 		if removal {
 			v.state.RemovedAt = lp.EffectiveAt
+		}
+		if rotation {
+			v.state.ApproversAt = lp.EffectiveAt
 		}
 		if p := v.state.Open.Pending; rotation && p != nil {
 			// The new set replaces the old one: what the old set signed and
@@ -944,7 +948,7 @@ func (u *Updates) Accept(ctx context.Context, raw []byte) (uint8, backend.SetupS
 		return 0, none, backend.Refused(backend.StatusStorage, "config update: the values in force are unknown, so no record is written: %v (send that update again first)", v.missing)
 	}
 	// The change rules: the signatures and the wait (setupwire changes.go).
-	h := setupwire.History{RemovedAt: v.state.RemovedAt, Now: now}
+	h := setupwire.History{RemovedAt: v.state.RemovedAt, ApproversAt: v.state.ApproversAt, Now: now}
 	d, err := upd.Decide(&u.opt.Setup.Chain, v.locked, v.open, h)
 	if err != nil {
 		return 0, none, backend.Refused(backend.StatusBadRequest, "config update: %v", err)

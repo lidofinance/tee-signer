@@ -42,6 +42,7 @@ enough.
 | source gate | 1, or 9 | presence byte, then the source floor epoch (see "Source gate") |
 | share set | 1, 34 or 66 | presence byte, then the current root (32), a presence byte and the pending root (32) (see "Share set") |
 | removal time | 1, or 9 | presence byte, then the effective time of the newest locked update in force that removed one approver (never 0); break-glass waits one change delay after it (`setupwire.History`) |
+| approver set time | 1, or 9 | presence byte, then the effective time of the newest locked update in force that changed the approver set (other keys, another order or another `approvals_needed`; a removal too; never 0); a break-glass update adds no image until the set has been in force for the images wait (`setupwire.History`) |
 | carried revocations | 1 + 32 each | count (0 to 128), then the `revoked_client_certs` entries of a pending open update that a rotation dropped, sorted, without repeats, none zero; the runner refuses them until the next open update comes into force |
 | update paths | 4 | the path each update the state names came by (1 normal, 2 break-glass, 3 emergency removal; 0 unknown), for locked active, locked pending, open active, open pending; 0 where the state names no update |
 | signature | 64 | Ed25519 over the context `signer-mark-v1` and the fields above |
@@ -58,8 +59,8 @@ under its own magic (an `SMARK1` record as `SMARK1`, an `SMARK2` one as `SMARK2`
 a presence byte other than 0 or 1, trailing bytes, a log ID that is zero
 in a later record or set in a first one, a target on a record that is not
 a tombstone, a pending update at or below the active version, a body past
-version 0 without a copy, an order of an unknown kind, a removal time of 0
-with its presence byte, or carried revocations out of order, repeated or
+version 0 without a copy, an order of an unknown kind, a removal time or an
+approver set time of 0 with its presence byte, or carried revocations out of order, repeated or
 zero.
 
 Fail-closed reader rule. A record the reader refuses is skipped, unless

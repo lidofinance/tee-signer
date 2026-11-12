@@ -30,6 +30,9 @@ type configModel struct {
 	// removedAt is the effective time of the newest locked update in force
 	// that removed one approver (setupwire.History).
 	removedAt uint64
+	// approversAt is the effective time of the newest locked update in
+	// force that changed the approver set (setupwire.History).
+	approversAt uint64
 }
 
 type groupModel struct {
@@ -98,6 +101,9 @@ func (c *configModel) reconcile(now uint64) {
 		c.activate(setupwire.GroupLocked)
 		if setupwire.RemovesOne(prev, c.locked()) {
 			c.removedAt = lp.at
+		}
+		if !c.locked().Approvers.Equal(&prev.Approvers) {
+			c.approversAt = lp.at
 		}
 		if rotation {
 			c.groups[setupwire.GroupOpen].pending = nil
@@ -168,7 +174,7 @@ func (c *configModel) accept(raw []byte, now uint64) (uint8, error) {
 	if b.PrevHash != gm.hash {
 		return 0, badRequest("prev_hash %x is not the %s update in force (version %d, %x)", b.PrevHash[:8], b.Group, gm.version, gm.hash[:8])
 	}
-	d, err := u.Decide(&c.setup.Chain, c.locked(), c.open(), setupwire.History{RemovedAt: c.removedAt, Now: now})
+	d, err := u.Decide(&c.setup.Chain, c.locked(), c.open(), setupwire.History{RemovedAt: c.removedAt, ApproversAt: c.approversAt, Now: now})
 	if err != nil {
 		return 0, badRequest("%v", err)
 	}

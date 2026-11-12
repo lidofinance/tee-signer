@@ -317,7 +317,9 @@ func TestDecideOpen(t *testing.T) {
 // one change delay after that removal break-glass is no path: a locked
 // break-glass change takes the normal path and waits, an open one (a
 // dropped revocation) is refused. Once the delay passed, break-glass is
-// back; the normal path and the other fast paths do not change.
+// back, for an added image once the images wait passed
+// (TestDecideImageAfterApproverChange); the normal path and the other fast
+// paths do not change.
 func TestDecideAfterRemoval(t *testing.T) {
 	s3 := setWith(t, 3, 2)
 	// The set after the removal of approver 3: keys 1 and 2, k = 2.
@@ -344,7 +346,9 @@ func TestDecideAfterRemoval(t *testing.T) {
 		{"image added within the delay", addImage, held, PathNormal, images},
 		{"NTS to NTP within the delay", func(l *Locked) { l.TimePolicy.Protocol = ClockNTP }, held, PathNormal, delay},
 		{"bound raised within the delay", func(l *Locked) { l.TimePolicy.MaxBoundMs = 200 }, held, PathNormal, delay},
-		{"image added after the delay", addImage, after, PathBreakGlass, 0},
+		// rv-dko.2: an image waits for the images wait after the removal.
+		{"image added after the images wait", addImage, History{RemovedAt: removed, Now: removed + images}, PathBreakGlass, 0},
+		{"bound raised after the delay", func(l *Locked) { l.TimePolicy.MaxBoundMs = 200 }, after, PathBreakGlass, 0},
 		{"tightening within the delay", func(l *Locked) { l.AllowedFeeRecipients = nil }, held, PathNormal, 0},
 		{"loosening within the delay", func(l *Locked) { l.BuilderGasLimitMax++ }, held, PathNormal, delay},
 		{"no removal in force", addImage, History{Now: removed}, PathBreakGlass, 0},

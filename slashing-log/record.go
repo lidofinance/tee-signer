@@ -19,7 +19,7 @@ import (
 
 // Record is one entry of a signer's mark log, magic SMARK3 (SMARK1 reads
 // as a record without Shares, SMARK1 and SMARK2 without the config history,
-// ConfigState.RemovedAt and Carried). Every record carries the full config state, so no record needs an earlier one for the
+// ConfigState.RemovedAt, ApproversAt and Carried). Every record carries the full config state, so no record needs an earlier one for the
 // config.
 type Record struct {
 	Setup       [32]byte          // setup_hash; zero on the flag path without a setup
@@ -64,6 +64,12 @@ type ConfigState struct {
 	// break-glass change waits one change delay after it
 	// (setupwire.History).
 	RemovedAt uint64
+	// ApproversAt is the effective time of the newest locked update in
+	// force that changed the approver set (a rotation: other keys, another
+	// order or another approvals_needed; a removal too), 0 for none. A
+	// break-glass update that adds an image waits the images wait after it
+	// (setupwire.History).
+	ApproversAt uint64
 	// Carried are the revoked_client_certs entries of a pending open
 	// update that a rotation dropped, which the runner keeps refusing until
 	// the next open update comes into force (leaving one out of it needed
@@ -160,7 +166,7 @@ func (s ConfigState) Equal(o ConfigState) bool {
 		return a.Version == b.Version && a.Hash == b.Hash && pendEq(a.Pending, b.Pending)
 	}
 	ordEq := s.Order == o.Order || s.Order != nil && o.Order != nil && *s.Order == *o.Order
-	return grpEq(s.Locked, o.Locked) && grpEq(s.Open, o.Open) && ordEq && s.RemovedAt == o.RemovedAt && slices.Equal(s.Carried, o.Carried) && s.Paths == o.Paths
+	return grpEq(s.Locked, o.Locked) && grpEq(s.Open, o.Open) && ordEq && s.RemovedAt == o.RemovedAt && s.ApproversAt == o.ApproversAt && slices.Equal(s.Carried, o.Carried) && s.Paths == o.Paths
 }
 
 // bodyIndex is the position in Record.Copies of a group's active (pending
@@ -336,6 +342,10 @@ func (r *Record) encodeBody() []byte {
 	if r.State.RemovedAt != 0 {
 		b = be.AppendUint64(b, r.State.RemovedAt)
 	}
+	b = putFlag(b, r.State.ApproversAt != 0)
+	if r.State.ApproversAt != 0 {
+		b = be.AppendUint64(b, r.State.ApproversAt)
+	}
 	b = append(b, byte(len(r.State.Carried)))
 	for _, h := range r.State.Carried {
 		b = append(b, h[:]...)
@@ -488,6 +498,12 @@ func Parse(enc []byte) (*Record, error) {
 			// Presence with 0 would encode back without it.
 			r.State.RemovedAt = rd.u64()
 			ok = ok && r.State.RemovedAt != 0
+		}
+		has, valid = rd.flag()
+		ok = ok && valid
+		if has {
+			r.State.ApproversAt = rd.u64()
+			ok = ok && r.State.ApproversAt != 0
 		}
 		if n := int(rd.u8()); n > 0 {
 			r.State.Carried = make([][32]byte, n)
