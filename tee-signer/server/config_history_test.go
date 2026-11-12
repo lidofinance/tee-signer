@@ -79,7 +79,7 @@ func TestConfigUpdateOnCoarseClock(t *testing.T) {
 	e.restart()
 	fee := e.setup.Locked.AllowedFeeRecipients[0]
 	tight := e.body(locked, 1, e.groupHash(locked), e.now())
-	tight.Locked.TimePolicy.MaxBoundMs, tight.Locked.TimePolicy.MaxSampleBoundMs = 1, 1
+	tight.Locked.TimePolicy.MaxBoundMs, tight.Locked.TimePolicy.MaxSampleBoundMs = 1, 80
 	h1 := hashOf(t, tight)
 	if st := e.mustSend(signed(t, tight, first2, nil), wireadmin.ConfigAccepted); st.Locked != (backend.ConfigGroup{Version: 1, Hash: h1}) {
 		t.Fatalf("a 1 ms bound: %+v, want in force at once", st.Locked)

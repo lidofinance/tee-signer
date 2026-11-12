@@ -83,7 +83,7 @@ Each leaf has its own 32-byte salt. A salt of 32 zero bytes is refused everywher
 | 9 | `bare_root_domains` | u16; bit n set allows domain type 0x0n000000; only bits 2, 5, 6, 7, 8, 9 |
 | 10 | `slot_time_changes` | count:u8 (0 to 16), then per change epoch:u64 and seconds_per_slot:u64, ascending epochs (section 4) |
 | 11 | `allowed_builder_request_auth_data_roots` | count:u8 (0 to 16), then 32-byte roots, sorted; each is hash_tree_root of a BuilderRequestAuth `data` field as SSZ ByteList[4096] (builder-specs, Gloas). The signer signs a BuilderRequestAuth only when the root of its data is on the list; empty means it signs none |
-| 12 | `time_policy` | version:u8 (1), protocol:u8 (1 nts, 2 ntp), max_bound_ms:u16 (1 to 250), max_sample_bound_ms:u16 (max_bound_ms to 1000) |
+| 12 | `time_policy` | version:u8 (1), protocol:u8 (1 nts, 2 ntp), max_bound_ms:u16 (1 to 250), max_sample_bound_ms:u16 (max(max_bound_ms, 80) to 1000) |
 | 13 | `deposit_policy` | version:u8 (1), count:u8 (1 to 16) then 32-byte withdrawal credentials (prefix 0x01 or 0x02, 11 zero bytes, an address that is not zero), sorted; count:u8 (0 to 8) then allowed deposit amounts u64 Gwei, sorted, each 1 to max_effective_balance; min_activation_balance:u64 Gwei (1 to max_effective_balance); max_effective_balance:u64 Gwei. The runner does not use it yet |
 | 14 | `exit_policy` | version:u8 (1), count:u16 then 48-byte validator keys, stake_cap_per_day:u64 Gwei, approvals_needed:u8. Exit approvals are not in format 6: the count, the cap and approvals_needed must be 0, so the value is always `0x01` and 11 zero bytes |
 

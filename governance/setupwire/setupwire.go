@@ -187,6 +187,10 @@ const (
 	DefaultMaxBoundMs   = 100
 	MaxMaxBoundMs       = 250
 	MaxMaxSampleBoundMs = 1000
+	// MinMaxSampleBoundMs is the smallest sample cap: the clock takes a
+	// sample at receipt only while its bound plus the aging over the join
+	// age (38 ms) is within the cap, so a smaller cap leaves little room.
+	MinMaxSampleBoundMs = 80
 )
 
 // MaxKMSKeyCreationDate is 9999-12-31T23:59:59Z, the last time the text
@@ -1701,8 +1705,8 @@ func (t *TimePolicy) Check() error {
 	if t.MaxBoundMs == 0 || t.MaxBoundMs > MaxMaxBoundMs {
 		return fmt.Errorf("time_policy.max_bound_ms %d, want 1 to %d", t.MaxBoundMs, MaxMaxBoundMs)
 	}
-	if t.MaxSampleBoundMs < t.MaxBoundMs || t.MaxSampleBoundMs > MaxMaxSampleBoundMs {
-		return fmt.Errorf("time_policy.max_sample_bound_ms %d, want max_bound_ms (%d) to %d", t.MaxSampleBoundMs, t.MaxBoundMs, MaxMaxSampleBoundMs)
+	if t.MaxSampleBoundMs < max(t.MaxBoundMs, MinMaxSampleBoundMs) || t.MaxSampleBoundMs > MaxMaxSampleBoundMs {
+		return fmt.Errorf("time_policy.max_sample_bound_ms %d, want max(max_bound_ms (%d), %d) to %d", t.MaxSampleBoundMs, t.MaxBoundMs, MinMaxSampleBoundMs, MaxMaxSampleBoundMs)
 	}
 	return nil
 }

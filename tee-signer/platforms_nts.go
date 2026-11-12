@@ -20,8 +20,9 @@ package main
 //	                                                         its source trusts
 //	-nts-wait 90s              RUNNER_NTS_WAIT=90s           how long start-up waits for the first quorum
 //	-nts-max-bound 100ms       RUNNER_NTS_MAX_BOUND=100ms    Now fails above this error bound; at most 250ms
-//	-nts-max-sample-bound 100ms RUNNER_NTS_MAX_SAMPLE_BOUND   a sample with a wider bound joins no quorum; from
-//	                                                         -nts-max-bound (the default) to 1s (no cap)
+//	-nts-max-sample-bound 100ms RUNNER_NTS_MAX_SAMPLE_BOUND   the sample cap: a sample joins no quorum when its bound
+//	                                                         plus the aging over the join age (38 ms) is over it; from
+//	                                                         -nts-max-bound and 80ms (the default) to 1s (no cap)
 //	-nts-terms-confirmed a,b   RUNNER_NTS_TERMS_CONFIRMED    catalog entries (trusted-time/ntscatalog) dialed next to
 //	                                                         the default set, whose operators' terms the deployment's
 //	                                                         writer confirmed; id@host picks an alt host with a Nitro
@@ -205,12 +206,15 @@ func ntsFlagSettings(protocol clock.Protocol) (ntsSettings, error) {
 	if maxBound > ntsMaxBoundCap {
 		return ntsSettings{}, fmt.Errorf("nts clock: -nts-max-bound (RUNNER_NTS_MAX_BOUND) %v: at most %v", maxBound, ntsMaxBoundCap)
 	}
-	maxSample, err := ntsDuration(*ntsMaxSampleFlag, "RUNNER_NTS_MAX_SAMPLE_BOUND", maxBound)
+	// At least 80 ms, as in a setup (setupwire.MinMaxSampleBoundMs): the
+	// clock takes a sample only while its bound plus 38 ms of aging fits.
+	minSample := max(maxBound, time.Duration(setupwire.MinMaxSampleBoundMs)*time.Millisecond)
+	maxSample, err := ntsDuration(*ntsMaxSampleFlag, "RUNNER_NTS_MAX_SAMPLE_BOUND", minSample)
 	if err != nil {
 		return ntsSettings{}, err
 	}
-	if maxSample < maxBound || maxSample > ntsMaxSampleBoundCap {
-		return ntsSettings{}, fmt.Errorf("nts clock: -nts-max-sample-bound (RUNNER_NTS_MAX_SAMPLE_BOUND) %v: from -nts-max-bound (%v) to %v", maxSample, maxBound, ntsMaxSampleBoundCap)
+	if maxSample < minSample || maxSample > ntsMaxSampleBoundCap {
+		return ntsSettings{}, fmt.Errorf("nts clock: -nts-max-sample-bound (RUNNER_NTS_MAX_SAMPLE_BOUND) %v: from %v (-nts-max-bound, at least 80ms) to %v", maxSample, minSample, ntsMaxSampleBoundCap)
 	}
 	return ntsSettings{protocol: protocol, maxBound: maxBound, maxSample: maxSample, confirmed: ntsConfirmed(),
 		serversFrom: "-nts-terms-confirmed (RUNNER_NTS_TERMS_CONFIRMED)"}, nil

@@ -188,10 +188,16 @@ type ClockNTS struct {
 	Refused string `json:"refused,omitempty"`
 	// BoundNowMS is the error bound of the signer's time now: the bound of
 	// the last quorum grown by rho since then. Real time is within
-	// +-BoundNowMS of the time the signer uses. Signing fails above
-	// MaxBoundMS.
+	// +-BoundNowMS of the time the signer uses while every quorum member is
+	// right. Signing fails above MaxBoundMS.
 	BoundNowMS float64 `json:"bound_now_ms"`
-	MaxBoundMS float64 `json:"max_bound_ms"`
+	// WorstBoundMS is the error one wrong quorum member can cause: equal to
+	// BoundNowMS with 4 or more fresh samples, and up to twice the widest
+	// member's bound with exactly 3, where one wrong operator and a host
+	// that delays the honest answers can shift the time inside the honest
+	// overlap. For monitoring; signing does not use it.
+	WorstBoundMS float64 `json:"worst_bound_ms,omitempty"`
+	MaxBoundMS   float64 `json:"max_bound_ms"`
 	// OffsetFromHostMS is the NTS time minus the system clock inside the
 	// TEE (the clock the host sets). The runner does not use the system
 	// clock; this shows how far off it is.
@@ -266,8 +272,9 @@ type ClockNTSOperator struct {
 	Answers int64 `json:"answers"`
 	Losses  int64 `json:"losses"`
 	// Wide counts the losses that were answers with a bound over the
-	// sample cap (-nts-max-sample-bound): a host that delays one operator
-	// shows here, one that drops it does not.
+	// receipt bound (the sample cap less the aging over the join age, 38
+	// ms): a host that delays one operator shows here, one that drops it
+	// does not.
 	Wide int64 `json:"wide,omitempty"`
 	// KEOK and KEFail count NTS-KE sessions.
 	KEOK   int64 `json:"ke_ok"`

@@ -151,16 +151,17 @@ type NTS struct {
 	Coarse   interface{ Now() (time.Time, error) }
 	Interval time.Duration // 0: NTSInterval
 	MaxBound time.Duration // 0: NTSMaxBound
-	// MaxSampleBound refuses a sample whose own bound is larger at receipt
-	// (0: MaxBound). While it waits to join, its bound grows by rho, by at
-	// most nts.Drift of the oldest join age (38 ms at 76 s under the shift
-	// schedule); a sample under the cap at receipt joins for its whole join
-	// age. A host that delays the one honest answer of a small fresh set
-	// until its bound is wide lets two wrong servers place the time
-	// anywhere inside it while the quorum's bound looks small. The bound is
-	// a half-width, so that error is up to twice the cap plus the aging,
-	// about 2 x (cap + 38 ms) (about 1 s each way without the cap). A far
-	// region, whose samples are wide, raises MaxBound and this cap.
+	// MaxSampleBound caps a sample's bound (0: MaxBound). At receipt the
+	// bound must leave room for the aging over the join age (nts.Drift, 38
+	// ms at 76 s under the shift schedule; receiptBound), so the aged bound
+	// stays within the cap for as long as the sample may join. A host that
+	// delays the honest answers of a small fresh set until their bounds are
+	// wide lets wrong servers place the time anywhere inside them while the
+	// quorum's bound looks small: two wrong of 4 or 5 fresh samples, and one
+	// wrong of exactly 3, where none is outvoted (HEALTH worst_bound_ms
+	// shows that case). The bound is a half-width, so that error is up to
+	// twice the cap (about 1 s each way without the cap). A far region,
+	// whose samples are wide, raises MaxBound and this cap.
 	MaxSampleBound time.Duration
 	MaxAge         time.Duration // 0: NTSMaxAge, or NTSShiftMaxAge with Shifts
 	MaxCoarseDiff  time.Duration // 0: NTSMaxCoarseDiff
@@ -269,6 +270,14 @@ type ntsResult struct {
 	sampled int64         // local ns of the oldest sample (T4) in the quorum
 	members []string
 	lo, hi  int64
+	// worst is the error a single wrong member can cause, at `at`. With
+	// exactly 3 fresh samples (nts.QuorumWrong(3) is 0) the result is the
+	// overlap of all three intervals, so one wrong operator can place a
+	// narrow interval anywhere inside the honest overlap: the error is up to
+	// the width of the widest honest interval, twice its aged bound, while
+	// bound may be a few ms. With more samples a wrong one is outvoted, and
+	// worst is bound (rv-dko.4).
+	worst time.Duration
 }
 
 type ntsPeer struct {
@@ -354,6 +363,20 @@ func (n *NTS) interval() time.Duration { return cmpOr(n.Interval, NTSInterval) }
 func (n *NTS) maxBound() time.Duration { return cmpOr(n.MaxBound, NTSMaxBound) }
 func (n *NTS) maxSampleBound() time.Duration {
 	return cmpOr(n.MaxSampleBound, n.maxBound())
+}
+
+// receiptBound is the widest bound a sample may have at receipt: the cap
+// less the aging over the join age (nts.Drift, 38 ms at the 76 s join age
+// of the shift schedule). A sample under it stays under the cap, aged by
+// rho, for as long as it may join, so it never leaves a quorum early, and
+// the error a host and wrong servers reach stays twice the cap (rv-dko.5).
+// The setup's max_sample_bound_ms is at least 80 ms, so this is at least
+// 42 ms; for a smaller cap (tests) it does not go below half the cap.
+func (n *NTS) receiptBound() time.Duration { return n.receiptBoundOf(n.maxSampleBound()) }
+
+// receiptBoundOf is receiptBound for the sample cap c.
+func (n *NTS) receiptBoundOf(c time.Duration) time.Duration {
+	return max(c-nts.Drift(time.Duration(n.sampleMaxAge())), c/2)
 }
 func (n *NTS) shiftMode() bool { return n.Shifts || n.ScheduleSeed != nil }
 
@@ -720,7 +743,7 @@ func (n *NTS) SetPolicy(protocol Protocol, maxBound, maxSampleBound time.Duratio
 			}
 			p.sample, p.ntpAddr = nil, ""
 			p.nextKE, p.keWait, p.lostInRow, p.lostKE = 0, 0, 0, false
-		case p.sample != nil && p.sample.Bound > maxSampleBound:
+		case p.sample != nil && p.sample.Bound > n.receiptBoundOf(maxSampleBound):
 			p.sample = nil
 			dropped = append(dropped, p.srv.Operator)
 		}
@@ -1098,17 +1121,16 @@ func (n *NTS) fresh() int {
 }
 
 // joins says whether p's sample may join a quorum at local time now: at
-// most maxAge old, newer than a refused quorum, and within MaxSampleBound
-// at receipt (record refuses wider ones; this keeps that true here). Its
-// bound, aged by rho as the quorum ages it, is then at most the cap plus
-// nts.Drift(maxAge), 38 ms at the 76 s join age of the shift schedule, so
-// a sample under the cap joins for its whole join age. Checking the aged
-// bound against the cap alone would let a sample with bound B join for
-// only 2 x (cap - B) seconds at 500 ppm, 30 s at 85 ms, less than the 60 s
-// until its operator's next contact.
+// most maxAge old, newer than a refused quorum, and within receiptBound at
+// receipt (record refuses wider ones; this keeps that true here). Its
+// bound, aged by rho as the quorum ages it, then stays within the cap for
+// the whole join age. Checking the aged bound against the cap instead
+// would let a sample with bound B join for only 2 x (cap - B) seconds at
+// 500 ppm, 30 s at 85 ms, less than the 60 s until its operator's next
+// contact; letting the aged bound pass the cap would widen the error.
 func (n *NTS) joins(p *ntsPeer, now, maxAge int64) bool {
 	s := p.sample
-	return s != nil && now-s.T4 <= maxAge && s.T4 > n.refusedT4 && s.Bound <= n.maxSampleBound()
+	return s != nil && now-s.T4 <= maxAge && s.T4 > n.refusedT4 && s.Bound <= n.receiptBound()
 }
 
 // certTime is the time NTS-KE checks certificate validity at: the coarse
@@ -1323,7 +1345,7 @@ func (n *NTS) record(p *ntsPeer, s nts.Sample, err error) bool {
 		p.lostInRow++
 		p.lastErr = err
 		n.logf(slog.LevelWarn, "nts: query failed", "operator", p.srv.Operator, "err", err)
-	case s.Bound > n.maxSampleBound():
+	case s.Bound > n.receiptBound():
 		// An answer, but too wide to join a quorum: it counts as lost (a
 		// fallback may follow), and the earlier sample stays until it ages
 		// out. It is authenticated, so the cookies work: it ends a loss
@@ -1332,9 +1354,9 @@ func (n *NTS) record(p *ntsPeer, s nts.Sample, err error) bool {
 		wide = true
 		p.lostInRow, p.lostKE = 0, false
 		p.stats.LastDelay, p.stats.LastBound = s.Delay, s.Bound
-		err = &wideSampleError{bound: s.Bound, limit: n.maxSampleBound()}
+		err = &wideSampleError{bound: s.Bound, limit: n.receiptBound()}
 		p.lastErr = err
-		n.logf(slog.LevelWarn, "nts: sample too wide", "operator", p.srv.Operator, "bound", s.Bound, "delay", s.Delay, "limit", n.maxSampleBound())
+		n.logf(slog.LevelWarn, "nts: sample too wide", "operator", p.srv.Operator, "bound", s.Bound, "delay", s.Delay, "limit", n.receiptBound())
 	default:
 		p.stats.Samples++
 		p.lostInRow, p.lostKE = 0, false
@@ -1415,7 +1437,13 @@ func (n *NTS) combine(coarse time.Time, coarseLocal int64) error {
 	for _, v := range in {
 		sampled = min(sampled, v.T4)
 	}
-	cur := &ntsResult{offset: q.Offset, bound: q.Bound, at: now, sampled: sampled, members: members, lo: q.Lo, hi: q.Hi}
+	worst := q.Bound
+	if nts.QuorumWrong(len(in)) == 0 {
+		for _, v := range in {
+			worst = max(worst, 2*nts.AddBound(v.Bound, nts.Drift(time.Duration(now-v.T4))))
+		}
+	}
+	cur := &ntsResult{offset: q.Offset, bound: q.Bound, at: now, sampled: sampled, members: members, lo: q.Lo, hi: q.Hi, worst: worst}
 	n.mu.Lock()
 	// The bound grows by rho only if the local clock keeps within rho of
 	// real time. Check that against the last quorum and the baseline: both
@@ -1616,6 +1644,7 @@ func (n *NTS) NTSSummary() NTSSummary {
 	if r := n.result; r != nil {
 		s.Members = append([]string(nil), r.members...)
 		s.AgeOfQuorum = time.Duration(now - r.at)
+		s.WorstBoundNow = nts.AddBound(r.worst, nts.Drift(s.AgeOfQuorum))
 		s.OffsetFromHost = time.Duration(now + r.offset - time.Now().UnixNano())
 	}
 	if n.shifts != nil {

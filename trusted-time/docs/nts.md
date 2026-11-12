@@ -852,25 +852,30 @@ cannot turn it off or point it elsewhere:
 | Azure | `platform-azure/deploy/aci-template.json` command (CCE policy hash) | `login.microsoftonline.com`, `management.azure.com`, `www.cloudflare.com` | ACI's default outbound access, direct |
 | GCP | `platform-gcp/deploy/Dockerfile` entrypoint (image digest) | `cloudkms.googleapis.com`, `sts.googleapis.com`, `www.cloudflare.com` | the VM's external address, direct (implied allow-all egress) |
 
-A sample whose own bound is over the setup's `max_sample_bound_ms` joins no
-quorum (`clock.NTS.MaxSampleBound`). At receipt it counts as a lost answer,
-so a fallback may follow, and HEALTH counts it in `wide`; it ends a loss
-streak (the cookies work) and gets no start retry. A sample under the cap
-at receipt joins for its whole join age (76 s): its bound, aged by rho as
-the quorum ages it, may pass the cap by that aging, at most 38 ms. Without
-that allowance a sample with bound B would join for only 2 x (cap - B)
-seconds, 30 s at 85 ms, and leave before its operator's next contact 60 s
-later. The cap is at least `max_bound_ms` and may be raised up to 1 s,
-where the cap is off. Why: a host that delays the one honest answer of a
-small fresh set widens its bound, and two wrong servers can then place
-the time anywhere inside it while the quorum's bound looks small. The
-bound is a half-width, and the host's delay can put the true time at
-either edge, so the error is up to twice the aged cap: about
-2 x (100 + 38) ms, 276 ms, at the default 100 ms, against about 1 s each
-way without the cap (RFC 5905 MAXDIST, beyond which the core refuses a
-sample). A setup that raises the sample cap above `max_bound_ms` gives
-part of that back. A far deployment raises both, and that error grows
-with them (about 2 x (250 + 38) ms, 576 ms, at 250 ms).
+A sample whose bound at receipt is over the setup's `max_sample_bound_ms`
+less the aging over the join age (38 ms at 76 s, so 62 ms at the default
+100 ms; `clock.NTS.MaxSampleBound`, `receiptBound`) joins no quorum. It
+counts as a lost answer, so a fallback may follow, and HEALTH counts it in
+`wide`; it ends a loss streak (the cookies work) and gets no start retry.
+A sample within that limit joins for its whole join age, and its bound,
+aged by rho as the quorum ages it, stays within the cap all that time. A
+check of the aged bound against the cap alone would let a sample with
+bound B join for only 2 x (cap - B) seconds, 30 s at 85 ms, and leave
+before its operator's next contact 60 s later; letting the aged bound pass
+the cap would widen the error below (rv-dko.5). The cap is at least
+`max_bound_ms` and 80 ms, and may be raised up to 1 s, where the cap is
+off. Why: a host that delays the honest answers of a small fresh set
+widens their bounds, and wrong servers can then place the time anywhere
+inside them while the quorum's bound looks small: two wrong of 4 or 5
+fresh samples, and one wrong of exactly 3, where no wrong sample is
+outvoted. The bound is a half-width, and the host's delay can put the true
+time at either edge, so the error is up to twice the cap: about 200 ms at
+the default 100 ms, against about 1 s each way without the cap (RFC 5905
+MAXDIST, beyond which the core refuses a sample). HEALTH `bound_now_ms`
+does not show this; `worst_bound_ms` does for the 3-sample case (twice the
+widest member's bound). A setup that raises the sample cap above
+`max_bound_ms` gives part of that back. A far deployment raises both, and
+that error grows with them (about 500 ms at 250 ms).
 
 The coarse URLs are hosts the platform's egress already allows. Their
 status does not matter, only the Date header of their own answer: on
