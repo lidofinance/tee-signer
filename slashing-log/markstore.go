@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -100,6 +101,8 @@ type Env struct {
 	// remove after the lock check. GCS and Azure lock the policy itself and
 	// ignore it.
 	RetainDays uint32
+	// Logger, if set, takes the store client's warnings.
+	Logger *slog.Logger
 }
 
 // opener opens one store kind. The platform builds register theirs

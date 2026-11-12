@@ -320,11 +320,22 @@ resource "aws_iam_user" "record_writer" {
 # marker on a versioned bucket) and DeleteObjectVersion to every
 # principal, the account's admins and the writer user included: a delete
 # marker over a clone's record would let a second runner's conditional
-# create through (issue #5 R3). So no request adds a delete marker while
-# this policy stands. A lifecycle expiration rule still can (S3 runs it,
-# not a principal the policy matches), and an admin who can change this
-# policy can lift it. Credentials minted for the writer user put records
-# as the writer but are denied deletes too. The runner's checks after each
+# create through (issue #5 R3). A lifecycle expiration rule adds delete
+# markers too, and S3 runs it whatever the bucket policy says, so
+# NoLifecycleRules denies s3:PutLifecycleConfiguration (which also covers
+# DeleteBucketLifecycle) to every principal; it also blocks transitions to
+# archive classes. A rule set before this policy keeps running, so the
+# bucket must have none when this statement is first applied; the lock
+# check reads the rules (s3:GetLifecycleConfiguration; without it, a
+# warning) and refuses to start on a transition and warns of an
+# expiration. While the
+# policy stands no request and no new lifecycle rule adds a delete marker;
+# an admin who can change the policy can lift both denies. Versioning
+# cannot be suspended on an Object Lock bucket, and a replication rule
+# copies objects out without changing them, so the policy leaves both
+# alone; replicas into marks/ and config/ are denied by OnlyWriterWrites.
+# Credentials minted for the writer user put records as the writer but
+# are denied deletes too. The runner's checks after each
 # create (s3log checkHidden, checkMarker) catch a create that a delete
 # marker let through either way.
 # ShortRetention and NoRetention (EDS-FRESH-04) refuse a put that would
@@ -362,7 +373,7 @@ resource "aws_s3_bucket_policy" "marks" {
         Sid       = "EnclaveWriterListsAndChecksTheLock"
         Effect    = "Allow"
         Principal = { AWS = aws_iam_user.record_writer.arn }
-        Action    = ["s3:ListBucketVersions", "s3:GetBucketObjectLockConfiguration"]
+        Action    = ["s3:ListBucketVersions", "s3:GetBucketObjectLockConfiguration", "s3:GetLifecycleConfiguration"]
         Resource  = "arn:aws:s3:::${var.mark_bucket}"
       },
       {
@@ -386,6 +397,13 @@ resource "aws_s3_bucket_policy" "marks" {
         Principal = "*"
         Action    = ["s3:DeleteObject", "s3:DeleteObjectVersion"]
         Resource  = "arn:aws:s3:::${var.mark_bucket}/*"
+      },
+      {
+        Sid       = "NoLifecycleRules"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:PutLifecycleConfiguration"
+        Resource  = "arn:aws:s3:::${var.mark_bucket}"
       },
       {
         Sid       = "ShortRetention"

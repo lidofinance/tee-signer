@@ -454,6 +454,20 @@ reads `cluster.json` refuse a single-mode cluster of more than one
 signer, and `import-draft` refuses a split file that gives one index to
 two signers. The approvers check it for each import order they sign.
 
+What the threshold rule protects against: two signing sets of t signers
+overlap in 2t - n signers, and an honest signer in the overlap refuses
+the second side of a conflicting pair, since its mark log holds the
+first. A faulty signer (its mark failed) or a rogue one signs both sides.
+The signers never see each other's requests, so a hostile gateway can
+send each side to a different set. A split is safe against f faulty or
+rogue signers plus a hostile gateway if and only if 2t - n > f. The prod
+rule, 2t - n >= 2, guarantees safety against one such signer, not two:
+3 of 4 and 4 of 6 overlap in two signers, and two rogue ones can sign a
+slashable pair. A split holds against two only with 2t - n >= 3 (4 of
+5). The 2-of-3 splits of devnets and the test networks overlap in one
+signer and have no margin: one rogue signer and a hostile gateway are
+enough.
+
 A GCP signer holds a key alone only with a second, separate acceptance:
 a GCP setup with `signing_mode = single` is refused, so no runner starts
 from it, and an import order with t = n = 1 is refused on GCP on every

@@ -102,6 +102,9 @@ endpoint the runner calls moves to G1, add it.
   one signer be upgraded or restarted while another is down, and t still
   sign. With n - t = 1 (3 of 4, 4 of 5), a second fault during a
   one-at-a-time upgrade stops signing until one of the two is back.
+  Safety against a slashable pair comes from the overlap 2t - n: the
+  prod rule holds against one faulty or rogue signer, not two
+  (signer-protocol/docs/protocol.md, "Key rule lock").
 - Never run the old and the new image of one signer at the same time.
   They share one mark log; the second writer finds a record it did not
   write and stops.
