@@ -25,9 +25,12 @@ const (
 )
 
 // csConfidentialHWModels are the hwmodel values of VMs with memory
-// encryption, accepted when ConfidentialSpaceOptions.HWModels is empty.
-// GCP_SHIELDED_VM is not one: the host can read that VM's memory.
-var csConfidentialHWModels = []string{"GCP_AMD_SEV", "GCP_AMD_SEV_ES", "GCP_INTEL_TDX"}
+// encryption that also protects register state, accepted when
+// ConfidentialSpaceOptions.HWModels is empty. GCP_SHIELDED_VM is not one:
+// the host can read that VM's memory. Nor is GCP_AMD_SEV, which encrypts
+// memory but leaves register state to the host; a list that wants it
+// names it.
+var csConfidentialHWModels = []string{"GCP_AMD_SEV_ES", "GCP_INTEL_TDX"}
 
 // ConfidentialSpaceOptions configures VerifyConfidentialSpace.
 type ConfidentialSpaceOptions struct {
@@ -55,8 +58,8 @@ type ConfidentialSpaceOptions struct {
 	// be set.
 	Nonces []string
 	// HWModels lists the accepted hwmodel values. Empty means the models
-	// with memory encryption: GCP_AMD_SEV, GCP_AMD_SEV_ES and GCP_INTEL_TDX,
-	// never GCP_SHIELDED_VM.
+	// with memory encryption and register protection: GCP_AMD_SEV_ES and
+	// GCP_INTEL_TDX, never GCP_AMD_SEV or GCP_SHIELDED_VM.
 	HWModels []string
 	// ServiceAccount, if set, must appear in google_service_accounts.
 	ServiceAccount string

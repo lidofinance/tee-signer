@@ -541,8 +541,9 @@ func TestNewerProtocolLevelWarnsInAThresholdCluster(t *testing.T) {
 }
 
 // A signer whose HEALTH fails at the first load has its whole key refused;
-// once served, the key stays served through a later HEALTH failure, and
-// goes when the signer reports another mode.
+// once served, the key stays served through a later HEALTH failure (for
+// at most modeMaxAge, TestWholeKeyModeAgesOut), and goes when the signer
+// reports another mode.
 func TestWholeKeyAcrossHealthFailures(t *testing.T) {
 	k := splitKey(t, 2, 3)
 	w := splitKey(t, 1, 1)
@@ -653,4 +654,150 @@ func TestMaxShareIndexCapped(t *testing.T) {
 	if s := newSigners(nil, nil, 64, time.Second, slog.New(slog.NewTextHandler(io.Discard, nil))); s.maxIndex != 8 {
 		t.Fatalf("max index %d, want 8", s.maxIndex)
 	}
+}
+
+// skewClock moves the gateway's clock d ahead of the wall clock.
+func skewClock(s *Signers, d time.Duration) {
+	s.keys.now = func() time.Time { return time.Now().Add(d) }
+}
+
+// A whole key is served while its signer's signing_mode is younger than
+// three key refreshes. Once HEALTH fails for longer, the next load refuses
+// the whole key and says why; the threshold key stays served. A HEALTH
+// answer of single brings the whole key back at the next load.
+func TestWholeKeyModeAgesOut(t *testing.T) {
+	k := splitKey(t, 2, 3)
+	w := splitKey(t, 1, 1)
+	single := cluster([]*testKey{w}, 1)[0]
+	fakes := append(cluster([]*testKey{k}, 3), single)
+	runners, names := make([]runner, len(fakes)), make([]string, len(fakes))
+	for i, f := range fakes {
+		runners[i], names[i] = f, fmt.Sprintf("signer-%d", i+1)
+	}
+	var logs syncBuilder
+	s := newSigners(names, runners, 0, 2*time.Second, slog.New(slog.NewTextHandler(&logs, nil)))
+	if _, err := s.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	single.set(func(f *fakeRunner) { f.healthErr = errors.New("health down") })
+	skewClock(s, 2*keysMaxAge)
+	if _, err := s.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.keys.lookup(w.pk); !ok {
+		t.Fatal("a whole key whose mode is two refreshes old is not served")
+	}
+	skewClock(s, 3*keysMaxAge+time.Second)
+	if _, err := s.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.keys.lookup(w.pk); ok {
+		t.Fatal("the whole key is still served after its signing_mode aged out")
+	}
+	if !strings.Contains(logs.String(), "key refused") || !strings.Contains(logs.String(), "older than") {
+		t.Fatalf("the refusal does not say the mode is too old:\n%s", logs.String())
+	}
+	if _, ok := s.keys.lookup(k.pk); !ok {
+		t.Fatal("the 2 of 3 key is not served")
+	}
+	single.set(func(f *fakeRunner) { f.healthErr = nil })
+	if _, err := s.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.keys.lookup(w.pk); !ok {
+		t.Fatal("the whole key did not come back after HEALTH said single again")
+	}
+}
+
+// When every key is whole, a load that fails still drops a whole key whose
+// signing_mode aged out: the old list is not kept as it was.
+func TestWholeKeyModeAgesOutWhenTheLoadFails(t *testing.T) {
+	w := splitKey(t, 1, 1)
+	single := cluster([]*testKey{w}, 1)[0]
+	s := newTestSigners(t, []*fakeRunner{single})
+	if _, ok := s.keys.lookup(w.pk); !ok {
+		t.Fatal("the whole key of a single-mode signer is not served")
+	}
+	single.set(func(f *fakeRunner) { f.err = io.EOF })
+	skewClock(s, 3*keysMaxAge+time.Second)
+	if _, err := s.Refresh(context.Background()); err == nil {
+		t.Fatal("a load with no key to serve passed")
+	}
+	if _, ok := s.keys.lookup(w.pk); ok {
+		t.Fatal("a failed load kept a whole key whose signing_mode aged out")
+	}
+	single.set(func(f *fakeRunner) { f.err = nil })
+	if _, err := s.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.keys.lookup(w.pk); !ok {
+		t.Fatal("the whole key did not come back after HEALTH said single again")
+	}
+}
+
+// A sign request for a whole key whose signing_mode aged out since the
+// last load waits for a new load instead of signing with the old list: it
+// signs when HEALTH says single again, and is refused, without a signer
+// call, when HEALTH still fails.
+func TestWholeKeySignChecksTheModeAge(t *testing.T) {
+	w := splitKey(t, 1, 1)
+	single := cluster([]*testKey{w}, 1)[0]
+	single.root = testRoot
+	s := newTestSigners(t, []*fakeRunner{single})
+	skewClock(s, 3*keysMaxAge+time.Second)
+	if _, err := signWith(t, s, w.pk); err != nil {
+		t.Fatalf("a fresh HEALTH answer did not let the whole key sign: %v", err)
+	}
+	single.set(func(f *fakeRunner) { f.healthErr, f.signs = errors.New("health down"), 0 })
+	skewClock(s, 2*(3*keysMaxAge+time.Second))
+	_, err := signWith(t, s, w.pk)
+	if !errors.Is(err, ErrUnknownKey) {
+		t.Fatalf("whole key with an aged-out signing_mode: %v, want ErrUnknownKey", err)
+	}
+	single.set(func(f *fakeRunner) {
+		if f.signs != 0 {
+			t.Errorf("%d sign calls for a whole key whose signing_mode aged out", f.signs)
+		}
+	})
+}
+
+// Threshold keys do not depend on HEALTH: a key of a 2-of-3 cluster stays
+// served and signs when no signer answered HEALTH for longer than the
+// whole-key limit.
+func TestThresholdKeyIgnoresModeAge(t *testing.T) {
+	k := splitKey(t, 2, 3)
+	fakes := cluster([]*testKey{k}, 3)
+	setRoot(fakes)
+	s := newTestSigners(t, fakes)
+	for _, f := range fakes {
+		f.set(func(f *fakeRunner) { f.healthErr = errors.New("health down") })
+	}
+	skewClock(s, 10*keysMaxAge)
+	if _, err := s.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := signWith(t, s, k.pk); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// syncBuilder is a strings.Builder safe for the log writes of background
+// loads.
+type syncBuilder struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (b *syncBuilder) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.b.Write(p)
+}
+
+func (b *syncBuilder) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.b.String()
 }

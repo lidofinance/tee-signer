@@ -24,7 +24,7 @@ func csClaims(now time.Time) map[string]any {
 		"eat_nonce":               []string{"6e6f6e63652d6f6e65", "6e6f6e63652d74776f"},
 		"secboot":                 true,
 		"oemid":                   11129,
-		"hwmodel":                 "GCP_AMD_SEV",
+		"hwmodel":                 "GCP_AMD_SEV_ES",
 		"swname":                  "CONFIDENTIAL_SPACE",
 		"swversion":               []string{"250301"},
 		"dbgstat":                 "disabled-since-boot",
@@ -177,13 +177,16 @@ func TestConfidentialSpace(t *testing.T) {
 			t.Fatalf("matching project: %v", err)
 		}
 	})
-	t.Run("no HWModels: confidential models only", func(t *testing.T) {
-		for _, m := range []string{"GCP_AMD_SEV", "GCP_AMD_SEV_ES", "GCP_INTEL_TDX"} {
+	// rv-b9e.12: the default holds the models that also protect register
+	// state, GCP_AMD_SEV_ES and GCP_INTEL_TDX. GCP_AMD_SEV encrypts memory
+	// only; a list that wants it names it.
+	t.Run("no HWModels: confidential models with register protection only", func(t *testing.T) {
+		for _, m := range []string{"GCP_AMD_SEV_ES", "GCP_INTEL_TDX"} {
 			if _, err := VerifyConfidentialSpace(resign("hwmodel", m), opts()); err != nil {
 				t.Errorf("%s: %v", m, err)
 			}
 		}
-		for _, m := range []any{"GCP_SHIELDED_VM", "", nil} {
+		for _, m := range []any{"GCP_AMD_SEV", "GCP_SHIELDED_VM", "", nil} {
 			_, err := VerifyConfidentialSpace(resign("hwmodel", m), opts())
 			wantErr(t, err, ErrClaim)
 		}

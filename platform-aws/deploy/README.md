@@ -276,6 +276,14 @@ SETUP=signer-2.bin platform-aws/deploy/parent-run.sh               # on the pare
   The script refuses `CLIENT_CA`, `REGION`, `KMS_KEY_ARN`, `MARK_BUCKET`
   and `MARK_SIGNER`, and checks that the image holds no `/etc/signer`.
 
+The mark bucket must have no lifecycle rules. The runner's lock check
+refuses an enabled transition rule (the start stops, or mark writes stop
+on a running signer) and warns of an expiration rule; both messages say
+how to remove the rules. With the bucket policy's `NoLifecycleRules`
+statement in force, removing a rule (`aws s3api delete-bucket-lifecycle`)
+is denied like adding one, so drop that statement from the policy first,
+remove the rules, and put the statement back.
+
 With `mark_bucket` set, `main.tf` writes the bucket policy: the writer may
 create and read objects under `marks/` and `config/`, set each new object's
 retention (`s3:PutObjectRetention`, see "Mark log"), list versions and read

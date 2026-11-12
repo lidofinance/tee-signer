@@ -260,8 +260,11 @@ What the check does not cover:
 - `dmverity-vhd` runs on the machine that makes the policy. The pin
   covers the binary, not that machine's Docker daemon.
 - The version pin reads the version that `az extension show` reports, so
-  it catches a wrong install, not a modified one. The exact-text check is
-  what limits a modified confcom.
+  it catches a wrong install, not a modified one. The exact-text check
+  catches a confcom that writes wrong output. It does not stop a confcom
+  built to get past it, which runs as the deploy user and could rewrite
+  the reference files or the checker too: the deploy machine and its
+  tools are trusted.
 - A network entry part (build overlay) adds its own containers. The check
   holds them to the same rules as the runner (their template command,
   their image's layers, no exec, not elevated), but it accepts them: they

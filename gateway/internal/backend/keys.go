@@ -176,7 +176,8 @@ func everySubset(pk phase0.BLSPubKey, shares []share, idx []uint64, t int) bool 
 // readers that arrive during a load wait for it and use its result. A sign
 // request for a key the list has does not wait: it starts the load in the
 // background and signs with the list as it is. A
-// failed load keeps the old list, and the next try waits maxAge again, so
+// failed load keeps the old list less the keys check refuses, and the next
+// try waits maxAge again, so
 // signers that are down, or unknown keys in sign requests, cause at most
 // one load per maxAge.
 type keyList struct {
@@ -184,6 +185,9 @@ type keyList struct {
 	maxAge time.Duration
 	now    func() time.Time
 	log    *slog.Logger
+	// check, if set, is asked of each key of the list after a failed load;
+	// a key it refuses leaves the list.
+	check func(group) error
 
 	loading chan struct{} // holds a token while a load runs
 
@@ -260,6 +264,7 @@ func (l *keyList) loadLocked(ctx context.Context) (int, error) {
 		l.mu.Lock()
 		l.tried = l.now()
 		l.mu.Unlock()
+		l.recheck()
 
 		return 0, err
 	}
@@ -288,6 +293,31 @@ func (l *keyList) loadLocked(ctx context.Context) (int, error) {
 	}
 
 	return len(keys), nil
+}
+
+// recheck drops the keys check refuses from the list; the caller holds
+// the loading token. Without it a failed load would keep serving a key the
+// last good load let in, such as a whole key whose signing_mode aged out.
+func (l *keyList) recheck() {
+	if l.check == nil {
+		return
+	}
+	keys := make(map[phase0.BLSPubKey]group, len(l.keys))
+	for k, g := range l.keys {
+		if err := l.check(g); err != nil {
+			l.log.Warn("key refused", "pubkey", fmt.Sprintf("%#x", k), "shares", len(g.shares), "err", err.Error())
+			l.log.Info("key gone", "pubkey", fmt.Sprintf("%#x", k))
+
+			continue
+		}
+		keys[k] = g
+	}
+	if len(keys) == len(l.keys) {
+		return
+	}
+	l.mu.Lock()
+	l.keys = keys
+	l.mu.Unlock()
 }
 
 func (l *keyList) stale() bool {

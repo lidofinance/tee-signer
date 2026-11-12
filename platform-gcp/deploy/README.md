@@ -116,11 +116,26 @@ CHAIN=<chain> CHAIN_JSON=chain.json SETUP_FILE=signer-3.bin CONFIRM=yes platform
 - As on AWS, any object under `shares/` that does not open under the
   current sealing key and the mark log's log_id (a leftover from an
   earlier mark log, a foreign object) now stops the start, where before it
-  was logged and skipped. The store is the container's file system and
-  the state copy is encrypted and restored as a whole commit, so nobody
-  can remove such an object. The way out is a new setup (a new
-  setup_hash, so a new state copy path and sealing AAD) and a new import
-  of the shares.
+  was logged and skipped. The error names each such object
+  (`shares/<validator public key hex>`) and the state copy path
+  (`state/<setup_hash hex>/<signer>/`). The store is the container's file
+  system and the state copy is encrypted and restored as a whole commit,
+  so nobody can remove one object. Check each named key against this
+  signer's imports first. A share that is not one of this setup's came in
+  a state copy commit the runner did not write (the forged commit above).
+  The runner logs `state copy: wrote` with the version of each commit it
+  writes, and `state copy: newest commit` with the version it restored at
+  start. If the restored version is higher than the last one the runner
+  wrote, and the bucket takes deletes (no retention lock in force), delete
+  the commit objects above that version under the state copy path and
+  restart: the restore takes the newest commit that opens, the runner's
+  own (`slashing-log/docs/durable-state.md`, "Why a rolled-back copy is no
+  slashing risk"; if HEALTH then reports `load_failed`, import every
+  listed share again in one batch). Under a locked retention policy, as
+  on mainnet, those commits stay until their retention ends. Then, and
+  when the share is one of this setup's, the way out is a new setup (a
+  new setup_hash, so a new state copy path and sealing AAD) and a new
+  import of the shares.
 - `CHAIN` picks the runner build of `build-image.sh` (the mainnet runner
   when unset); the chain config is checked, not put into the image. The
   script refuses `CLIENT_CA`, and `render_dockerfile` refuses `STATE_STORE`
