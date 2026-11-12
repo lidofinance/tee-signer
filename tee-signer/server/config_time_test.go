@@ -206,3 +206,40 @@ func TestConfigAcceptRefusedAfterCoreClockError(t *testing.T) {
 		t.Fatalf("slot times in the core: %+v", got)
 	}
 }
+
+// rv-hov.35: a clock failure inside the core while Sync applies an update
+// that came due writes no record that shows the update in force. The retry
+// an epoch later then still passes the update's effective time to the core,
+// which takes the slot time change, and only then the record is written.
+func TestConfigSyncWritesNoRecordWhileRetryPending(t *testing.T) {
+	e := newEnv(t, u64(3600))
+	e.upd.opt.Clock = steadyClock{e.clock}
+	t0 := e.now()
+	eT := (t0 + 3600 - testGenesis) / testEpoch
+	b := e.body(locked, 1, e.groupHash(locked), t0)
+	b.Locked.SlotTimeChanges = []setupwire.SlotTimeChange{{Epoch: eT + 4, SecondsPerSlot: 4}}
+	e.mustSend(signed(t, b, first2, nil), wireadmin.ConfigAccepted)
+	e.clock.add(3600)
+	e.clock.set(func(c *fakeClock) { c.failNext = 1 })
+	if err := e.upd.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st := e.log.State(); st.Locked.Version != 0 || st.Locked.Pending == nil {
+		t.Fatalf("record written while the core retry is pending: %+v", st.Locked)
+	}
+	wantCode(t, e.upd.signErr(), backend.StatusClock, "slot time changes")
+	e.clock.add(testEpoch)
+	if err := e.upd.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.upd.signErr(); err != nil {
+		t.Fatalf("after the retry: %v", err)
+	}
+	want := []core.SlotTimeChange{{Epoch: eT + 4, SecondsPerSlot: 4}}
+	if got := e.signer.Config().SlotTimeChanges; !slices.Equal(got, want) {
+		t.Fatalf("slot times in the core: %+v", got)
+	}
+	if st := e.log.State(); st.Locked.Version != 1 || st.Locked.Pending != nil {
+		t.Fatalf("record after the retry: %+v", st.Locked)
+	}
+}

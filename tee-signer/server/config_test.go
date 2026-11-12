@@ -1532,3 +1532,34 @@ func TestConfigUpdateRefusedWhileBodyMissing(t *testing.T) {
 		t.Fatalf("after the new locked update: pending open update %+v, want %+v", p, fp)
 	}
 }
+
+// rv-hov.34: a slot time change pending whose body is unreadable, then a
+// fork update. The fork rule cannot count epochs under the pending slot
+// times, so the update is refused. With the body back the rule refuses the
+// fork at epoch 1160 as in TestConfigUpdateForkRuleCountsPendingSlotTimes.
+func TestConfigUpdateForkPendingSlotTimesUnreadable(t *testing.T) {
+	e := newEnv(t, u64(3600))
+	t0 := e.now()
+	lb := e.body(locked, 1, e.groupHash(locked), t0)
+	lb.Locked.SlotTimeChanges = []setupwire.SlotTimeChange{{Epoch: 1079, SecondsPerSlot: 1}}
+	raw := signed(t, lb, first2, nil)
+	e.mustSend(raw, wireadmin.ConfigAccepted)
+	e.signer.Close()
+	if err := os.Remove(filepath.Join(e.dir, "marks", markstore.BodyName(e.hash, locked, 1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	e.start()
+	ob := e.body(open, 1, e.groupHash(open), t0+7200)
+	ob.Open.ForkSchedule = append(ob.Open.ForkSchedule, setupwire.Fork{Epoch: 1160, Version: v6})
+	_, _, err := e.send(signed(t, ob, first2, nil))
+	wantCode(t, err, backend.StatusStorage, "pending locked version 1 has no readable body")
+	if e.log.State().Open.Pending != nil {
+		t.Fatal("refused, but pending")
+	}
+	e.mustSend(raw, wireadmin.ConfigKnown)
+	_, _, err = e.send(signed(t, ob, first2, nil))
+	wantCode(t, err, backend.StatusSchedule, "fork rule")
+	if e.log.State().Open.Pending != nil {
+		t.Fatal("refused, but pending")
+	}
+}
