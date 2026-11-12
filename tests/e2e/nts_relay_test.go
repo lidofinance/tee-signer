@@ -222,7 +222,7 @@ func TestE2ENTSClockThroughRelay(t *testing.T) {
 
 // TestE2ENTSIgnoresHostClock: the host moves the system clock 1 h ahead
 // (clock_offset on the dev platform) and the runner signs on the NTS clock
-// of three test servers. HEALTH shows the servers' time, and a vote 4
+// of four test servers (the runner refuses fewer). HEALTH shows the servers' time, and a vote 4
 // epochs ahead of real time, long past for the moved clock, is refused.
 func TestE2ENTSIgnoresHostClock(t *testing.T) {
 	bin := runnerBinary(t, "aws-debug")
@@ -234,7 +234,7 @@ func TestE2ENTSIgnoresHostClock(t *testing.T) {
 	serverClock := func() time.Time { return start.Add(time.Duration(rawNow() - raw0)) }
 	var roots []byte
 	var servers []string
-	for _, name := range []string{"a", "b", "c"} {
+	for _, name := range []string{"a", "b", "c", "d"} {
 		host := "nts-" + name + ".test"
 		store := ntstest.NewStore()
 		ntp, err := ntstest.StartNTP(store, ntstest.NTPOptions{Clock: serverClock})
@@ -271,7 +271,7 @@ func TestE2ENTSIgnoresHostClock(t *testing.T) {
 	r.start()
 	cl := client(t, addr)
 	h := waitReady(t, cl)
-	if h.ClockSource != "nts(a,b,c)" || !h.ClockTrusted {
+	if h.ClockSource != "nts(a,b,c,d)" || !h.ClockTrusted {
 		t.Fatalf("clock %s trusted=%v", h.ClockSource, h.ClockTrusted)
 	}
 	if off := int64(h.ClockUnix) - serverClock().Unix(); off < -2 || off > 2 {
@@ -286,6 +286,74 @@ func TestE2ENTSIgnoresHostClock(t *testing.T) {
 	_, err := cl.Sign(ctx, c.req(pk, att(e+3, e+4, 1)))
 	rr := wantRefused(t, err, backend.StatusPolicyFuture)
 	t.Logf("host clock +1h, runner clock %s within 2 s of the servers: vote 4 epochs ahead refused: %v", h.ClockSource, rr)
+}
+
+// TestE2ENTSPlainNTPIgnoresHostClock: TestE2ENTSIgnoresHostClock with
+// -clock-protocol ntp against four plain NTP test servers, without NTS-KE.
+// The runner warns at start, and its clock source and HEALTH say ntp.
+func TestE2ENTSPlainNTPIgnoresHostClock(t *testing.T) {
+	bin := runnerBinary(t, "aws-debug")
+	if out, err := runnerCmd(bin, "-nts-selftest").CombinedOutput(); err != nil {
+		t.Fatalf("%s has no NTS library (build it with the tag nts): %v %s", bin, err, out)
+	}
+	dir := t.TempDir()
+	raw0, start := rawNow(), time.Now()
+	serverClock := func() time.Time { return start.Add(time.Duration(rawNow() - raw0)) }
+	var servers []string
+	var ntps []*ntstest.NTPServer
+	for _, name := range []string{"a", "b", "c", "d"} {
+		ntp, err := ntstest.StartPlainNTP(ntstest.NTPOptions{Clock: serverClock})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(ntp.Close)
+		ntps = append(ntps, ntp)
+		// No NTS-KE server: the KE address is a closed port, and the clock
+		// must not need it.
+		servers = append(servers, name+"=nts-"+name+".test@127.0.0.1:1#"+ntp.Addr)
+	}
+	// The debug build reads a roots file even for plain NTP.
+	_, ca, err := ntstest.CertificatePEM("unused.test", start.Add(-time.Hour), start.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootsFile := filepath.Join(dir, "nts-roots.pem")
+	if err := os.WriteFile(rootsFile, ca, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	coarse, _, caFile := coarseServers(t, dir)
+	t.Setenv("SSL_CERT_FILE", caFile)
+	t.Setenv("RUNNER_NTS_TEST_SERVERS", strings.Join(servers, ","))
+	t.Setenv("RUNNER_NTS_TEST_ROOTS", rootsFile)
+	t.Setenv("RUNNER_NTS_CLOCK", "")
+	t.Setenv("RUNNER_CLOCK_PROTOCOL", "")
+
+	c := newChain(t)
+	addr := fmt.Sprintf("tcp:127.0.0.1:%d", freePort(t))
+	r := newRunnerOn(t, bin, "runner-ntp-host-clock", c, addr, "-platform-opt", "clock_offset=1h",
+		"-nts-clock", "-clock-protocol", "ntp", "-nts-coarse-urls", strings.Join(coarse, ","), "-nts-wait", "30s")
+	r.start()
+	cl := client(t, addr)
+	h := waitReady(t, cl)
+	if h.ClockSource != "ntp(a,b,c,d)" || !h.ClockTrusted {
+		t.Fatalf("clock %s trusted=%v", h.ClockSource, h.ClockTrusted)
+	}
+	if off := int64(h.ClockUnix) - serverClock().Unix(); off < -2 || off > 2 {
+		t.Fatalf("runner clock %d s off the NTP servers' clock; the host clock is 1 h ahead", off)
+	}
+	if h.NTS == nil || h.NTS.Protocol != "ntp" || !h.NTS.Quorum {
+		t.Fatalf("health nts %+v", h.NTS)
+	}
+	for i, o := range h.NTS.Operators {
+		if o.KEOK != 0 || o.KEFail != 0 || ntps[i].Requests.Load() < 1 {
+			t.Fatalf("operator %+v: want plain queries and no NTS-KE", o)
+		}
+	}
+	logs := r.logText()
+	if !strings.Contains(logs, "level=WARN msg=\"plain NTP: the host can forge every answer") || !strings.Contains(logs, "protocol=ntp") {
+		t.Fatalf("runner log lacks the plain NTP warning:\n%s", logs)
+	}
+	t.Logf("host clock +1h, runner clock %s within 2 s of the servers, health protocol %s", h.ClockSource, h.NTS.Protocol)
 }
 
 // coarseServers starts three HTTPS-date servers on loopback and returns
@@ -308,14 +376,16 @@ func coarseServers(t *testing.T, dir string) (urls, routes []string, caFile stri
 	return urls, routes, caFile
 }
 
-// TestE2ENTSRelayInterop is the same path against the four public NTS
-// operators: NTS-KE over TCP (where the enclave has vsock-proxy) and NTP
+// TestE2ENTSRelayInterop is the same path against the catalog's default NTS
+// servers: NTS-KE over TCP (where the enclave has vsock-proxy) and NTP
 // through udprelay with its default allowlist. Network: TCP 4460 and UDP
-// 123 and 4123 to those four only (the coarse check uses loopback servers).
-// Runs only with NTS_INTEROP=1, for NTS_INTEROP_FOR (default 150s).
+// 123 and 4123 to those servers only (the coarse check uses loopback
+// servers). The default set has 6, all active on the 60 s schedule, each
+// asked once per 60 s. Runs only with NTS_INTEROP=1, for
+// NTS_INTEROP_FOR (default 150s).
 func TestE2ENTSRelayInterop(t *testing.T) {
 	if os.Getenv("NTS_INTEROP") != "1" {
-		t.Skip("set NTS_INTEROP=1 to run (network: the four public NTS operators)")
+		t.Skip("set NTS_INTEROP=1 to run (network: the default public NTS servers)")
 	}
 	run := 150 * time.Second
 	if s := os.Getenv("NTS_INTEROP_FOR"); s != "" {
@@ -327,7 +397,8 @@ func TestE2ENTSRelayInterop(t *testing.T) {
 	bin := runnerBinary(t, "aws-debug")
 	dir := t.TempDir()
 	coarse, routes, caFile := coarseServers(t, dir)
-	for _, h := range []string{"time.cloudflare.com", "nts.netnod.se", "ptbtime1.ptb.de", "ntppool1.time.nl"} {
+	for _, h := range []string{"time.cloudflare.com", "nts.netnod.se", "ptbtime1.ptb.de", "bevtime1.metrologie.at",
+		"nts.meta.com", "ntp1.wiktel.com"} {
 		routes = append(routes, h+":4460=tcp:"+h+":4460")
 	}
 	relayPort := freePort(t)
@@ -336,7 +407,8 @@ func TestE2ENTSRelayInterop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The relay with its defaults: the four names, Netnod's block, 123 and 4123.
+	// The relay with its defaults: the default servers' NTP names, Netnod's
+	// block, 123 and 4123.
 	relay := exec.Command(udprelayBinary(t), "-listen", fmt.Sprintf("tcp:127.0.0.1:%d", relayPort), "-debug", "-stats-every", "30s")
 	relay.Stdout, relay.Stderr = lf, lf
 	if err := relay.Start(); err != nil {
@@ -389,7 +461,39 @@ func TestE2ENTSRelayInterop(t *testing.T) {
 			last = l
 		}
 	}
-	if !strings.Contains(last, "members=cloudflare,netnod,ptb,time.nl ") {
-		t.Fatalf("the last status line lacks the quorum of all four: %s", last)
+	_, after, _ := strings.Cut(last, "members=")
+	members, _, _ := strings.Cut(after, " ")
+	known := map[string]bool{"cloudflare": true, "netnod": true, "ptb": true, "bev": true, "meta": true, "wiktel": true}
+	n := 0
+	for _, m := range strings.Split(members, ",") {
+		if !known[m] {
+			t.Fatalf("quorum member %q is not a default server: %s", m, last)
+		}
+		n++
+	}
+	if n < 3 {
+		t.Fatalf("the last status line has a quorum of %d, want at least 3: %s", n, last)
+	}
+	// The start round asks every server, so each default server must have
+	// answered at least once (peers: operator:samples/queries/keN,...), and
+	// the relay must have refused no destination: a missing NTP name would
+	// otherwise hide behind the 4 of 6 the quorum needs.
+	_, peers, _ := strings.Cut(last, `peers="`)
+	peers, _, _ = strings.Cut(peers, `"`)
+	answered := map[string]bool{}
+	for _, p := range strings.Fields(peers) {
+		op, rest, ok := strings.Cut(p, ":")
+		samples, _, _ := strings.Cut(rest, "/")
+		if s, err := strconv.Atoi(samples); ok && err == nil && s > 0 {
+			answered[op] = true
+		}
+	}
+	for op := range known {
+		if !answered[op] {
+			t.Errorf("default server %s never answered: %s", op, last)
+		}
+	}
+	if b, err := os.ReadFile(relayLog); err != nil || strings.Contains(string(b), "destination refused") {
+		t.Errorf("the relay refused a destination (or its log is unreadable: %v)", err)
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/trusted-time/nts/ntstest"
+	"github.com/lidofinance/tee-signer/trusted-time/ntscatalog"
 )
 
 func TestVersion(t *testing.T) {
@@ -383,19 +384,71 @@ func TestQuorumBinding(t *testing.T) {
 		{Operator: "netnod", Offset: 110 * ms, Bound: 15 * time.Millisecond},
 		{Operator: "ptb", Offset: 102 * ms, Bound: 2 * time.Millisecond},
 	}
-	q, err := Quorum(in, 0)
+	q, err := Quorum(in, 0, 1)
 	if err != nil || q.Lo != 95*ms || q.Hi != 110*ms || q.Offset != 102_500_000 || q.Bound != 7_500_000 {
 		t.Fatalf("%+v %v", q, err)
 	}
 	in[2].Operator = "netnod"
-	if _, err := Quorum(in, 0); err == nil || !strings.Contains(err.Error(), "two servers of one operator") {
+	if _, err := Quorum(in, 0, 1); err == nil || !strings.Contains(err.Error(), "two servers of one operator") {
 		t.Fatalf("duplicate: %v", err)
 	}
-	if _, err := Quorum(in[:2], 0); err == nil {
+	if _, err := Quorum(in[:2], 0, 1); err == nil {
 		t.Fatal("two servers accepted")
 	}
 	if d := Drift(32 * time.Second); d != 16*time.Millisecond {
 		t.Fatalf("Drift(32 s) = %v", d)
+	}
+}
+
+// Two of five servers wrong in different directions: F = 1 gives no time,
+// the majority rule (F = 2) gives the interval the other three share.
+func TestQuorumBindingMajority(t *testing.T) {
+	const ms = int64(time.Millisecond)
+	in := []Interval{
+		{Operator: "a", Offset: 100 * ms, Bound: 5 * time.Millisecond},
+		{Operator: "b", Offset: 101 * ms, Bound: 5 * time.Millisecond},
+		{Operator: "c", Offset: 99 * ms, Bound: 5 * time.Millisecond},
+		{Operator: "d", Offset: -900 * ms, Bound: time.Millisecond},
+		{Operator: "e", Offset: 900 * ms, Bound: time.Millisecond},
+	}
+	for n, want := range map[int]int{0: 0, 1: 0, 3: 1, 4: 1, 5: 2, 6: 2, 7: 3, 12: 5} {
+		if got := MajorityWrong(n); got != want {
+			t.Fatalf("MajorityWrong(%d) = %d, want %d", n, got, want)
+		}
+	}
+	for n, want := range map[int]int{0: 0, 2: 0, 3: 0, 4: 1, 5: 2, 6: 2, 7: 3, 12: 5} {
+		if got := QuorumWrong(n); got != want {
+			t.Fatalf("QuorumWrong(%d) = %d, want %d", n, got, want)
+		}
+	}
+	// Two agree, one does not: the majority rule takes it, the clock's does not.
+	two := []Interval{in[0], in[1], in[3]}
+	if _, err := Quorum(two, 0, MajorityWrong(3)); err != nil {
+		t.Fatalf("2 of 3: %v", err)
+	}
+	if _, err := Quorum(two, 0, QuorumWrong(3)); err == nil {
+		t.Fatal("QuorumWrong took 2 of 3")
+	}
+	if _, err := Quorum(in, 0, 1); err == nil || !strings.Contains(err.Error(), "disagree") {
+		t.Fatalf("F = 1: %v", err)
+	}
+	q, err := Quorum(in, 0, MajorityWrong(len(in)))
+	if err != nil || q.Lo != 96*ms || q.Hi != 104*ms {
+		t.Fatalf("majority: %+v %v", q, err)
+	}
+	if _, err := Quorum(in[:4], 0, 2); err == nil {
+		t.Fatal("F = 2 with 4 servers accepted")
+	}
+	if _, err := Quorum(in, 0, -1); err == nil {
+		t.Fatal("negative max wrong accepted")
+	}
+}
+
+// The catalog keeps copies of the quorum's limits (it builds without cgo);
+// they must be the core's.
+func TestCatalogLimitsMatchTheCore(t *testing.T) {
+	if ntscatalog.MaxLabel != MaxOperatorLen || ntscatalog.MaxServers != MaxServers {
+		t.Fatalf("catalog MaxLabel %d MaxServers %d, core %d and %d", ntscatalog.MaxLabel, ntscatalog.MaxServers, MaxOperatorLen, MaxServers)
 	}
 }
 
@@ -407,6 +460,30 @@ func TestPinnedRoots(t *testing.T) {
 	}
 	if _, err := RootPool([]string{"other.pem"}); err == nil {
 		t.Fatal("unpinned root accepted")
+	}
+	// Every root the catalog names, for its entries and their alt hosts,
+	// is pinned and loads, and every pinned file is used.
+	used := map[string]bool{}
+	for _, e := range ntscatalog.Builtin.NTS {
+		sets := [][]string{e.Roots}
+		for _, a := range e.Alt {
+			if len(a.Roots) > 0 {
+				sets = append(sets, a.Roots)
+			}
+		}
+		for _, roots := range sets {
+			if _, err := RootPool(roots); err != nil {
+				t.Errorf("%s: %v", e.ID, err)
+			}
+			for _, r := range roots {
+				used[r] = true
+			}
+		}
+	}
+	for f := range rootSHA256 {
+		if !used[f] {
+			t.Errorf("pinned root %s is named by no catalog entry", f)
+		}
 	}
 }
 

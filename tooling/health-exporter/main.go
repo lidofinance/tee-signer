@@ -314,6 +314,12 @@ func render(w io.Writer, rs []*runner) {
 			counter("tee_signer_hash_cache_misses_total", "Signing root cache misses since start.", one, float64(s.HashCacheMisses))
 		}
 		if n := h.NTS; n != nil {
+			protocol := n.Protocol
+			if protocol == "" {
+				protocol = "nts" // older runners run NTS only
+			}
+			gauge("tee_signer_nts_protocol_info", "Protocol of the network clock; always 1. ntp is plain NTP: the host can forge every answer, so the tee_signer_nts_* bounds hold only against an honest host.",
+				with("protocol", protocol), 1)
 			gauge("tee_signer_nts_quorum", "1 if the NTS clock answers.", one, b2f(n.Quorum))
 			gauge("tee_signer_nts_bound_seconds", "Current NTS error bound.", one, n.BoundNowMS/1000)
 			gauge("tee_signer_nts_max_bound_seconds", "Error bound above which the runner signs nothing.", one, n.MaxBoundMS/1000)

@@ -244,7 +244,9 @@ type NTPOptions struct {
 	Clock func() time.Time
 }
 
-// NTPServer is an NTS-protected NTP server on 127.0.0.1.
+// NTPServer is an NTS-protected NTP server on 127.0.0.1. It also answers
+// plain NTP requests (RFC 5905, the 48-octet header alone) with the same
+// options, as public NTS servers do.
 type NTPServer struct {
 	Addr     string
 	Port     uint16
@@ -266,6 +268,10 @@ func StartNTP(store *Store, opts NTPOptions) (*NTPServer, error) {
 	go s.serve()
 	return s, nil
 }
+
+// StartPlainNTP starts a server that answers plain NTP only: it has no
+// cookie store, so it drops NTS requests.
+func StartPlainNTP(opts NTPOptions) (*NTPServer, error) { return StartNTP(nil, opts) }
 
 // Set changes the options for the next requests.
 func (s *NTPServer) Set(opts NTPOptions) {
@@ -360,17 +366,28 @@ func (s *NTPServer) serve() {
 	}
 }
 
+// isPlain says whether p is a plain NTP client request (RFC 5905 section
+// 7.3): the 48-octet header alone, version 4, mode 3.
+func isPlain(p []byte) bool { return len(p) == 48 && p[0]&0x3f == 4<<3|3 }
+
 func (s *NTPServer) answer(p []byte, recv time.Time, o NTPOptions) []byte {
+	plainReq := isPlain(p)
 	r := parse(p)
-	if r == nil || r.uid == nil || r.cookie == nil || o.Drop {
+	if plainReq {
+		r = &request{transmit: p[40:48], poll: p[2]}
+	}
+	if r == nil || o.Drop || (!plainReq && (r.uid == nil || r.cookie == nil || s.store == nil)) {
 		return nil
 	}
-	k, ok := s.store.lookup(r.cookie)
 	kiss := o.Kiss
-	if !ok {
-		kiss = "NTSN" // RFC 8915 section 5.7: unknown cookie
-	} else if _, ok := Open(k.c2s, p[:r.authStart], r.nonce, r.ct); !ok {
-		kiss = "NTSN"
+	var k keyPair
+	if !plainReq {
+		var ok bool
+		if k, ok = s.store.lookup(r.cookie); !ok {
+			kiss = "NTSN" // RFC 8915 section 5.7: unknown cookie
+		} else if _, ok := Open(k.c2s, p[:r.authStart], r.nonce, r.ct); !ok {
+			kiss = "NTSN"
+		}
 	}
 	if o.Hold > 0 {
 		time.Sleep(o.Hold)
@@ -401,9 +418,16 @@ func (s *NTPServer) answer(p []byte, recv time.Time, o NTPOptions) []byte {
 		h[1] = 0
 		copy(h[12:], kiss)
 		binary.BigEndian.PutUint64(h[40:], ntpTime(recv))
+		if plainReq {
+			return h
+		}
 		return append(h, field(0x0104, r.uid)...)
 	}
 	binary.BigEndian.PutUint64(h[40:], ntpTime(o.now().Add(o.Offset)))
+	if plainReq {
+		// No cookies and no authenticator: BadAuth has nothing to change.
+		return h
+	}
 	out := append(h, field(0x0104, r.uid)...)
 	var plain []byte
 	for i := 0; i < 1+r.placeholders; i++ {

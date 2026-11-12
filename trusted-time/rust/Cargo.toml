@@ -10,7 +10,7 @@ default-members = [".", "core"]
 resolver = "3"
 
 [workspace.package]
-version = "0.0.3"
+version = "0.0.5"
 edition = "2024"
 rust-version = "1.94"
 publish = false

@@ -58,6 +58,11 @@ func TestRenderHelpTypeOnce(t *testing.T) {
 		t.Errorf("validators block:\n%s", out)
 	}
 	wantLine(t, out, `tee_signer_nts_members{runner="a"} 2`)
+	// An older runner sends no protocol: NTS.
+	wantLine(t, out, `tee_signer_nts_protocol_info{runner="a",protocol="nts"} 1`)
+	h2 := *h
+	h2.NTS = &backend.ClockNTS{Protocol: "ntp"}
+	wantLine(t, rendered(&runner{name: "c", h: &h2}), `tee_signer_nts_protocol_info{runner="c",protocol="ntp"} 1`)
 	wantLine(t, out, `tee_signer_not_ready_reason{runner="a",reason="mark_log_lost"} 0`)
 }
 

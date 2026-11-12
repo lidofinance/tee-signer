@@ -1,14 +1,15 @@
-//! The time from several servers that one of them may get wrong.
+//! The time from several servers that some of them may get wrong.
 //!
 //! Each measurement gives an interval [offset - bound, offset + bound] that
-//! holds the real offset if the server is honest. With at most [`F`] servers
+//! holds the real offset if the server is honest. With at most F servers
 //! wrong, at least `n - F` intervals hold the real offset, so the real offset
 //! is a point that at least `n - F` intervals cover. This module returns
 //! [lo, hi], the smallest and the largest such point, or no answer if there
 //! is none (more than F servers are wrong). The result is the midpoint, with
 //! half the width as its bound. This is the intersection algorithm of
-//! RFC 5905 section 11.2.1 (Marzullo) with a fixed F and without the
-//! clustering that follows it.
+//! RFC 5905 section 11.2.1 (Marzullo) without the clustering that follows
+//! it. [`combine`] uses F = [`F`]; [`combine_with`] takes F from the caller,
+//! up to the majority rule [`majority_wrong`].
 //!
 //! The plan for this step named a simpler rule: lo = the (F+1)-th smallest
 //! lower end, hi = the (F+1)-th largest upper end, fail if lo > hi. With
@@ -25,7 +26,7 @@ use core::fmt;
 
 use crate::sample::drift_ns;
 
-/// How many servers may be wrong.
+/// How many servers may be wrong in [`combine`].
 pub const F: usize = 1;
 /// The fewest measurements the quorum needs: 2F + 1.
 pub const MIN_SERVERS: usize = 2 * F + 1;
@@ -65,7 +66,8 @@ pub struct QuorumResult {
 /// Why there is no combined time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QuorumError {
-    /// Fewer than [`MIN_SERVERS`] measurements.
+    /// Fewer than [`MIN_SERVERS`] measurements, or fewer than
+    /// 2 x max_wrong + 1.
     TooFew,
     /// More than [`MAX_SERVERS`] measurements.
     TooMany,
@@ -77,7 +79,8 @@ pub enum QuorumError {
     BadBound,
     /// A measurement taken after `now`.
     FromTheFuture,
-    /// lo > hi: more than F servers are wrong.
+    /// No point that `n - max_wrong` intervals cover: more than max_wrong
+    /// servers are wrong.
     NoAgreement,
     /// The numbers do not fit in i64 nanoseconds.
     OutOfRange,
@@ -86,13 +89,13 @@ pub enum QuorumError {
 impl fmt::Display for QuorumError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TooFew => write!(f, "fewer than {MIN_SERVERS} servers"),
+            Self::TooFew => f.write_str("too few servers: at least 3, and over twice the number allowed wrong"),
             Self::TooMany => write!(f, "more than {MAX_SERVERS} servers"),
             Self::BadOperator => write!(f, "operator label empty or over {MAX_OPERATOR_LEN} octets"),
             Self::DuplicateOperator => f.write_str("two servers of one operator"),
             Self::BadBound => f.write_str("negative error bound"),
             Self::FromTheFuture => f.write_str("measurement after the quorum time"),
-            Self::NoAgreement => write!(f, "the servers disagree: more than {F} wrong"),
+            Self::NoAgreement => f.write_str("the servers disagree: too many wrong"),
             Self::OutOfRange => f.write_str("offset out of range"),
         }
     }
@@ -104,11 +107,27 @@ impl core::error::Error for QuorumError {}
 /// Each bound first grows by rho times its age, `now - t4`
 /// ([`crate::sample::RHO_PPM`]), so all intervals hold at `now`.
 pub fn combine(samples: &[Interval<'_>], now_local_ns: i64) -> Result<QuorumResult, QuorumError> {
-    if samples.len() < MIN_SERVERS {
-        return Err(QuorumError::TooFew);
-    }
+    combine_with(samples, now_local_ns, F)
+}
+
+/// The most wrong servers a majority rule allows among `n`: (n - 1) / 2,
+/// rounded down. 2 of 3, 3 of 4, 3 of 5, 4 of 6, 4 of 7 must agree. The
+/// NTS clock passes less for 3 intervals, so that 3 of 3 must agree
+/// (`nts.QuorumWrong` in Go).
+pub const fn majority_wrong(n: usize) -> usize {
+    n.saturating_sub(1) / 2
+}
+
+/// [`combine`] with `max_wrong` in place of [`F`]: at least
+/// `n - max_wrong` intervals must cover the result. Sound only while
+/// `n >= 2 * max_wrong + 1`, so fewer samples than that are refused as
+/// [`QuorumError::TooFew`], as are fewer than [`MIN_SERVERS`].
+pub fn combine_with(samples: &[Interval<'_>], now_local_ns: i64, max_wrong: usize) -> Result<QuorumResult, QuorumError> {
     if samples.len() > MAX_SERVERS {
         return Err(QuorumError::TooMany);
+    }
+    if samples.len() < MIN_SERVERS || max_wrong > majority_wrong(samples.len()) {
+        return Err(QuorumError::TooFew);
     }
     // Ends of the intervals as (point, 0 for a lower end or 1 for an upper
     // end). Sorted, a lower end comes before an upper end at the same point,
@@ -137,7 +156,7 @@ pub fn combine(samples: &[Interval<'_>], now_local_ns: i64) -> Result<QuorumResu
     // Walk left to right counting the intervals that cover the point. lo is
     // the first lower end where the count reaches n - F, hi the last upper
     // end where it is still n - F before that interval closes.
-    let need = samples.len() - F;
+    let need = samples.len() - max_wrong;
     let (mut count, mut lo, mut hi) = (0usize, None, None);
     for &(x, kind) in &ends {
         if kind == 0 {
@@ -283,6 +302,130 @@ mod tests {
         let many: Vec<_> = names.iter().map(|n| iv(n, 0, 1)).collect();
         assert_eq!(combine(&many, 0), Err(QuorumError::TooMany));
         assert!(combine(&many[..16], 0).is_ok());
+    }
+
+    const NAMES: [&str; 16] = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p"];
+
+    #[test]
+    fn majority_counts() {
+        let want = [(3, 1), (4, 1), (5, 2), (6, 2), (7, 3), (8, 3), (12, 5)];
+        for (n, f) in want {
+            assert_eq!(majority_wrong(n), f, "n {n}");
+        }
+        assert_eq!(majority_wrong(0), 0);
+    }
+
+    #[test]
+    fn combine_with_refuses_unsound_max_wrong() {
+        let v: Vec<_> = NAMES[..5].iter().map(|n| iv(n, 0, 1)).collect();
+        assert_eq!(combine_with(&v[..3], 0, 2), Err(QuorumError::TooFew));
+        assert_eq!(combine_with(&v[..4], 0, 2), Err(QuorumError::TooFew));
+        assert!(combine_with(&v, 0, 2).is_ok());
+        assert_eq!(combine_with(&v, 0, 3), Err(QuorumError::TooFew));
+        assert_eq!(combine_with(&v, 0, usize::MAX), Err(QuorumError::TooFew));
+        // max_wrong 0: all must agree, still at least 3.
+        assert!(combine_with(&v[..3], 0, 0).is_ok());
+        assert_eq!(combine_with(&v[..2], 0, 0), Err(QuorumError::TooFew));
+    }
+
+    /// n honest servers around 100 ms (each holds 100), plus wrong ones.
+    fn honest_plus(n_honest: usize, wrong: &[(i64, i64)]) -> Vec<Interval<'static>> {
+        let mut v: Vec<_> = (0..n_honest).map(|i| iv(NAMES[i], 100 + (i as i64 % 3) - 1, 4)).collect();
+        for (k, &(o, b)) in wrong.iter().enumerate() {
+            v.push(iv(NAMES[n_honest + k], o, b));
+        }
+        v
+    }
+
+    fn holds_truth(r: &QuorumResult) -> bool {
+        (r.offset_ns - 100 * MS).abs() <= r.bound_ns
+    }
+
+    /// Two wrong servers, far apart from each other and from the truth: the
+    /// majority rule answers from n = 5 on, F = 1 never does.
+    #[test]
+    fn majority_two_wrong_n3_to_12() {
+        for n in 3..=12 {
+            let v = honest_plus(n - 2, &[(-900, 1), (900, 1)]);
+            let maj = combine_with(&v, 0, majority_wrong(n));
+            if n >= 5 {
+                assert!(holds_truth(&maj.unwrap()), "n {n}: {maj:?}");
+            } else {
+                assert_eq!(maj, Err(QuorumError::NoAgreement), "n {n}");
+            }
+            assert_eq!(combine(&v, 0), Err(QuorumError::NoAgreement), "F=1, n {n}");
+        }
+    }
+
+    /// Two wrong servers that agree with each other (colluding): they cannot
+    /// move the result while they are a minority.
+    #[test]
+    fn majority_two_colluders_n5_to_12() {
+        for n in 5..=12 {
+            for at in [-1000, 90, 107, 112, 1000] {
+                let v = honest_plus(n - 2, &[(at, 1), (at, 1)]);
+                let r = combine_with(&v, 0, majority_wrong(n)).unwrap();
+                assert!(holds_truth(&r), "n {n} at {at}: {r:?}");
+            }
+        }
+    }
+
+    /// A server smearing a leap second (moving 0 to 1000 ms) plus one more
+    /// wrong server: with the majority rule the answer holds the truth at
+    /// every point of the smear, from n = 5 on.
+    #[test]
+    fn majority_smear_plus_one_wrong() {
+        for n in 5..=12 {
+            for smear in (0..=1000).step_by(25) {
+                let v = honest_plus(n - 2, &[(100 + smear, 2), (-500, 1)]);
+                let r = combine_with(&v, 0, majority_wrong(n)).unwrap();
+                assert!(holds_truth(&r), "n {n} smear {smear}: {r:?}");
+            }
+        }
+    }
+
+    /// The definition check of random_intervals_match_the_definition, with
+    /// the majority rule and n from 3 to 12.
+    #[test]
+    fn random_intervals_majority_match_the_definition() {
+        let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut next = |m: u64| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            (x % m) as i64
+        };
+        let (mut agreed, mut refused) = (0, 0);
+        for _ in 0..20_000 {
+            let n = 3 + next(10) as usize;
+            let f = majority_wrong(n);
+            let v: Vec<_> = (0..n).map(|i| iv(NAMES[i], next(200), next(60))).collect();
+            let cover = |p: i64| v.iter().filter(|s| s.offset_ns - s.bound_ns <= p && p <= s.offset_ns + s.bound_ns).count();
+            let mut points: Vec<i64> = v.iter().flat_map(|s| [s.offset_ns - s.bound_ns, s.offset_ns + s.bound_ns]).collect();
+            points.sort_unstable();
+            let covered: Vec<i64> = points.iter().copied().filter(|&p| cover(p) >= n - f).collect();
+            match combine_with(&v, 0, f) {
+                Ok(r) => {
+                    agreed += 1;
+                    assert_eq!(covered.first(), Some(&r.lo_ns));
+                    assert_eq!(covered.last(), Some(&r.hi_ns));
+                    // The result lies within the (f+1)-th lowest lower end and
+                    // the (f+1)-th highest upper end, and its bound holds it.
+                    let mut lows: Vec<i64> = v.iter().map(|s| s.offset_ns - s.bound_ns).collect();
+                    let mut highs: Vec<i64> = v.iter().map(|s| s.offset_ns + s.bound_ns).collect();
+                    lows.sort_unstable();
+                    highs.sort_unstable_by(|a, b| b.cmp(a));
+                    assert!(lows[f] <= r.lo_ns && r.hi_ns <= highs[f]);
+                    assert!(r.offset_ns - r.bound_ns <= r.lo_ns && r.hi_ns <= r.offset_ns + r.bound_ns);
+                }
+                Err(e) => {
+                    refused += 1;
+                    assert_eq!(e, QuorumError::NoAgreement);
+                    assert!(covered.is_empty());
+                }
+            }
+        }
+        assert!(agreed > 1000 && refused > 1000, "{agreed} {refused}");
     }
 
     #[test]

@@ -95,7 +95,10 @@ fn header_matches_the_library() {
         "int snts_ntp_request(snts_assoc *a, const uint8_t *random, size_t random_len, uint8_t *out, size_t cap,\n                     size_t *out_len, snts_request **req);",
         "void snts_request_free(snts_request *r);",
         "int snts_ntp_verify(snts_assoc *a, snts_request *r, const uint8_t *packet, size_t packet_len,\n                    int64_t t1_local_ns, int64_t t4_local_ns, int64_t pivot_unix_ns, snts_sample *out,\n                    uint32_t *reason);",
-        "int snts_quorum(const snts_interval *intervals, size_t n, int64_t now_local_ns, snts_quorum_result *out,\n                uint32_t *reason);",
+        "int snts_plain_request(const uint8_t *random, size_t random_len, uint8_t *out, size_t cap, size_t *out_len,\n                       snts_plain **req);",
+        "void snts_plain_free(snts_plain *r);",
+        "int snts_plain_verify(snts_plain *r, const uint8_t *packet, size_t packet_len, int64_t t1_local_ns,\n                      int64_t t4_local_ns, int64_t pivot_unix_ns, snts_sample *out, uint32_t *reason);",
+        "int snts_quorum(const snts_interval *intervals, size_t n, size_t max_wrong, int64_t now_local_ns,\n                snts_quorum_result *out, uint32_t *reason);",
     ] {
         assert!(h.contains(decl), "header lacks: {decl}");
     }
@@ -117,6 +120,8 @@ fn header_matches_the_library() {
     }
     for (name, v) in [
         ("SNTS_REQUEST_RANDOM_LEN", REQUEST_RANDOM_LEN as i64),
+        ("SNTS_PLAIN_RANDOM_LEN", PLAIN_RANDOM_LEN as i64),
+        ("SNTS_PLAIN_REQUEST_LEN", signer_nts_core::ntp::HEADER_LEN as i64),
         ("SNTS_KEY_LEN", signer_nts_core::keys::KEY_LEN as i64),
         ("SNTS_MAX_OPERATOR_LEN", signer_nts_core::quorum::MAX_OPERATOR_LEN as i64),
         ("SNTS_MAX_SERVERS", signer_nts_core::quorum::MAX_SERVERS as i64),
@@ -371,6 +376,104 @@ fn null_pointers() {
     }
 }
 
+/// Builds a plain request; returns the packet and the handle.
+fn plain_request(seed: u8) -> (Vec<u8>, *mut SntsPlain) {
+    let rnd: [u8; PLAIN_RANDOM_LEN] = core::array::from_fn(|i| seed.wrapping_add(i as u8).wrapping_mul(31));
+    let mut buf = [0u8; 64];
+    let (mut n, mut r) = (0usize, null_mut());
+    let rc = unsafe { snts_plain_request(rnd.as_ptr(), rnd.len(), buf.as_mut_ptr(), buf.len(), &mut n, &mut r) };
+    assert_eq!((rc, n), (OK, 48));
+    assert!(!r.is_null());
+    (buf[..n].to_vec(), r)
+}
+
+/// A plain server response to `packet`: the header of `reply` with the
+/// request's transmit timestamp as origin, and nothing after it.
+fn plain_response(packet: &[u8], reply: &ServerReply) -> Vec<u8> {
+    common::header(reply, packet[40..48].try_into().unwrap())
+}
+
+fn plain_verify(r: *mut SntsPlain, p: &[u8], t1: i64, t4: i64) -> (c_int, Sample, u32) {
+    let mut s = Sample::default();
+    let mut why = 0;
+    let rc = unsafe { snts_plain_verify(r, p.as_ptr(), p.len(), t1, t4, PIVOT, &mut s, &mut why) };
+    (rc, s, why)
+}
+
+#[test]
+fn plain_round_trip_with_measurement() {
+    let (packet, r) = plain_request(1);
+    assert_eq!(packet[0], 0x23);
+    assert!(packet[1..40].iter().all(|&b| b == 0));
+    let reply = ServerReply::default();
+    let resp = plain_response(&packet, &reply);
+    let (rc, s, why) = plain_verify(r, &resp, 5 * MS, 25 * MS);
+    assert_eq!(rc, OK, "{}", cstr(snts_reason_text(rc, why)));
+    assert_eq!((s.stratum, s.precision, s.leap, s.cookies_received, s.cookies_held), (2, -20, 0, 0, 0));
+    let t2 = signer_nts_core::time::NtpTimestamp::from_bits(reply.receive).to_unix_nanos(PIVOT).unwrap();
+    let t3 = signer_nts_core::time::NtpTimestamp::from_bits(reply.transmit).to_unix_nanos(PIVOT).unwrap();
+    assert_eq!(s.delay_ns, 20 * MS - (t3 - t2));
+    assert!((s.offset_ns - ((t2 - 5 * MS) + (t3 - 25 * MS)) / 2).abs() <= 1);
+    assert!(s.bound_ns >= s.delay_ns / 2 + s.root_delay_ns / 2 + s.root_dispersion_ns);
+    // The same response again is a replay.
+    let (rc, _, why) = plain_verify(r, &resp, 5 * MS, 25 * MS);
+    assert_eq!((rc, why >> 16), (E_NTP, 4));
+    unsafe { snts_plain_free(r) };
+}
+
+#[test]
+fn plain_refusals_kiss_and_sample_checks() {
+    let (packet, r) = plain_request(2);
+    // Each refusal leaves the request open for the next response.
+    let mut wrong_origin = plain_response(&packet, &ServerReply::default());
+    wrong_origin[24] ^= 1;
+    let (rc, _, why) = plain_verify(r, &wrong_origin, 0, MS);
+    assert_eq!((rc, why), (E_NTP, 9 << 16));
+    assert_eq!(cstr(snts_reason_text(rc, why)), "origin timestamp is not our transmit timestamp");
+    let (rc, _, why) = plain_verify(r, &plain_response(&packet, &ServerReply { stratum: 16, ..ServerReply::default() }), 0, MS);
+    assert_eq!((rc, why), (E_NTP, (22 << 16) | 16));
+    let (rc, _, why) = plain_verify(r, &plain_response(&packet, &ServerReply { leap: 3, ..ServerReply::default() }), 0, MS);
+    assert_eq!((rc, why), (E_NTP, 21 << 16));
+    // A zero reference timestamp fails the measurement.
+    let (rc, _, why) = plain_verify(r, &plain_response(&packet, &ServerReply { reference: 0, ..ServerReply::default() }), 0, MS);
+    assert_eq!((rc, why), (E_SAMPLE, 5 << 16));
+    unsafe { snts_plain_free(r) };
+
+    let (packet, r) = plain_request(3);
+    let kiss = ServerReply { leap: 3, stratum: 0, reference_id: *b"DENY", ..ServerReply::default() };
+    let mut resp = plain_response(&packet, &kiss);
+    resp.extend_from_slice(&[0xff; 12]);
+    let (rc, s, _) = plain_verify(r, &resp, 0, MS);
+    assert_eq!((rc, &s.kiss, s.cookies_held), (KISS, b"DENY", 0));
+    unsafe { snts_plain_free(r) };
+}
+
+#[test]
+fn plain_arguments() {
+    let rnd = [7u8; PLAIN_RANDOM_LEN];
+    let mut buf = [0u8; 48];
+    let (mut n, mut r) = (0usize, null_mut());
+    unsafe {
+        assert_eq!(snts_plain_request(rnd.as_ptr(), 7, buf.as_mut_ptr(), 48, &mut n, &mut r), E_ARG);
+        assert_eq!(snts_plain_request(rnd.as_ptr(), 8, buf.as_mut_ptr(), 47, &mut n, &mut r), E_BUFFER);
+        assert_eq!((n, r), (48, null_mut()));
+        assert_eq!(snts_plain_request(null(), 8, buf.as_mut_ptr(), 48, &mut n, &mut r), E_NULL);
+        assert_eq!(snts_plain_request(rnd.as_ptr(), 8, buf.as_mut_ptr(), 48, &mut n, null_mut()), E_NULL);
+        assert_eq!(snts_plain_request(rnd.as_ptr(), 8, buf.as_mut_ptr(), 48, null_mut(), &mut r), E_NULL);
+        assert_eq!(snts_plain_request(rnd.as_ptr(), 8, buf.as_mut_ptr(), 48, &mut n, &mut r), OK);
+        assert_eq!(&buf[40..], &rnd);
+        let mut s = Sample::default();
+        let mut why = 0;
+        assert_eq!(snts_plain_verify(null_mut(), buf.as_ptr(), 48, 0, 1, PIVOT, &mut s, &mut why), E_NULL);
+        assert_eq!(snts_plain_verify(r, null(), 48, 0, 1, PIVOT, &mut s, &mut why), E_NULL);
+        assert_eq!(snts_plain_verify(r, buf.as_ptr(), 48, 0, 1, PIVOT, null_mut(), &mut why), E_NULL);
+        // Our own request is mode 3, not 4; the reason pointer may be null.
+        assert_eq!(snts_plain_verify(r, buf.as_ptr(), 48, 0, 1, PIVOT, &mut s, null_mut()), E_NTP);
+        snts_plain_free(r);
+        snts_plain_free(null_mut());
+    }
+}
+
 fn interval(op: &str, offset_ns: i64, bound_ns: i64) -> IntervalIn {
     let mut label = [0u8; 32];
     label[..op.len()].copy_from_slice(op.as_bytes());
@@ -382,21 +485,42 @@ fn quorum_through_c() {
     let ivs = [interval("cloudflare", 100 * MS, 10 * MS), interval("netnod", 110 * MS, 15 * MS), interval("ptb", 102 * MS, 2 * MS)];
     let mut q = QuorumOut::default();
     let mut why = 0;
-    assert_eq!(unsafe { snts_quorum(ivs.as_ptr(), 3, 0, &mut q, &mut why) }, OK);
+    assert_eq!(unsafe { snts_quorum(ivs.as_ptr(), 3, 1, 0, &mut q, &mut why) }, OK);
     assert_eq!((q.lo_ns, q.hi_ns, q.offset_ns, q.bound_ns), (95 * MS, 110 * MS, 102_500_000, 7_500_000));
     let dup = [ivs[0], ivs[1], ivs[0]];
-    assert_eq!(unsafe { snts_quorum(dup.as_ptr(), 3, 0, &mut q, &mut why) }, E_QUORUM);
+    assert_eq!(unsafe { snts_quorum(dup.as_ptr(), 3, 1, 0, &mut q, &mut why) }, E_QUORUM);
     assert_eq!(cstr(snts_reason_text(E_QUORUM, why)), "two servers of one operator");
-    assert_eq!(unsafe { snts_quorum(ivs.as_ptr(), 2, 0, &mut q, &mut why) }, E_QUORUM);
+    assert_eq!(unsafe { snts_quorum(ivs.as_ptr(), 2, 1, 0, &mut q, &mut why) }, E_QUORUM);
     assert_eq!(why, 1 << 16);
-    assert_eq!(unsafe { snts_quorum(ivs.as_ptr(), 17, 0, &mut q, &mut why) }, E_QUORUM);
+    assert_eq!(unsafe { snts_quorum(ivs.as_ptr(), 17, 1, 0, &mut q, &mut why) }, E_QUORUM);
     assert_eq!(why, 2 << 16);
     let mut bad = ivs;
     bad[2].operator_len = 33;
-    assert_eq!(unsafe { snts_quorum(bad.as_ptr(), 3, 0, &mut q, &mut why) }, E_QUORUM);
+    assert_eq!(unsafe { snts_quorum(bad.as_ptr(), 3, 1, 0, &mut q, &mut why) }, E_QUORUM);
     assert_eq!(why, 3 << 16);
-    assert_eq!(unsafe { snts_quorum(null(), 3, 0, &mut q, &mut why) }, E_NULL);
-    assert_eq!(unsafe { snts_quorum(ivs.as_ptr(), 3, 0, null_mut(), &mut why) }, E_NULL);
+    assert_eq!(unsafe { snts_quorum(null(), 3, 1, 0, &mut q, &mut why) }, E_NULL);
+    assert_eq!(unsafe { snts_quorum(ivs.as_ptr(), 3, 1, 0, null_mut(), &mut why) }, E_NULL);
+}
+
+#[test]
+fn quorum_through_c_majority() {
+    // Three agree near 100 ms, two are far off and disagree with each other.
+    let ivs = [
+        interval("a", 100 * MS, 5 * MS),
+        interval("b", 101 * MS, 5 * MS),
+        interval("c", 99 * MS, 5 * MS),
+        interval("d", -900 * MS, MS),
+        interval("e", 900 * MS, MS),
+    ];
+    let mut q = QuorumOut::default();
+    let mut why = 0;
+    assert_eq!(unsafe { snts_quorum(ivs.as_ptr(), 5, 1, 0, &mut q, &mut why) }, E_QUORUM);
+    assert_eq!(why, 7 << 16);
+    assert_eq!(unsafe { snts_quorum(ivs.as_ptr(), 5, 2, 0, &mut q, &mut why) }, OK);
+    assert_eq!((q.lo_ns, q.hi_ns), (96 * MS, 104 * MS));
+    // max_wrong 2 needs at least 5 intervals.
+    assert_eq!(unsafe { snts_quorum(ivs.as_ptr(), 4, 2, 0, &mut q, &mut why) }, E_QUORUM);
+    assert_eq!(why, 1 << 16);
 }
 
 // Go calls C from many threads. Each association is used by one thread at a
