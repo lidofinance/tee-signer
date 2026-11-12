@@ -302,21 +302,30 @@ func (s *Server) ProveSealingKey(keys []string) error {
 	if len(bad) > 0 {
 		return fmt.Errorf("the stored sealing key opens %d of %d stored shares; %s did not open. "+
 			"A sealing key that does not open every stored share may be one that someone outside the TEE planted, "+
-			"so this runner seals nothing under it. %s", len(keys)-len(bad), len(keys), strings.Join(bad, ", "), proveFix(s.Platform.Name))
+			"so this runner seals nothing under it. %s", len(keys)-len(bad), len(keys), strings.Join(bad, ", "), proveFix(s.Platform.Name, s.SetupHash))
 	}
 	s.SealingKeyUnproven = false
 	return nil
 }
 
 // proveFix says what the operator can do after ProveSealingKey refused.
-func proveFix(platformName string) string {
+func proveFix(platformName string, setupHash [32]byte) string {
 	if platformName == "gcp" {
 		// The store is the container's file system and the state copy is
 		// encrypted and restored as a whole commit: nobody outside the VM
-		// can edit either. A new setup has a new setup_hash, so a new
-		// state copy path and a new sealing AAD.
-		return "The store and its state copy cannot be edited from outside the VM: " +
-			"start over with a new setup and import the shares again"
+		// can edit either. A share that is not this setup's came in a
+		// commit the runner did not write (platform-gcp/deploy/README.md),
+		// and the restore takes the newest commit that opens, so deleting
+		// the commits above the runner's own restores its state. A new
+		// setup has a new setup_hash, so a new state copy path and a new
+		// sealing AAD.
+		return fmt.Sprintf("Each name is shares/ and a validator public key; check it against this signer's imports. "+
+			"The store and its state copy cannot be edited from outside the VM, but the copy's newest commits can be deleted. "+
+			"A share that is not a share of this setup came in a state copy commit this runner did not write: "+
+			"compare the version of this start's \"state copy: newest commit\" log line with the last \"state copy: wrote\" version in the runner's earlier logs. "+
+			"If the newest is higher and the bucket takes deletes (no retention lock in force), delete the commits above that version "+
+			"under state/%x/<signer>/ in the encrypted_state_store bucket and restart: the runner restores its own last commit. "+
+			"Under a retention lock, or when the share is one of this setup's, start over with a new setup and import the shares again", setupHash)
 	}
 	return "Remove what does not belong under shares/ on the host, or, if no share opens, " +
 		"move the sealing blob aside too, and restart"

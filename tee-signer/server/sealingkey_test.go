@@ -131,3 +131,33 @@ func TestProveSealingKeyRefusalPerPlatform(t *testing.T) {
 		}
 	}
 }
+
+// rv-b9e.8: on GCP the refusal names the share that did not open by its
+// store name and the state copy path its commits live under, and says how
+// to get out without a new setup when the share is not one of this setup's:
+// drop the state copy commits this runner did not write.
+func TestProveSealingKeyRefusalNamesTheObjectOnGCP(t *testing.T) {
+	store := &shareStore{m: map[string][]byte{}}
+	setup, logID := [32]byte{0xa}, [32]byte{1}
+	name := "shares/" + strings.Repeat("aa", 48)
+	store.Put(name, []byte("anything"))
+	listed, _ := ListShares(store)
+	s := withSealer(t, shareServer(t, store, setup, logID), 0x42)
+	s.Platform.Name = "gcp"
+	err := s.ProveSealingKey(listed)
+	if err == nil {
+		t.Fatal("a share that does not open passed")
+	}
+	for _, want := range []string{
+		name,
+		"state/0a" + strings.Repeat("00", 31) + "/",
+		"not a share of this setup",
+		"state copy: wrote",
+		"state copy: newest commit",
+		"new setup",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q: %v", want, err)
+		}
+	}
+}
