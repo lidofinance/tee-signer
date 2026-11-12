@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -195,6 +197,22 @@ func TestDialRefusalIsNoDenial(t *testing.T) {
 			t.Errorf("%s: %+v, want an error of the dial with the stage and a cut detail", o.Signer, o)
 		}
 	}
+}
+
+// A call on the wire ends by the connection deadline, an error that wraps
+// os.ErrDeadlineExceeded: a timeout, as the pool metric counts it.
+func TestWarnConnectionDeadlineIsTimeout(t *testing.T) {
+	k := splitKey(t, 2, 3)
+	fakes := cluster([]*testKey{k}, 3)
+	setRoot(fakes)
+	s, logs := newLoggedSigners(t, fakes)
+	stalled := fmt.Errorf("remote: SIGN: %w", &net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded})
+	fakes[0].set(func(f *fakeRunner) { f.err = stalled })
+	if _, err := signWith(t, s, k.pk); err != nil {
+		t.Fatal(err)
+	}
+	waitLog(t, logs, "signer=signer-1 type=ATTESTATION pubkey="+fmt.Sprintf("%#x", k.pk[:4])+
+		` result=error reason=timeout detail="remote: SIGN: read tcp: i/o timeout"`)
 }
 
 // All signers sign: no warning.

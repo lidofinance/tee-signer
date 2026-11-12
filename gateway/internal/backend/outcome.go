@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -151,7 +152,7 @@ func outcomeOf(name string, err error) Outcome {
 	switch {
 	case errors.Is(err, errBadPartial):
 		o.Reason = "bad_partial"
-	case errors.Is(err, context.DeadlineExceeded):
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, os.ErrDeadlineExceeded):
 		o.Reason = "timeout"
 	case errors.Is(err, context.Canceled):
 		o.Reason = "canceled"
