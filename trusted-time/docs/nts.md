@@ -197,7 +197,13 @@ numbers and struct sizes; a Go test checks cgo's struct sizes against it.
   the coarse check (NTS time outside -30 s to +31 s of it is refused: 30 s
   plus the Date header's 1 s resolution; a refusal stops `Now` until a
   quorum passes, as a drift refusal does), the certificate clock of NTS-KE
-  (no reading: NTS-KE is refused) and the NTP era. Its `Anchored` clock ages on `CLOCK_MONOTONIC_RAW` too.
+  (no reading: NTS-KE is refused). Its `Anchored` clock ages on `CLOCK_MONOTONIC_RAW` too.
+  The NTP era does not come from it: answers are read around the era
+  pivot, the source constant 2026-01-01T00:00:00Z (`eraAnchor`) or the
+  highest time served if later. A quorum before the anchor or more than 20
+  years after the pivot is refused before the coarse and drift checks, so
+  it leaves the drift history alone. A coarse clock 2^32 s off would
+  otherwise move every honest answer one era, about 136 years.
   The NTS time has no fallback to it. The runner's config updates read it
   while the NTS clock has no quorum (`NTS.CoarseNow`; signer-protocol
   protocol.md, CONFIG_UPDATE, step 3), and so does the start fallback to
