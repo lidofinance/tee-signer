@@ -525,14 +525,16 @@ func TestE2E(t *testing.T) {
 	t.Logf("runner-a restarted at epoch %d, share reloaded from sealed storage", e2)
 	// Repeat roots live in RAM: after the restart a validator client retry
 	// of the last vote and block is refused, as is another root at that
-	// target.
-	if _, err := viaTCP.Sign(ctx, c.req(pk, &blkAgain)); !backend.StatusOf(err).IsSlashing() {
-		t.Fatalf("exact repeat of the block after restart: want a slashing refusal, got %v", err)
+	// target. This runner keeps no marks (no mark log, no persisted marks),
+	// so only the restart floor refuses them: floor refusals.
+	_, err = viaTCP.Sign(ctx, c.req(pk, &blkAgain))
+	if r := wantRefused(t, err, backend.StatusFloor); !strings.Contains(r.Detail, "(restart floor)") {
+		t.Fatalf("exact repeat of the block after restart: want a restart floor refusal, got %v", r)
 	}
 	for _, root := range []byte{0xa1, 0xa2} {
 		_, err = viaTCP.Sign(ctx, c.req(pk, att(e1-1, e1, root)))
-		if r := wantRefused(t, err, backend.StatusSlashSource); !strings.Contains(r.Detail, "restart floor") {
-			t.Fatalf("root %x at target %d after restart: want a floor refusal, got %v", root, e1, r)
+		if r := wantRefused(t, err, backend.StatusFloor); !strings.Contains(r.Detail, "(restart floor)") {
+			t.Fatalf("root %x at target %d after restart: want a restart floor refusal, got %v", root, e1, r)
 		}
 	}
 	t.Logf("after restart: the last attestation and block again, and another root at target %d, refused by the floor", e1)
@@ -541,12 +543,9 @@ func TestE2E(t *testing.T) {
 	// the clock horizon until epoch E+1, and below the floor after.)
 	for _, m := range []*backend.AttestationData{att(e2, e2+1, 0xa3), att(e2+1, e2+1, 0xa3)} {
 		_, err = viaTCP.Sign(ctx, c.req(pk, m))
-		var rr *backend.RefusedError
-		if !errors.As(err, &rr) || !rr.Code.IsSlashing() || !strings.Contains(rr.Detail, "restart floor") {
-			t.Fatalf("target %d after restart: want a floor refusal, got %v", m.Target.Epoch, err)
-		}
-		if _, err := fmt.Sscanf(rr.Detail[strings.Index(rr.Detail, "floor epoch"):], "floor epoch %d", &floor); err != nil {
-			t.Fatal(err)
+		rr := wantRefused(t, err, backend.StatusFloor)
+		if _, err := fmt.Sscanf(rr.Detail, "floor epoch %d (restart floor): ", &floor); err != nil {
+			t.Fatalf("target %d after restart: %v: %v", m.Target.Epoch, rr, err)
 		}
 		t.Logf("after restart: source=%d target=%d refused: %v", m.Source.Epoch, m.Target.Epoch, rr)
 	}

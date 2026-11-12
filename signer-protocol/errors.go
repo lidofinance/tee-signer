@@ -54,6 +54,16 @@ const (
 	StatusPlatform       Status = 1005 // sealing, storage or attestation hook failed
 	StatusForbidden      Status = 1006 // the client certificate's role does not allow this message
 	StatusRateLimited    Status = 1007 // an attest-only certificate had its fresh attestations of the minute
+	// A restart, import or source floor alone refuses the message: no mark
+	// the runner read at start or holds of the key refuses it. detail
+	// starts with "floor epoch N". Not a slashing code: the key's history
+	// is unknown, not in conflict.
+	StatusFloor Status = 1008
+	// A floor refuses the message, and a mark read at start (the device
+	// mark, one for all keys, or the key's persisted commit-ahead mark)
+	// refuses it too, but nothing from this run proves a conflict of the
+	// key's own. detail starts with "floor epoch N", as for StatusFloor.
+	StatusFloorUnproven Status = 1009
 )
 
 var statusNames = map[Status]string{
@@ -74,7 +84,8 @@ var statusNames = map[Status]string{
 	StatusPolicyTargetSlot:  "SC_ERR_POLICY_TARGET_SLOT",
 	StatusBadRequest:        "BAD_REQUEST", StatusUnsupported: "UNSUPPORTED", StatusInternal: "INTERNAL",
 	StatusDomainMismatch: "DOMAIN_MISMATCH", StatusNotReady: "NOT_READY", StatusPlatform: "PLATFORM",
-	StatusForbidden: "FORBIDDEN", StatusRateLimited: "RATE_LIMITED",
+	StatusForbidden: "FORBIDDEN", StatusRateLimited: "RATE_LIMITED", StatusFloor: "FLOOR",
+	StatusFloorUnproven: "FLOOR_UNPROVEN",
 }
 
 func (s Status) String() string {

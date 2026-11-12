@@ -877,13 +877,15 @@ func TestE2EAzureRunnerMarkLogLostState(t *testing.T) {
 	t.Logf("another Key Vault key: refused to start")
 }
 
-var floorRE = regexp.MustCompile(`below the source floor epoch (\d+)`)
+var floorRE = regexp.MustCompile(`^floor epoch (\d+) \(source floor\)`)
 
 // sourceFloorRefusal returns the floor epoch if err refuses a vote whose
-// source is below a validator's source floor.
+// source is below a validator's source floor and the key's own history
+// does not refuse it: FLOOR, or FLOOR_UNPROVEN when the mark log's mark
+// does. Never a slashing code.
 func sourceFloorRefusal(err error) (uint64, bool) {
 	var r *backend.RefusedError
-	if !errors.As(err, &r) || r.Code != backend.StatusSlashSource {
+	if !errors.As(err, &r) || r.Code != backend.StatusFloor && r.Code != backend.StatusFloorUnproven {
 		return 0, false
 	}
 	m := floorRE.FindStringSubmatch(r.Detail)

@@ -31,10 +31,11 @@ func lateImport(t *testing.T, e *tgtEnv) (pka, pkb backend.Pubkey, f0, late uint
 	return pka, pkb, f0, late
 }
 
+// wantSlashing fails unless err is a slashing or a floor refusal.
 func wantSlashing(t *testing.T, err error, what string) {
 	t.Helper()
-	if err == nil || !backend.StatusOf(err).IsSlashing() {
-		t.Errorf("%s: %v, want a slashing refusal", what, err)
+	if st := backend.StatusOf(err); err == nil || !st.IsSlashing() && st != backend.StatusFloor && st != backend.StatusFloorUnproven {
+		t.Errorf("%s: %v, want a slashing or floor refusal", what, err)
 	}
 }
 
@@ -130,7 +131,7 @@ func TestLateImportWithHistoryGetsABlockFloor(t *testing.T) {
 	}
 	err := e.signMsg(pkb, &backend.BeaconBlockHeader{Slot: (f0+5)*8 + 3, ProposerIndex: 6, BodyRoot: backend.Root{0xb6}})
 	var r *backend.RefusedError
-	if !errors.As(err, &r) || !strings.Contains(r.Detail, "import floor epoch") {
+	if !errors.As(err, &r) || r.Code != backend.StatusFloor || !strings.Contains(r.Detail, "(import floor)") {
 		t.Errorf("refusal detail %v, want the import floor named", err)
 	}
 }

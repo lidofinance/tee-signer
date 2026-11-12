@@ -312,22 +312,26 @@ func TestCombineAllDown(t *testing.T) {
 	}
 }
 
-// Two signers refuse on slashing protection: a denial (HTTP 412), as soon
-// as the threshold is out of reach.
+// Two signers refuse on slashing protection or its floor: a denial (HTTP
+// 412), as soon as the threshold is out of reach.
 func TestCombineDenied(t *testing.T) {
-	k := splitKey(t, 2, 3)
-	fakes := cluster([]*testKey{k}, 3)
-	setRoot(fakes)
-	s := newTestSigners(t, fakes)
-	hang := make(chan struct{})
-	defer close(hang)
-	fakes[0].set(func(f *fakeRunner) { f.err = proto.Refused(proto.StatusSlashTarget, "double vote") })
-	fakes[1].set(func(f *fakeRunner) { f.err = proto.Refused(proto.StatusSlashTarget, "double vote") })
-	fakes[2].set(func(f *fakeRunner) { f.hang = hang })
-	_, err := signWith(t, s, k.pk)
-	var denied *DeniedError
-	if !errors.As(err, &denied) || !strings.Contains(err.Error(), "SC_ERR_SLASH_TARGET") {
-		t.Fatalf("want a denial, got %v", err)
+	for _, code := range []proto.Status{proto.StatusSlashTarget, proto.StatusFloor, proto.StatusFloorUnproven} {
+		t.Run(code.String(), func(t *testing.T) {
+			k := splitKey(t, 2, 3)
+			fakes := cluster([]*testKey{k}, 3)
+			setRoot(fakes)
+			s := newTestSigners(t, fakes)
+			hang := make(chan struct{})
+			defer close(hang)
+			fakes[0].set(func(f *fakeRunner) { f.err = proto.Refused(code, "refused") })
+			fakes[1].set(func(f *fakeRunner) { f.err = proto.Refused(code, "refused") })
+			fakes[2].set(func(f *fakeRunner) { f.hang = hang })
+			_, err := signWith(t, s, k.pk)
+			var denied *DeniedError
+			if !errors.As(err, &denied) || !strings.Contains(err.Error(), code.String()) {
+				t.Fatalf("want a denial, got %v", err)
+			}
+		})
 	}
 }
 

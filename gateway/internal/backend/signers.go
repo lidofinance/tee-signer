@@ -526,16 +526,16 @@ func notEnough(g group, good int, denied, failed []string) error {
 }
 
 // isDenial reports whether a signer refused the request on its rules:
-// slashing protection, policy, domain, or a request it would not take.
-// Anything else (not ready, a platform failure, an unknown key, the
-// connection) is a failure.
+// slashing protection or its floor, policy, domain, or a request it would
+// not take. Anything else (not ready, a platform failure, an unknown key,
+// the connection) is a failure.
 func isDenial(err error) bool {
 	var r *proto.RefusedError
 	if !errors.As(err, &r) {
 		return false
 	}
 	switch c := r.Code; {
-	case c.IsSlashing(), c.IsPolicy(), c == proto.StatusPolicyBuilderAuth:
+	case c.IsSlashing(), c.IsPolicy(), c == proto.StatusPolicyBuilderAuth, c == proto.StatusFloor, c == proto.StatusFloorUnproven:
 		return true
 	case c == proto.StatusArg, c == proto.StatusDecode, c == proto.StatusBadRequest, c == proto.StatusUnsupported:
 		return true

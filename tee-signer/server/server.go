@@ -138,6 +138,10 @@ type Server struct {
 	// restart, which reads the raised mark.
 	blockedMu sync.Mutex
 	blocked   map[backend.Pubkey]bool
+	// voting counts each validator's votes in the core now; voted: one
+	// signed since its load (floorStatus). Under blockedMu.
+	voting map[backend.Pubkey]int
+	voted  map[backend.Pubkey]bool
 	// admitting holds the validators whose share addShareOf is adding now:
 	// one share per validator at a time (SSI-STORAGE-01). Each also holds a
 	// max_keys slot until its import ends (SIAC-01, checkSlots).
@@ -1027,18 +1031,44 @@ func (s *Server) identity() *backend.Identity {
 }
 
 func (s *Server) sign(req backend.SignRequest) (backend.Signature, error) {
+	a, isVote := req.Message.(*backend.AttestationData)
 	s.blockedMu.Lock()
 	blocked := s.blocked[req.Pubkey]
+	if isVote && !blocked {
+		if s.voting == nil {
+			s.voting, s.voted = map[backend.Pubkey]int{}, map[backend.Pubkey]bool{}
+		}
+		s.voting[req.Pubkey]++
+	}
 	s.blockedMu.Unlock()
 	if blocked {
 		return backend.Signature{}, backend.Refused(backend.StatusStorage, "the import's bounds (interchange maxima or import floor) did not reach the core; restart the runner")
 	}
+	signed := false
+	if isVote {
+		defer func() {
+			s.blockedMu.Lock()
+			defer s.blockedMu.Unlock()
+			if s.voting[req.Pubkey]--; s.voting[req.Pubkey] == 0 {
+				delete(s.voting, req.Pubkey)
+			}
+			if signed {
+				s.voted[req.Pubkey] = true
+			}
+		}()
+	}
 	kind := req.Message.Kind().String()
-	if a, ok := req.Message.(*backend.AttestationData); ok && s.Hooks != nil {
+	if isVote && s.Hooks != nil {
 		if f, on := s.Hooks.SourceFloor(req.Pubkey); on && a.Source.Epoch < f {
-			err := backend.Refused(backend.StatusSlashSource,
-				"attestation source %d below the source floor epoch %d: no import carried this validator's vote history, and the mark log held no vote when this runner started on it or the share came in later", a.Source.Epoch, f)
-			s.Log.Info("refused", "kind", kind, "pubkey", req.Pubkey.String()[:18], "msg", describe(req.Message), "err", err)
+			// A vote the key's own history also refuses gets the code and
+			// detail the core gives a source refusal: no slashing refusal
+			// names a floor, so a client cannot take it for a floor one.
+			err := backend.Refused(backend.StatusSlashSource, "%s", kind)
+			if st, ok := s.floorStatus(req); ok {
+				err = backend.Refused(st,
+					"floor epoch %d (source floor): attestation source %d below it: no import carried this validator's vote history, and the mark log held no vote when this runner started on it or the share came in later", f, a.Source.Epoch)
+			}
+			s.Log.Info("refused", "kind", kind, "pubkey", req.Pubkey.String()[:18], "msg", describe(req.Message), "source_floor", f, "err", err)
 			return backend.Signature{}, err
 		}
 	}
@@ -1075,18 +1105,21 @@ func (s *Server) sign(req backend.SignRequest) (backend.Signature, error) {
 	}
 	if err != nil {
 		var r *backend.RefusedError
-		if errors.As(err, &r) && r.Code.IsSlashing() {
+		if errors.As(err, &r) && r.Code.IsSlashing() && s.Hooks != nil {
 			if f, ok := s.Hooks.Floor(req.Pubkey); ok && atOrBelowFloor(req.Message, f, s.Signer.Config().SlotsPerEpoch) {
-				kind := "restart"
-				if lf, ok := s.Hooks.LoadFloor(req.Pubkey); ok && lf == f {
-					kind = "import"
+				if st, ok := s.floorStatus(req); ok {
+					which := "restart"
+					if lf, ok := s.Hooks.LoadFloor(req.Pubkey); ok && lf == f {
+						which = "import"
+					}
+					err = backend.Refused(st, "floor epoch %d (%s floor): %s", f, which, r.Detail)
 				}
-				r.Detail += fmt.Sprintf(" (at or below %s floor epoch %d)", kind, f)
 			}
 		}
 		s.Log.Info("refused", "kind", kind, "pubkey", req.Pubkey.String()[:18], "msg", describe(req.Message), "err", err)
 		return sig, err
 	}
+	signed = true
 	if repeat {
 		s.Log.Info("signed (exact repeat, same signature)", "kind", kind, "pubkey", req.Pubkey.String()[:18], "msg", describe(req.Message))
 		return sig, nil
@@ -1098,6 +1131,55 @@ func (s *Server) sign(req backend.SignRequest) (backend.Signature, error) {
 	}
 	s.Log.Info("signed", "kind", kind, "pubkey", req.Pubkey.String()[:18], "msg", describe(req.Message))
 	return sig, nil
+}
+
+// floorStatus classifies req, refused at or below a floor; it never
+// changes whether req is refused. ok is false when evidence from this run
+// proves a conflict of the key's own: the interchange maxima of its import
+// (Hooks.Recorded), or for a vote any vote it signed since its load or has
+// in the core now. A key not loaded gets no floor status either. Else the
+// status is StatusFloorUnproven when a mark read at start refuses req (the
+// mark log's mark or the key's persisted mark, Hooks.Unproven), and
+// StatusFloor when none does.
+func (s *Server) floorStatus(req backend.SignRequest) (backend.Status, bool) {
+	if _, err := s.Signer.State(req.Pubkey); err != nil {
+		return 0, false
+	}
+	if v, ok := req.Message.(*backend.AttestationData); ok {
+		s.blockedMu.Lock()
+		busy := s.voted[req.Pubkey] || s.voting[req.Pubkey] > 1 // req counts once
+		s.blockedMu.Unlock()
+		if busy || v.Source.Epoch > v.Target.Epoch {
+			return 0, false
+		}
+	}
+	free, known := markFree(s.Hooks.Recorded(req.Pubkey), req.Message)
+	if !known || !free {
+		return 0, false
+	}
+	if mark, found := s.Hooks.Unproven(req.Pubkey); found {
+		if free, _ := markFree(mark, req.Message); !free {
+			return backend.StatusFloorUnproven, true
+		}
+	}
+	return backend.StatusFloor, true
+}
+
+// markFree reports whether mark lets m sign: m is above it. known is false
+// for a message kind a mark does not bound.
+func markFree(mark backend.Watermark, m backend.Message) (free, known bool) {
+	slotFree := func(slot uint64) bool { return !mark.HasBlock || slot > mark.BlockSlot }
+	switch v := m.(type) {
+	case *backend.AttestationData:
+		return !mark.HasAttestation || v.Source.Epoch >= mark.SourceEpoch && v.Target.Epoch > mark.TargetEpoch, true
+	case *backend.BeaconBlockHeader:
+		return slotFree(v.Slot), true
+	case *backend.PayloadAttestationData:
+		return slotFree(v.Slot), true
+	case *backend.PayloadEnvelope:
+		return slotFree(v.Payload.SlotNumber), true
+	}
+	return false, false
 }
 
 func atOrBelowFloor(m backend.Message, floor, slotsPerEpoch uint64) bool {
@@ -1403,6 +1485,9 @@ func (s *Server) sealRecord(rec shareRecord) ([]byte, error) {
 // the last slot of that epoch, and targets up to it.
 func (s *Server) loadShare(pk backend.Pubkey, secret *[32]byte, index uint64, interchange *backend.Watermark, floor uint64, how string) (backend.ValidatorKey, error) {
 	imp := interchange
+	if s.Hooks != nil && interchange != nil {
+		s.Hooks.NoteInterchange(pk, *interchange)
+	}
 	if floor != 0 {
 		fw := state.FloorWatermark(s.Signer.Config(), floor)
 		fw.SourceEpoch = 0

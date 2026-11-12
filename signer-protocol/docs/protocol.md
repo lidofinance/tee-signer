@@ -138,12 +138,75 @@ that; a client that needs to tell causes apart reads `detail`.
 | 1005 | `PLATFORM` | a sealing, store or attestation hook failed | maybe |
 | 1006 | `FORBIDDEN` | the client certificate's role does not allow this message (see "Client roles") | no |
 | 1007 | `RATE_LIMITED` | an attest-only client certificate had its fresh attestations of the minute (see "Client roles"); `detail` says how many seconds to wait | later |
+| 1008 | `FLOOR` | a floor refuses the message, and no mark the runner read at start or holds of the key refuses it (see "Floor refusals"); `detail` starts with `floor epoch N` | no; messages above epoch N sign |
+| 1009 | `FLOOR_UNPROVEN` | a floor refuses the message, a mark read at start (the mark log's mark, or the key's persisted mark) refuses it too, and nothing from this run proves a conflict of the key's own (see "Floor refusals"); `detail` starts with `floor epoch N` | no; messages above epoch N sign |
 
 `backend.Status.IsSlashing` covers 9 to 12 and 24; `IsPolicy` covers 13
-to 23, 25, 28 and 1003. Codes 26 and 27 are in neither (see "Open items").
+to 23, 25, 28 and 1003. Codes 26, 27, 1008 and 1009 are in neither (26
+and 27: see "Open items"; 1008 and 1009: see "Floor refusals").
 
-A refusal caused by the restart floor carries
-`(at or below restart floor epoch N)` in `detail`.
+### Floor refusals
+
+When a key loads (at start, or an import while the runner runs), the
+runner refuses its blocks, votes, PTC votes and envelopes at or below a
+floor epoch: the clock epoch then plus `max_sign_epochs_ahead_of_clock`
+plus 1. A key imported without vote history also gets a source floor: no
+vote with a lower source signs.
+
+The status of such a refusal says what the runner knows. It never changes
+whether the message is refused. Proof of a conflict comes from this run
+only: the interchange maxima of the key's import, and for a vote any vote
+the key signed since it loaded or has in the core now. The marks read at
+start prove no message. The mark log's mark is one mark for all keys,
+the highest any key signed or the runner covered. A persisted mark
+(`-persist-watermarks`) is the core's commit-ahead mark: it holds
+headroom above what the key signed, and any earlier floor.
+
+| Status | When | Client |
+| --- | --- | --- |
+| `FLOOR` (1008) | no mark read at start and nothing from this run refuses the message | skip the duty, sign from epoch N+1 |
+| `FLOOR_UNPROVEN` (1009) | a mark read at start refuses it (mark log, or persisted mark), nothing from this run does | skip the duty, sign from epoch N+1, alert the operator |
+| slashing code (9 to 12, 24) | evidence from this run refuses it: a conflict | halt |
+
+For `FLOOR` and `FLOOR_UNPROVEN`, `detail` is `floor epoch N (W floor): `
+and the reason, with N the floor epoch and W `restart`, `import` or
+`source`. For the source floor, votes sign once the chain justifies epoch
+N. A slashing refusal has the core's code and `detail`, the message kind
+such as `attestation`, at or below the floor as above it. No slashing
+refusal names a floor.
+
+A vote at or below the floor also gets a slashing code when another vote
+of the same key is in the core at that moment, for example a vote and its
+retry sent together: the runner then refuses against the vote in flight,
+and neither is signed. Through the gateway both answers are 412.
+
+`FLOOR_UNPROVEN` is common right after a restart: the interchange maxima
+of an import are not kept across a restart, the mark log holds no mark
+per key, and a persisted mark covers its headroom. A key's double vote of
+a vote it signed before the restart is then `FLOOR_UNPROVEN`, as are
+another key's vote for a target the mark log covers and, with persisted
+marks, an honest vote under the stored mark that the key never signed.
+
+Before 1008, a refusal at or below the floor had a slashing code, and
+`detail` ended with `(at or below restart floor epoch N)` or
+`(at or below import floor epoch N)`, or for the source floor read
+`attestation source S below the source floor epoch N: ...`. That text is
+gone. A client that read it to tell a floor refusal from a conflict must
+handle 1008 and 1009 instead. A slashing code at or below the floor is
+now a plain slashing refusal: the client handles it as any other, and
+halts.
+
+A runner with no history across a restart reports all its refusals at or
+below the restart floor as `FLOOR`, a re-sent double vote of a vote
+signed before the restart included. The runner still refuses it. Such
+runners: the dev platform without a mark log or persisted marks, a runner
+started without a setup with `-mark-store none`, and one whose mark log
+was lost and set up again.
+
+A client that knows only the codes before 1008 sees an unknown code. The
+gateway answers `FLOOR` and `FLOOR_UNPROVEN` with HTTP 412, as a slashing
+refusal. Update the gateway with or before the runners: a gateway from
+before these codes answers them with HTTP 500.
 
 ## Messages
 
