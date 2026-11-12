@@ -74,6 +74,54 @@ const (
 	ntsRefreshLimit = 2 * ntsExchangeTimeout
 )
 
+// eraAnchorUnix is 2026-01-01T00:00:00Z. An NTP timestamp holds seconds
+// modulo 2^32 (about 136 years), so reading one needs a time within 68
+// years of it to pick the era (the pivot). The pivot is this anchor, or the
+// highest time the clock has served if later (eraPivot), and the clock
+// serves no time before the anchor. It is a constant in the source on
+// purpose: it must not come from the build host, the host the runner runs
+// on or the coarse clock, which the host can set; a coarse clock 2^32 s off
+// would otherwise move every honest answer one era (rv-d3u.4). It only has
+// to be within 68 years of real time, and it is part of the measured image.
+const eraAnchorUnix = 1767225600
+
+// eraAnchor is eraAnchorUnix as a time.
+var eraAnchor = time.Unix(eraAnchorUnix, 0).UTC()
+
+// eraWindow: a quorum time more than this after the era pivot is refused.
+// 20 years of 365.25 days; well inside the 68 years the pivot covers.
+const eraWindow = 20 * 8766 * time.Hour
+
+// eraPivot is the time NTP timestamps are read around: the highest time
+// served (by Now, or the quorum in force at its forming), never below
+// eraAnchor. It never comes from the coarse clock.
+func (n *NTS) eraPivot() time.Time {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	p := eraAnchor
+	if n.highest.After(p) {
+		p = n.highest
+	}
+	if r := n.result; r != nil {
+		if t := time.Unix(0, r.at+r.offset); t.After(p) {
+			p = t
+		}
+	}
+	return p
+}
+
+// eraRefusal says why quorum time t is outside the sanity window around
+// pivot, or "" when it is inside.
+func eraRefusal(t, pivot time.Time) string {
+	switch {
+	case t.Before(eraAnchor):
+		return fmt.Sprintf("quorum time %s is before the era anchor %s", t.UTC().Format(time.RFC3339Nano), eraAnchor.Format(time.RFC3339))
+	case t.Sub(pivot) > eraWindow:
+		return fmt.Sprintf("quorum time %s is more than %v after the era pivot %s", t.UTC().Format(time.RFC3339Nano), eraWindow, pivot.UTC().Format(time.RFC3339Nano))
+	}
+	return ""
+}
+
 // NTSServer is one NTS server and the operator who runs it.
 type NTSServer struct {
 	Host     string
@@ -951,6 +999,7 @@ func (n *NTS) Refresh(ctx context.Context) error {
 	}
 	var wg sync.WaitGroup
 	now := coarseLocal
+	pivot := n.eraPivot()
 	for _, p := range n.peers {
 		n.reEnablePeer(p, now)
 		if p.disabled != "" || now < p.nextPoll {
@@ -959,7 +1008,7 @@ func (n *NTS) Refresh(ctx context.Context) error {
 		wg.Add(1)
 		go func(p *ntsPeer) {
 			defer wg.Done()
-			n.poll(ctx, p, coarse, now)
+			n.poll(ctx, p, pivot, now)
 		}(p)
 	}
 	wg.Wait()
@@ -1006,6 +1055,7 @@ func (n *NTS) refreshShifts(ctx context.Context) error {
 		n.setErr(err)
 		return err
 	}
+	pivot := n.eraPivot()
 	// All rounds share one deadline, so the tick ends within
 	// ntsRefreshLimit and the samples that join its quorum (joinAge) are
 	// still under MaxAge when the next quorum forms. A round cut short loses
@@ -1018,7 +1068,7 @@ func (n *NTS) refreshShifts(ctx context.Context) error {
 	// the next contact with that operator is still NTSShiftMinGap after it.
 	tick := int64(n.interval() / 4)
 	after := func(at int64) int { return max(1, int((at-coarseLocal+tick-1)/tick)) }
-	lost := n.askAll(ctx, coarse, n.shifts.plan(coarseLocal, n.askable(coarseLocal)), coarseLocal)
+	lost := n.askAll(ctx, pivot, n.shifts.plan(coarseLocal, n.askable(coarseLocal)), coarseLocal)
 	// Past the deadline the later rounds would mark contacts, use the
 	// fallback cap and back off NTS-KE without sending anything.
 	if ctx.Err() != nil {
@@ -1038,10 +1088,10 @@ func (n *NTS) refreshShifts(ctx context.Context) error {
 			fallbacks = append(fallbacks, ntsAsk{op, roleFallback})
 		}
 	}
-	n.askAll(ctx, coarse, fallbacks, at)
+	n.askAll(ctx, pivot, fallbacks, at)
 	if ctx.Err() == nil && n.fresh() < NTSShiftBurstBelow {
 		at := n.local()
-		n.askAll(ctx, coarse, n.shifts.burst(after(at), n.askable(at)), at)
+		n.askAll(ctx, pivot, n.shifts.burst(after(at), n.askable(at)), at)
 	}
 	return n.combineShifts(coarse, coarseLocal)
 }
@@ -1080,7 +1130,7 @@ type ntsLost struct {
 
 // askAll polls asks in parallel, sent at local time at, and returns those
 // that got no sample. A server stopped by DENY or RSTR counts as lost.
-func (n *NTS) askAll(ctx context.Context, coarse time.Time, asks []ntsAsk, at int64) []ntsLost {
+func (n *NTS) askAll(ctx context.Context, pivot time.Time, asks []ntsAsk, at int64) []ntsLost {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var lost []ntsLost
@@ -1098,7 +1148,7 @@ func (n *NTS) askAll(ctx context.Context, coarse time.Time, asks []ntsAsk, at in
 			if retry {
 				gap = NTSShiftStartRetry
 			}
-			ok := p.disabled == "" && n.waitGap(ctx, p, at, gap, retry) && n.poll(ctx, p, coarse, at)
+			ok := p.disabled == "" && n.waitGap(ctx, p, at, gap, retry) && n.poll(ctx, p, pivot, at)
 			if a.role == roleFallback && p.stats.KEOK+p.stats.KEFail != ke {
 				n.shifts.fallbackKE(a.op)
 			}
@@ -1189,9 +1239,10 @@ func (n *NTS) certTime() time.Time {
 }
 
 // poll runs NTS-KE if needed, then one query, and says whether a sample
-// came. at is the local time it starts (for testQuery). Only this peer's fields are written, and Refresh runs one poll per
-// peer at a time.
-func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time, at int64) bool {
+// came. pivot picks the NTP era of the answer (eraPivot). at is the local
+// time it starts (for testQuery). Only this peer's fields are written, and
+// Refresh runs one poll per peer at a time.
+func (n *NTS) poll(ctx context.Context, p *ntsPeer, pivot time.Time, at int64) bool {
 	var s nts.Sample
 	var err error
 	if n.testQuery != nil {
@@ -1210,9 +1261,9 @@ func (n *NTS) poll(ctx context.Context, p *ntsPeer, coarse time.Time, at int64) 
 		timeout = cmpOr(n.queryTimeout, timeout)
 		qctx, cancel := context.WithTimeout(ctx, timeout)
 		if n.plain() {
-			s, err = nts.QueryPlain(qctx, p.ntpAddr, coarse, n.Dial)
+			s, err = nts.QueryPlain(qctx, p.ntpAddr, pivot, n.Dial)
 		} else {
-			s, err = p.assoc.Query(qctx, p.ntpAddr, coarse, n.Dial)
+			s, err = p.assoc.Query(qctx, p.ntpAddr, pivot, n.Dial)
 		}
 		cancel()
 		p.stats.Queries++
@@ -1438,7 +1489,7 @@ func (n *NTS) record(p *ntsPeer, s nts.Sample, err error) bool {
 }
 
 // combine forms the quorum of the fresh samples and checks it against the
-// coarse time.
+// sanity window around the era pivot and the coarse time.
 func (n *NTS) combine(coarse time.Time, coarseLocal int64) error {
 	now := n.local()
 	maxAge := n.sampleMaxAge()
@@ -1461,6 +1512,17 @@ func (n *NTS) combine(coarse time.Time, coarseLocal int64) error {
 		return err
 	}
 	t := time.Unix(0, now+q.Offset)
+	// The sanity window comes before the coarse and drift checks: a quorum
+	// outside it is not served and does not enter the drift history, so it
+	// cannot start a new history that later quorums must agree with.
+	if why := eraRefusal(t, n.eraPivot()); why != "" {
+		err = fmt.Errorf("clock: nts: %s; refused", why)
+		n.mu.Lock()
+		n.result, n.lastErr = nil, err
+		n.mu.Unlock()
+		n.logf(slog.LevelError, "nts: quorum outside the sanity window", "err", err)
+		return err
+	}
 	// The coarse reading was taken before the polls: move it forward by
 	// the local time since then.
 	diff := t.Sub(coarse.Add(time.Duration(now - coarseLocal)))
