@@ -20,8 +20,11 @@ func Verify(pubkey backend.Pubkey, signingRoot backend.Root, sig backend.Signatu
 	return C.sc_bls_verify(u8(pubkey[:]), u8(signingRoot[:]), 32, u8(sig[:])) == C.SC_OK
 }
 
-// PubkeyOf returns the public key of a secret scalar (big endian).
+// PubkeyOf returns the public key of a secret scalar (big endian). It
+// clears its own copy of secret, which cgo moves to the heap; the caller
+// clears the one it passed.
 func PubkeyOf(secret [32]byte) (backend.Pubkey, error) {
+	defer clear(secret[:])
 	var pk backend.Pubkey
 	if rc := C.sc_bls_pubkey(u8(secret[:]), u8(pk[:])); rc != C.SC_OK {
 		return pk, fmt.Errorf("core: %v", backend.Status(rc))

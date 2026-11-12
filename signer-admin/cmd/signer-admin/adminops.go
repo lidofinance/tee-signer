@@ -23,6 +23,7 @@ import (
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	adminapprover "github.com/lidofinance/tee-signer/signer-admin/approver"
 	admincluster "github.com/lidofinance/tee-signer/signer-admin/cluster"
+	"github.com/lidofinance/tee-signer/signer-admin/internal/lockdown"
 	remoteadmin "github.com/lidofinance/tee-signer/signer-admin/remote/admin"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-core/threshold"
@@ -31,17 +32,14 @@ import (
 
 // ---- probe ----
 
-// connectAdmin opens an attested connection to m for admin messages. A
-// connection file without setup_sha256 gets the setup built for m as its
-// pin, so probe and import work before pin and still check that the
-// signer runs that setup.
+// connectAdmin opens an attested connection to m for admin messages.
+// memberConn pins the setup built for m when the connection file has no
+// setup_sha256, so probe and import work before pin and still check that
+// the signer runs that setup.
 func connectAdmin(m *member, timeout time.Duration) (*runnerclient.Client, error) {
 	conn, err := memberConn(m)
 	if err != nil {
 		return nil, err
-	}
-	if conn.Attestation.SetupSHA256 == "" {
-		conn.Attestation.SetupSHA256 = fullHex(m.setupHash)
 	}
 	return conn.New(runnerclient.WithTimeout(timeout))
 }
@@ -558,19 +556,21 @@ func cmdImport(args []string, out io.Writer) error {
 	commPath := fs.String("commitments", "", "with -order: the split file of import-draft, for each validator's commitments")
 	skip := fs.Bool("skip-loaded", false, "leave out the shares whose validator the runner holds already")
 	icPath := fs.String("interchange", "", "EIP-3076 slashing protection file (format 5): each share goes in with its validator's maxima, so the runner refuses everything at or below them")
-	chainPath := fs.String("setup", "", "with -conn and -interchange: the runner's setup file, or the -config file of a runner without a setup; "+
-		"the runner must report its hash, and the file's genesis_validators_root must be the interchange file's (with -cluster it is the member's setup)")
+	chainPath := fs.String("setup", "", "with -conn: the runner's setup file, or with -interchange the -config file of a runner without a setup; "+
+		"required for any verifier but dev, and the image that cloud.json pins must be on its approved list; "+
+		"with -interchange the runner must report its hash, and the file's genesis_validators_root must be the interchange file's (with -cluster it is the member's setup)")
+	updatesPath := fs.String("updates", "", "with -setup: the folder of the cluster's signed updates, whose locked updates extend the approved image list")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	byCluster := *cf.path != "" || *target != ""
 	if fs.NArg() != 0 || *sharesPath == "" || byCluster == (*connPath != "") || byCluster && (*cf.path == "" || *target == "") ||
-		(*orderPath == "") != (*commPath == "") || *chainPath != "" && (byCluster || *icPath == "") {
-		return errors.New("usage: signer-admin import (-cluster cluster.json -signer NAME | -conn cloud.json [-setup FILE]) " +
+		(*orderPath == "") != (*commPath == "") || *chainPath != "" && byCluster || *updatesPath != "" && *chainPath == "" {
+		return errors.New("usage: signer-admin import (-cluster cluster.json -signer NAME | -conn cloud.json [-setup FILE [-updates DIR]]) " +
 			"[-order import.signed -commitments FILE] -shares FILE [-interchange FILE] [-skip-loaded]")
 	}
 	// The shares file is plaintext: no core dumps from here on.
-	if err := lockSecrets(os.Stderr); err != nil {
+	if err := lockdown.Secrets(os.Stderr); err != nil {
 		return err
 	}
 	var (
@@ -599,21 +599,47 @@ func cmdImport(args []string, out io.Writer) error {
 			return err
 		}
 		name = conn.Address
-		if *icPath != "" {
-			if *chainPath == "" {
-				return errors.New("-conn with -interchange needs -setup: the runner's setup file, or its -config file if it runs without a setup")
-			}
-			var s *setupwire.Setup
+		if *icPath != "" && *chainPath == "" {
+			return errors.New("-conn with -interchange needs -setup: the runner's setup file, or its -config file if it runs without a setup")
+		}
+		var s *setupwire.Setup
+		if *chainPath != "" {
 			if gvr, gvrOfHash, s, err = chainOf(*chainPath); err != nil {
 				return err
 			}
-			// -setup names the runner's platform, so the dev verifier is
-			// held to a dev platform setup as it is for a member.
-			if s != nil {
-				if err := devPlatformOnly(conn, s); err != nil {
-					return fmt.Errorf("%s: %w", *connPath, err)
+		}
+		// The setup holds the image pin and the trust anchor of cloud.json
+		// to the approvers' list, as for a member. Without one only the dev
+		// verifier goes on.
+		// The order binds the share to that setup: it must name the setup's
+		// hash and cluster (checked below), and a runner of another setup
+		// refuses it.
+		switch {
+		case s != nil:
+			if *updatesPath != "" {
+				if _, err := os.Stat(*updatesPath); err != nil {
+					return fmt.Errorf("-updates: %w", err)
 				}
 			}
+			v, err := admincluster.CheckConn(conn, s, *updatesPath, now())
+			if err != nil {
+				return fmt.Errorf("%s: %w", *connPath, err)
+			}
+			if conn.Attestation.Verifier != runnerclient.VerifierDev {
+				if *orderPath == "" {
+					return fmt.Errorf("%s: verifier %s: -conn needs -order, an import order for the -setup file, so the share goes to a runner of that setup only (refusing)",
+						*connPath, conn.Attestation.Verifier)
+				}
+				if *updatesPath == "" {
+					fprintf(out, "%s: checked against the setup's own list, locked version 0 (no -updates)\n", *connPath)
+				} else {
+					fprintf(out, "%s: the image pin is on the approved list of locked version %d\n", *connPath, v)
+				}
+			}
+			setup, clID = &gvrOfHash, s.ClusterID
+		case conn.Attestation.Verifier != runnerclient.VerifierDev:
+			return fmt.Errorf("%s: verifier %s: -conn needs -setup, the runner's setup file, to check the image that cloud.json pins against the approvers' list (refusing)",
+				*connPath, conn.Attestation.Verifier)
 		}
 		dial = func() (*runnerclient.Client, error) { return conn.New(runnerclient.WithTimeout(*cf.timeout)) }
 	}

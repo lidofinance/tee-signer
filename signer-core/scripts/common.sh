@@ -12,8 +12,8 @@ VECTORS_DIR="${VECTORS_DIR:-$CORE_DIR/vectors}"
 
 # supranational/blst (vendored, see check_blst)
 BLST_REPO="https://github.com/supranational/blst.git"
-BLST_TAG="v0.3.16"
-BLST_COMMIT="e7f90de551e8df682f3cc99067d204d8b90d27ad"
+BLST_TAG="v0.3.17"
+BLST_COMMIT="54e6e55674722fc2797ebb4bbb71b26d881eb4b8"
 BLST_DIR="$THIRD_PARTY/blst"
 
 # ethereum/consensus-spec-tests.

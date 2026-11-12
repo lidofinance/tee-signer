@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lidofinance/tee-signer/governance/runnerchain"
 	"github.com/lidofinance/tee-signer/governance/setuptext"
@@ -411,7 +412,10 @@ func TestDropRunningImageFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signed := craft(t, craftSpec{setup: fc.path("setups/s1.setup"), group: setupwire.GroupLocked, version: 1, locked: l, set: fc.keys[:3], signers: []int{0, 1}})
+	// The list gains an image, so the wait is at least the images time
+	// lock: 7 days on this build.
+	signed := craft(t, craftSpec{setup: fc.path("setups/s1.setup"), group: setupwire.GroupLocked, version: 1, locked: l, set: fc.keys[:3], signers: []int{0, 1},
+		activateAt: uint64(time.Now().Add(8 * 24 * time.Hour).Unix())})
 	seen := fc.runners["s2"].Seen(wireadmin.TypeConfigUpdate)
 	out = failTool(t, "push", "-cluster", fc.cluster, signed)
 	wantIn(t, out, "signer s2", "runs the nitro image", nitro)
@@ -423,6 +427,26 @@ func TestDropRunningImageFlow(t *testing.T) {
 	// The retirement step: the flag names the signer.
 	out = mustTool(t, "draft", "-cluster", fc.cluster, "-group", "locked", "-margin", "0s", "-drop-running-image", "s2", "-out", fc.path("retire.bin"), swap)
 	wantIn(t, out, "drops the image s2 runs", "wrote "+fc.path("retire.bin"))
+	// push refuses an activate_at earlier than now plus the wait: the
+	// runners would bring the update into force later than activate_at.
+	// The tool allows setupwire.PushSlack, not more.
+	s1, err := setupwire.DecodeSetup(mustRead(t, fc.path("setups/s1.setup")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := setupwire.DecodeUpdate(mustRead(t, signed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := runnerchain.Mainnet.Limits().Wait(&s1.Chain, &s1.Locked, &u.Body)
+	for _, at := range []int64{0, time.Now().Unix() + int64(w) - setupwire.PushSlack - 60} {
+		early := craft(t, craftSpec{setup: fc.path("setups/s1.setup"), group: setupwire.GroupLocked, version: 1, locked: l, set: fc.keys[:3], signers: []int{0, 1}, activateAt: uint64(at)})
+		seen := fc.runners["s2"].Seen(wireadmin.TypeConfigUpdate)
+		wantIn(t, failTool(t, "push", "-cluster", fc.cluster, "-drop-running-image", "s2", early), "is earlier than now plus the wait")
+		if fc.runners["s2"].Seen(wireadmin.TypeConfigUpdate) != seen {
+			t.Fatal("push sent an update with an early activate_at")
+		}
+	}
 	out = mustTool(t, "push", "-cluster", fc.cluster, "-drop-running-image", "s2", signed)
 	if count(out, `accepted: locked v1/[0-9a-f]{8} pending`) != 3 {
 		t.Fatalf("push with -drop-running-image:\n%s", out)

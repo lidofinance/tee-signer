@@ -20,19 +20,20 @@ jobs:
         os: [ ubuntu-latest, ubuntu-24.04-arm, windows-latest, windows-11-arm, macos-latest ]
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
 
     - name: Get date
       id: get-date
       run: echo "date=$(date -u +%Y-%m)" >> $GITHUB_OUTPUT
       shell: bash
 
-    - uses: actions/cache@v4
+    - uses: actions/cache@v5
       with:
         path: |
           ~/.cargo/registry
           **/Cargo.lock
           **/bindings/rust/target
+          ~/.wasmtime
         key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ steps.get-date.outputs.date }}
 
     - name: Environment
@@ -42,21 +43,14 @@ jobs:
         sysctl hw 2>/dev/null && echo --- || true
         env | sort
 
-    - name: Install Rust
-      if: ${{ runner.os == 'Windows' && runner.arch == 'ARM64' }}
+    - name: Install Wasmtime
+      if: ${{ runner.os == 'Linux' }}
       shell: bash
-      run: |
-        if ! which cargo > /dev/null 2>&1; then
-            curl -sSf -o rustup-init.exe https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe
-            ./rustup-init.exe --profile minimal --component clippy -y
-        fi
+      run: if [ ! -d ~/.wasmtime/bin ]; then curl https://wasmtime.dev/install.sh -sSf | bash; fi
 
     - name: Rust
       shell: bash
       run: |
-        if [ -d "$HOME/.cargo/bin" ] && ! which cargo > /dev/null 2>&1; then
-            export PATH="$HOME/.cargo/bin:$PATH"
-        fi
         rustc --version --verbose
         export CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
         cd bindings/rust
@@ -85,15 +79,16 @@ jobs:
         env BLST_TEST_NO_STD= \
             CARGO_TARGET_${triplet}_RUNNER="bash ulimit-s $stack_size" \
             cargo test --release
-        if [ $RUNNER_OS = "Linux" ]; then
+        if [ -x ~/.wasmtime/bin/wasmtime ]; then
             echo '--- test wasm32-wasip1'
             echo
             rustup target add wasm32-wasip1
-            curl https://wasmtime.dev/install.sh -sSf | bash
             env CARGO_TARGET_WASM32_WASIP1_RUNNER=~/.wasmtime/bin/wasmtime \
                 cargo test --release --target=wasm32-wasip1
             cargo clean -p blst --release --target=wasm32-wasip1
             echo
+        fi
+        if [ $RUNNER_OS = "Linux" ]; then
             if [ `uname -p` = "x86_64" ]; then
                 echo '--- test -mlvi-hardening'
                 echo
@@ -161,6 +156,7 @@ jobs:
         rm -rf target/*/{debug,release}/incremental
         rm -rf ~/.cargo/registry/src
         rm -rf ~/.cargo/registry/index/*/.cache
+        mkdir -p ~/.wasmtime
 
     - name: Go
       if: ${{ runner.os != 'Windows' || runner.arch != 'ARM64' }}
@@ -177,19 +173,19 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
 
-    - uses: actions/cache@v4
+    - uses: actions/cache@v5
       with:
         path: ~/swig
         key: ${{ runner.os }}-swig-github
 
-    - uses: actions/setup-java@v4
+    - uses: actions/setup-java@v5
       with:
         distribution: temurin
         java-version: 11
 
-    - uses: actions/setup-node@v4
+    - uses: actions/setup-node@v6
       with:
         node-version: '20.x'
 
@@ -221,6 +217,9 @@ jobs:
             fi
             env PATH=~/swig/bin:$PATH SWIG_LIB=~/swig/share/swig/current \
                 $node_js/run.me
+            (cd $node_js; npm install node-addon-api && rm blst_wrap.cpp)
+            env PATH=~/swig/bin:$PATH SWIG_LIB=~/swig/share/swig/current \
+                $node_js/run.me
         fi
     - name: node-gyp
       run: |
@@ -243,20 +242,18 @@ jobs:
             npm install --global typescript || true
             if which tsc > /dev/null 2>&1; then
               ( cd $node_js;
-                npm install @types/node
-                tsc runnable.ts;
+                npm install @types/node;
+                tsc runnable.ts --ignoreConfig --types node --module commonjs;
                 env NODE_PATH=.: node runnable.js;
               )
            fi
         fi
 
     - name: Emscripten
-      uses: addnab/docker-run-action@v3
+      uses: docker://emscripten/emsdk
       with:
-        registry: https://index.docker.io/v1/
-        image: emscripten/emsdk
-        options: --volume ${{ github.workspace }}:/blst --network=none
-        run: git config --global safe.directory \* && git clone -q /blst /tmp/blst && /tmp/blst/bindings/emscripten/run.me -O2
+        args: >
+          bindings/emscripten/run.me -O2
 
     - name: C#
       run: |
@@ -268,3 +265,42 @@ jobs:
                 dotnet run -c Release
             fi
         fi
+
+    - uses: actions/cache@v5
+      with:
+        path: |
+          ~/.cache/zig
+          ~/zig-x86_64-linux-*
+          ~/.wasmtime
+        key: ${{ runner.os }}-zig-github
+
+    - name: Zig
+      run: |
+        which minisign > /dev/null 2>&1 || sudo apt-get -y install minisign
+        curl https://ziglang.org/download/community-mirrors.txt -sSfo mirrors.txt && \
+        for ver in 0.14.1 0.16.0; do (
+            base_dir=zig-x86_64-linux-$ver
+            if [ ! -d ~/$base_dir ]; then
+                mirror=`shuf -n 1 mirrors.txt`
+                curl $mirror/$base_dir.tar.xz -sSfo $base_dir.tar.xz && \
+                curl https://ziglang.org/download/$ver/$base_dir.tar.xz.minisig -sSfo $base_dir.minisig && \
+                minisign -V -P "RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U" \
+                         -x $base_dir.minisig -m $base_dir.tar.xz -q || \
+                (rm -f $base_dir.* && echo "$ver download failure")
+                if [ -f $base_dir.tar.xz ]; then
+                    unxz -c $base_dir.tar.xz | tar xf - --directory ~
+                    rm $base_dir.*
+                fi
+            fi
+            if [ -x ~/$base_dir/zig ]; then
+                echo "--- test $base_dir"
+                PATH=~/$base_dir:$PATH
+                zig build test --summary new
+                echo '--- test wasm32-wasi'
+                if [ ! -d ~/.wasmtime ]; then
+                    curl https://wasmtime.dev/install.sh -sSf | bash
+                fi
+                PATH=~/.wasmtime/bin:$PATH
+                zig build test -Dtarget=wasm32-wasi -fwasmtime --summary new
+            fi
+        ); done

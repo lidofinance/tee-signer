@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -275,6 +276,8 @@ type craftSpec struct {
 	// in it that sign.
 	set     []approver
 	signers []int
+	// activateAt is the update's activate_at; zero: now.
+	activateAt uint64
 }
 
 // craft signs and encodes the update of spec and returns its file.
@@ -285,7 +288,7 @@ func craft(t *testing.T, spec craftSpec) string {
 		t.Fatal(err)
 	}
 	b := setupwire.UpdateBody{ClusterID: s.ClusterID, ChainHash: s.Chain.Hash(), Group: spec.group, Version: spec.version,
-		PrevHash: spec.prev, ActivateAt: uint64(time.Now().Unix())}
+		PrevHash: spec.prev, ActivateAt: cmp.Or(spec.activateAt, uint64(time.Now().Unix()))}
 	if b.PrevHash == ([32]byte{}) {
 		b.PrevHash, _ = s.GroupHash(spec.group)
 	}

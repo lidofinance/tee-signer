@@ -196,7 +196,8 @@ func SameCluster(a, b *Member) error {
 
 // LoadConn reads a signer's connection file as runnerclient does: fields
 // of other tools (accounts, slots_per_epoch of the signing client) are left
-// alone, and paths are relative to the file.
+// alone, and paths are relative to the file. The attestation section is
+// read strictly (StrictAttestation).
 func LoadConn(path string) (*runnerclient.Connection, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -206,8 +207,30 @@ func LoadConn(path string) (*runnerclient.Connection, error) {
 	if err := json.Unmarshal(b, &conn); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
+	if err := StrictAttestation(b); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
 	conn.ResolvePaths(filepath.Dir(path))
 	return &conn, nil
+}
+
+// StrictAttestation refuses a connection file whose attestation section
+// has a field runnerclient does not know. A misspelled pin key would
+// otherwise leave that pin out without a word.
+func StrictAttestation(b []byte) error {
+	var top struct {
+		Attestation json.RawMessage `json:"attestation"`
+	}
+	if err := json.Unmarshal(b, &top); err != nil || top.Attestation == nil {
+		return err
+	}
+	dec := json.NewDecoder(bytes.NewReader(top.Attestation))
+	dec.DisallowUnknownFields()
+	var a runnerclient.Attestation
+	if err := dec.Decode(&a); err != nil {
+		return fmt.Errorf("attestation: %w", err)
+	}
+	return nil
 }
 
 // State is what the tool reads of one signer.

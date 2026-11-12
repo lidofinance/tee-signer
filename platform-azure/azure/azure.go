@@ -96,6 +96,7 @@ func parseRSAJWK(b []byte) (*rsa.PrivateKey, error) {
 	}
 	num := func(name string) (*big.Int, error) {
 		v, err := base64.RawURLEncoding.DecodeString(j[name])
+		defer clear(v)
 		if err != nil || len(v) == 0 {
 			return nil, fmt.Errorf("azure: jwk field %s", name)
 		}
@@ -142,6 +143,7 @@ func (a *Attester) Attest(ctx context.Context, _, userData []byte) (*backend.Att
 // setup derives other keys from the same Key Vault key.
 func derivedKeys(key *rsa.PrivateKey, setup [32]byte) (dek, wrap []byte, err error) {
 	ikm := key.D.Bytes()
+	defer clear(ikm)
 	if dek, err = hkdf.Key(sha256.New, ikm, nil, string(setupwire.CtxAzureSealing.Message(setup[:])), 32); err != nil {
 		return nil, nil, err
 	}
@@ -149,6 +151,17 @@ func derivedKeys(key *rsa.PrivateKey, setup [32]byte) (dek, wrap []byte, err err
 		return nil, nil, err
 	}
 	return dek, wrap, nil
+}
+
+// wipeRSAKey zeroes the private values of k that this code can reach: D,
+// the primes and the CRT values. crypto/rsa keeps its own precomputed copy,
+// which stays until the garbage collector frees it.
+func wipeRSAKey(k *rsa.PrivateKey) {
+	for _, v := range append([]*big.Int{k.D, k.Precomputed.Dp, k.Precomputed.Dq, k.Precomputed.Qinv}, k.Primes...) {
+		if v != nil {
+			clear(v.Bits())
+		}
+	}
 }
 
 // dataKey releases the key and returns the sealing data key and the
@@ -259,6 +272,7 @@ func New(o platform.Options) (*platform.Platform, error) {
 		return nil, err
 	}
 	dek, wrap, err := derivedKeys(key, o.SetupHash)
+	wipeRSAKey(key)
 	if err != nil {
 		return nil, err
 	}

@@ -1,7 +1,8 @@
 // Command share-import is the dealer side of the sealed share import: it
 // asks a runner for its attested identity, checks it, encrypts one share to
 // the runner's import key (HPKE, ML-KEM-768-X25519) and sends it. The share
-// is read from a file or stdin, never from the command line.
+// is read from a file of mode 0600 or stricter or from stdin, never from the
+// command line, after core dumps are turned off.
 //
 //	share-import -addr tcp:127.0.0.1:7100 -pubkey 0x... -index 9 -share-file share.hex -verifier dev
 //
@@ -24,7 +25,13 @@
 //	                     -gcp-service-account
 //
 // -verifier has no default and there is no way to skip the check. A setting
-// of one verifier is refused with another. With -tls-cert and -tls-key the
+// of one verifier is refused with another. Any verifier but dev needs
+// -setup, the runner's setup file, and takes -updates, the folder of the
+// cluster's signed updates: the image the flags pin must be on the
+// approvers' list, and the trust anchor must be the setup's
+// (signer-admin/cluster.CheckConn). It also needs -order, an import order
+// for that setup, so a runner of another setup refuses the share. A
+// -updates folder that does not exist is refused. With -tls-cert and -tls-key the
 // tool also connects over mutual TLS and binds the connection to the
 // verified identity; -tls-key-pin adds a pin of the runner's TLS key.
 // A runner with a setup takes a share only under an import order that k
@@ -43,6 +50,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -55,6 +63,10 @@ import (
 
 	"github.com/lidofinance/tee-signer/attestation-verify/runnerclient"
 	"github.com/lidofinance/tee-signer/governance/importorder"
+	"github.com/lidofinance/tee-signer/governance/setupwire"
+	adminapprover "github.com/lidofinance/tee-signer/signer-admin/approver"
+	admincluster "github.com/lidofinance/tee-signer/signer-admin/cluster"
+	"github.com/lidofinance/tee-signer/signer-admin/internal/lockdown"
 	remoteadmin "github.com/lidofinance/tee-signer/signer-admin/remote/admin"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-protocol"
@@ -68,10 +80,18 @@ func main() {
 	}
 }
 
+// readSecret turns core dumps off and locks memory first, then reads the
+// share. A share file must be readable by its owner only.
 func readSecret(path string) ([32]byte, error) {
 	var sk [32]byte
+	if err := lockdown.Secrets(os.Stderr); err != nil {
+		return sk, err
+	}
 	var r io.Reader = os.Stdin
 	if path != "-" {
+		if err := adminapprover.CheckPrivateFile(path); err != nil {
+			return sk, err
+		}
 		f, err := os.Open(path)
 		if err != nil {
 			return sk, err
@@ -84,11 +104,13 @@ func readSecret(path string) ([32]byte, error) {
 		return sk, err
 	}
 	defer clear(b)
-	s := strings.TrimPrefix(strings.TrimSpace(string(b)), "0x")
+	// Trimmed in place: no string copy of the secret.
+	s := bytes.TrimPrefix(bytes.TrimSpace(b), []byte("0x"))
 	if len(s) != 64 {
 		return sk, errors.New("share file: want 32 bytes as hex")
 	}
-	if _, err := hex.Decode(sk[:], []byte(s)); err != nil {
+	if _, err := hex.Decode(sk[:], s); err != nil {
+		clear(sk[:])
 		return sk, errors.New("share file: not hex")
 	}
 	return sk, nil
@@ -107,6 +129,8 @@ func run() error {
 		commFile   = flag.String("commitments", "", "the validator's public commitments, one 0x-hex point per line (with -order)")
 		chainBuild = flag.String("allow-chain-build", "", "accept a runner of the non-prod build of this chain: hoodi, devnet or ci-test (governance time locks in minutes, that chain only; needs -tls-cert)")
 	)
+	setupFile := flag.String("setup", "", "the runner's setup file; required for any verifier but dev")
+	updatesDir := flag.String("updates", "", "with -setup: the folder of the cluster's signed updates, whose locked updates extend the approved image list")
 	att := runnerclient.Flags(flag.CommandLine)
 	flag.Parse()
 	if *addr == "" || *pubkeyHex == "" || *shareFile == "" {
@@ -120,12 +144,13 @@ func run() error {
 		return errors.New("-commitments needs -order")
 	}
 	extra := &backend.SealedImportRequest{}
+	var o *importorder.Order
 	if *orderFile != "" {
 		raw, err := os.ReadFile(*orderFile)
 		if err != nil {
 			return err
 		}
-		o, err := importorder.Decode(raw)
+		o, err = importorder.Decode(raw)
 		if err != nil {
 			return fmt.Errorf("-order: %w", err)
 		}
@@ -151,6 +176,52 @@ func run() error {
 
 	// The verifier and the client come first: a wrong setting stops the tool
 	// before it reads the share.
+	if *updatesDir != "" && *setupFile == "" {
+		return errors.New("-updates needs -setup")
+	}
+	if *setupFile != "" {
+		raw, err := os.ReadFile(*setupFile)
+		if err != nil {
+			return err
+		}
+		s, err := setupwire.DecodeSetup(raw)
+		if err != nil {
+			return fmt.Errorf("-setup: %w", err)
+		}
+		if *updatesDir != "" {
+			if _, err := os.Stat(*updatesDir); err != nil {
+				return fmt.Errorf("-updates: %w", err)
+			}
+		}
+		// CheckConn also pins the setup's hash when -setup-sha256 is unset.
+		conn := runnerclient.Connection{Attestation: *att}
+		v, err := admincluster.CheckConn(&conn, s, *updatesDir, time.Now())
+		if err != nil {
+			return err
+		}
+		*att = conn.Attestation
+		// The order binds the share to the setup: a runner of another setup
+		// refuses it.
+		if att.Verifier != runnerclient.VerifierDev {
+			h, err := s.Hash()
+			if err != nil {
+				return err
+			}
+			switch {
+			case o == nil:
+				return fmt.Errorf("verifier %s needs -order, an import order for the -setup file (refusing)", att.Verifier)
+			case o.Body.Target != h || o.Body.ClusterID != s.ClusterID:
+				return fmt.Errorf("-order is an import order for setup %x, -setup is setup %x (refusing)", o.Body.Target[:4], h[:4])
+			}
+			if *updatesDir == "" {
+				fmt.Println("checked against the setup's own list, locked version 0 (no -updates)")
+			} else {
+				fmt.Printf("image pin on the approved list of locked version %d\n", v)
+			}
+		}
+	} else if att.Verifier != runnerclient.VerifierDev {
+		return fmt.Errorf("verifier %s needs -setup, the runner's setup file, to check the pinned image against the approvers' list (refusing)", att.Verifier)
+	}
 	verify, err := att.NewVerifier()
 	if err != nil {
 		return err

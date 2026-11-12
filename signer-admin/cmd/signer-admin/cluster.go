@@ -27,6 +27,10 @@ type member struct {
 	setup     *setupwire.Setup
 	setupRaw  []byte
 	setupHash [32]byte
+	updates   string // the updates folder of its cluster.json
+	// walked is the locked version the image check of memberConn reached
+	// in the updates folder.
+	walked uint64
 }
 
 type cluster struct {
@@ -74,7 +78,7 @@ func loadCluster(path string, only []string) (*cluster, error) {
 	}
 	c := &cluster{updates: ac.Updates}
 	for _, m := range ac.Members {
-		c.members = append(c.members, &member{name: m.Name, cloudPath: m.CloudPath, setup: m.Setup, setupRaw: m.SetupRaw, setupHash: m.SetupHash})
+		c.members = append(c.members, &member{name: m.Name, cloudPath: m.CloudPath, setup: m.Setup, setupRaw: m.SetupRaw, setupHash: m.SetupHash, updates: ac.Updates})
 	}
 	return c, nil
 }
@@ -89,43 +93,23 @@ func cmpOr(s, def string) string {
 // loadConn reads a signer's cloud.json as runnerclient does.
 func loadConn(path string) (*runnerclient.Connection, error) { return admincluster.LoadConn(path) }
 
-// memberConn reads m's cloud.json and refuses the dev verifier when m's
-// setup names a cloud platform (devPlatformOnly). Every command that
-// connects to a member of a cluster.json reads the file here.
+// memberConn reads m's cloud.json and holds its attestation settings to
+// m's setup and the updates folder (admin/cluster.CheckConn): the image
+// pin must be on the approvers' list and the trust anchor the setup's.
+// Every command that connects to a member of a cluster.json reads the
+// file here.
 func memberConn(m *member) (*runnerclient.Connection, error) {
 	conn, err := loadConn(m.cloudPath)
 	if err != nil {
 		return nil, err
 	}
-	if err := devPlatformOnly(conn, m.setup); err != nil {
+	if m.walked, err = admincluster.CheckConn(conn, m.setup, m.updates, now()); err != nil {
 		return nil, fmt.Errorf("%s: %w", m.cloudPath, err)
 	}
+	if _, err := os.Stat(m.updates); m.setup.Platform.Platform != setupwire.PlatformDev && errors.Is(err, os.ErrNotExist) {
+		admincluster.WarnOnce(m.updates + " does not exist: the image check used the setup's own list")
+	}
 	return conn, nil
-}
-
-// devPlatformOnly refuses conn's dev verifier when s is a setup of a cloud
-// platform. The dev verifier takes an unsigned document from whoever
-// answers; runnerclient keeps it to this machine, and the tool holds the
-// setup, so it can also tell a dev platform member from a cloud one.
-func devPlatformOnly(conn *runnerclient.Connection, s *setupwire.Setup) error {
-	p := s.Platform.Platform
-	if conn.Attestation.Verifier != runnerclient.VerifierDev || p == setupwire.PlatformDev {
-		return nil
-	}
-	return fmt.Errorf("verifier dev, but the setup is on the %s platform; the dev verifier proves nothing about a cloud runner, use %s", p, verifierFor(p))
-}
-
-// verifierFor is the runnerclient verifier of a cloud platform.
-func verifierFor(p setupwire.Platform) string {
-	switch p {
-	case setupwire.PlatformNitro:
-		return runnerclient.VerifierAWSNitro
-	case setupwire.PlatformAzure:
-		return runnerclient.VerifierAzureMAA
-	case setupwire.PlatformGCP:
-		return runnerclient.VerifierGCPCS
-	}
-	return "the verifier of its platform"
 }
 
 // signerState is what the tool reads of one signer.
@@ -145,6 +129,13 @@ func readState(ctx context.Context, m *member, conn *runnerclient.Connection, ti
 	st, cl, err := admincluster.ReadState(ctx, &admincluster.Member{Name: m.name, SetupHash: m.setupHash}, conn, timeout)
 	if err != nil {
 		return nil, nil, err
+	}
+	// A runner further along than the folder means the image check used
+	// an old list. The runner's word can only make this stricter, so it
+	// is a warning.
+	if v := st.State.Locked.Version; m.setup.Platform.Platform != setupwire.PlatformDev && v > m.walked {
+		fmt.Fprintf(os.Stderr, "warning: %s has locked version %d in force, the updates folder %s reaches version %d only: the image check used an older list; copy the missing signed updates there\n",
+			m.name, v, m.updates, m.walked)
 	}
 	return &signerState{state: st.State, health: st.Health, chain: st.Chain}, cl, nil
 }

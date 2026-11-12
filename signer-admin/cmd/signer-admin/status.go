@@ -49,20 +49,18 @@ func cmdPin(args []string, out io.Writer) error {
 }
 
 func pinOne(m *member, timeout time.Duration) (string, error) {
+	file, err := loadConn(m.cloudPath)
+	if err != nil {
+		return "", err
+	}
+	// memberConn refuses a pin of another setup and pins m's setup when
+	// the file has none.
 	conn, err := memberConn(m)
 	if err != nil {
 		return "", err
 	}
 	want := fullHex(m.setupHash)
-	already := false
-	if p := strings.ToLower(strings.TrimPrefix(conn.Attestation.SetupSHA256, "0x")); p != "" {
-		if p != want {
-			return "", fmt.Errorf("%s pins setup_sha256 %s already, not the setup built for this signer (%s); remove it to pin a new setup", m.cloudPath, p, want)
-		}
-		already = true
-	}
-	conn.Attestation.SetupSHA256 = want
-	conn.Attestation.AllowUnpinnedSetup = false
+	already := file.Attestation.SetupSHA256 != ""
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	st, cl, err := readState(ctx, m, conn, timeout)

@@ -937,8 +937,12 @@ Reading the public key needs no card:
 gpg --with-keygrip --list-keys FINGERPRINT    # Keygrip of the [S] subkey
 signer-admin approver-key -key openpgp:KEYGRIP
 gpg --export FINGERPRINT > approver.pgp       # or from a file someone sent
-signer-admin approver-key -openpgp approver.pgp [-fingerprint SUBKEY]
+signer-admin approver-key -openpgp approver.pgp [-fingerprint SUBKEY_FPR]
 ```
+
+SUBKEY_FPR is the subkey's full fingerprint, all 40 hex digits, from
+`gpg --with-subkey-fingerprint --list-keys FINGERPRINT`; a key ID is
+refused.
 
 Both print `approvers = 0x...`. The first reads the public key gpg-agent
 keeps for a card key; the second reads the exported key's Ed25519 keys
@@ -1299,8 +1303,9 @@ the client's nonce.
 The `gcp-cs` verifier checks, in `attest.VerifyConfidentialSpace`: the RS256
 signature against the issuer's key set (or a pinned set), the issuer, the
 configured audience (never the STS audience), `swname`, `secboot`, `dbgstat`,
-STABLE support, the hardware model, the image digest, optionally the service
-account, and `eat_nonce`, which carries the hex of `user_data`.
+STABLE support, no env, cmd or args override, the hardware model, the image
+digest, optionally the service account, and `eat_nonce`, which carries the hex
+of `user_data`.
 
 On AWS the runner listens on vsock inside the enclave. The parent instance
 forwards traffic into the enclave and is not trusted, so the vsock listener

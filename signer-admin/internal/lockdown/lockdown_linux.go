@@ -1,6 +1,8 @@
 //go:build linux
 
-package main
+// Package lockdown turns off core dumps and locks memory before an operator
+// tool holds a plaintext key or share.
+package lockdown
 
 import (
 	"fmt"
@@ -9,14 +11,14 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// lockSecrets is what a command runs before it holds a plaintext key or
+// Secrets is what a command runs before it holds a plaintext key or
 // share: core dumps off, and the process's memory locked in RAM when the
 // system allows it, with a warning on warn when it does not.
-func lockSecrets(warn io.Writer) error {
+func Secrets(warn io.Writer) error {
 	if err := disableCoreDumps(); err != nil {
 		return err
 	}
-	lockMemory(warn)
+	LockMemory(warn)
 	return nil
 }
 
@@ -34,9 +36,9 @@ func disableCoreDumps() error {
 	return nil
 }
 
-// lockMemory locks the process's pages in RAM. Tests replace it: the test
+// LockMemory locks the process's pages in RAM. Tests replace it: the test
 // binary would stay locked for the rest of the run.
-var lockMemory = lockMemoryOS
+var LockMemory = lockMemoryOS
 
 // lockMemoryOS locks the process's pages, present and future, in RAM
 // (mlockall), so none of them reaches a swap device. It needs an unlimited

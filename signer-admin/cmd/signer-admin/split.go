@@ -25,6 +25,7 @@ import (
 	"github.com/lidofinance/tee-signer/governance/runnerchain"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	adminapprover "github.com/lidofinance/tee-signer/signer-admin/approver"
+	"github.com/lidofinance/tee-signer/signer-admin/internal/lockdown"
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-core/software"
 	"github.com/lidofinance/tee-signer/signer-core/threshold"
@@ -62,7 +63,7 @@ var (
 //
 // OUT must be a new folder on tmpfs. split refuses to run with swap on,
 // unless -allow-swap says the swap device is safe (zram, encrypted), and
-// turns core dumps off and locks its memory first (lockSecrets). With
+// turns core dumps off and locks its memory first (lockdown.Secrets). With
 // -expect, exactly the listed keys are split, in that order, and every one
 // must be found.
 func cmdSplit(args []string, out io.Writer) error {
@@ -82,7 +83,7 @@ func cmdSplit(args []string, out io.Writer) error {
 	if fs.NArg() != 0 || *ksDir == "" || *passFile == "" || *outDir == "" || *signers == "" || *t == 0 || *n == 0 {
 		return errors.New(splitUsage)
 	}
-	if err := lockSecrets(os.Stderr); err != nil {
+	if err := lockdown.Secrets(os.Stderr); err != nil {
 		return err
 	}
 	names := strings.Split(*signers, ",")
