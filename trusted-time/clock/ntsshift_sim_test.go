@@ -34,6 +34,15 @@ type shiftWorld struct {
 	blipTo   int64
 	ntsOnly  bool // the blip stops NTS answers only, not coarse readings
 	contacts map[string][]int64
+	// early marks the contacts made before the first quorum to an operator
+	// that had not answered: they may follow a lost one after
+	// NTSShiftStartRetry. inStart reports that no quorum formed yet.
+	early    map[string][]bool
+	answered map[string]bool
+	// lost marks the contacts that got no answer: the one retry of a lost
+	// answer may follow it after NTSShiftStartRetry.
+	lost    map[string][]bool
+	inStart func() bool
 	// downUntil: no answers before this local time; rateUntil: a
 	// Kiss-o'-Death RATE before this local time.
 	downUntil map[string]int64
@@ -62,14 +71,64 @@ func (w *shiftWorld) query(op string, t int64) (nts.Sample, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.contacts[op] = append(w.contacts[op], t)
+	if w.early == nil {
+		w.early, w.answered, w.lost = map[string][]bool{}, map[string]bool{}, map[string][]bool{}
+	}
+	w.early[op] = append(w.early[op], w.inStart != nil && w.inStart() && !w.answered[op])
 	if t < w.rateUntil[op] {
+		w.lost[op] = append(w.lost[op], false) // a RATE gets no retry
 		return nts.Sample{}, &nts.KissError{Code: "RATE"}
 	}
 	if w.inBlip(t) || w.down[op] || t < w.downUntil[op] || w.draw(op, t) < w.loss[op] {
+		w.lost[op] = append(w.lost[op], true)
 		w.now = max(w.now, t+int64(NTSShiftQueryTimeout))
 		return nts.Sample{}, errors.New("timeout")
 	}
+	w.lost[op] = append(w.lost[op], false)
+	w.answered[op] = true
 	return nts.Sample{Offset: w.off + int64(w.wrong[op]), Bound: 15 * time.Millisecond, Delay: 30 * time.Millisecond, T4: t}, nil
+}
+
+// gapsOf is the shortest gap between two contacts with one operator, and
+// its operator. Two kinds of contact may come NTSShiftStartRetry after the
+// one before, so their gap counts NTSShiftMinGap/NTSShiftStartRetry times
+// longer (20 s reads as 60 s): an early one, and the one retry of a lost
+// answer inside the gap. The contact after a retry is measured from the
+// lost one, so a lost answer costs at most one extra query.
+func gapsOf(w *shiftWorld) (time.Duration, string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	best, who := time.Duration(1<<62), ""
+	for op, cs := range w.contacts {
+		prev := 0 // the last contact that was not a retry
+		for i := 1; i < len(cs); i++ {
+			d := time.Duration(cs[i] - cs[prev])
+			retry := false
+			switch {
+			case w.early[op][i]:
+				d = time.Duration(cs[i]-cs[i-1]) * (NTSShiftMinGap / NTSShiftStartRetry)
+			case d < NTSShiftMinGap && i == prev+1 && w.lost[op][prev]:
+				d = time.Duration(cs[i]-cs[i-1]) * (NTSShiftMinGap / NTSShiftStartRetry)
+				retry = true
+			}
+			if !retry {
+				prev = i
+			}
+			if d < best {
+				best, who = d, op
+			}
+		}
+	}
+	return best, who
+}
+
+// inStartOf reports whether n formed no quorum yet.
+func inStartOf(n *NTS) func() bool {
+	return func() bool {
+		n.shifts.mu.Lock()
+		defer n.shifts.mu.Unlock()
+		return !n.shifts.warm
+	}
 }
 
 func (w *shiftWorld) Now() (time.Time, error) {
@@ -149,6 +208,7 @@ func runShiftScenario(t testing.TB, sc shiftScenario) shiftResult {
 	w := &shiftWorld{off: 1_800_000_000 * int64(time.Second), seed: sc.seed, loss: map[string]float64{}, down: map[string]bool{},
 		wrong: map[string]time.Duration{}, contacts: map[string][]int64{}}
 	n := &NTS{Coarse: w, Local: w.local, ScheduleSeed: fmt.Appendf(nil, "signer-%d", sc.seed), testQuery: w.queryCtx, noStartDelay: true}
+	w.inStart = inStartOf(n)
 	for i := range sc.catalog {
 		n.Servers = append(n.Servers, NTSServer{Host: fmt.Sprintf("op%d.test", i), Operator: fmt.Sprintf("op%d", i)})
 	}
@@ -221,16 +281,14 @@ func runShiftScenario(t testing.TB, sc shiftScenario) shiftResult {
 	}
 	res.window = to - sc.from
 	hours := sc.dur.Hours()
-	res.minGap, res.opMin = time.Duration(math.MaxInt64), math.Inf(1)
+	res.opMin = math.Inf(1)
+	res.minGap, res.minGapOp = gapsOf(w)
 	total := 0
-	for op, cs := range w.contacts {
+	for _, cs := range w.contacts {
 		total += len(cs)
 		ph := float64(len(cs)) / hours
 		res.opMax, res.opMin = max(res.opMax, ph), min(res.opMin, ph)
 		for i := 1; i < len(cs); i++ {
-			if d := time.Duration(cs[i] - cs[i-1]); d < res.minGap {
-				res.minGap, res.minGapOp = d, op
-			}
 			res.idleMax = max(res.idleMax, time.Duration(cs[i]-cs[i-1]))
 		}
 	}
@@ -244,6 +302,7 @@ func runShiftScenario(t testing.TB, sc shiftScenario) shiftResult {
 		res.counts.Bursts += c.Bursts
 		res.counts.Handovers += c.Handovers
 		res.counts.FailedHandovers += c.FailedHandovers
+		res.counts.Retries += c.Retries
 	}
 	if res.counts.Queries != int64(total) {
 		t.Fatalf("%s: schedule counted %d queries, the servers saw %d", sc.name, res.counts.Queries, total)
@@ -251,10 +310,15 @@ func runShiftScenario(t testing.TB, sc shiftScenario) shiftResult {
 	return res
 }
 
-// The scenarios of the reviews, as in ~/scratch/nts-sim/run7.py: C 8, A 5,
-// S 15 min, cap 90 s; 6 h runs counted from 20 min.
+// The scenarios of the design reviews: 8 operators (5 active), 15 min
+// shifts, 90 s cap; counted from 20 min.
 func reviewScenarios(dur time.Duration, seed uint64) []shiftScenario {
-	base := shiftScenario{catalog: 8, dur: dur, from: 20 * time.Minute, seed: seed}
+	return reviewScenariosN(dur, seed, 8)
+}
+
+// reviewScenariosN: the same scenarios with catalog operators.
+func reviewScenariosN(dur time.Duration, seed uint64, catalog int) []shiftScenario {
+	base := shiftScenario{catalog: catalog, dur: dur, from: 20 * time.Minute, seed: seed}
 	with := func(name string, f func(*shiftScenario)) shiftScenario {
 		s := base
 		s.name = name
@@ -271,6 +335,16 @@ func reviewScenarios(dur time.Duration, seed uint64) []shiftScenario {
 			s.wrong = map[int]time.Duration{2: time.Second, 5: -time.Second}
 		}),
 	}
+}
+
+// smallSetLossScenarios: one operator down and a lossy one, where every
+// lost answer of a set under 7 leaves too few fresh samples.
+func smallSetLossScenarios(dur time.Duration, seed uint64, catalog int) []shiftScenario {
+	base := shiftScenario{catalog: catalog, dur: dur, from: 20 * time.Minute, seed: seed}
+	a, b := base, base
+	a.name, a.down, a.lossy = "one down, one at 50% loss", []int{0}, []int{1}
+	b.name, b.down, b.loss = "one down, 10% loss everywhere", []int{0}, 0.1
+	return []shiftScenario{a, b}
 }
 
 func blipScenario(seed uint64) shiftScenario {
@@ -298,8 +372,9 @@ func TestNTSShiftScenariosShort(t *testing.T) {
 				t.Errorf("%s: blocked %v", sc.name, r.blocked)
 			}
 		}
-		// A healthy run bursts at most at the start dip.
-		if sc.name == "healthy" && (r.queriesPerHour < 295 || r.queriesPerHour > 310 || r.counts.Fallbacks != 0 || r.counts.Bursts != r.startBursts) {
+		// A healthy run bursts at the start dip and at most once per
+		// handover (the newcomer's first sample ages out before its slot).
+		if sc.name == "healthy" && (r.queriesPerHour < 295 || r.queriesPerHour > 310 || r.counts.Fallbacks != 0 || r.counts.Bursts > r.startBursts+r.counts.Handovers) {
 			t.Errorf("healthy: %.1f q/h, %+v", r.queriesPerHour, r.counts)
 		}
 	}
@@ -326,7 +401,7 @@ func TestNTSShiftBlipRecovers(t *testing.T) {
 }
 
 // An NTS-only outage (UDP blocked, coarse fine) of 3 minutes: the clock
-// keeps asking, falls below 3 fresh samples and bursts. After the outage
+// keeps asking, falls below 4 fresh samples and bursts. After the outage
 // it is back once 3 operators not asked in the last 60 s have answered:
 // up to 60 s, since the bursts asked every operator during the outage.
 func TestNTSShiftBurstAfterNTSOutage(t *testing.T) {
@@ -474,6 +549,156 @@ func TestNTSShiftTickDeadline(t *testing.T) {
 	for op, c := range s.Operators {
 		if c.Fallbacks != 0 || c.Bursts != 0 {
 			t.Fatalf("%s: %+v after the deadline", op, c)
+		}
+	}
+}
+
+// NTSSummary answers while a Refresh hangs on a server (under -race it
+// also checks that it reads no field the polls write), and under shifts
+// exactly NTSShiftActives servers report Active.
+func TestNTSSummaryDuringRefresh(t *testing.T) {
+	release := make(chan struct{})
+	n := &NTS{Coarse: &coarseClock{}, Shifts: true, ScheduleSeed: []byte("summary"), noStartDelay: true}
+	n.testQuery = func(ctx context.Context, op string, _ int64) (nts.Sample, error) {
+		if op == "op0" {
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+			return nts.Sample{}, errors.New("timeout")
+		}
+		return nts.Sample{Offset: time.Now().UnixNano() - n.local(), Bound: 5 * time.Millisecond, T4: n.local()}, nil
+	}
+	for i := range 8 {
+		n.Servers = append(n.Servers, NTSServer{Host: fmt.Sprintf("op%d.test", i), Operator: fmt.Sprintf("op%d", i)})
+	}
+	done := make(chan error, 1)
+	go func() { done <- n.Refresh(context.Background()) }()
+	got := make(chan NTSSummary, 1)
+	go func() {
+		for {
+			s := n.NTSSummary()
+			if s.Peers[1].Answers == 1 {
+				got <- s
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	select {
+	case s := <-got:
+		if len(s.Peers) != 8 || s.Peers[0].Queries != 0 {
+			t.Fatalf("summary during the refresh: %+v", s.Peers)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("NTSSummary waited for the refresh")
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	active := 0
+	for _, p := range n.NTSSummary().Peers {
+		if p.Active {
+			active++
+		}
+	}
+	if active != NTSShiftActives {
+		t.Fatalf("%d active, want %d", active, NTSShiftActives)
+	}
+}
+
+// 7 operators run 4 actives (ShiftActives). The cases that must never
+// block with 8 operators must not block with 7 either; two wrong at once
+// may, since 3 of 4 must agree.
+func TestNTSShiftSevenServers(t *testing.T) {
+	if got := ShiftActives(7); got != 4 {
+		t.Fatalf("ShiftActives(7) = %d", got)
+	}
+	for n, want := range map[int]int{3: 3, 5: 5, 6: 6, 8: 5, 12: 5} {
+		if got := ShiftActives(n); got != want {
+			t.Errorf("ShiftActives(%d) = %d, want %d", n, got, want)
+		}
+	}
+	for _, sc := range reviewScenariosN(2*time.Hour, 1, 7) {
+		r := runShiftScenario(t, sc)
+		checkMinGap(t, sc.name, r)
+		t.Logf("%s: blocked %v (%.3f%%), longest %v, %.1f q/h", sc.name, r.blocked, r.blockedPct(), r.longest, r.queriesPerHour)
+		switch sc.name {
+		case "healthy", "one active at 50% loss", "two actives down", "one operator wrong":
+			if r.blocked != 0 {
+				t.Errorf("%s: blocked %v", sc.name, r.blocked)
+			}
+		}
+	}
+}
+
+// 7 against 8 operators over 10 seeds of 6 h per scenario: mean and worst
+// blocked share and the load. Long: run with NTS_SHIFT_SIM=1.
+func TestNTSShiftSevenVersusEight(t *testing.T) {
+	if os.Getenv("NTS_SHIFT_SIM") == "" {
+		t.Skip("NTS_SHIFT_SIM not set")
+	}
+	var out strings.Builder
+	for _, c := range []int{7, 8} {
+		names := reviewScenariosN(time.Hour, 0, c)
+		for i := range names {
+			var mean, worst, qh float64
+			var longest time.Duration
+			for seed := uint64(1); seed <= 10; seed++ {
+				r := runShiftScenario(t, reviewScenariosN(6*time.Hour, seed, c)[i])
+				mean += r.blockedPct() / 10
+				worst = max(worst, r.blockedPct())
+				longest = max(longest, r.longest)
+				qh += r.queriesPerHour / 10
+			}
+			fmt.Fprintf(&out, "C %d A %d | %-28s | blocked mean %.3f %% worst %.3f %% longest %v | %.1f q/h\n",
+				c, ShiftActives(c), names[i].name, mean, worst, longest, qh)
+		}
+		for seed := uint64(1); seed <= 6; seed++ {
+			sc := blipScenario(seed)
+			sc.catalog = c
+			r := runShiftScenario(t, sc)
+			fmt.Fprintf(&out, "C %d A %d | 5-minute blip, seed %d        | blocked %v\n", c, ShiftActives(c), seed, r.blocked)
+		}
+	}
+	t.Log("\n" + out.String())
+}
+
+// Below 7 operators every one is active, once per 60 s, and nothing hands
+// over: about 60 queries per operator per hour when healthy. A healthy
+// run, one wrong operator and one lossy operator never block with 4 or 6;
+// with 6, two down or two wrong do not either. There is no operator for a
+// fallback, so a lost answer gets one retry 20 s later: with 4 servers,
+// 30 % loss blocked 18 % of the time without it, one down and one at 50 %
+// loss 34 %, one down and 10 % loss 17 %. A lost answer costs at most one
+// extra query.
+func TestNTSShiftSmallSets(t *testing.T) {
+	for _, c := range []int{4, 6} {
+		if got := ShiftActives(c); got != c {
+			t.Fatalf("ShiftActives(%d) = %d", c, got)
+		}
+		for _, sc := range append(reviewScenariosN(2*time.Hour, 1, c), smallSetLossScenarios(2*time.Hour, 1, c)...) {
+			r := runShiftScenario(t, sc)
+			checkMinGap(t, sc.name, r)
+			t.Logf("%d servers, %s: blocked %v (%.3f%%), longest %v, %.1f q/h, %+v", c, sc.name, r.blocked, r.blockedPct(), r.longest, r.queriesPerHour, r.counts)
+			// With 4, 3 must agree, so two down blocks by design; with 6
+			// two down leave 4 fresh, 3 of which must agree.
+			mustNot := sc.name == "healthy" || sc.name == "one operator wrong" || sc.name == "one active at 50% loss" ||
+				(c == 6 && (sc.name == "two actives down" || sc.name == "two wrong (smear plus one)"))
+			if mustNot && r.blocked != 0 {
+				t.Errorf("%d servers, %s: blocked %v", c, sc.name, r.blocked)
+			}
+			if sc.name == "healthy" && (r.counts.Handovers != 0 || r.counts.Retries != 0 || r.queriesPerHour > 61*float64(c)) {
+				t.Errorf("%d servers, healthy: %.1f q/h, %+v", c, r.queriesPerHour, r.counts)
+			}
+			if r.counts.Retries > r.counts.Losses || r.counts.Fallbacks != 0 {
+				t.Errorf("%d servers, %s: %d retries for %d losses, %d fallbacks", c, sc.name, r.counts.Retries, r.counts.Losses, r.counts.Fallbacks)
+			}
+			limit := map[string]float64{"30% loss everywhere": 3, "one down, one at 50% loss": 20, "one down, 10% loss everywhere": 3}
+			if l, ok := limit[sc.name]; ok && (r.blockedPct() > l || r.counts.Retries == 0) {
+				t.Errorf("%d servers, %s: blocked %.3f%%, over %v%%, with %d retries", c, sc.name, r.blockedPct(), l, r.counts.Retries)
+			}
 		}
 	}
 }

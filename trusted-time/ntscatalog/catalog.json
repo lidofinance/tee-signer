@@ -7,7 +7,11 @@
       "roots": ["sslcom-root-ecc.pem"],
       "nitro_port": 8005,
       "status": "active",
-      "note": "Anycast. Terms: Cloudflare website terms, no stated rate limit."
+      "terms": "open",
+      "terms_url": "https://www.cloudflare.com/website-terms/",
+      "regions": ["global"],
+      "default": true,
+      "note": "Anycast, under 10 ms from every test point. Time services fall under the website terms, no stated rate limit. Lost about half its answers from GCP europe-west9 and europe-west1 in 2026-11."
     },
     {
       "id": "netnod",
@@ -15,9 +19,26 @@
       "operator": "netnod",
       "roots": ["isrg-root-x1.pem", "isrg-root-x2.pem"],
       "ntp_nets": ["194.58.200.0/21"],
+      "plain_ntp_host": "ntp.se",
       "nitro_port": 8006,
       "status": "active",
-      "note": "NTS-KE names NTP servers by address in 194.58.200.0/21, port 4123. Terms: free for anyone."
+      "terms": "open",
+      "terms_url": "https://www.netnod.se/nts/network-time-security",
+      "regions": ["eu", "na"],
+      "alt": [
+        {"host": "sth1.nts.netnod.se", "note": "Stockholm"},
+        {"host": "sth2.nts.netnod.se", "note": "Stockholm"},
+        {"host": "gbg1.nts.netnod.se", "note": "Gothenburg"},
+        {"host": "gbg2.nts.netnod.se", "note": "Gothenburg"},
+        {"host": "mmo1.nts.netnod.se", "note": "Malmo"},
+        {"host": "mmo2.nts.netnod.se", "note": "Malmo"},
+        {"host": "lul1.nts.netnod.se", "note": "Lulea"},
+        {"host": "lul2.nts.netnod.se", "note": "Lulea"},
+        {"host": "svl1.nts.netnod.se", "note": "Sundsvall"},
+        {"host": "svl2.nts.netnod.se", "note": "Sundsvall"}
+      ],
+      "default": true,
+      "note": "NTS-KE names NTP servers by address in 194.58.200.0/21, port 4123. Free for anyone. Alt hosts answered NTS-KE from Europe on 2026-11-10."
     },
     {
       "id": "ptb",
@@ -26,7 +47,16 @@
       "roots": ["isrg-root-x1.pem", "isrg-root-x2.pem"],
       "nitro_port": 8007,
       "status": "active",
-      "note": "PTB runs ptbtime1 to 4; one is listed, since the quorum counts one server per operator. Terms: free, no rate limiting."
+      "terms": "open",
+      "terms_url": "https://zeit.ptb.de/files/Zeitserver_der_PTB_v1.0.pdf",
+      "regions": ["eu", "na"],
+      "alt": [
+        {"host": "ptbtime2.ptb.de"},
+        {"host": "ptbtime3.ptb.de"},
+        {"host": "ptbtime4.ptb.de", "note": "Another network block than ptbtime1 to 3."}
+      ],
+      "default": true,
+      "note": "National metrology institute, Germany. Free, no registration, rate limiting off. Alt hosts answered NTS-KE from Europe on 2026-11-10."
     },
     {
       "id": "time.nl",
@@ -35,7 +65,195 @@
       "roots": ["isrg-root-x1.pem", "isrg-root-x2.pem"],
       "nitro_port": 8008,
       "status": "active",
-      "note": "Terms: fair use with a 1024 s poll interval; the runner polls more often."
+      "terms": "ask",
+      "terms_url": "https://time.nl/index_en.html",
+      "regions": ["eu", "na"],
+      "alt": [
+        {"host": "ntppool2.time.nl"},
+        {"host": "ntppool3.time.nl"},
+        {"host": "ntppool4.time.nl"},
+        {"host": "any.time.nl", "roots": ["harica-tls-rsa-root-2021.pem", "harica-root-2015.pem"], "nitro_port": 8018,
+         "note": "Anycast, stratum 2, called experimental by TimeNL. 2 to 8 ms and 16/16 from every GCP test point on 2026-11-10. Chosen with -nts-terms-confirmed time.nl@any.time.nl."}
+      ],
+      "note": "TimeNL / SIDN Labs. Fair use with a 1024 s poll interval, no hard-coding in mass-market products; the runner polls far more often, and spreading queries over the hosts does not change that, since the policy is per client. Not in the default set for its terms; a deployment that confirmed them adds it (-nts-terms-confirmed time.nl, or time.nl@<host> for an alt host with a Nitro port)."
+    },
+    {
+      "id": "bev",
+      "host": "bevtime1.metrologie.at",
+      "operator": "bev",
+      "roots": ["isrg-root-x1.pem", "isrg-root-x2.pem"],
+      "nitro_port": 8009,
+      "status": "active",
+      "terms": "open",
+      "terms_url": "https://www.bev.gv.at/Themen/Mess-und-Eichwesen/Messtechnische-Fachbereiche/Zeitdienste/Zeitsynchronisation-Internet.html",
+      "regions": ["eu", "na"],
+      "alt": [
+        {"host": "bevtime2.metrologie.at"},
+        {"host": "time.metrologie.at"}
+      ],
+      "default": true,
+      "note": "National metrology institute, Austria, stratum 1. Public, no limits stated, no liability for outages."
+    },
+    {
+      "id": "fer",
+      "host": "nts1.ntp.hr",
+      "operator": "fer",
+      "roots": ["sectigo-server-auth-root-r46.pem"],
+      "plain_ntp_host": "ntp.hr",
+      "nitro_port": 8010,
+      "status": "active",
+      "terms": "open",
+      "terms_url": "http://www.ntp.hr/",
+      "regions": ["eu"],
+      "alt": [
+        {"host": "nts2.ntp.hr"}
+      ],
+      "note": "University of Zagreb FER, stratum 1 GNSS. Public and free; large users should run their own secondary. Rejects stale cookies with the kiss code NTS and a zero octet; keeps cookies 3 to 4 h. NTS-KE timed out from all six non-EU GCP regions on 2026-11-10, so eu only. Left the default set on 2026-11-10: in a 15 min live run from Europe its NTS-KE failed twice and its handover failed on an NTP timeout."
+    },
+    {
+      "id": "meta",
+      "host": "nts.meta.com",
+      "operator": "meta",
+      "roots": ["digicert-global-root-g2.pem"],
+      "ntp_names": ["time.meta.com"],
+      "nitro_port": 8011,
+      "status": "active",
+      "terms": "open",
+      "terms_url": "https://engineering.fb.com/2026/10/06/production-engineering/nts-authenticated-time-at-meta/",
+      "regions": ["global"],
+      "default": true,
+      "note": "Meta, stratum 1 GNSS. NTS-KE names time.meta.com as its NTP server. Live and free, no usage policy found. Smears leap seconds over about 18 h. Short-lived KE certificates (renewed weekly in 2026-11). 0 answers from one home line on 2026-11-08, 16/16 elsewhere."
+    },
+    {
+      "id": "obspm",
+      "host": "ntp.obspm.fr",
+      "operator": "obspm",
+      "roots": ["harica-tls-rsa-root-2021.pem", "harica-root-2015.pem"],
+      "nitro_port": 8012,
+      "status": "active",
+      "terms": "ask",
+      "terms_url": "https://syrte.obspm.fr/spip/fr/services/ref-temps/article/diffusion-de-l-heure-par-internet-ntp-network-time-protocol.html",
+      "regions": ["eu", "na"],
+      "note": "Paris Observatory (LNE-OP), stratum 2. Open to all; regular users are asked to email the operator first."
+    },
+    {
+      "id": "cambridge",
+      "host": "ntp0.cam.ac.uk",
+      "operator": "cambridge",
+      "roots": ["digicert-global-root-g2.pem"],
+      "nitro_port": 8013,
+      "status": "active",
+      "terms": "ask",
+      "regions": ["eu", "na"],
+      "alt": [
+        {"host": "ntp1.cam.ac.uk"},
+        {"host": "ntp3.cam.ac.uk"}
+      ],
+      "note": "University of Cambridge UIS, stratum 2. Terms not public (the NTP help page is staff-only), so ask first. ntp2.cam.ac.uk (Department of Engineering) did not answer NTS-KE and is left out."
+    },
+    {
+      "id": "mbix",
+      "host": "time1.mbix.ca",
+      "operator": "mbix",
+      "roots": ["isrg-root-x1.pem", "isrg-root-x2.pem"],
+      "nitro_port": 8014,
+      "status": "active",
+      "terms": "ask",
+      "terms_url": "https://web.archive.org/web/20260616204831/http://www.mbix.ca/ntp-services/",
+      "regions": ["eu", "na", "sa"],
+      "alt": [
+        {"host": "time2.mbix.ca"},
+        {"host": "time3.mbix.ca"}
+      ],
+      "note": "Manitoba Internet Exchange, Winnipeg, stratum 1 GPS. Its NTP page (archived 2026-06; the live site is down since 2026-10-21) says the cluster serves MBIX-connected networks and states no limits; time1.mbix.ca says it is in the public NTP pool and gives an NTS client config. Use outside MBIX networks is not stated, so ask. Steady -3 to -9 ms offset from far test points."
+    },
+    {
+      "id": "wiktel",
+      "host": "ntp1.wiktel.com",
+      "operator": "wiktel",
+      "roots": ["isrg-root-x1.pem", "isrg-root-x2.pem"],
+      "nitro_port": 8015,
+      "status": "active",
+      "terms": "open",
+      "terms_url": "https://ntp1.wiktel.com/",
+      "regions": ["eu", "na", "sa"],
+      "alt": [
+        {"host": "ntp2.wiktel.com"}
+      ],
+      "default": true,
+      "note": "Wikstrom Telephone Company, Minnesota, stratum 1 GPS. Public NTP pool member, NTS client config published, no limits stated; the page does not name the operator. Offset -3 to -18 ms from far test points."
+    },
+    {
+      "id": "nic.br",
+      "host": "a.st1.ntp.br",
+      "operator": "nic.br",
+      "roots": ["isrg-root-x1.pem", "isrg-root-x2.pem"],
+      "nitro_port": 8016,
+      "status": "active",
+      "terms": "open",
+      "terms_url": "https://ntp.br/faq/",
+      "regions": ["na", "sa"],
+      "alt": [
+        {"host": "c.st1.ntp.br"},
+        {"host": "gps.ntp.br"}
+      ],
+      "note": "NIC.br with Observatorio Nacional time, stratum 1. Free and public; built for Brazil, foreign clients may be blocked for a while under load. b.st1.ntp.br did not answer NTS-KE and is left out."
+    },
+    {
+      "id": "globalentry",
+      "host": "time-gps.globalentry.systems",
+      "operator": "globalentry",
+      "roots": ["isrg-root-x1.pem", "isrg-root-x2.pem"],
+      "nitro_port": 8017,
+      "status": "active",
+      "terms": "ask",
+      "regions": ["na", "sa"],
+      "note": "Global Entry Systems, Colorado, stratum 2 with a GPS/PPS stratum 1 upstream. Terms not readable (site returns 403), so ask. 16/16 from all six non-EU GCP regions on 2026-11-10; 125 ms from Tokyo, 172 ms from Sydney, 187 ms from Singapore, so not apac by the 180 ms rule. Not measured from Europe."
+    }
+  ],
+  "coarse": [
+    {
+      "id": "aws-kms",
+      "url": "https://kms.{region}.amazonaws.com/",
+      "cloud_roots": "aws",
+      "note": "Nitro image. Chain seen 2026-11-11: Amazon Root CA 1 (cross-signed by Starfield Services Root G2)."
+    },
+    {
+      "id": "aws-sts",
+      "url": "https://sts.{region}.amazonaws.com/",
+      "cloud_roots": "aws",
+      "note": "Nitro image. Chain seen 2026-11-11: Amazon Root CA 1."
+    },
+    {
+      "id": "gcp-kms",
+      "url": "https://cloudkms.googleapis.com/",
+      "cloud_roots": "google",
+      "note": "Confidential Space image. Chain seen 2026-11-11: GTS Root R4."
+    },
+    {
+      "id": "gcp-sts",
+      "url": "https://sts.googleapis.com/",
+      "cloud_roots": "google",
+      "note": "Confidential Space image. Chain seen 2026-11-11: GTS Root R4."
+    },
+    {
+      "id": "azure-login",
+      "url": "https://login.microsoftonline.com/",
+      "cloud_roots": "azure",
+      "note": "ACI image. Chain seen 2026-11-11: Microsoft TLS RSA Root G2 under DigiCert Global Root G2."
+    },
+    {
+      "id": "azure-management",
+      "url": "https://management.azure.com/",
+      "cloud_roots": "azure",
+      "note": "ACI image. Chain seen 2026-11-11: Microsoft TLS RSA Root G2 under DigiCert Global Root G2."
+    },
+    {
+      "id": "cloudflare-www",
+      "url": "https://www.cloudflare.com/",
+      "roots": ["isrg-root-x1.pem", "isrg-root-x2.pem", "sslcom-root-ecc.pem"],
+      "cloud_roots": "google",
+      "note": "Every image. Chain seen 2026-11-11: ISRG Root X1. Cloudflare's edge certificates also come from Google Trust Services and SSL.com, so their roots are here too."
     }
   ]
 }

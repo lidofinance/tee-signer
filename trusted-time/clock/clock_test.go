@@ -59,3 +59,45 @@ func TestHTTPSDate(t *testing.T) {
 		t.Fatal("plain http accepted")
 	}
 }
+
+// The quorum counts each source: answers, failures, the last error, and how
+// far its reading was from the quorum's answer. A failed round still counts.
+func TestQuorumSourceStats(t *testing.T) {
+	ctx := context.Background()
+	a := &fakeSource{name: "a", t: base}
+	b := &fakeSource{name: "b", t: base.Add(2 * time.Second)}
+	c := &fakeSource{name: "c", err: errors.New("timeout")}
+	q := &Quorum{Sources: []Source{a, b, c}, Min: 2}
+	if st := q.SourceStats(); len(st) != 3 || st[0].Name != "a" || st[0].Queries != 0 || st[0].LastAnswerAge != -1 {
+		t.Fatalf("before any round: %+v", st)
+	}
+	if got, err := q.Fetch(ctx); err != nil || !got.Equal(base) {
+		t.Fatalf("%v %v", got, err)
+	}
+	st := q.SourceStats()
+	if st[0].Answers != 1 || st[0].LastDiff != 0 || st[0].LastAnswerAge < 0 || st[0].LastError != "" {
+		t.Fatalf("a: %+v", st[0])
+	}
+	if st[1].Answers != 1 || st[1].LastDiff != 2*time.Second {
+		t.Fatalf("b: %+v", st[1])
+	}
+	if st[2].Queries != 1 || st[2].Failures != 1 || st[2].Answers != 0 || st[2].LastAnswerAge != -1 || st[2].LastError == "" {
+		t.Fatalf("c: %+v", st[2])
+	}
+	// A round without a quorum: b's answer counts, its last diff stays.
+	a.err, b.t = errors.New("down"), base.Add(5*time.Second)
+	if _, err := q.Fetch(ctx); err == nil {
+		t.Fatal("quorum with one answer")
+	}
+	st = q.SourceStats()
+	if st[0].Failures != 1 || st[1].Answers != 2 || st[1].LastDiff != 2*time.Second || st[2].Failures != 2 {
+		t.Fatalf("after a failed round: %+v", st)
+	}
+	an := &Anchored{Src: q, Interval: time.Second}
+	if got := an.SourceStats(); len(got) != 3 || got[1].Answers != 2 {
+		t.Fatalf("anchored: %+v", got)
+	}
+	if got := (&Anchored{Src: a, Interval: time.Second}).SourceStats(); got != nil {
+		t.Fatalf("a source without stats: %+v", got)
+	}
+}
