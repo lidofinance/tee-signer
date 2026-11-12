@@ -25,6 +25,8 @@ import (
 const (
 	KeyLen            = C.SNTS_KEY_LEN
 	RequestRandomLen  = C.SNTS_REQUEST_RANDOM_LEN
+	PlainRandomLen    = C.SNTS_PLAIN_RANDOM_LEN
+	PlainRequestLen   = C.SNTS_PLAIN_REQUEST_LEN
 	KEMaxResponseLen  = C.SNTS_KE_MAX_RESPONSE_LEN
 	NTPMaxRequestLen  = C.SNTS_NTP_MAX_REQUEST_LEN
 	NTPMaxResponseLen = C.SNTS_NTP_MAX_RESPONSE_LEN
@@ -53,7 +55,7 @@ const (
 )
 
 // Version is the name and version of the Rust library, for example
-// "signer-nts 0.0.3".
+// "signer-nts 0.0.5".
 func Version() string { return C.GoString(C.snts_version()) }
 
 // AESSIVSelfTest runs the AES-SIV-CMAC-256 test vector of RFC 5297 appendix
@@ -261,6 +263,12 @@ func (r *Request) Verify(packet []byte, t1, t4 int64, pivot time.Time) (Sample, 
 	var reason C.uint32_t
 	rc := C.snts_ntp_verify(r.a.p, r.p, ptr(packet), C.size_t(len(packet)), C.int64_t(t1), C.int64_t(t4),
 		C.int64_t(pivot.UnixNano()), &out, &reason)
+	return sampleOf(rc, &out, reason)
+}
+
+// sampleOf turns the outcome of snts_ntp_verify or snts_plain_verify into
+// a Sample, a *KissError or an *Error.
+func sampleOf(rc C.int, out *C.snts_sample, reason C.uint32_t) (Sample, error) {
 	if rc == codeKiss {
 		k := C.GoBytes(unsafe.Pointer(&out.kiss[0]), 4)
 		return Sample{CookiesHeld: int(out.cookies_held)}, &KissError{Code: string(k)}
@@ -283,6 +291,46 @@ func (r *Request) Verify(packet []byte, t1, t4 int64, pivot time.Time) (Sample, 
 	}, nil
 }
 
+// PlainRequest is one plain NTP request (RFC 5905, no NTS) waiting for its
+// response. Nothing authenticates the response: anyone on the path who sees
+// the request can answer it with any time. Its methods are not safe for
+// concurrent use.
+type PlainRequest struct {
+	p *C.snts_plain
+}
+
+// NewPlainRequest builds a plain NTP request. random is PlainRandomLen
+// octets from a CSPRNG; it becomes the transmit timestamp.
+func NewPlainRequest(random []byte) ([]byte, *PlainRequest, error) {
+	out := make([]byte, PlainRequestLen)
+	var n C.size_t
+	var r *C.snts_plain
+	if err := check(C.snts_plain_request(ptr(random), C.size_t(len(random)), ptr(out), C.size_t(len(out)), &n, &r), 0); err != nil {
+		return nil, nil, err
+	}
+	return out[:n], &PlainRequest{p: r}, nil
+}
+
+// Close frees the request.
+func (r *PlainRequest) Close() {
+	C.snts_plain_free(r.p)
+	r.p = nil
+}
+
+// Verify checks a response to r with the header checks of Request.Verify
+// and measures it, with the same arguments and errors. The sample has no
+// cookie counts.
+func (r *PlainRequest) Verify(packet []byte, t1, t4 int64, pivot time.Time) (Sample, error) {
+	if r.p == nil {
+		return Sample{}, errors.New("nts: plain request closed")
+	}
+	var out C.snts_sample
+	var reason C.uint32_t
+	rc := C.snts_plain_verify(r.p, ptr(packet), C.size_t(len(packet)), C.int64_t(t1), C.int64_t(t4),
+		C.int64_t(pivot.UnixNano()), &out, &reason)
+	return sampleOf(rc, &out, reason)
+}
+
 // Interval is one server's measurement for the quorum.
 type Interval struct {
 	Operator string
@@ -300,7 +348,8 @@ type QuorumResult struct {
 
 // Quorum combines 3 to MaxServers intervals from distinct operators, up to
 // maxWrong of which may be wrong, at the Monotonic time now. len(in) must
-// be at least 2 * maxWrong + 1; MajorityWrong(len(in)) is the most it takes.
+// be at least 2 * maxWrong + 1; MajorityWrong(len(in)) is the most it takes
+// (the clock passes QuorumWrong).
 func Quorum(in []Interval, now int64, maxWrong int) (QuorumResult, error) {
 	if len(in) > MaxServers {
 		return QuorumResult{}, fmt.Errorf("nts: %d servers, at most %d", len(in), MaxServers)
@@ -336,6 +385,13 @@ func Quorum(in []Interval, now int64, maxWrong int) (QuorumResult, error) {
 // MajorityWrong is the most wrong servers the majority rule allows among
 // n: (n - 1) / 2, rounded down.
 func MajorityWrong(n int) int { return max(n-1, 0) / 2 }
+
+// QuorumWrong is the most wrong servers the NTS clock allows among n fresh
+// samples: MajorityWrong(n), but never so many that fewer than 3 agree.
+// 3 of 3, 3 of 4, 3 of 5, 4 of 6 and 4 of 7 must agree. Without the floor,
+// 2 of 3 would do, and a host that drops answers until 3 are fresh could
+// let 2 wrong operators set the time.
+func QuorumWrong(n int) int { return max(min(MajorityWrong(n), n-3), 0) }
 
 // Drift is how far a bound grows over d: RhoPPM of d, rounded up, as
 // drift_ns in the Rust core. The product takes 128 bits: in int64 it

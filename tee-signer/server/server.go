@@ -1523,7 +1523,8 @@ func (s *Server) health() (*backend.Health, error) {
 func healthNTS(s clock.NTSSummary) *backend.ClockNTS {
 	ms := func(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
 	out := &backend.ClockNTS{
-		Quorum: s.Quorum, Refused: s.Refused, BoundNowMS: ms(s.BoundNow), MaxBoundMS: ms(s.MaxBound), OffsetFromHostMS: ms(s.OffsetFromHost),
+		Protocol: string(s.Protocol),
+		Quorum:   s.Quorum, Refused: s.Refused, BoundNowMS: ms(s.BoundNow), MaxBoundMS: ms(s.MaxBound), OffsetFromHostMS: ms(s.OffsetFromHost),
 		Members: s.Members, QuorumAgeMS: ms(s.AgeOfQuorum), SampleAgeMS: ms(s.SampleAge), MaxSampleAgeMS: ms(s.MaxSampleAge),
 		Refusals: s.Refusals,
 		DriftPPM: s.DriftPPM, DriftErrPPM: s.DriftErrPPM, DriftBaselineS: s.DriftBaseline.Seconds(), RhoViolations: s.RhoViolations,
@@ -1536,11 +1537,19 @@ func healthNTS(s clock.NTSSummary) *backend.ClockNTS {
 		}
 		c := s.Operators[p.Operator]
 		out.Operators = append(out.Operators, backend.ClockNTSOperator{
-			Operator: p.Operator, Host: p.Host, Active: p.Active, Queries: p.Queries, Answers: p.Answers, Losses: p.Losses,
+			Operator: p.Operator, Host: p.Host, Active: p.Active, Queries: p.Queries, Answers: p.Answers, Losses: p.Losses, Wide: p.Wide,
 			KEOK: p.KEOK, KEFail: p.KEFail, LastAnswerAgeMS: age, Off: p.Off, LastError: p.LastError,
 			Fallbacks: c.Fallbacks, Bursts: c.Bursts, Rates: c.Rates, Handovers: c.Handovers, FailedHandovers: c.FailedHandovers,
-			FallbackKE: c.FallbackKE,
+			FallbackKE: c.FallbackKE, Retries: c.Retries,
 		})
+	}
+	for _, c := range s.Coarse {
+		age := -1.0
+		if c.LastAnswerAge >= 0 {
+			age = ms(c.LastAnswerAge)
+		}
+		out.Coarse = append(out.Coarse, backend.ClockNTSCoarse{Source: c.Name, Queries: c.Queries, Answers: c.Answers,
+			Failures: c.Failures, LastAnswerAgeMS: age, LastDiffMS: ms(c.LastDiff), LastError: c.LastError})
 	}
 	return out
 }

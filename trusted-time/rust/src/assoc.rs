@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use signer_nts_core::cookie::Cookie;
 use signer_nts_core::ke;
 use signer_nts_core::keys::{C2sKey, S2cKey};
-use signer_nts_core::ntp::{self, LeapIndicator, PendingRequest, RequestInput, Response};
+use signer_nts_core::ntp::{self, LeapIndicator, PendingRequest, RequestInput, Response, TimeSample};
 use signer_nts_core::sample;
 use signer_nts_core::time::NtpTimestamp;
 
@@ -121,27 +121,40 @@ impl Association {
                 while self.cookies.len() > COOKIE_JAR {
                     self.cookies.pop_front();
                 }
-                let m = sample::measure(&s, t1_local_ns, t4_local_ns, pivot_unix_ns)
-                    .map_err(|e| (E_SAMPLE, reason::sample(&e)))?;
-                Ok(Verified::Time(Sample {
-                    offset_ns: m.offset_ns,
-                    delay_ns: m.delay_ns,
-                    bound_ns: m.bound_ns,
-                    t4_local_ns: m.t4_local_ns,
-                    root_delay_ns: i64::try_from(s.root_delay.to_nanos()).unwrap_or(i64::MAX),
-                    root_dispersion_ns: i64::try_from(s.root_dispersion.to_nanos()).unwrap_or(i64::MAX),
-                    cookies_received: u32::try_from(received).unwrap_or(u32::MAX),
-                    cookies_held: u32::try_from(self.cookies.len()).unwrap_or(u32::MAX),
-                    precision: i32::from(s.precision),
-                    stratum: s.stratum,
-                    leap: match s.leap {
-                        LeapIndicator::NoWarning => 0,
-                        LeapIndicator::InsertSecond => 1,
-                        LeapIndicator::DeleteSecond => 2,
-                    },
-                    kiss: [0; 4],
-                }))
+                let mut out = measured(&s, t1_local_ns, t4_local_ns, pivot_unix_ns)?;
+                out.cookies_received = u32::try_from(received).unwrap_or(u32::MAX);
+                out.cookies_held = u32::try_from(self.cookies.len()).unwrap_or(u32::MAX);
+                Ok(Verified::Time(out))
             }
         }
     }
+}
+
+/// Measures an accepted response (`sample::measure`) and fills in a
+/// [`Sample`] with no cookie counts.
+pub(crate) fn measured(
+    s: &TimeSample,
+    t1_local_ns: i64,
+    t4_local_ns: i64,
+    pivot_unix_ns: i64,
+) -> Result<Sample, (c_int, u32)> {
+    let m = sample::measure(s, t1_local_ns, t4_local_ns, pivot_unix_ns).map_err(|e| (E_SAMPLE, reason::sample(&e)))?;
+    Ok(Sample {
+        offset_ns: m.offset_ns,
+        delay_ns: m.delay_ns,
+        bound_ns: m.bound_ns,
+        t4_local_ns: m.t4_local_ns,
+        root_delay_ns: i64::try_from(s.root_delay.to_nanos()).unwrap_or(i64::MAX),
+        root_dispersion_ns: i64::try_from(s.root_dispersion.to_nanos()).unwrap_or(i64::MAX),
+        cookies_received: 0,
+        cookies_held: 0,
+        precision: i32::from(s.precision),
+        stratum: s.stratum,
+        leap: match s.leap {
+            LeapIndicator::NoWarning => 0,
+            LeapIndicator::InsertSecond => 1,
+            LeapIndicator::DeleteSecond => 2,
+        },
+        kiss: [0; 4],
+    })
 }

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/trusted-time/nts/ntstest"
+	"github.com/lidofinance/tee-signer/trusted-time/ntscatalog"
 )
 
 func TestVersion(t *testing.T) {
@@ -415,6 +416,19 @@ func TestQuorumBindingMajority(t *testing.T) {
 			t.Fatalf("MajorityWrong(%d) = %d, want %d", n, got, want)
 		}
 	}
+	for n, want := range map[int]int{0: 0, 2: 0, 3: 0, 4: 1, 5: 2, 6: 2, 7: 3, 12: 5} {
+		if got := QuorumWrong(n); got != want {
+			t.Fatalf("QuorumWrong(%d) = %d, want %d", n, got, want)
+		}
+	}
+	// Two agree, one does not: the majority rule takes it, the clock's does not.
+	two := []Interval{in[0], in[1], in[3]}
+	if _, err := Quorum(two, 0, MajorityWrong(3)); err != nil {
+		t.Fatalf("2 of 3: %v", err)
+	}
+	if _, err := Quorum(two, 0, QuorumWrong(3)); err == nil {
+		t.Fatal("QuorumWrong took 2 of 3")
+	}
 	if _, err := Quorum(in, 0, 1); err == nil || !strings.Contains(err.Error(), "disagree") {
 		t.Fatalf("F = 1: %v", err)
 	}
@@ -430,6 +444,14 @@ func TestQuorumBindingMajority(t *testing.T) {
 	}
 }
 
+// The catalog keeps copies of the quorum's limits (it builds without cgo);
+// they must be the core's.
+func TestCatalogLimitsMatchTheCore(t *testing.T) {
+	if ntscatalog.MaxLabel != MaxOperatorLen || ntscatalog.MaxServers != MaxServers {
+		t.Fatalf("catalog MaxLabel %d MaxServers %d, core %d and %d", ntscatalog.MaxLabel, ntscatalog.MaxServers, MaxOperatorLen, MaxServers)
+	}
+}
+
 func TestPinnedRoots(t *testing.T) {
 	for _, s := range PublicServers {
 		if _, err := RootPool(s.Roots); err != nil {
@@ -438,6 +460,30 @@ func TestPinnedRoots(t *testing.T) {
 	}
 	if _, err := RootPool([]string{"other.pem"}); err == nil {
 		t.Fatal("unpinned root accepted")
+	}
+	// Every root the catalog names, for its entries and their alt hosts,
+	// is pinned and loads, and every pinned file is used.
+	used := map[string]bool{}
+	for _, e := range ntscatalog.Builtin.NTS {
+		sets := [][]string{e.Roots}
+		for _, a := range e.Alt {
+			if len(a.Roots) > 0 {
+				sets = append(sets, a.Roots)
+			}
+		}
+		for _, roots := range sets {
+			if _, err := RootPool(roots); err != nil {
+				t.Errorf("%s: %v", e.ID, err)
+			}
+			for _, r := range roots {
+				used[r] = true
+			}
+		}
+	}
+	for f := range rootSHA256 {
+		if !used[f] {
+			t.Errorf("pinned root %s is named by no catalog entry", f)
+		}
 	}
 }
 

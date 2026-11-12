@@ -65,21 +65,26 @@ func TestAllowlist(t *testing.T) {
 		}
 	}
 	refused := map[string]string{
-		"time.cloudflare.com:53":            "port 53 not allowed",
-		"time.cloudflare.com:4460":          "port 4460 not allowed",
-		"evil.example:123":                  "name evil.example not in the allowlist",
-		"ntppool1.time.nl.evil.example:123": "not in the allowlist",
-		"203.0.113.9:123":                   "not in the allowlist", // what evil.example resolves to
-		"194.58.208.1:4123":                 "not in the allowlist", // just outside the block
-		"127.0.0.1:123":                     "not in the allowlist",
-		"0.0.0.0:123":                       "not allowed",
-		"224.0.1.1:123":                     "not allowed", // NTP multicast
-		"[fe80::1%eth0]:123":                "not allowed",
-		"ntppool1.time.nl:123":              "cannot resolve",
-		"time.cloudflare.com":               "not host:port",
-		"time.cloudflare.com:x":             "port x not allowed",
-		"time.cloudflare.com:-1":            "not allowed",
-		"time.cloudflare.com:65659":         "not allowed",
+		"time.cloudflare.com:53":       "port 53 not allowed",
+		"time.cloudflare.com:4460":     "port 4460 not allowed",
+		"evil.example:123":             "name evil.example not in the allowlist",
+		"nts1.ntp.hr.evil.example:123": "not in the allowlist",
+		"203.0.113.9:123":              "not in the allowlist", // what evil.example resolves to
+		"194.58.208.1:4123":            "not in the allowlist", // just outside the block
+		"127.0.0.1:123":                "not in the allowlist",
+		"0.0.0.0:123":                  "not allowed",
+		"224.0.1.1:123":                "not allowed", // NTP multicast
+		"[fe80::1%eth0]:123":           "not allowed",
+		"nts1.ntp.hr:123":              "cannot resolve",
+		"time.cloudflare.com":          "not host:port",
+		"time.cloudflare.com:x":        "port x not allowed",
+		"time.cloudflare.com:-1":       "not allowed",
+		"time.cloudflare.com:65659":    "not allowed",
+	}
+	// An address of no allowed name makes the relay resolve every allowed
+	// name once; after that all are cached, nts1.ntp.hr's failure too.
+	if _, err := a.Check(context.Background(), "198.51.100.1:123"); err == nil {
+		t.Fatal("an address of no allowed name passed")
 	}
 	before := dns.calls.Load()
 	for dest, want := range refused {
@@ -87,12 +92,12 @@ func TestAllowlist(t *testing.T) {
 			t.Errorf("%s: got %v, want %q", dest, err, want)
 		}
 	}
-	// No name outside the list was looked up. The allowed names are
-	// cached from above, except ntppool1.time.nl, whose lookup fails.
-	if got := dns.calls.Load() - before; got > 1 {
-		t.Errorf("%d lookups for the refusals, want at most 1 (ntppool1.time.nl, then its failure is cached)", got)
+	// No name outside the list was looked up, and the allowed ones come
+	// from the cache.
+	if got := dns.calls.Load() - before; got != 0 {
+		t.Errorf("%d lookups for the refusals, want 0 (all allowed names cached, failures too)", got)
 	}
-	for _, f := range []string{"evil.example", "ntppool1.time.nl.evil.example"} {
+	for _, f := range []string{"evil.example", "nts1.ntp.hr.evil.example"} {
 		if _, ok := a.cache[f]; ok {
 			t.Errorf("%s was looked up", f)
 		}
@@ -510,5 +515,55 @@ func TestRelaySessionTimeouts(t *testing.T) {
 	}
 	if d := time.Since(start); d < 300*time.Millisecond || d > 2*time.Second {
 		t.Fatalf("busy session closed after %v, want about 400 ms", d)
+	}
+}
+
+// A DNS answer that points an allowed name at loopback, a private or
+// shared-space address does not turn the relay there, unless Nets holds
+// the address (the e2e tests name localhost and allow 127.0.0.1/32).
+func TestAllowlistRefusesLocalAnswers(t *testing.T) {
+	dns := &fakeDNS{table: map[string][]netip.Addr{
+		"lo.example":   addrs("127.0.0.1"),
+		"vpc.example":  addrs("10.0.0.5", "fd00::5"),
+		"cgn.example":  addrs("100.64.1.1"),
+		"n64.example":  addrs("64:ff9b::a00:5", "2002:a00:5::1", "198.18.0.1"),
+		"both.example": addrs("10.0.0.6", "192.0.2.7"),
+	}}
+	a := &Allowlist{Names: []string{"lo.example", "vpc.example", "cgn.example", "n64.example", "both.example"}, Ports: []uint16{123}, Lookup: dns.lookup}
+	for _, dest := range []string{"lo.example:123", "vpc.example:123", "cgn.example:123", "n64.example:123"} {
+		if _, err := a.Check(context.Background(), dest); err == nil || !strings.Contains(err.Error(), "no usable address") {
+			t.Errorf("%s: %v", dest, err)
+		}
+	}
+	for _, dest := range []string{"127.0.0.1:123", "10.0.0.5:123", "[fd00::5]:123", "100.64.1.1:123", "10.0.0.6:123", "[64:ff9b::a00:5]:123"} {
+		if _, err := a.Check(context.Background(), dest); err == nil || !strings.Contains(err.Error(), "not in the allowlist") {
+			t.Errorf("%s: %v", dest, err)
+		}
+	}
+	if ap, err := a.Check(context.Background(), "both.example:123"); err != nil || ap.String() != "192.0.2.7:123" {
+		t.Errorf("both.example: %v %v, want the public address", ap, err)
+	}
+	a.Nets = []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}
+	if ap, err := a.Check(context.Background(), "lo.example:123"); err != nil || ap.String() != "127.0.0.1:123" {
+		t.Errorf("lo.example with 127.0.0.1/32 in Nets: %v %v", ap, err)
+	}
+}
+
+// An address outside Nets that is not public is refused before the relay
+// looks up any allowed name: it could never pass, and the lookups of the
+// whole catalog would delay the answer.
+func TestAllowlistRefusesLocalAddressesWithoutLookups(t *testing.T) {
+	dns := &fakeDNS{table: map[string][]netip.Addr{"a.example": addrs("192.0.2.1")}}
+	a := &Allowlist{Names: []string{"a.example", "b.example", "c.example"}, Ports: []uint16{123}, Lookup: dns.lookup}
+	for _, dest := range []string{"10.0.0.5:123", "127.0.0.1:123", "[fd00::5]:123", "100.64.1.1:123"} {
+		if _, err := a.Check(context.Background(), dest); err == nil || !strings.Contains(err.Error(), "not in the allowlist") {
+			t.Errorf("%s: %v", dest, err)
+		}
+	}
+	if n := dns.calls.Load(); n != 0 {
+		t.Fatalf("%d lookups for addresses that cannot pass", n)
+	}
+	if _, err := a.Check(context.Background(), "192.0.2.1:123"); err != nil || dns.calls.Load() == 0 {
+		t.Fatalf("a public address of an allowed name: %v, %d lookups", err, dns.calls.Load())
 	}
 }

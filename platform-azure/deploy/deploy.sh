@@ -185,8 +185,19 @@ render() {
   # command replaces it.
   jq -e '.resources[0].properties.containers[0].properties.command
     | index("-nts-clock") != null and index("-nts-coarse-urls") != null
-      and index("-nts-wait") != null and index("-nts-max-bound") != null and index("-clock") == null' \
+      and index("-nts-wait") != null and index("-nts-max-bound") != null and index("-nts-max-sample-bound") != null and index("-clock") == null' \
     "$dir/template.json" >/dev/null || die "the runner command in $dir/template.json does not run the NTS clock alone"
+  # The clock protocol the command names: nts without -clock-protocol, or
+  # ntp (plain NTP, unauthenticated).
+  local proto
+  proto="$(jq -r '.resources[0].properties.containers[0].properties.command as $c
+    | ([range(0; $c | length) as $i | select($c[$i] == "-clock-protocol") | $c[$i + 1] // ""]
+       + [$c[] | select(startswith("-clock-protocol=")) | sub("^-clock-protocol="; "")]) | last // "nts"' "$dir/template.json")"
+  case "$proto" in
+    nts) log "signer $n: clock protocol nts" ;;
+    ntp) log "signer $n: clock protocol ntp (plain NTP, unauthenticated: the host can forge every answer within the coarse check, trusted-time/docs/nts.md)" ;;
+    *) die "the runner command in $dir/template.json names -clock-protocol $proto; want nts or ntp" ;;
+  esac
   # The runner takes its values from the setup in SIGNER_SETUP, a parameter
   # without a default, and the command names none of them.
   jq -e '.resources[0].properties.containers[0].properties

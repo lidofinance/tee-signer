@@ -128,8 +128,13 @@ func TestProbeNewRunnerWithNTS(t *testing.T) {
 	if strings.Contains(string(b), "clock_offset_s") {
 		t.Errorf("output still has clock_offset_s: %s", b)
 	}
-	if l := clockLine(r); !strings.Contains(l, "nts_bound=17.2ms") && !strings.Contains(l, "nts_bound=17.3ms") {
+	if l := clockLine(r); !strings.HasPrefix(l, "protocol=nts ") || !strings.Contains(l, "nts_bound=17.2ms") && !strings.Contains(l, "nts_bound=17.3ms") {
 		t.Errorf("log line %q", l)
+	}
+	// A plain NTP clock says so before its bound.
+	r.NTS.Protocol = "ntp"
+	if l := clockLine(r); !strings.HasPrefix(l, "protocol=ntp-unauthenticated nts_bound=") {
+		t.Errorf("plain NTP log line %q", l)
 	}
 }
 
