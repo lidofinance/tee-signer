@@ -631,6 +631,22 @@ int sc_signer_add_validator(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
                             uint8_t share_pubkey_out[SC_PUBKEY_LEN]);
 
 /*
+ * sc_signer_add_validator for a share of a distributed validator whose
+ * other parts the core does not see (an Obol/Charon cluster): pubkey is the
+ * share's own public key, which the client signs under, and group_pubkey the
+ * validator's on-chain (group) key. The aggregate and contribution calls
+ * then check the selection proof in the message against group_pubkey, the
+ * proof the cluster combined, instead of pubkey. Everything else (marks,
+ * policy, the partial selection proofs) works on pubkey as for any key.
+ * group_pubkey NULL is sc_signer_add_validator. SC_ERR_BAD_KEY, with nothing
+ * loaded, if group_pubkey is not a G1 point or is the point at infinity.
+ */
+int sc_signer_add_validator_group(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
+                                  const uint8_t secret[SC_SECRET_LEN], uint64_t validator_index,
+                                  const uint8_t group_pubkey[SC_PUBKEY_LEN],
+                                  uint8_t share_pubkey_out[SC_PUBKEY_LEN]);
+
+/*
  * EIP-3076 minimal import for one loaded validator. The caller parses the
  * interchange file and passes its metadata.genesis_validators_root, which
  * must equal the configured one (else SC_ERR_ARG), and the per-validator
@@ -863,6 +879,8 @@ int sc_sign_randao_reveal(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN], uin
                           uint8_t signature[SC_SIGNATURE_LEN]);
 int sc_sign_voluntary_exit(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
                            const sc_voluntary_exit *exit, uint8_t signature[SC_SIGNATURE_LEN]);
+/* reg->pubkey must be pubkey, or the group key of a validator loaded with
+ * sc_signer_add_validator_group (SC_ERR_POLICY_PUBKEY otherwise). */
 int sc_sign_validator_registration(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
                                    const sc_validator_registration *reg,
                                    uint8_t signature[SC_SIGNATURE_LEN]);
@@ -1009,7 +1027,8 @@ void sc_htr_sync_aggregator_selection_data(uint64_t slot, uint64_t subcommittee_
  *   (SC_ERR_POLICY_FORK). aggregator_index must equal the validator's bound
  *   index (SC_ERR_POLICY_INDEX, unless the index is SC_INDEX_UNKNOWN), and
  *   the selection proof must verify under the validator (group) public key
- *   over the slot's selection proof signing root (SC_ERR_SELECTION_PROOF).
+ *   over the slot's selection proof signing root (SC_ERR_SELECTION_PROOF):
+ *   the group_pubkey of sc_signer_add_validator_group, else pubkey.
  *   scratch holds SC_TYPED_SCRATCH_LEN bytes.
  * sc_sign_sync_committee_message: the slot and the block root,
  *   DOMAIN_SYNC_COMMITTEE at epoch(slot).

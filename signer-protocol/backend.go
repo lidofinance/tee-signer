@@ -99,8 +99,9 @@ type Health struct {
 	// and runners before it leave it out.
 	SingleKey string `json:"single_key,omitempty"`
 	// SigningMode is the setup's signing_mode: "threshold" (shares of
-	// t-of-n splits with n >= 2) or "single" (whole keys, 1 of 1 import
-	// orders only). Unlike single_key it is a leaf of the public part, so a
+	// t-of-n splits with n >= 2), "single" (whole keys, 1 of 1 import
+	// orders only) or "dv_share" (one share of each Charon distributed
+	// validator, served under the share key). Unlike single_key it is a leaf of the public part, so a
 	// verifier can also check it against the attested policy_root. Runners
 	// without a setup and runners before it leave it out.
 	SigningMode string `json:"signing_mode,omitempty"`

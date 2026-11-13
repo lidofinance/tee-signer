@@ -213,6 +213,11 @@ type shareRecord struct {
 	// Batch tags the records of one batch import (importbatch.go), so a
 	// start can leave out the records of a batch that did not complete.
 	Batch []byte `json:"batch,omitempty"`
+	// GroupPubkey: under signing_mode = dv_share, the validator key of the
+	// import order (the Charon group key), which the share's selection
+	// proofs must verify under. Pubkey is then the share's own key. Set
+	// only in dv_share mode; a runner built before it refuses the record.
+	GroupPubkey *backend.Pubkey `json:"group_pubkey,omitempty"`
 }
 
 func shareKey(pk backend.Pubkey) string { return "shares/" + hex.EncodeToString(pk[:]) }
@@ -589,7 +594,11 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 		}
 		var sec [32]byte
 		copy(sec[:], rec.Secret)
-		if err := s.checkWholeKey(pk, &sec); err != nil {
+		err := s.checkWholeKey(pk, &sec)
+		if err == nil {
+			err = s.checkGroupKey(pk, rec.GroupPubkey)
+		}
+		if err != nil {
 			clear(sec[:])
 			errs = append(errs, fmt.Errorf("%s: %w; the record stays in the store and is not loaded: remove it", k, err))
 			continue
@@ -598,7 +607,7 @@ func (s *Server) LoadListedShares(keys []string) (int, error) {
 		if rec.SourceFloor != 0 && !rec.History {
 			s.Hooks.NoteImportFloor(pk, rec.SourceFloor)
 		}
-		_, err := s.Signer.AddValidator(pk, sec, rec.Index, nil)
+		_, err = s.addValidator(pk, &sec, rec.Index, nil, rec.GroupPubkey)
 		clear(sec[:])
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", k, err))
@@ -927,7 +936,8 @@ func (s *Server) dispatch(ctx context.Context, f wire.Frame) ([]byte, error) {
 		if err != nil || got != req.SharePubkey {
 			return nil, backend.Refused(backend.StatusBadKey, "decrypted share does not match share_pubkey")
 		}
-		k, err := s.addShare(req.Pubkey, &secret, req.Index, req.Interchange, "sealed")
+		pk, group := s.importKey(&req)
+		k, err := s.addShareGroup(pk, &secret, req.Index, req.Interchange, group, "sealed")
 		if err != nil {
 			return nil, err
 		}
@@ -1297,6 +1307,15 @@ func describe(m backend.Message) string {
 // validator is refused before it is stored, so it never replaces the
 // stored record of the share that loaded (SSI-STORAGE-01).
 func (s *Server) addShare(pk backend.Pubkey, secret *[32]byte, index uint64, interchange *backend.Watermark, how string) (backend.ValidatorKey, error) {
+	return s.addShareGroup(pk, secret, index, interchange, nil, how)
+}
+
+// addShareGroup is addShare with the group key of a dv_share key (nil in
+// the other modes, checkGroupKey).
+func (s *Server) addShareGroup(pk backend.Pubkey, secret *[32]byte, index uint64, interchange *backend.Watermark, group *backend.Pubkey, how string) (backend.ValidatorKey, error) {
+	if err := s.checkGroupKey(pk, group); err != nil {
+		return backend.ValidatorKey{}, err
+	}
 	if err := s.reserve(pk); err != nil {
 		return backend.ValidatorKey{}, err
 	}
@@ -1319,7 +1338,7 @@ func (s *Server) addShare(pk backend.Pubkey, secret *[32]byte, index uint64, int
 		}
 	}
 	rec := shareRecord{Pubkey: pk, Secret: secret[:], Index: index,
-		History: interchange != nil && interchange.HasAttestation}
+		History: interchange != nil && interchange.HasAttestation, GroupPubkey: group}
 	if !rec.History && s.Hooks != nil {
 		// No vote history: the key may have voted elsewhere up to now, past
 		// the log's gate (SLBOUND-01). Gate it from now on, before it can
@@ -1356,7 +1375,7 @@ func (s *Server) addShare(pk backend.Pubkey, secret *[32]byte, index uint64, int
 	if err := s.putShare(pk, blob); err != nil {
 		return backend.ValidatorKey{}, backend.Refused(backend.StatusPlatform, "store share: %v", err)
 	}
-	return s.loadShare(pk, secret, index, interchange, loadFloor, how)
+	return s.loadShare(pk, secret, index, interchange, group, loadFloor, how)
 }
 
 // reserve marks pk as being added. Under a setup it also holds a max_keys
@@ -1497,10 +1516,11 @@ func (s *Server) checkWholeKeyOf(pk, got backend.Pubkey) error {
 		return nil
 	}
 	switch mode := s.Updates.SetupWire().SigningMode; mode {
-	case setupwire.SigningModeSingle:
+	case setupwire.SigningModeSingle, setupwire.SigningModeDVShare:
+		// A dv_share key is filed under its own public key (importKey).
 		if got != pk {
-			return backend.Refused(backend.StatusBadKey, "the setup says signing_mode = single, so this signer holds whole keys only: the key is not the validator key %s",
-				pk.String()[:18])
+			return backend.Refused(backend.StatusBadKey, "the setup says signing_mode = %s, so this signer holds keys under their own public key only: the key is not %s",
+				mode, pk.String()[:18])
 		}
 	case setupwire.SigningModeThreshold:
 		if got == pk {
@@ -1541,7 +1561,7 @@ func (s *Server) sealRecord(rec shareRecord) ([]byte, error) {
 // watermark the core imports with the key, under the same lock hold, so
 // the key never signs without them: blocks, PTC votes and envelopes up to
 // the last slot of that epoch, and targets up to it.
-func (s *Server) loadShare(pk backend.Pubkey, secret *[32]byte, index uint64, interchange *backend.Watermark, floor uint64, how string) (backend.ValidatorKey, error) {
+func (s *Server) loadShare(pk backend.Pubkey, secret *[32]byte, index uint64, interchange *backend.Watermark, group *backend.Pubkey, floor uint64, how string) (backend.ValidatorKey, error) {
 	imp := interchange
 	if s.Hooks != nil && interchange != nil {
 		s.Hooks.NoteInterchange(pk, *interchange)
@@ -1555,7 +1575,7 @@ func (s *Server) loadShare(pk backend.Pubkey, secret *[32]byte, index uint64, in
 		imp = &fw
 		s.Hooks.NoteLoadFloor(pk, floor)
 	}
-	k, err := s.Signer.AddValidator(pk, *secret, index, imp)
+	k, err := s.addValidator(pk, secret, index, imp, group)
 	if err != nil {
 		// A duplicate loaded nothing: the validator keeps its share and
 		// its bounds (APSTATE-02).

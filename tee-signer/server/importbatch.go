@@ -107,9 +107,10 @@ func (s *Server) importBatch(p []byte) ([]byte, error) {
 			return nil, err
 		}
 	}
-	pks := make([]backend.Pubkey, len(reqs))
+	// The keys the shares are filed under, and their group keys (importKey).
+	pks, groups := make([]backend.Pubkey, len(reqs)), make([]*backend.Pubkey, len(reqs))
 	for i := range reqs {
-		pks[i] = reqs[i].Pubkey
+		pks[i], groups[i] = s.importKey(&reqs[i])
 	}
 	if err := s.reserveAll(pks); err != nil {
 		return nil, err
@@ -119,7 +120,7 @@ func (s *Server) importBatch(p []byte) ([]byte, error) {
 	defer clear(secrets)
 	keys, seen := s.Signer.Keys(), map[backend.Pubkey]bool{}
 	for i := range reqs {
-		if err := s.checkBatchShare(&reqs[i], order, now, &secrets[i], keys, seen); err != nil {
+		if err := s.checkBatchShare(&reqs[i], pks[i], groups[i], order, now, &secrets[i], keys, seen); err != nil {
 			detail := err.Error()
 			if re := (*backend.RefusedError)(nil); errors.As(err, &re) {
 				detail = re.Detail
@@ -131,7 +132,7 @@ func (s *Server) importBatch(p []byte) ([]byte, error) {
 	if err != nil {
 		return nil, backend.Refused(backend.StatusPlatform, "%v", err)
 	}
-	if err := s.storeBatch(reqs, secrets, floor, floorOn); err != nil {
+	if err := s.storeBatch(reqs, pks, groups, secrets, floor, floorOn); err != nil {
 		return nil, err
 	}
 	out := make([]backend.ValidatorKey, 0, len(reqs))
@@ -142,12 +143,12 @@ func (s *Server) importBatch(p []byte) ([]byte, error) {
 		if floorOn {
 			loadFloor = floor
 			if r.Interchange == nil || !r.Interchange.HasAttestation {
-				s.Hooks.NoteImportFloor(r.Pubkey, floor)
+				s.Hooks.NoteImportFloor(pks[i], floor)
 			}
 		}
-		k, err := s.loadShare(r.Pubkey, &secrets[i], r.Index, r.Interchange, loadFloor, "sealed batch")
+		k, err := s.loadShare(pks[i], &secrets[i], r.Index, r.Interchange, groups[i], loadFloor, "sealed batch")
 		if err != nil {
-			failed = append(failed, fmt.Errorf("%s: %w", r.Pubkey.String()[:18], err))
+			failed = append(failed, fmt.Errorf("%s: %w", pks[i].String()[:18], err))
 			continue
 		}
 		out = append(out, k)
@@ -160,10 +161,14 @@ func (s *Server) importBatch(p []byte) ([]byte, error) {
 
 // checkBatchShare checks one share of a batch as the sealed import checks
 // it, against the import order o verified at now, and opens it into
-// secret. seen holds the share keys of the batch so far.
-func (s *Server) checkBatchShare(req *backend.SealedImportRequest, o *importorder.Order, now uint64, secret *[32]byte,
+// secret. seen holds the share keys of the batch so far. pk and group are
+// the key the share is filed under and its group key (importKey).
+func (s *Server) checkBatchShare(req *backend.SealedImportRequest, pk backend.Pubkey, group *backend.Pubkey, o *importorder.Order, now uint64, secret *[32]byte,
 	keys []backend.ValidatorKey, seen map[backend.Pubkey]bool) error {
 	if err := s.checkMaxima(req.Interchange); err != nil {
+		return err
+	}
+	if err := s.checkGroupKey(pk, group); err != nil {
 		return err
 	}
 	if o != nil {
@@ -186,10 +191,10 @@ func (s *Server) checkBatchShare(req *backend.SealedImportRequest, o *importorde
 		return &backend.RefusedError{Code: backend.StatusDuplicate, Detail: "the batch holds this share twice"}
 	}
 	seen[req.SharePubkey] = true
-	if err := s.checkShare(req.Pubkey, secret, keys); err != nil {
+	if err := s.checkShare(pk, secret, keys); err != nil {
 		return err
 	}
-	if _, err := s.Signer.State(req.Pubkey); err == nil {
+	if _, err := s.Signer.State(pk); err == nil {
 		return &backend.RefusedError{Code: backend.StatusDuplicate, Detail: "validator already loaded"}
 	}
 	return nil
@@ -199,12 +204,12 @@ func (s *Server) checkBatchShare(req *backend.SealedImportRequest, o *importorde
 // its records and stores them (putShares). A batch adds keys only: a key
 // whose record is in the set is refused, so the set before holds no
 // record of a batch key.
-func (s *Server) storeBatch(reqs []backend.SealedImportRequest, secrets [][32]byte, floor uint64, floorOn bool) error {
+func (s *Server) storeBatch(reqs []backend.SealedImportRequest, pks []backend.Pubkey, groups []*backend.Pubkey, secrets [][32]byte, floor uint64, floorOn bool) error {
 	s.shareSetMu.Lock()
 	defer s.shareSetMu.Unlock()
 	batch := map[backend.Pubkey]bool{}
 	for i := range reqs {
-		pk := reqs[i].Pubkey
+		pk := pks[i]
 		if _, held := s.shareHash[pk]; held {
 			return &backend.RefusedError{Code: backend.StatusDuplicate, Detail: fmt.Sprintf(
 				"validator %s: its share record is stored already; a batch adds keys only, import it with IMPORT_SHARE_SEALED", pk.String()[:18])}
@@ -248,8 +253,8 @@ func (s *Server) storeBatch(reqs []backend.SealedImportRequest, secrets [][32]by
 	blobs := make(map[backend.Pubkey][]byte, len(reqs))
 	for i := range reqs {
 		r := &reqs[i]
-		rec := shareRecord{Pubkey: r.Pubkey, Secret: secrets[i][:], Index: r.Index,
-			History: r.Interchange != nil && r.Interchange.HasAttestation, Batch: tag}
+		rec := shareRecord{Pubkey: pks[i], Secret: secrets[i][:], Index: r.Index,
+			History: r.Interchange != nil && r.Interchange.HasAttestation, Batch: tag, GroupPubkey: groups[i]}
 		if !rec.History && floorOn {
 			rec.SourceFloor = floor
 		}
@@ -257,7 +262,7 @@ func (s *Server) storeBatch(reqs []backend.SealedImportRequest, secrets [][32]by
 		if err != nil {
 			return err
 		}
-		blobs[r.Pubkey] = blob
+		blobs[pks[i]] = blob
 	}
 	if err := s.imageRefusal(); err != nil {
 		return err
