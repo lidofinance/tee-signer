@@ -21,17 +21,6 @@ func (e *RefusedError) Error() string { return "refused by gateway policy: " + e
 // Policy is the gateway policy. The zero value refuses every registration.
 type Policy struct {
 	feeRecipients map[bellatrix.ExecutionAddress]bool
-	// exitsToSigner leaves voluntary exits to the signer, which decides (the
-	// signer TA signs one only with an approval of its policy's approvers).
-	// The gateway refuses exits; the signer shim passes them on.
-	exitsToSigner bool
-}
-
-// PassExitsToSigner makes Check leave voluntary exits to the signer.
-func (p *Policy) PassExitsToSigner() *Policy {
-	p.exitsToSigner = true
-
-	return p
 }
 
 // New builds a policy from the fee recipient allowlist (0x-prefixed addresses).
@@ -54,9 +43,8 @@ func New(feeRecipientAllowlist []string) (*Policy, error) {
 func (p *Policy) Check(pubkey phase0.BLSPubKey, job *signing.Job) error {
 	switch job.Type {
 	case signing.TypeVoluntaryExit:
-		if !p.exitsToSigner {
-			return &RefusedError{Reason: "voluntary exits are never signed by this gateway"}
-		}
+		// Only the admin role signs an exit, at the signers (signer-admin exit).
+		return &RefusedError{Reason: "voluntary exits are never signed by this gateway"}
 	case signing.TypeValidatorRegistration:
 		reg := job.Registration
 		if reg.Pubkey != pubkey {

@@ -410,7 +410,7 @@ key_origin: reserved[4] imported_keys:u32 reserved[32]
 ```
 
 - `setup_hash`: SHA-256 over the context `signer-setup-v1`, `policy_root`
-  and `platform_commitment` (setup format 5, `attestation-verify/docs/attestation-statement.md`).
+  and `platform_commitment` (setup format 6, `attestation-verify/docs/attestation-statement.md`).
   A runner without a setup (the flag path of tests and local runners) puts the SHA-256 of its `-config` file here and zeros in the
   rest.
 - Per group, the state in force: the active version and the hash of the

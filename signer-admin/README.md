@@ -38,7 +38,7 @@ Every command that reads a member of `cluster.json` runs the check. When the clu
 An admin certificate that t signers accept can exit every key they hold, and nothing else gates an exit ([protocol.md](../signer-protocol/docs/protocol.md), "Client roles"). To protect it:
 
 - Keep the admin CA key and the admin certificates offline after the split and import. Bring them out only to send an approver-signed import or config update, or to make an exit.
-- Issue short-lived admin leaves (`issue-client-cert -role admin -valid`, 24h by default).
+- Issue short-lived admin leaves. `issue-client-cert -role admin -valid D` sets the validity the operator chooses, up to the issuer's own expiry; without `-valid` a leaf gets 24h.
 - Prefer one client root per signer, each held by a different person, so one admin certificate cannot reach t signers. To exit, each holder runs this on their own machine with their own admin certificate:
 
   ```
@@ -53,7 +53,7 @@ An admin certificate that t signers accept can exit every key they hold, and not
 
   The partial files are not secret.
 - A signer accepts admin chains from every root in its `allowed_client_ca` list. Pin on each signer only roots whose keys its own holder controls. Keep any root that all signers share offline, like an admin key. A setup file that sets `allowed_client_ca` once, before the first `[signer NAME]` section, gives every signer the same root.
-- The runner has no revocation list. If an admin root key leaks, make a new setup and import the keys again.
+- The runner refuses a client whose chain holds an entry of the `revoked_client_certs` list in force (open group): the SHA-256 of a certificate's DER (leaf, intermediate or CA), or of a public key's DER SubjectPublicKeyInfo, which revokes every certificate of that key ([protocol.md](../signer-protocol/docs/protocol.md), "Client roles"). To revoke, list the hash in an open config update (`draft -group open`, then `sign`, `assemble` and `push`). It needs the usual approver count and no wait: a runner applies it when it takes the update, and closes open connections of that chain. Dropping an entry needs every approver in force. If an admin root key leaks, revoke its public key. That also refuses the signing clients under that root, so a signer that pins only that root serves no one until the new setup is in place. `allowed_client_ca` is fixed in the setup, so a new admin root needs a new setup and a new import.
 - A pre-signed voluntary exit exits its key without the signer and stays valid for good (EIP-7044). Keep only a few of them loaded in the validator ejector, not one for every key. The TEE signer does not change the usual ejector advice.
 
 ## Splitting existing keys

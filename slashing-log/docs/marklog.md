@@ -629,7 +629,8 @@ holds its true mark.
   restart floor makes this cost nothing extra: a vote never has a source
   above the epoch of the clock when it was signed, and after a restart the
   floor already holds every key's votes until the chain justifies the
-  floor epoch, which is higher.- An admin who also controls key release (the AWS KMS key policy, the GCP
+  floor epoch, which is higher.
+- An admin who also controls key release (the AWS KMS key policy, the GCP
   WIF provider and the KMS key's IAM, the Azure key's release policy) can
   decrypt the sealed share, make key blobs and forge records. The store
   resists the admin exactly as far as key release does (research note,
@@ -637,13 +638,14 @@ holds its true mark.
   WIF pool's principal set only (`platform-gcp/deploy/README.md`), not to
   the service account the VM runs as.
 - A new key release. The record keys open only under the key release that
-  made them. On Azure each image gets a new Key Vault key version (the
-  release policy pins the CCE policy hash), so a new image cannot open the
-  old image's log: it gets a new `-mark-signer`, and the old runner hands
-  over its shares and its mark (`slashing-log/docs/durable-state.md`), or the operator
-  imports the shares again as for a new deployment. On AWS and GCP the KMS
-  key stays and the policy or WIF condition moves to the new image, which
-  then reads the old log.
+  made them. On mainnet the AWS key policy is locked and the Azure release
+  policy is immutable, so each names one image and a new image cannot open
+  the old image's log. A mainnet signer on AWS or Azure therefore moves to
+  a new image as a new signer: a new setup, key and mark log, and the
+  shares imported again (`docs/upgrade.md`, "When this works"). On GCP,
+  and on AWS or Azure with a key rule that can still change, the key rule
+  names the new image next to the old one, and the new image reads the old
+  log as on a restart (`docs/upgrade.md`).
 - A signer down longer than half the retention period: the age check
   stops it, and it needs a new setup and a re-import.
 - Objects under future record names. Anyone who can write the log's

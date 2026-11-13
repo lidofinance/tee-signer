@@ -250,8 +250,8 @@ With a setup the runner checks its own image against the setup's
 `allowed_image_measurements` in force (`signer-protocol/docs/protocol.md`,
 "Image check"). It takes its image from the evidence its key release sent
 (GCP image digest, Azure CCE policy hash, Nitro PCR0 to PCR2), runs the
-check before any share is unsealed, and again on every request that signs,
-hands over or imports. An image the list does not name stays up with its
+check before any share is unsealed, and again on every request that signs
+or imports. An image the list does not name stays up with its
 shares sealed and answers HEALTH (`image`), keys, attestation and
 CONFIG_UPDATE only. A mainnet build cannot turn the check off; a non-prod
 build has `-allow-unlisted-image`.
