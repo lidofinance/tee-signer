@@ -101,14 +101,15 @@ func TestDecodeSetupBytes(t *testing.T) {
 		return c
 	}
 	safetyAt := 2 + 32 + 8 + chainLen
-	// The locked group ends with time_policy, deposit_policy and
-	// exit_policy, the open group with revoked_client_certs and
-	// time_servers.
+	// The locked group ends with time_policy, deposit_policy,
+	// exit_policy and required_features, the open group with
+	// revoked_client_certs and time_servers.
 	lv, ov := leafBytes(s.Locked.fields()), leafBytes(s.Open.fields())
 	nl, no := len(lv), len(ov)
-	exitAt := o.lockedEnd - len(lv[nl-1])
-	depositAt := exitAt - len(lv[nl-2])
-	timeAt := depositAt - len(lv[nl-3])
+	featuresAt := o.lockedEnd - len(lv[nl-1])
+	exitAt := featuresAt - len(lv[nl-2])
+	depositAt := exitAt - len(lv[nl-3])
+	timeAt := depositAt - len(lv[nl-4])
 	serversAt := o.openEnd - len(ov[no-1])
 	revokedAt := serversAt - len(ov[no-2])
 	// rootsAt is the count byte of allowed_builder_request_auth_data_roots.
@@ -137,6 +138,8 @@ func TestDecodeSetupBytes(t *testing.T) {
 		{"deposit_policy version 2", set(depositAt, 2), "deposit_policy version 2, want 1"},
 		{"deposit_policy 17 credentials", set(depositAt+1, 17), "17 deposit_policy.withdrawal_credentials, at most 16"},
 		{"exit_policy version 2", set(exitAt, 2), "exit_policy version 2, want 1"},
+		{"required_features version 2", set(featuresAt, 2), "required_features version 2, want 1"},
+		{"required_features count 17", set(featuresAt+1, 17), "17 required_features, at most 16"},
 		{"exit_policy with a validator", set(exitAt+2, 1), "1 exit_policy.allowed_validators, at most 0"},
 		{"exit_policy approvals 1", set(exitAt+11, 1), "exit_policy: exit approvals are not in this version"},
 		{"revoked_client_certs version 0", set(revokedAt, 0), "revoked_client_certs version 0, want 1"},
@@ -277,7 +280,7 @@ func setupRefusals(t testing.TB) []setupRefusal {
 		{"signing mode 0", "", func(s *Setup) { s.SigningMode = 0 }, "signing_mode 0, want 1 (threshold) or 2 (single)", ""},
 		{"signing mode 3", "", func(s *Setup) { s.SigningMode = 3 }, "signing_mode 3", ""},
 		{"public salts missing", "", func(s *Setup) { s.PolicySalts.Public = nil }, "public: no salts", "skip"},
-		{"locked salts short", "", func(s *Setup) { s.PolicySalts.Locked = s.PolicySalts.Locked[:14] }, "locked: 14 salts, want one for each of the 15 leaves", "skip"},
+		{"locked salts short", "", func(s *Setup) { s.PolicySalts.Locked = s.PolicySalts.Locked[:14] }, "locked: 14 salts, want one for each of the 16 leaves", "skip"},
 		{"open salt zero", "", func(s *Setup) { s.PolicySalts.Open[0] = [32]byte{} }, "open: salt 0 is zero", ""},
 		{"platform salt zero", "", func(s *Setup) { s.PlatformSalt = [32]byte{} }, "platform_salt is zero", ""},
 		{"platform 0", "", func(s *Setup) { s.Platform.Platform = 0 }, "platform: 0", "unknown platform 0"},

@@ -350,7 +350,9 @@ func lockedClass(name string, a, n *Locked) ChangeClass {
 			tighterList(ad.AllowedDepositAmounts, nd.AllowedDepositAmounts))
 	}
 	// approvers (a removal has its own path, EmergencyRemoval),
-	// slot_time_changes, exit_policy and any field added later.
+	// slot_time_changes, exit_policy, required_features (any change, so a
+	// runner that lacks a feature has the change delay to be replaced) and
+	// any field added later.
 	return ChangeLoosen
 }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/lidofinance/tee-signer/signer-core/core"
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/transport"
+	"github.com/lidofinance/tee-signer/tee-signer/server"
 )
 
 // The setup path (-setup). The image is the same for every operator
@@ -137,7 +138,14 @@ func readSetup(ctx context.Context, ch setup.Channel, platformName string) (*set
 	if err != nil {
 		return nil, fmt.Errorf("setup from %s: %w", ch, err)
 	}
-	return setup.Load(raw, platformName)
+	st, err := setup.Load(raw, platformName)
+	if err != nil {
+		return nil, err
+	}
+	if err := st.Wire.Locked.CheckFeatures(server.KnownFeatures); err != nil {
+		return nil, fmt.Errorf("setup refused: %w", err)
+	}
+	return st, nil
 }
 
 // fromSetup is steps 1 and 2 on the setup path. A failure goes to the

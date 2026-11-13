@@ -248,7 +248,7 @@ func TestDecodeUpdateBytes(t *testing.T) {
 		{"version 3", set(b, 1, 3), false, "config update version 3, want 2"},
 		{"body kind", set(body, 0, 'U'), true, "not a config update body"},
 		{"body version 1 (setup format 5)", set(body, 1, 1), true, "config update body version 1, want 2"},
-		{"body zero salt", append(slices.Clone(body[:len(body)-32]), make([]byte, 32)...), true, "update: salt 14 is zero"},
+		{"body zero salt", append(slices.Clone(body[:len(body)-32]), make([]byte, 32)...), true, "update: salt 15 is zero"},
 		{"body length too large", set(b, 2, 0x7f), false, "at most 65536"},
 		{"oversize", make([]byte, MaxUpdate+1), false, "at most 65536"},
 		{"group 0", set(body, 66, 0), true, "unknown group 0"},

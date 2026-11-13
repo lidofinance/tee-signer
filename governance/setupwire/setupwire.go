@@ -510,6 +510,43 @@ type Locked struct {
 	TimePolicy                         TimePolicy
 	DepositPolicy                      DepositPolicy
 	ExitPolicy                         ExitPolicy
+	// RequiredFeatures (required_features, version 1) are the features a
+	// runner must have to run under this group: sorted, without repeats,
+	// each 1 to MaxFeatureName of a-z, 0-9 and '_', at most
+	// MaxRequiredFeatures. A runner refuses a group that names a feature
+	// it does not have (CheckFeatures).
+	RequiredFeatures []string
+}
+
+// required_features limits and names.
+const (
+	RequiredFeaturesLeaf    = "required_features"
+	RequiredFeaturesVersion = 1
+	MaxRequiredFeatures     = 16
+	MaxFeatureName          = 32
+)
+
+var featureRE = regexp.MustCompile(`^[a-z0-9_]{1,32}$`)
+
+// UnknownFeatures are the required features not in known, in list order;
+// nil when the runner knows them all.
+func (l *Locked) UnknownFeatures(known []string) []string {
+	var out []string
+	for _, f := range l.RequiredFeatures {
+		if !slices.Contains(known, f) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// CheckFeatures refuses a group that requires a feature not in known,
+// naming those features.
+func (l *Locked) CheckFeatures(known []string) error {
+	if unknown := l.UnknownFeatures(known); len(unknown) > 0 {
+		return fmt.Errorf("required_features %s: this runner does not have them", strings.Join(unknown, ", "))
+	}
+	return nil
 }
 
 // TimePolicy is how the runner's clock works (time_policy, version 1). The
@@ -1157,6 +1194,13 @@ func (l *Locked) fields() []field {
 			w.u64(e.StakeCapPerDay)
 			w.u8(e.ApprovalsNeeded)
 		}},
+		{RequiredFeaturesLeaf, func(w *writer) {
+			w.u8(RequiredFeaturesVersion)
+			w.u8(uint8(len(l.RequiredFeatures)))
+			for _, f := range l.RequiredFeatures {
+				w.str(f)
+			}
+		}},
 	}
 }
 
@@ -1227,6 +1271,10 @@ func readLocked(r *reader, l *Locked) {
 	r.count("exit_policy.allowed_validators", 0, true)
 	e.StakeCapPerDay = r.u64()
 	e.ApprovalsNeeded = r.u8()
+	r.version(RequiredFeaturesLeaf, RequiredFeaturesVersion)
+	for range r.count(RequiredFeaturesLeaf, MaxRequiredFeatures, false) {
+		l.RequiredFeatures = append(l.RequiredFeatures, r.str("required_features entry"))
+	}
 }
 
 // fields are the fields of the open group, in leaf order.
@@ -1693,6 +1741,17 @@ func (l *Locked) Check() error {
 	}
 	if err := l.ExitPolicy.Check(); err != nil {
 		return fmt.Errorf("locked: %w", err)
+	}
+	if n := len(l.RequiredFeatures); n > MaxRequiredFeatures {
+		return fmt.Errorf("locked: %d required_features, at most %d", n, MaxRequiredFeatures)
+	}
+	for i, f := range l.RequiredFeatures {
+		if !featureRE.MatchString(f) {
+			return fmt.Errorf("locked: required_features: %q: 1 to %d characters of a-z, 0-9, '_'", f, MaxFeatureName)
+		}
+		if i > 0 && l.RequiredFeatures[i-1] >= f {
+			return errors.New("locked: required_features must be sorted, without repeats")
+		}
 	}
 	return nil
 }

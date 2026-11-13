@@ -396,3 +396,25 @@ func TestChainConfig(t *testing.T) {
 		t.Fatalf("gcp config: %+v %v", gc, err)
 	}
 }
+
+// The runner refuses to start from a setup that requires a feature it
+// does not have, and names the feature.
+func TestStartRefusesRequiredFeatures(t *testing.T) {
+	s, err := setupwire.DecodeSetup(sampleSetup(t, "dev-single"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Locked.RequiredFeatures = []string{"dv_shares"}
+	raw, err := s.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []string
+	_, err = readSetup(context.Background(), &fakeChannel{raw: raw, events: &events}, "dev")
+	if err == nil || !strings.Contains(err.Error(), "required_features dv_shares") {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := readSetup(context.Background(), &fakeChannel{raw: sampleSetup(t, "dev-single"), events: &events}, "dev"); err != nil {
+		t.Fatalf("the setup without the list: %v", err)
+	}
+}

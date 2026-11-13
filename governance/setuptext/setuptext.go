@@ -735,6 +735,7 @@ func (p *parser) locked(l *setupwire.Locked) {
 	d.MinActivationBalance = scalar(p, "deposit_policy.min_activation_balance", parseAmount)
 	d.MaxEffectiveBalance = scalar(p, "deposit_policy.max_effective_balance", parseAmount)
 	// exit_policy has no keys: it is always empty in this version.
+	l.RequiredFeatures = sortedSet(p, setupwire.RequiredFeaturesLeaf, listOf(p, setupwire.RequiredFeaturesLeaf, parseText), strings.Compare)
 }
 
 func compareRoots(a, b backend.Root) int { return bytes.Compare(a[:], b[:]) }
@@ -990,6 +991,12 @@ func formatLocked(w *printer, l *setupwire.Locked) {
 	w.kv("deposit_policy.min_activation_balance", formatAmount(d.MinActivationBalance))
 	w.kv("deposit_policy.max_effective_balance", formatAmount(d.MaxEffectiveBalance))
 	w.note("exit_policy: empty; exit approvals are not in this version")
+	if len(l.RequiredFeatures) > 0 {
+		w.note("required_features: a runner without one of these refuses the setup or update")
+	}
+	for _, f := range l.RequiredFeatures {
+		w.kv(setupwire.RequiredFeaturesLeaf, f)
+	}
 }
 
 func formatOpen(w *printer, o *setupwire.Open) {
