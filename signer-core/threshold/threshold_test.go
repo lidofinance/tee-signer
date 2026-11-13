@@ -122,6 +122,41 @@ func TestFeldmanCommitments(t *testing.T) {
 	}
 }
 
+// Commitments from t share public keys are the split's own Feldman
+// commitments, whichever t shares they come from (a Charon cluster lock
+// gives the share public keys and no commitments).
+func TestCommitmentsFromShares(t *testing.T) {
+	secret, _ := software.NewSecret()
+	shares, want, err := software.SplitWithCommitments(secret, 3, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := map[uint64]backend.Pubkey{}
+	for _, s := range shares {
+		pub[s.ID], _ = core.PubkeyOf(s.Secret)
+	}
+	for _, ids := range [][]uint64{{1, 2, 3}, {5, 1, 4}, {2, 4, 5}} {
+		got, err := threshold.Commitments(ids, []backend.Pubkey{pub[ids[0]], pub[ids[1]], pub[ids[2]]})
+		if err != nil || len(got) != 3 {
+			t.Fatalf("%v: %v", ids, err)
+		}
+		for k := range want {
+			if got[k] != want[k] {
+				t.Fatalf("%v: commitment %d differs", ids, k)
+			}
+		}
+	}
+	if _, err := threshold.Commitments([]uint64{1, 1}, []backend.Pubkey{pub[1], pub[1]}); err == nil {
+		t.Fatal("accepted a repeated id")
+	}
+	if _, err := threshold.Commitments([]uint64{0, 1}, []backend.Pubkey{pub[1], pub[2]}); err == nil {
+		t.Fatal("accepted id 0")
+	}
+	if _, err := threshold.Commitments([]uint64{1, 2}, []backend.Pubkey{pub[1], {}}); err == nil {
+		t.Fatal("accepted a malformed key")
+	}
+}
+
 func TestRecoveryRejectsMalformedShares(t *testing.T) {
 	if _, err := threshold.RecoverSignature(nil, nil); err == nil {
 		t.Fatal("accepted no signatures")

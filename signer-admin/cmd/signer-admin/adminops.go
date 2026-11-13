@@ -407,6 +407,10 @@ type share struct {
 	secret [32]byte
 	// sharePub, if set, is what the secret's public key must be.
 	sharePub cloud.Pubkey
+	// markKey, if set, is the key the slashing protection file lists the
+	// share under: the line's own key of a dv_share share filed under its
+	// group key (fileDVShares).
+	markKey cloud.Pubkey
 }
 
 // readShares reads the shares file: one share per line, either
@@ -688,6 +692,13 @@ func cmdImport(args []string, out io.Writer) error {
 		}
 	}()
 	if o != nil {
+		n, err := fileDVShares(shares, split, o.Body.ShareIndex)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			fprintf(out, "%d shares named by their own key are shares %d of split validators: filed under the validator key, sent with their own key as share_pubkey (dv_share)\n", n, o.Body.ShareIndex)
+		}
 		if err := checkShareIndex(*sharesPath, shares, split, o); err != nil {
 			return err
 		}
@@ -753,7 +764,8 @@ func cmdImport(args []string, out io.Writer) error {
 	}
 	for i := range shares {
 		s := &shares[i] // not a copy of the secret
-		if held[s.pubkey] {
+		// A dv_share runner lists the share under its own key.
+		if held[s.pubkey] || s.markKey != (cloud.Pubkey{}) && held[s.markKey] {
 			skipped++
 			continue
 		}
@@ -775,7 +787,11 @@ func cmdImport(args []string, out io.Writer) error {
 		}
 		req := cloud.ImportShareRequest{Pubkey: s.pubkey, Secret: s.secret, Index: s.index}
 		if ic != nil {
-			if req.Interchange, err = ic.markOf(s.pubkey); err != nil {
+			mk := s.pubkey
+			if s.markKey != (cloud.Pubkey{}) {
+				mk = s.markKey
+			}
+			if req.Interchange, err = ic.markOf(mk); err != nil {
 				failed = true
 				fprintf(out, "%s %s: %v, not sent\n", name, s.pubkey, err)
 				continue

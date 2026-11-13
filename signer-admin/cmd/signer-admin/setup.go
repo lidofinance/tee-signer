@@ -196,7 +196,9 @@ func cmdSetup(args []string, out io.Writer) error {
 	// the operator sees it when the setup is made, not only in the file.
 	for _, s := range setups {
 		k := &s.Platform.SealingKeyRelease
-		if err := setupwire.CheckThresholdOn(s, len(setups), len(setups)); err != nil {
+		// A dv_share cluster holds some shares of a Charon split whose other
+		// shares sit in signers outside this file, so its size bounds no split.
+		if err := setupwire.CheckThresholdOn(s, len(setups), len(setups)); err != nil && s.SigningMode != setupwire.SigningModeDVShare {
 			return fmt.Errorf("signer %s: a cluster of %d signer(s) can hold no key: %w", s.SignerName, len(setups), err)
 		}
 		if err := setupwire.CheckSingleKeyProd(&s.Platform, &s.Chain); err != nil {
