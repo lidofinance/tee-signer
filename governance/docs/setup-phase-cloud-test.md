@@ -166,9 +166,9 @@ Set these once per shell, from the deploy settings of each cloud.
    (`allowed_fee_recipients`, the builder gas limits,
    `builder_registration_max_future_seconds`,
    `allow_unverified_nonslashable_signing`) and the `open` `fork_schedule`.
-5. The cluster file `setup.conf` (setup format 5).
+5. The cluster file `setup.conf` (setup format 6).
    Before the first section, the lines all signers share:
-   `setup_format_version = 5`, `signing_mode = threshold` (three signers
+   `setup_format_version = 6`, `signing_mode = threshold` (three signers
    hold shares; a one-signer file says `single`), `handover_generation = 1`, the chain lines
    (set `allow_unverified_nonslashable_signing` as the test's signing paths need),
    `allowed_client_ca` (the client CA, base64 DER), `max_keys`,
@@ -176,7 +176,7 @@ Set these once per shell, from the deploy settings of each cloud.
    to 3, `approvals_needed = 2`, `change_delay_seconds = 0` (a non-prod
    chain only: a prod chain needs at least the default time lock,
    `governance/setupwire/timelock.go`), the
-   balance values and `withdrawal_credentials`
+   `deposit_policy` values (withdrawal credentials and balances)
    (`governance/setuptext/testdata/setup-gcp.conf` lists them, without its
    `salt.*` and `platform_salt` lines: `signer-admin setup` draws the
    salts). Then one section per signer:

@@ -955,11 +955,13 @@ key either. The runner refuses a client certificate listed in the setup's
   with the leaf alone is refused. Tests in `tee-signer/attls`
   (`TestPinnedRootWithIntermediate`) show a rotated intermediate accepted by
   the same server, and an expired one refused.
-- The runner has no revocation list. A leaked client key works until its
-  certificate expires, so issue for hours or days. A leaked intermediate key
-  mints certificates until the intermediate expires. The runner cannot be
-  told to distrust one intermediate. If that key leaks, the fix is a new
-  root. Keep intermediates short-lived, and the key in an HSM or KMS.
+- A leaked client key works until its certificate expires or the
+  approvers revoke it, so issue for hours or days. A leaked intermediate key
+  mints certificates until the intermediate expires or is revoked. To
+  revoke a certificate or a key, list its hash in `revoked_client_certs`
+  with an open config update, which needs no wait
+  (`signer-protocol/docs/protocol.md`, "Client roles"). Keep intermediates
+  short-lived, and the key in an HSM or KMS.
 - Issue with `NotBefore` about five minutes in the past. The runner clock
   is at or just behind real time (about a second in normal operation).
 
