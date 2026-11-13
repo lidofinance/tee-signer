@@ -141,6 +141,9 @@ type view struct {
 	newestAt  uint64
 	// missing: a body the active values need is unreadable.
 	missing error
+	// unsupported: the locked group in force names required_features this
+	// image does not have (also part of missing).
+	unsupported error
 }
 
 // Updates holds a runner's config groups: it takes CONFIG_UPDATE, gives the
@@ -280,7 +283,9 @@ func (u *Updates) StartConfig(base core.Config) (core.Config, error) {
 	if v.newest != nil {
 		cfg, u.coreOpen = cfg.WithSchedule(scheduleOf(v.newest)), v.newestRef
 	}
-	if v.missing != nil {
+	if v.unsupported != nil {
+		u.opt.Logger.Error("config: this image does not support the required_features of the locked group in force; the runner signs nothing (run a newer image)", "err", v.unsupported)
+	} else if v.missing != nil {
 		u.opt.Logger.Error("config: an update body is unreadable; the runner signs nothing until it is back (send the update again)", "err", v.missing)
 	}
 	u.opt.Logger.Info("config at start", "locked", v.state.Locked.Version, "open", v.state.Open.Version,
@@ -436,6 +441,11 @@ func (u *Updates) compute(st markstore.ConfigState, now uint64) view {
 	var err error
 	if v.locked, err = u.lockedValues(v.state.Locked); err != nil {
 		errs = append(errs, err)
+	} else if err := v.locked.CheckFeatures(KnownFeatures); err != nil {
+		// Stored by an image that has the feature: this one signs nothing
+		// under it.
+		v.unsupported = fmt.Errorf("the locked group in force (version %d): %w", v.state.Locked.Version, err)
+		errs = append(errs, v.unsupported)
 	}
 	if v.open, err = u.openValues(v.state.Open); err != nil {
 		errs = append(errs, err)
@@ -460,6 +470,12 @@ func (u *Updates) compute(st markstore.ConfigState, now uint64) view {
 	v.missing = errors.Join(errs...)
 	return v
 }
+
+// KnownFeatures are the required_features (setupwire.Locked) this build
+// runs with: none yet. The runner refuses to start from a setup that
+// requires another feature, refuses a locked update that does, and signs
+// nothing while a stored locked group that does is in force (compute).
+var KnownFeatures []string
 
 // nextDue is the earliest effective time of a pending update in st.
 func nextDue(st markstore.ConfigState) uint64 {
@@ -883,6 +899,13 @@ func (u *Updates) Accept(ctx context.Context, raw []byte) (uint8, backend.SetupS
 	b := &upd.Body
 	if err := b.Matches(u.opt.Setup); err != nil {
 		return 0, none, backend.Refused(backend.StatusBadRequest, "config update: %v", err)
+	}
+	// Before the again paths: a stored update this build cannot run under
+	// is not taken as known either.
+	if b.Group == setupwire.GroupLocked && b.Locked != nil {
+		if err := b.Locked.CheckFeatures(KnownFeatures); err != nil {
+			return 0, none, backend.Refused(backend.StatusBadRequest, "config update: locked version %d: %v", b.Version, err)
+		}
 	}
 	hash, err := b.Hash()
 	if err != nil {

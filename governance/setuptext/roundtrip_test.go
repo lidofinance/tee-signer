@@ -157,3 +157,35 @@ func TestKMSKeyCreationDateNote(t *testing.T) {
 		t.Fatalf("prod: %v\n%s", err, text)
 	}
 }
+
+// required_features survives the human form, in a setup and in a locked
+// update body; an empty list writes no key, and salt.required_features is
+// always written.
+func TestRequiredFeaturesText(t *testing.T) {
+	s := setups(t)["setup-nitro"]
+	base := must(FormatSetup(s))
+	if bytes.Contains(base, []byte("\nrequired_features")) || !bytes.Contains(base, []byte("\nsalt.required_features = ")) {
+		t.Fatalf("empty list:\n%s", base)
+	}
+	s.Locked.RequiredFeatures = []string{"a_1", "dv_shares"}
+	text := must(FormatSetup(s))
+	for _, want := range []string{"\nrequired_features = a_1\n", "\nrequired_features = dv_shares\n"} {
+		if !bytes.Contains(text, []byte(want)) {
+			t.Fatalf("no %q in\n%s", want, text)
+		}
+	}
+	parsed, err := ParseSetup("f", text)
+	if err != nil || !reflect.DeepEqual(parsed, s) {
+		t.Fatalf("parse: %v", err)
+	}
+
+	b := updates(t)["update-locked"].Body
+	l := *b.Locked
+	l.RequiredFeatures = []string{"dv_shares"}
+	b.Locked = &l
+	btext := must(FormatUpdateBody(&b))
+	pb, err := ParseUpdateBody("b", btext)
+	if err != nil || !reflect.DeepEqual(*pb, b) {
+		t.Fatalf("body: %v\n%s", err, btext)
+	}
+}

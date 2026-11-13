@@ -1563,3 +1563,57 @@ func TestConfigUpdateForkPendingSlotTimesUnreadable(t *testing.T) {
 		t.Fatal("refused, but pending")
 	}
 }
+
+// The runner refuses a locked update that requires a feature it does not
+// have, whoever signs, and keeps nothing of it.
+func TestConfigUpdateRequiredFeatures(t *testing.T) {
+	e := newEnv(t, nil)
+	b := e.body(locked, 1, e.groupHash(locked), e.now())
+	b.Locked.RequiredFeatures = []string{"dv_shares"}
+	_, _, err := e.send(signed(t, b, first2, nil))
+	wantCode(t, err, backend.StatusBadRequest, "required_features dv_shares")
+	if logPending(t, e, locked) != nil {
+		t.Fatal("the refused update is pending")
+	}
+}
+
+// A locked update that names a feature this build lacks, stored by a later
+// image that has the feature (body and record written straight to the log,
+// as that image would), then this image started on the same log: the
+// runner signs nothing once that update is in force, and the update sent
+// again is refused, not taken as known.
+func TestConfigUpdateStoredRequiredFeatures(t *testing.T) {
+	for _, pend := range []bool{false, true} {
+		t.Run(map[bool]string{false: "in force", true: "pending"}[pend], func(t *testing.T) {
+			e := newEnv(t, nil)
+			t0 := e.now()
+			b1 := e.body(locked, 1, e.groupHash(locked), t0)
+			b1.Locked.RequiredFeatures = []string{"dv_shares"}
+			raw1, h1 := signed(t, b1, first2, nil), hashOf(t, b1)
+			at := t0
+			if pend {
+				at = t0 + 1000
+			}
+			if _, _, _, err := e.log.PutBody(ctx, raw1); err != nil {
+				t.Fatal(err)
+			}
+			next := e.log.State().Clone()
+			next.Locked.Pending = &markstore.Pending{Version: 1, Hash: h1, EffectiveAt: at}
+			if err := e.log.SetState(ctx, next); err != nil {
+				t.Fatal(err)
+			}
+			e.restart()
+			fee := e.setup.Locked.AllowedFeeRecipients[0]
+			if pend {
+				if err := e.register(fee); err != nil {
+					t.Fatalf("before the update is in force: %v", err)
+				}
+				e.clock.add(1000)
+			}
+			wantCode(t, e.register(fee), backend.StatusStorage, "required_features dv_shares")
+			_, _, err := e.send(raw1)
+			wantCode(t, err, backend.StatusBadRequest, "required_features dv_shares")
+			wantCode(t, e.register(fee), backend.StatusStorage, "required_features dv_shares")
+		})
+	}
+}

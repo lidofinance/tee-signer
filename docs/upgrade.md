@@ -56,6 +56,14 @@ It changed:
   with a list of withdrawal credentials in place of one. New are
   `time_policy` (`time_policy.protocol`, `time_policy.max_bound_ms`,
   `time_policy.max_sample_bound_ms`) and `exit_policy` (empty).
+- Locked group, added after the first format 6 setups: `required_features`
+  (a list, empty by default). A runner refuses a setup or update that
+  names a feature it does not have; this image has none. The format number
+  stayed 6, but format 6 setups and updates made before this field do not
+  decode on this image: encode and approve every setup again, as for a new
+  format (the Hoodi signers get new setups). While a locked group that
+  names a feature this image does not have is in force, the runner signs
+  nothing and refuses every update; the fix is a newer image.
 - Open group: new are `revoked_client_certs` (hashes of client
   certificates or public keys the runner refuses) and `time_servers` (NTS
   catalog IDs the clock dials besides the image's default set, at most
