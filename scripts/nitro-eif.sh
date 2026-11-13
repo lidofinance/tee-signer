@@ -96,7 +96,7 @@ if [ "${NITRO_CLI_REUSE:-}" = 1 ]; then
 else
   bash "$ROOT/scripts/nitro-cli-image.sh" >/dev/null
 fi
-bash "$ROOT/scripts/build-runner.sh" "$arch" >/dev/null 2>&1
+run_build_runner "$arch" >/dev/null 2>&1
 RUNNER="$BUILD/$arch/bin/runner-aws$SUFFIX"
 [ -x "$RUNNER" ] || die "$RUNNER was not built"
 if grep -qa -- "allow-import" "$RUNNER"; then

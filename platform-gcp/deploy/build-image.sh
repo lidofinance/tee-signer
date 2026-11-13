@@ -41,7 +41,7 @@ mkdir -p "$OUT"
 # The chain record of the per-chain images: a generic image has none.
 rm -f "$OUT/runner.chain"
 log "building the runners (scripts/build-runner.sh)"
-if ! bash "$ROOT/scripts/build-runner.sh" x86_64 >"$OUT/build-runner.log" 2>&1; then
+if ! run_build_runner x86_64 >"$OUT/build-runner.log" 2>&1; then
   tail -n 20 "$OUT/build-runner.log" >&2
   die "scripts/build-runner.sh failed (log: $OUT/build-runner.log)"
 fi

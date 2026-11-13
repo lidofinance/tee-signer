@@ -56,7 +56,16 @@ die() { echo "generic-images: $*" >&2; exit 1; }
 export GOPROXY=off GOTOOLCHAIN=local NITRO_CLI_REUSE=1
 # The chain's suffix: -<chain> for a non-prod chain, nothing for mainnet.
 SUFFIX="$(image_suffix)"
-export IMAGE_TAG=generic STDIO=enable
+# IMAGE_VARIANT=test (default): the test images (Azure STDIO=enable, GCP
+# log_redirect always). IMAGE_VARIANT=prod: the production images (STDIO=disable,
+# log_redirect never), with their own measurements.
+IMAGE_VARIANT="${IMAGE_VARIANT:-test}"
+case "$IMAGE_VARIANT" in
+  test) export STDIO=enable LOG_REDIRECT=always ;;
+  prod) export STDIO=disable LOG_REDIRECT=never ;;
+  *) die "IMAGE_VARIANT must be test or prod" ;;
+esac
+export IMAGE_TAG=generic
 unset CLIENT_CA REGION KMS_KEY_ARN MARK_BUCKET MARK_SIGNER MARK_STORE STATE_STORE
 
 # The network settings of the Azure and GCP builds: the overlay's, or none
@@ -112,6 +121,7 @@ cmd_build() {
   {
     echo "# generic $(chain_is_prod "$CHAIN" || echo "$CHAIN ")images, built $(date -u +%Y-%m-%dT%H:%M:%SZ) from $(git -C "$ROOT" rev-parse --short HEAD)$([ -z "$(git -C "$ROOT" status --porcelain -- . ':!build' ':!logs')" ] || echo ' with local changes')"
     echo "# $(head -n 1 "$BUILD/core-src/SOURCE.txt")"
+    echo "# variant $IMAGE_VARIANT, builder ${SIGNER_BUILDER_IMAGE:-none (host toolchain)}"
     echo "# go $(go env GOVERSION), nitro-cli $NITRO_CLI_TAG image $(docker image inspect "signer-cloud/nitro-cli:$NITRO_CLI_TAG-$HOST_ARCH" --format '{{.Id}}')$(devnet_hook generic_images_note)"
     fingerprints
   } >"$dir/fingerprints.txt"

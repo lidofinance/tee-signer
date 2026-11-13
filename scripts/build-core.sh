@@ -58,7 +58,15 @@ for arch in "${archs[@]}"; do
   ar="ar" nm="nm"
   [ "$arch" != "$HOST_ARCH" ] && ar="$arch-linux-gnu-ar" nm="$arch-linux-gnu-nm"
   out="$BUILD/$arch"
+  # The compiler, archiver and blst pin of the last build. Another one (a
+  # new blst, the host's gcc after the release builder's) drops every
+  # archive and object, so no stale libblst.a or .o gets linked.
+  stamp="$("$cc" --version | head -n 1; "$ar" --version | head -n 1; sha256sum <"$THIRD_PARTY/blst.sha256")"
+  if [ "$(cat "$out/core.stamp" 2>/dev/null)" != "$stamp" ]; then
+    rm -rf "$out/lib/libblst.a" "$out/lib/libsigner_core.a" "$out/obj" "$out/blst"
+  fi
   mkdir -p "$out/lib" "$out/obj" "$out/blst"
+  printf '%s\n' "$stamp" >"$out/core.stamp"
 
   if [ ! -f "$out/lib/libblst.a" ] || [ "${BASH_SOURCE[0]}" -nt "$out/lib/libblst.a" ]; then
     flags=()

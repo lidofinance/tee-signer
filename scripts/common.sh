@@ -289,6 +289,30 @@ check_setup() {
   setup_tool check -platform "$platform" -chain "$CHAIN_JSON" "$file"
 }
 
+# ---- release builder --------------------------------------------------------
+# SIGNER_BUILDER_IMAGE names an image of release/builder.Dockerfile. When it
+# is set, run_build_runner builds the NTS library in its own image as
+# always, then runs scripts/build-runner.sh inside the builder, offline, on
+# the Go module cache SIGNER_GOMODCACHE (default: go env GOMODCACHE),
+# mounted read-only. Go, gcc, glibc and binutils then come from the image,
+# so the runners do not depend on this host. Unset, build-runner.sh runs
+# here, with the host's toolchain, as before.
+run_build_runner() {
+  if [ -z "${SIGNER_BUILDER_IMAGE:-}" ]; then
+    bash "$ROOT/scripts/build-runner.sh" "$@"
+    return
+  fi
+  [ -z "$OVERLAY_DIR" ] || { echo "SIGNER_BUILDER_IMAGE: the build overlay is not mounted into the builder" >&2; return 1; }
+  case "${CHAIN_JSON:-$ROOT}" in "$ROOT"/*|"$ROOT") ;; *) echo "SIGNER_BUILDER_IMAGE: CHAIN_JSON must be inside $ROOT" >&2; return 1 ;; esac
+  local modcache="${SIGNER_GOMODCACHE:-$(go env GOMODCACHE)}"
+  bash "$ROOT/scripts/build-nts.sh" --no-test "$@" || return 1
+  docker run --rm --pull=never --network none --user "$(id -u):$(id -g)" \
+    -e HOME=/tmp -e GOMODCACHE=/gomod -e GOPROXY=off -e GOFLAGS=-mod=readonly \
+    -e CHAIN -e CHAIN_JSON -e NTS_PREBUILT=1 \
+    -v "$modcache:/gomod:ro" -v "$ROOT:$ROOT" -w "$ROOT" \
+    "$SIGNER_BUILDER_IMAGE" bash scripts/build-runner.sh "$@"
+}
+
 # setup_value FILE KEY: the first value of KEY in the human form of a setup.
 setup_value() {
   setup_tool show "$1" | sed -n "s/^$2 = //p" | head -n 1

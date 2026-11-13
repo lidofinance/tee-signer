@@ -250,6 +250,8 @@ render_dockerfile() { # render_dockerfile SRC > DST
   for v in STATE_STORE MARK_SIGNER; do
     [ -z "${!v:-}" ] || die "$v is set, but the image is generic: the setup names the state copy and the signer"
   done
+  case "${LOG_REDIRECT:-always}" in always | never) ;; *) die "LOG_REDIRECT must be always or never" ;; esac
+  s="${s//@LOG_REDIRECT@/${LOG_REDIRECT:-always}}"
   if devnet_has gcp_render_dockerfile; then
     s="$(devnet_gcp_render_dockerfile "$1" <<<"$s")"
   fi
