@@ -73,12 +73,14 @@ func CheckThresholdOn(s *Setup, t, n int) error {
 		if p.Platform == PlatformGCP && !p.SealingKeyRelease.UnsafeSingleKeyAccepted {
 			return fmt.Errorf("threshold 1 of 1 on gcp: a single-node signer on GCP is refused unless its setup accepts the risk (sealing_key_release.unsafe_single_key_accepted = true, signer-admin setup -allow-gcp-unsafe-single-key): %s", UnsafeSingleKeyWarning)
 		}
-	case SigningModeThreshold:
+	case SigningModeThreshold, SigningModeDVShare:
+		// A dv_share signer holds one share of a Charon split. Its share
+		// alone signs nothing for the validator, so GCP needs no acceptance.
 		if n == 1 {
-			return fmt.Errorf("threshold %d of 1: the setup says signing_mode = threshold, so this signer holds shares of splits with n >= 2, never a whole key; a single-node signer needs a setup with signing_mode = single", t)
+			return fmt.Errorf("threshold %d of 1: the setup says signing_mode = %s, so this signer holds shares of splits with n >= 2, never a whole key; a single-node signer needs a setup with signing_mode = single", t, s.SigningMode)
 		}
 	default:
-		return fmt.Errorf("signing_mode %d: unknown, want threshold or single", s.SigningMode)
+		return fmt.Errorf("signing_mode %d: unknown, want threshold, single or dv_share", s.SigningMode)
 	}
 	return CheckThreshold(s.Chain.GenesisForkVersion, s.Chain.GenesisValidatorsRoot, t, n)
 }
@@ -92,8 +94,8 @@ func CheckThresholdOn(s *Setup, t, n int) error {
 // rule there.
 func CheckMembers(mode SigningMode, members int) error {
 	switch {
-	case mode != SigningModeSingle && mode != SigningModeThreshold:
-		return fmt.Errorf("signing_mode %d: unknown, want threshold or single", mode)
+	case mode != SigningModeSingle && mode != SigningModeThreshold && mode != SigningModeDVShare:
+		return fmt.Errorf("signing_mode %d: unknown, want threshold, single or dv_share", mode)
 	case members < 1:
 		return fmt.Errorf("no signer")
 	case mode == SigningModeSingle && members != 1:
