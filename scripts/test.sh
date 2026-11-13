@@ -22,7 +22,8 @@
 #   EIF check        scripts/eif-check-test.sh
 #   deploy names     scripts/side-by-side-test.sh
 #   GCP deploy       scripts/gcp-deploy-test.sh: the public and private entries,
-#                    the egress rules, a subnet of its own, a previous digest
+#                    the egress rules, a subnet of its own, a previous digest,
+#                    the service account email from gcloud
 #   AWS service      scripts/aws-parent-service-test.sh: the parent's systemd
 #                    unit and its restart logic, with a fake nitro-cli
 #   Azure template   scripts/azure-template-test.sh: the rendered group and

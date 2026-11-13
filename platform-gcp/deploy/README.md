@@ -424,7 +424,10 @@ machine type, quota, and the newest Confidential Space image.
    temporary Docker config, so `~/.docker` stays as it is.
 7. `kms-create`: key ring `signer`, HSM key `sealing` (purpose `encryption`).
    Key rings and keys cannot be deleted. Only key versions can be destroyed.
-8. `sa-create`: `signer-workload`.
+8. `sa-create`: `signer-workload`. The steps after it read the account's
+   email from `gcloud iam service-accounts list` and stop unless exactly
+   one email starts with `signer-workload@`. The script never builds the
+   email from the project ID.
 9. `sa-bindings`: the service account gets `artifactregistry.reader` on the
    repository only, and at project level
    `confidentialcomputing.workloadUser` (attestation tokens) and
@@ -592,7 +595,8 @@ verifier-config` writes them to `$GCP_TEST_DIR/gcp-signer.json` (directory
 700, file 600, no secrets; some chains add a suffix to the file name). With `HARDWARE=amd-sev` it writes a `NOTE.txt` next to it
 that says the file is for AMD SEV only. It needs `GCP_TEST_DIR`, a private
 directory outside the repo, and `CLIENT_CERT` and `CLIENT_KEY`, the signing
-client's client certificate and key; it stops if one is missing.
+client's client certificate and key; it stops if one is missing. It reads
+the service account email from gcloud, so run it after `sa-create`.
 
 | Setting | Value |
 | --- | --- |
@@ -600,7 +604,7 @@ client's client certificate and key; it stops if one is missing.
 | `gcp_image_digest` | the digest in `build/gcp/runner.digest` |
 | `gcp_audience` | `signer-runner-identity` |
 | `gcp_hwmodels` | `["GCP_AMD_SEV"]` with `HARDWARE=amd-sev`. Production: `["GCP_INTEL_TDX"]` only |
-| `gcp_service_account` | `signer-workload@<gcp-project>.iam.gserviceaccount.com` |
+| `gcp_service_account` | the email of `signer-workload` as gcloud lists it, for example `signer-workload@<gcp-project>.iam.gserviceaccount.com` |
 | `gcp_project_id` | `<gcp-project>`, the `PROJECT_ID` of the deploy. With `mainnet` set the client needs it and `gcp_service_account` |
 | `gcp_issuer` | not set: the default `https://confidentialcomputing.googleapis.com` |
 | `address` | `tcp:<signer-node-1-ip>:7100`. The address exists after `address-reserve`. Until then the file holds `tcp:SIGNER_IP:7100` (or set `SIGNER_ADDRESS`) |

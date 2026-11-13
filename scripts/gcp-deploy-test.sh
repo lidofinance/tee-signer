@@ -18,7 +18,9 @@
 #            bad previous digest, wif-create and provider-update without
 #            a valid runner.digest, amd-sev on mainnet, a VM self-link
 #            over 127 bytes, a malformed PROJECT_ID
-#   domain   a domain-scoped PROJECT_ID: service account and registry path
+#   domain   a domain-scoped PROJECT_ID: the registry path
+#   account  every step that names the service account takes its email
+#            from gcloud, and stops on no match or two
 #
 # deploy.sh runs in a copy of the repo's scripts and cloud folders with a
 # fake gcloud that records its arguments, as in side-by-side-test.sh, so no
@@ -38,11 +40,17 @@ run_rc() { if out="$("$@" 2>&1)"; then rc=0; else rc=$?; fi; }
 has() { grep -q -F -- "$1" <<<"$2"; }
 
 # A fake gcloud: each call's arguments, one per line, then a blank line.
+# "iam service-accounts list" prints sa.list. Its workload account has an
+# email that no rule of the script could build, so a step that uses a built
+# address shows up.
+SA_EMAIL=signer-workload@from-gcloud.example.iam.gserviceaccount.com
 cat >"$work/bin/gcloud" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$@" "" >>"$work/gcloud.calls"
+if [ "\$1 \$2 \$3" = "iam service-accounts list" ]; then cat "$work/sa.list"; fi
 EOF
 chmod +x "$work/bin/gcloud"
+printf '%s\n' 123456-compute@developer.gserviceaccount.com "$SA_EMAIL" >"$work/sa.list"
 
 arch="$(uname -m)"
 case "$arch" in amd64) arch=x86_64 ;; arm64) arch=aarch64 ;; esac
@@ -166,15 +174,88 @@ run_rc dep CHAIN=ci-test bash "$DEPLOY" provider-update </dev/null
 : >"$work/gcloud.calls"
 
 # ---- domain-scoped project ----------------------------------------------------
-# rv-b9e.3: PROJECT_ID=example.com:signer names the KMS key by that ID, the
-# service account as signer.example.com and the registry path as
-# example.com/signer.
+# rv-b9e.3: PROJECT_ID=example.com:signer names the KMS key by that ID and
+# the registry path as example.com/signer. rv-w8m.1: the plan names no
+# service account email, since only gcloud knows it.
+other_sa() { grep -o 'signer-workload@[a-z0-9.<>:-]*' <<<"$1" | grep -v -x -F "$SA_EMAIL" || true; }
+: >"$work/gcloud.calls"
 p="$(dep PROJECT_ID=example.com:signer bash "$DEPLOY" plan 2>&1)"
 miss=""
-for w in "--project=example.com:signer" "signer-workload@signer.example.com.iam.gserviceaccount.com"   "europe-west4-docker.pkg.dev/example.com/signer/signer/runner"; do
+for w in "--project=example.com:signer" "europe-west4-docker.pkg.dev/example.com/signer/signer/runner"; do
   has "$w" "$p" || miss+=" [$w]"
 done
-[ -z "$miss" ] && ok "domain-scoped project: the service account and registry path" || bad "domain-scoped plan lacks$miss"
+[ -z "$miss" ] && ok "domain-scoped project: the registry path" || bad "domain-scoped plan lacks$miss"
+[ -z "$(other_sa "$p")" ] && [ ! -s "$work/gcloud.calls" ] && ok "domain-scoped plan: no built service account email, no gcloud call" ||
+  bad "domain-scoped plan: [$(other_sa "$p")] calls $(cat "$work/gcloud.calls")"
+
+# ---- service account email ----------------------------------------------------
+# rv-w8m.1: each step that names the workload account reads its email from
+# gcloud (sa.list) and never builds it from PROJECT_ID.
+sa_case() { # sa_case WHAT ENV... -- CMD...
+  local what="$1" envs=() o
+  shift
+  while [ "$1" != -- ]; do envs+=("$1"); shift; done
+  shift
+  : >"$work/gcloud.calls"
+  run_rc dep "${envs[@]}" CONFIRM=yes bash "$DEPLOY" "$@"
+  o="$(other_sa "$out $(cat "$work/gcloud.calls")")"
+  if [ "$rc" = 0 ] && has "$SA_EMAIL" "$(cat "$work/gcloud.calls")" && [ -z "$o" ]; then
+    ok "$what: the email from gcloud"
+  else
+    bad "$what: rc $rc, other address [$o] $out $(cat "$work/gcloud.calls")"
+  fi
+}
+sa_case "vm-create" "${P2[@]}" CHAIN=ci-test SETUP_FILE="$work/gcp-2.bin" -- vm-create
+sa_case "sa-bindings" -- sa-bindings
+sa_case "wif-create" -- wif-create
+sa_case "provider-update" -- provider-update
+sa_case "teardown" -- teardown
+sa_case "domain-scoped provider-update" PROJECT_ID=example.com:signer -- provider-update
+has "--project=example.com:signer" "$(cat "$work/gcloud.calls")" || bad "domain-scoped provider-update: the list call lacks the project"
+: >"$work/gcloud.calls"
+run_rc dep PROJECT_ID=example.com:signer CHAIN=ci-test GCP_TEST_DIR="$work/vc" CLIENT_CERT=/c.pem CLIENT_KEY=/c.key bash "$DEPLOY" verifier-config
+vc="$(jq -r .attestation.gcp_service_account "$work"/vc/gcp-signer*.json 2>/dev/null || true)"
+[ "$rc" = 0 ] && [ "$vc" = "$SA_EMAIL" ] && has "-gcp-service-account $SA_EMAIL " "$out" && [ -z "$(other_sa "$out")" ] &&
+  ok "domain-scoped verifier-config: gcp_service_account and the share-import flag from gcloud" || bad "verifier-config: rc $rc, [$vc] $out"
+
+# No match or two matches stop the step before any change.
+sa_refused() { # sa_refused WHAT PATTERN NOCALL ENV... -- CMD...
+  local what="$1" pat="$2" nocall="$3" envs=()
+  shift 3
+  while [ "$1" != -- ]; do envs+=("$1"); shift; done
+  shift
+  : >"$work/gcloud.calls"
+  run_rc dep "${envs[@]}" CONFIRM=yes bash "$DEPLOY" "$@"
+  if [ "$rc" != 0 ] && has "$pat" "$out" && ! grep -q -x -F -- "$nocall" "$work/gcloud.calls"; then
+    ok "refused: $what"
+  else
+    bad "$what: rc $rc $out $(cat "$work/gcloud.calls")"
+  fi
+}
+echo 123456-compute@developer.gserviceaccount.com >"$work/sa.list"
+sa_refused "sa-bindings without the account" "found no service account signer-workload" add-iam-policy-binding -- sa-bindings
+sa_refused "vm-create without the account" "found no service account signer-workload" instances \
+  "${P2[@]}" CHAIN=ci-test SETUP_FILE="$work/gcp-2.bin" -- vm-create
+sa_refused "wif-create without the account" "found no service account signer-workload" workload-identity-pools -- wif-create
+# rv-cr6.1: a teardown with the account already gone deletes the rest and
+# says so, without the sa-create hint.
+: >"$work/gcloud.calls"
+run_rc dep CONFIRM=yes bash "$DEPLOY" teardown
+[ "$rc" = 0 ] && has "no service account signer-workload in" "$out" && ! has "run sa-create first" "$out" &&
+  ! grep -q "service-accounts delete" "$work/gcloud.calls" && ok "teardown without the account: nothing to delete" ||
+  bad "teardown without the account: rc $rc $out"
+p="$(dep bash "$DEPLOY" preflight 2>&1 || true)"
+has "ok    service account signer-workload is free" "$p" && ok "preflight: no account, the name is free" || bad "preflight without the account: $p"
+printf '%s\n' "$SA_EMAIL" signer-workload@other.example.iam.gserviceaccount.com >"$work/sa.list"
+sa_refused "sa-bindings with two accounts" "found 2 service accounts named signer-workload" add-iam-policy-binding -- sa-bindings
+sa_refused "provider-update with two accounts" "found 2 service accounts named signer-workload" workload-identity-pools -- provider-update
+printf '%s\n' "$SA_EMAIL" >"$work/sa.list"
+: >"$work/gcloud.calls"
+run_rc dep "${P2[@]}" CHAIN=ci-test SETUP_FILE="$work/gcp-2.bin" bash "$DEPLOY" vm-create </dev/null
+[ "$rc" = 3 ] && [ ! -s "$work/gcloud.calls" ] && ok "vm-create without CONFIRM: no gcloud call before the gate" ||
+  bad "vm-create without CONFIRM: rc $rc $out $(cat "$work/gcloud.calls")"
+p="$(dep bash "$DEPLOY" preflight 2>&1 || true)"
+has "FAIL  service account signer-workload exists already" "$p" && ok "preflight: the account exists" || bad "preflight with the account: $p"
 
 # ---- refused ----------------------------------------------------------------
 refused() { # refused WHAT PATTERN ENV... -- CMD
