@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""Turn the fingerprints.txt of scripts/generic-images.sh into measurements.json.
+"""Turn the fingerprints file of a release lane into measurements.json.
 
     release/measurements.py --tag TAG --commit SHA --chain CHAIN --variant VARIANT \
         FINGERPRINTS > measurements.json
+
+FINGERPRINTS is the fingerprints-<chain>[-test].txt of release/release-build.sh.
+Its variant, commit and chain lines must equal --variant, --commit and
+--chain, so a test lane cannot be published as prod, or under another commit.
 
 The setup_line of each image is the line an approver puts into a setup or a
 locked update (governance/setuptext: allowed_image_measurements = KIND HEX...).
@@ -14,7 +18,10 @@ import json
 import re
 import sys
 
-HEX = {"nitro.PCR0": 96, "nitro.PCR1": 96, "nitro.PCR2": 96, "azure.cce_policy": 64}
+HEX = {"nitro.PCR0": 96, "nitro.PCR1": 96, "nitro.PCR2": 96, "azure.cce_policy": 64,
+       "nitro.runner": 64, "azure.runner": 64, "gcp.runner": 64}
+# The value lines release/release-build.sh adds for the lane itself.
+LANE = ("variant", "commit", "chain")
 
 
 def read(path):
@@ -29,6 +36,9 @@ def read(path):
     for name, size in HEX.items():
         if not re.fullmatch("[0-9a-f]{%d}" % size, values.get(name, "")):
             sys.exit(f"measurements: {name} is missing or not {size} hex digits")
+    for name in [n for n in values if n.startswith("parent.")]:
+        if not re.fullmatch("[0-9a-f]{64}", values[name]):
+            sys.exit(f"measurements: {name} is not 64 hex digits")
     for name in ("azure.image", "gcp.image"):
         if not re.fullmatch("sha256:[0-9a-f]{64}", values.get(name, "")):
             sys.exit(f"measurements: {name} is missing or not sha256:<64 hex>")
@@ -42,6 +52,11 @@ def main():
     ap.add_argument("fingerprints")
     args = ap.parse_args()
     v = read(args.fingerprints)
+    for name in LANE:
+        if name not in v:
+            sys.exit(f"measurements: no {name} line in {args.fingerprints} (not a release lane's file)")
+        if v[name] != getattr(args, name):
+            sys.exit(f"measurements: --{name} is {getattr(args, name)!r}, the lane was built with {v[name]!r}")
     pcrs = [v["nitro.PCR0"], v["nitro.PCR1"], v["nitro.PCR2"]]
     gcp = v["gcp.image"].removeprefix("sha256:")
     out = {

@@ -20,8 +20,11 @@ cmd_fetch() {
   for m in "${MODULES[@]}"; do
     (cd "$ROOT/$m" && go mod download)
   done
-  # Every module zip in the cache matches go.sum (GOSUMDB checked it on download).
-  (cd "$ROOT/tee-signer" && go mod verify)
+  # The cache holds each module's dependencies unchanged since download
+  # (GOSUMDB and go.sum checked them then).
+  for m in "${MODULES[@]}"; do
+    (cd "$ROOT/$m" && go mod verify)
+  done
 }
 
 case "${1:-}" in
