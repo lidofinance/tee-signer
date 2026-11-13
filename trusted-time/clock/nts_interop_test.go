@@ -18,8 +18,11 @@ import (
 // default public servers (nts.PublicServers): one NTS-KE and three queries
 // per server, 33 s apart (RFC 5905 MINPOLL is 16 s), so about 70 s and one
 // TLS session and 3 UDP queries per server.
-// It runs only with NTS_INTEROP=1 (scripts/nts-interop.sh): it needs the
-// network and is not part of the offline tests.
+// It runs only with NTS_INTEROP=1:
+//
+//	(cd trusted-time && NTS_INTEROP=1 go test -count=1 -tags nts -run '^TestNTSInteropPublicServers$' -v ./clock)
+//
+// It needs the network and is not part of the offline tests.
 //
 // The coarse clock is the host clock here: the HTTPS-date sources would be
 // other hosts, which this test does not contact. So the 2 s check compares
@@ -30,7 +33,7 @@ func TestNTSInteropPublicServers(t *testing.T) {
 	}
 	n := &NTS{Coarse: &coarseClock{}, Interval: 33 * time.Second, StartDelay: -1}
 	for _, s := range nts.PublicServers {
-		pool, err := nts.RootPool(s.Roots)
+		pool, err := nts.RootsPEM(s.Roots)
 		if err != nil {
 			t.Fatal(err)
 		}

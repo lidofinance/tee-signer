@@ -4,7 +4,6 @@ package clock
 
 import (
 	"context"
-	"crypto/x509"
 	"fmt"
 	"log/slog"
 	"net"
@@ -16,19 +15,20 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/trusted-time/nts"
+	"github.com/lidofinance/tee-signer/trusted-time/ntscatalog"
 )
 
 // TestNTSShiftLive runs the shift schedule against public NTS servers,
 // the catalog's and candidates for it, for NTS_SHIFT_LIVE (a duration, for
 // example 15m). It needs the network, and it is a test only:
 //   - the coarse clock is the host clock, as in TestNTSInteropPublicServers;
-//   - operators whose roots trusted-time/nts does not pin (BEV, FER, Meta,
-//     Paris Observatory) use the system roots of the machine;
+//   - every operator's roots are the catalog's pinned ones (the core takes
+//     its roots as PEM, and no general store);
 //   - any.time.nl is left out: it is TimeNL, the operator of
 //     ntppool1.time.nl, and the quorum takes one server per operator.
 //
 // It sets the seed 3 minutes in (SetScheduleSeed), and resolves the NTP
-// host at NTS-KE although it dials through its own Dial.
+// host once per NTS-KE although it dials through its own Dial.
 //
 // It logs every contact (each dial, by operator), the counts of the
 // schedule, and every second Now failed; it fails if an operator is
@@ -38,27 +38,29 @@ func TestNTSShiftLive(t *testing.T) {
 	if err != nil {
 		t.Skip("NTS_SHIFT_LIVE is not a duration")
 	}
-	pinned := func(files ...string) *x509.CertPool {
-		p, err := nts.RootPool(files)
-		if err != nil {
-			t.Fatal(err)
+	// The roots of a host: the catalog's pinned files, as PEM.
+	server := func(host, operator string) NTSServer {
+		for _, e := range ntscatalog.Builtin.NTS {
+			if e.Host == host {
+				pem, err := nts.RootsPEM(e.Roots)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return NTSServer{Host: host, Operator: operator, Roots: pem}
+			}
 		}
-		return p
-	}
-	isrg := pinned("isrg-root-x1.pem", "isrg-root-x2.pem")
-	system, err := x509.SystemCertPool()
-	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("%s is not in the catalog", host)
+		return NTSServer{}
 	}
 	servers := []NTSServer{
-		{Host: "nts.netnod.se", Operator: "netnod", Roots: isrg},
-		{Host: "ptbtime1.ptb.de", Operator: "ptb", Roots: isrg},
-		{Host: "bevtime1.metrologie.at", Operator: "bev", Roots: system},
-		{Host: "ntppool1.time.nl", Operator: "time.nl", Roots: isrg},
-		{Host: "nts1.ntp.hr", Operator: "fer", Roots: system},
-		{Host: "nts.meta.com", Operator: "meta", Roots: system},
-		{Host: "ntp.obspm.fr", Operator: "obspm", Roots: system},
-		{Host: "time.cloudflare.com", Operator: "cloudflare", Roots: pinned("sslcom-root-ecc.pem")},
+		server("nts.netnod.se", "netnod"),
+		server("ptbtime1.ptb.de", "ptb"),
+		server("bevtime1.metrologie.at", "bev"),
+		server("ntppool1.time.nl", "time.nl"),
+		server("nts1.ntp.hr", "fer"),
+		server("nts.meta.com", "meta"),
+		server("ntp.obspm.fr", "obspm"),
+		server("time.cloudflare.com", "cloudflare"),
 	}
 
 	// Every dial, by address. NTS-KE dials host:4460; NTP dials the address
@@ -81,7 +83,9 @@ func TestNTSShiftLive(t *testing.T) {
 	// No seed at start, as when the key comes later: every operator is
 	// active until SetScheduleSeed, 3 minutes in.
 	n := &NTS{Servers: servers, Coarse: &coarseClock{}, Dial: record, Log: log, Shifts: true, resolveAnyDial: true}
-	n.init()
+	if err := n.init(); err != nil {
+		t.Fatal(err)
+	}
 	t.Logf("start delay %v, grid phase %d ticks (no seed yet)", n.shifts.startDelay, n.shifts.phase)
 	seedAt := 3 * time.Minute
 
@@ -132,6 +136,15 @@ func TestNTSShiftLive(t *testing.T) {
 		byAddr[net.JoinHostPort(s.Host, "4460")] = s.Operator
 		if p, ok := st.Peers[s.Operator]; ok && p.NTPAddr != "" {
 			byAddr[p.NTPAddr] = s.Operator
+			// The NTP dials go to the address the name resolved to at
+			// NTS-KE (nts.Config.ResolveNTP): every address of the name
+			// counts as its operator's.
+			if host, port, err := net.SplitHostPort(p.NTPAddr); err == nil {
+				ips, _ := net.LookupHost(host)
+				for _, ip := range ips {
+					byAddr[net.JoinHostPort(ip, port)] = s.Operator
+				}
+			}
 		}
 	}
 	contacts := map[string][]time.Time{}

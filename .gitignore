@@ -4,8 +4,8 @@
 /signer-core/build/
 /signer-core/vectors/
 /signer-core/sim/build/
-/trusted-time/rust/target/
 /gateway/bin/
+/trusted-time/ntscore/c/build/
 
 # OS generated files
 .DS_Store

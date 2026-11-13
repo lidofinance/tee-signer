@@ -60,6 +60,7 @@ n=0
 tags_of() {
   case "$1" in
     tee-signer) runner_tags runner-dev ;;
+    trusted-time) echo nts ;;
     platform-aws) echo platform_aws ;;
     platform-azure) echo platform_azure ;;
     platform-gcp) echo platform_gcp ;;
@@ -74,9 +75,14 @@ watched() {
 # saved <mod> <dir> <target>: the files of the target's testdata/fuzz.
 saved() { ls -1 "$ROOT/$1/$2/testdata/fuzz/$3" 2>/dev/null || true; }
 
-# fuzz_one <mod> <dir> <target>: go test -fuzz into $one.
+# fuzz_one <mod> <dir> <target>: go test -fuzz into $one. The NTS clock's
+# targets drive the C core: they run under AddressSanitizer (-asan links
+# the sanitizer archive of trusted-time/ntscore/c), so a memory error in the
+# C is a failure, not a lucky crash.
 fuzz_one() {
-  (cd "$ROOT/$1" && go test -tags "$(tags_of "$1")" -run '^$' -fuzz "^$3\$" -fuzztime "$budget" \
+  local asan=()
+  [ "$1" != trusted-time ] || asan=(-asan)
+  (cd "$ROOT/$1" && go test "${asan[@]}" -tags "$(tags_of "$1")" -run '^$' -fuzz "^$3\$" -fuzztime "$budget" \
     -fuzzminimizetime "$minimize" -parallel 4 "$2") >"$one" 2>&1
 }
 
@@ -106,6 +112,7 @@ failed() {
 
 for mod in "${mods[@]}"; do
   [ -f "$ROOT/$mod/go.mod" ] || continue
+  [ "$mod" != trusted-time ] || make -s -C "$ROOT/trusted-time/ntscore/c" asan >/dev/null
   # package directory, file, then target name, for each func FuzzX in a _test.go
   while read -r dir file name; do
     [[ "$name" =~ $match ]] || continue
