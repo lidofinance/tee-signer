@@ -5,6 +5,9 @@
 typedef struct {
     uint8_t pubkey[SC_PUBKEY_LEN];       /* validator (account) pubkey */
     uint8_t share_pubkey[SC_PUBKEY_LEN]; /* pubkey of the loaded secret */
+    /* The key selection proofs verify under: the group key of
+     * sc_signer_add_validator_group, else pubkey. */
+    uint8_t proof_pubkey[SC_PUBKEY_LEN];
     uint64_t index;
     blst_scalar sk;
     /* With SC_MARKS_PER_DEVICE only slash.ram is used; the signer's device
@@ -235,13 +238,26 @@ int sc_signer_add_validator(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
                             const uint8_t secret[SC_SECRET_LEN], uint64_t validator_index,
                             uint8_t share_pubkey_out[SC_PUBKEY_LEN])
 {
+    return sc_signer_add_validator_group(s, pubkey, secret, validator_index, NULL,
+                                         share_pubkey_out);
+}
+
+int sc_signer_add_validator_group(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
+                                  const uint8_t secret[SC_SECRET_LEN], uint64_t validator_index,
+                                  const uint8_t group_pubkey[SC_PUBKEY_LEN],
+                                  uint8_t share_pubkey_out[SC_PUBKEY_LEN])
+{
     sc_validator *v;
     blst_p1 pk;
+    blst_p1_affine group;
     uint32_t pos;
     int rc;
 
     if (!s || !pubkey || !secret)
         return SC_ERR_ARG;
+    if (group_pubkey && (blst_p1_uncompress(&group, group_pubkey) != BLST_SUCCESS ||
+                         blst_p1_affine_is_inf(&group) || !blst_p1_affine_in_g1(&group)))
+        return SC_ERR_BAD_KEY;
     pos = table_probe(s, pubkey);
     if (s->table[pos])
         return SC_ERR_DUPLICATE;
@@ -263,6 +279,7 @@ int sc_signer_add_validator(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_LEN],
     }
 
     memcpy(v->pubkey, pubkey, SC_PUBKEY_LEN);
+    memcpy(v->proof_pubkey, group_pubkey ? group_pubkey : pubkey, SC_PUBKEY_LEN);
     blst_sk_to_pk_in_g1(&pk, &v->sk);
     blst_p1_compress(v->share_pubkey, &pk);
     /* One share, one set of marks. Under a second pubkey the same share
@@ -848,6 +865,7 @@ int sc_sign_validator_registration(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_
 {
     sc_validator *v = find_validator(s, pubkey);
     uint8_t obj[SC_ROOT_LEN], root[SC_ROOT_LEN];
+    const uint8_t *want;
     uint64_t now;
     int rc;
 
@@ -857,7 +875,11 @@ int sc_sign_validator_registration(sc_signer *s, const uint8_t pubkey[SC_PUBKEY_
         return SC_ERR_UNKNOWN_VALIDATOR;
     if ((rc = read_clock(s, &now)) != SC_OK)
         return rc;
-    if ((rc = sc_policy_check_registration(&s->cfg, now, reg, v->pubkey)) != SC_OK)
+    /* The registration may name the validator's group key, if it was loaded
+     * with one (a Charon client registers the group key); proof_pubkey is
+     * pubkey otherwise. */
+    want = memcmp(reg->pubkey, v->proof_pubkey, SC_PUBKEY_LEN) == 0 ? v->proof_pubkey : v->pubkey;
+    if ((rc = sc_policy_check_registration(&s->cfg, now, reg, want)) != SC_OK)
         return rc;
     sc_htr_validator_registration(reg, obj);
     sc_signer_signing_root(s, SC_DOMAIN_APPLICATION_BUILDER, 0, obj, root);
@@ -1102,7 +1124,8 @@ static void typed_sign(sc_signer *s, const sc_validator *v,
         memcpy(signing_root, root, SC_ROOT_LEN);
 }
 
-/* A selection proof must be the validator's (group) signature over obj. */
+/* A selection proof must be the validator's (group) signature over obj:
+ * under the group key the validator was loaded with, else its pubkey. */
 static int check_selection_proof(const sc_signer *s, const sc_validator *v,
                                  const uint8_t domain_type[SC_DOMAIN_TYPE_LEN], uint64_t epoch,
                                  const uint8_t obj[SC_ROOT_LEN],
@@ -1111,8 +1134,9 @@ static int check_selection_proof(const sc_signer *s, const sc_validator *v,
     uint8_t root[SC_ROOT_LEN];
 
     sc_signer_signing_root(s, domain_type, epoch, obj, root);
-    return sc_bls_verify(v->pubkey, root, sizeof root, proof) == SC_OK ? SC_OK
-                                                                        : SC_ERR_SELECTION_PROOF;
+    return sc_bls_verify(v->proof_pubkey, root, sizeof root, proof) == SC_OK
+               ? SC_OK
+               : SC_ERR_SELECTION_PROOF;
 }
 
 static int check_bound_index(const sc_validator *v, uint64_t index)

@@ -511,6 +511,24 @@ func (s *Signer) refusal(rc C.int, what string) error {
 func (s *Signer) AddValidator(pubkey backend.Pubkey, secret [32]byte, index uint64,
 	interchange *backend.Watermark) (backend.ValidatorKey, error) {
 	defer clear(secret[:])
+	return s.addValidator(pubkey, &secret, index, interchange, nil)
+}
+
+// AddValidatorGroup is AddValidator for a share of a distributed validator
+// (sc_signer_add_validator_group): pubkey is the share's own key, the key
+// requests name, and group the validator's on-chain key. Aggregates and
+// contributions must carry a selection proof by group. A group key that is
+// not a G1 point is refused (StatusBadKey) and nothing loads.
+func (s *Signer) AddValidatorGroup(pubkey backend.Pubkey, secret [32]byte, index uint64,
+	interchange *backend.Watermark, group backend.Pubkey) (backend.ValidatorKey, error) {
+	defer clear(secret[:])
+	return s.addValidator(pubkey, &secret, index, interchange, &group)
+}
+
+// addValidator takes the caller's copy of the secret by pointer, so no
+// further copy of it lands on the Go stack or heap.
+func (s *Signer) addValidator(pubkey backend.Pubkey, secret *[32]byte, index uint64,
+	interchange *backend.Watermark, group *backend.Pubkey) (backend.ValidatorKey, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.s == nil {
@@ -522,9 +540,13 @@ func (s *Signer) AddValidator(pubkey backend.Pubkey, secret [32]byte, index uint
 		C.memset(unsafe.Pointer(sec), 0, 32)
 		C.free(unsafe.Pointer(sec))
 	}()
-	*sec = secret
+	*sec = *secret
 	var share [48]byte
-	rc := C.sc_signer_add_validator(s.s, u8(pubkey[:]), (*C.uint8_t)(unsafe.Pointer(sec)), C.uint64_t(index), u8(share[:]))
+	var gp *C.uint8_t
+	if group != nil {
+		gp = u8(group[:])
+	}
+	rc := C.sc_signer_add_validator_group(s.s, u8(pubkey[:]), (*C.uint8_t)(unsafe.Pointer(sec)), C.uint64_t(index), gp, u8(share[:]))
 	what := "add validator"
 	if rc == C.SC_ERR_DUPLICATE && !s.hasKey(pubkey) {
 		what = "add validator: this share is loaded under another pubkey"

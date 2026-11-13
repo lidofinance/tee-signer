@@ -119,6 +119,74 @@ func RecoverPubkey(ids []uint64, pks []backend.Pubkey) (backend.Pubkey, error) {
 	return out, nil
 }
 
+// Commitments returns the Feldman commitments of the degree t-1 split
+// polynomial through t share public keys pks at share IDs ids (t =
+// len(ids)): commitment k is sum_i c_ik * pks[i], where c_ik is
+// coefficient k of the Lagrange basis polynomial of ids[i]. Commitment 0
+// is the full public key. IDs must be distinct and not 0.
+func Commitments(ids []uint64, pks []backend.Pubkey) ([]backend.Pubkey, error) {
+	t := len(ids)
+	if t == 0 || t != len(pks) {
+		return nil, errors.New("threshold: ids and keys differ in length")
+	}
+	// basis[i][k]: coefficient k of prod_{j!=i} (x - x_j) / (x_i - x_j).
+	basis := make([][]*big.Int, t)
+	for i, xi := range ids {
+		if xi == 0 {
+			return nil, errors.New("threshold: share id 0")
+		}
+		poly := []*big.Int{big.NewInt(1)}
+		den := big.NewInt(1)
+		for j, xj := range ids {
+			if i == j {
+				continue
+			}
+			if xi == xj {
+				return nil, errors.New("threshold: duplicate share id")
+			}
+			// poly *= (x - x_j)
+			next := make([]*big.Int, len(poly)+1)
+			for k := range next {
+				next[k] = new(big.Int)
+			}
+			neg := new(big.Int).Neg(new(big.Int).SetUint64(xj))
+			for k, c := range poly {
+				next[k+1].Add(next[k+1], c)
+				next[k].Add(next[k], new(big.Int).Mul(c, neg))
+			}
+			for _, c := range next {
+				c.Mod(c, curveOrder)
+			}
+			poly = next
+			d := new(big.Int).Sub(new(big.Int).SetUint64(xi), new(big.Int).SetUint64(xj))
+			den.Mul(den, d.Mod(d, curveOrder)).Mod(den, curveOrder)
+		}
+		inv := new(big.Int).ModInverse(den, curveOrder)
+		for _, c := range poly {
+			c.Mul(c, inv).Mod(c, curveOrder)
+		}
+		basis[i] = poly
+	}
+	pts := make([]byte, 0, 48*t)
+	for _, p := range pks {
+		pts = append(pts, p[:]...)
+	}
+	out := make([]backend.Pubkey, t)
+	for k := range t {
+		scalars := make([]byte, 0, 32*t)
+		for i := range t {
+			be := scalarBytes(basis[i][k])
+			for b := 31; b >= 0; b-- {
+				scalars = append(scalars, be[b])
+			}
+		}
+		if C.threshold_p1_lincomb(u8(pts), u8(scalars), C.size_t(t), u8(out[k][:])) != 0 {
+			return nil, errors.New("threshold: bad share public key")
+		}
+	}
+	return out, nil
+}
+
 // FeldmanEval returns sum commitments[k] * x^k, the public key of the
 // split polynomial's value at x when commitments[k] is the public key of
 // coefficient k (Feldman). It refuses a commitment that is not a G1 point

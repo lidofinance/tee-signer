@@ -210,7 +210,7 @@ func (s *Signers) Close() error {
 // is left out and logged once. Every signer that answered is also asked
 // for HEALTH: its protocol level, and for a signer that lists a whole key
 // its signing_mode (a whole key is served only from a signer that reported
-// signing_mode = single within modeMaxAge, checkWhole).
+// signing_mode = single or dv_share within modeMaxAge, checkWhole).
 func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, error) {
 	type answer struct {
 		keys    []proto.ValidatorKey
@@ -356,7 +356,8 @@ func listsWholeKey(keys []proto.ValidatorKey) bool {
 }
 
 // checkWhole refuses a whole key (threshold 1) unless its signer's HEALTH
-// said signing_mode = single at most modeMaxAge before now; s.mu is held.
+// said signing_mode = single or dv_share at most modeMaxAge before now; s.mu
+// is held.
 // Share keys equal to the validator key are not enough: the runner of a
 // threshold setup refuses a whole key at import, so one that lists it is
 // not following its setup, and an old runner or one without a setup does
@@ -369,15 +370,22 @@ func (s *Signers) checkWhole(g group, now time.Time) error {
 		return nil
 	}
 	n := g.shares[0].node
-	if m := s.modes[n]; m != setupwire.SigningModeSingle.String() {
-		return fmt.Errorf("the whole key is on signer %s, whose HEALTH says signing_mode = %q; a whole key needs signing_mode = single", s.names[n], m)
+	if m := s.modes[n]; !wholeKeyMode(m) {
+		return fmt.Errorf("the whole key is on signer %s, whose HEALTH says signing_mode = %q; a whole key needs signing_mode = single or dv_share", s.names[n], m)
 	}
 	if now.Sub(s.modesAt[n]) > s.modeMaxAge {
-		return fmt.Errorf("the whole key is on signer %s, whose last signing_mode from HEALTH is older than %s (%d key refreshes); a whole key needs a recent signing_mode = single",
+		return fmt.Errorf("the whole key is on signer %s, whose last signing_mode from HEALTH is older than %s (%d key refreshes); a whole key needs a recent signing_mode = single or dv_share",
 			s.names[n], s.modeMaxAge, modeMaxRefreshes)
 	}
 
 	return nil
+}
+
+// wholeKeyMode reports whether a signer of signing_mode m serves whole
+// keys: single, or dv_share, whose runner lists each Charon share under its
+// own key and signs alone for it (the Charon cluster combines the shares).
+func wholeKeyMode(m string) bool {
+	return m == setupwire.SigningModeSingle.String() || m == setupwire.SigningModeDVShare.String()
 }
 
 // wholeOK is checkWhole at the key list's clock. A threshold key passes

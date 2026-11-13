@@ -88,3 +88,41 @@ Any t of the `shares.txt` files are the whole keys, so they never travel togethe
 6. Right after the import succeeds, delete the file: `umount DIR` for the tmpfs folder, and `shred -u` the copy on the media (shred overwrites in place, which works on a plain filesystem on a flash stick or a hard disk; an SSD or a journaling or copy-on-write filesystem may keep old blocks, so treat such media as still holding the share and keep or destroy it as a secret).
 
 After the last signer, delete `OUT` on the dealer machine (`umount` its tmpfs) and do not reboot into a hibernation image that was made while it existed.
+
+## Charon shares (signing_mode = dv_share)
+
+A signer behind an Obol Charon node holds that node's share of each distributed validator. Charon's validator client asks for each share under the share's own key, and the aggregates and sync contributions it sends carry the selection proof the cluster combined, which verifies under the validator's group key. A setup with `signing_mode = dv_share` serves such shares: the runner signs under the share key and checks those selection proofs against the group key. Marks, floors and every other rule apply to the share key as for any key.
+
+The group key comes from the import, never from a request. `dv-split` reads the cluster lock and writes the split file:
+
+```
+signer-admin dv-split -lock cluster-lock.json -signers NAME=INDEX[,NAME=INDEX...] [-out split.json]
+```
+
+- For each validator it takes `distributed_public_key` (the group key) and `public_shares` (share index i + 1 at position i), computes the t commitments of the split from the first t public shares (t is the lock's `threshold`), and checks that commitment 0 is the group key and that every one of the n public shares is the commitments' value at its index. A lock that fails any check writes nothing.
+- `-signers` gives each dv_share signer of `cluster.json` the Charon share index it holds: its operator's position in the lock, from 1.
+- dv-split does not check the lock's signatures or `lock_hash` yet. The admin vouches for the file; the approvers sign the commitments hash that `import-draft` puts in the order for each group key.
+
+Before they sign an import order for a dv_share signer, the approvers check each group key the order names: it is a validator on chain, or it comes from a cluster lock they trust. The runner cannot tell a Charon split from one made up for the purpose. Anyone who holds a whole validator key can make up a split in which that key is the share at the order's index, with a group key no cluster uses. A dv_share runner that takes it serves the whole key under its own key and signs alone for that validator, without the single-mode rules: no GCP acceptance, no one-signer cluster check.
+
+Then per signer, as for a split: `import-draft -split split.json`, the approvers `show` and `sign`, `assemble`, and `import -order import.signed -commitments split.json -shares FILE`. The shares file may name each share by its own key, as for a single-mode import (`0x<share pubkey> <validator index> 0x<share secret>`): `import` files each share of the order's index under its group key and says how many it filed. With `-interchange`, it looks each such share up under its own key, the key a Charon validator client's slashing protection file uses.
+
+The runner checks the share against the order's commitments at the order's share index (`share_pubkey` must be their value there, and commitment 0 is the group key), seals the group key into the share record and lists the share under its own key in PUBLIC_KEYS. The gateway sees a whole key. The group key check only stops aggregates and contributions with a selection proof the group did not make; none of these messages is slashable.
+
+The split must pass the chain's threshold rule as for threshold mode: on mainnet (and any chain the chain table does not list) 2t - n >= 2, so Charon's 3 of 4, 5 of 7 and 7 of 10 pass and a 2-of-3 cluster is refused.
+
+The gateway serves a dv_share key as a whole key (PUBLIC_KEYS lists `pubkey` = `share_pubkey`): its whole-key check takes `signing_mode = dv_share` as it takes `single` ([gateway/README.md](../gateway/README.md)). A gateway older than that refuses the keys.
+
+The tee-signer cluster of a dv_share setup may have any number of signers, since the other shares of each split sit in other operators' signers. A dv_share setup on GCP needs no `unsafe_single_key_accepted`: the signer holds one share, not the key, as long as the approvers checked each group key before they signed its order (above).
+
+### From signing_mode = single
+
+A signer that holds Charon shares as whole keys under `signing_mode = single` signs attestations and blocks, but refuses every aggregate and sync contribution: their selection proof is the group's, not the share's. To move it:
+
+1. Write a setup that says `signing_mode = dv_share` and run `signer-admin setup`. It is a new setup, with a new `setup_sha256`; the approvers check and approve it as any new setup.
+2. Start the runner on it with new stores, or remove the old share records (`shares/...` in the encrypted state store) first. Records sealed under the old setup do not open under the new one. A runner that lists records it cannot open takes no import but one batch that holds every listed key. dv_share records have the same names (the share keys), so an `import` of all of them works only while they fit one batch (1024 shares and one frame); with more, remove the old records.
+3. `signer-admin dv-split -lock cluster-lock.json -signers NAME=INDEX -out split.json`.
+4. `import-draft`, approvals and `assemble` as above.
+5. `signer-admin import -cluster cluster.json -signer NAME -order import.signed -commitments split.json -shares FILE [-interchange FILE]`, with the shares file of the single-mode import.
+
+Each key starts with the restart floor of the import, so the signer misses the duties of a restart.

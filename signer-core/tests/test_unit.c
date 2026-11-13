@@ -3025,6 +3025,122 @@ static void test_typed(void)
     CHECK(strcmp(sc_status_name(SC_ERR_SELECTION_PROOF), "SC_ERR_SELECTION_PROOF") == 0);
 }
 
+/*
+ * A distributed validator share: the core holds key 10000+i as a whole key
+ * (its pubkey is the validator pubkey of the requests), and the selection
+ * proofs in aggregates and contributions are the group key's (account key
+ * i). Loaded with the group key, the core checks them against it; loaded
+ * without, against the share key, and the group's proof is refused.
+ */
+static void test_dv_share(void)
+{
+    host_t h = {0};
+    sc_config cfg;
+    uint8_t sig[96], obj[32], proof[96], ssz[512], root[32], sr[32];
+    uint8_t share_sk[32], acct_sk[32], share_pk[48], group_pk[48], other_pk[48], out[48];
+    uint8_t scratch[SC_TYPED_SCRATCH_LEN], inf[48] = {0xc0}, junk[48];
+    const sc_preset *p = &SC_PRESET_MAINNET;
+    const uint64_t slot = E * 32 + 9;
+    size_t n;
+
+    make_gloas_config(&cfg);
+    set_epoch(&h, E);
+    const uint8_t *gvr = cfg.genesis_validators_root;
+    secret_for(10005, share_sk);
+    secret_for(5, acct_sk);
+    CHECK_RC(sc_bls_pubkey(share_sk, share_pk), SC_OK);
+    CHECK_RC(sc_bls_pubkey(acct_sk, group_pk), SC_OK);
+    secret_for(6, acct_sk);
+    CHECK_RC(sc_bls_pubkey(acct_sk, other_pk), SC_OK);
+    sc_htr_uint64(slot, obj);
+    account_sign(5, D_SEL, V_FULU, gvr, obj, proof);
+
+    /* Without a group key (single mode): the group's proof is refused. */
+    sc_signer *single = new_signer(&h, &cfg, 4, 4);
+    g_loading = 1;
+    CHECK_RC(sc_signer_add_validator(single, share_pk, share_sk, 777, NULL), SC_OK);
+    g_loading = 0;
+    n = aggregate_ssz(ssz, 777, slot, proof);
+    CHECK_RC(sc_sign_aggregate_and_proof(single, share_pk, ssz, n, SC_AGGREGATE_ELECTRA, p, scratch,
+                                         sig, NULL),
+             SC_ERR_SELECTION_PROOF);
+
+    /* With the right group key the same aggregate signs with the share. */
+    sc_signer *dv = new_signer(&h, &cfg, 4, 4);
+    g_loading = 1;
+    CHECK_RC(sc_signer_add_validator_group(dv, share_pk, share_sk, 777, group_pk, out), SC_OK);
+    g_loading = 0;
+    CHECK(memcmp(out, share_pk, 48) == 0);
+    CHECK_RC(sc_sign_aggregate_and_proof(dv, share_pk, ssz, n, SC_AGGREGATE_ELECTRA, p, scratch, sig,
+                                         sr),
+             SC_OK);
+    CHECK_RC(sc_bls_verify(share_pk, sr, 32, sig), SC_OK);
+    /* A proof by the share key itself is not the group's: refused. */
+    account_sign(10005, D_SEL, V_FULU, gvr, obj, sig);
+    n = aggregate_ssz(ssz, 777, slot, sig);
+    CHECK_RC(sc_sign_aggregate_and_proof(dv, share_pk, ssz, n, SC_AGGREGATE_ELECTRA, p, scratch, sig,
+                                         NULL),
+             SC_ERR_SELECTION_PROOF);
+    /* The partial selection proof is still the share's signature. */
+    CHECK_RC(sc_sign_selection_proof(dv, share_pk, slot, sig, sr), SC_OK);
+    root_with(D_SEL, V_FULU, gvr, obj, root);
+    CHECK(memcmp(root, sr, 32) == 0);
+    CHECK_RC(sc_bls_verify(share_pk, root, 32, sig), SC_OK);
+    /* Contribution and proof: the group's sync selection proof signs. */
+    sc_htr_sync_aggregator_selection_data(slot, 2, obj);
+    account_sign(5, D_SYNC_SEL, V_FULU, gvr, obj, proof);
+    n = contribution_ssz(ssz, 777, slot, 2, proof);
+    CHECK_RC(sc_sign_contribution_and_proof(dv, share_pk, ssz, n, p, sig, NULL), SC_OK);
+    CHECK_RC(sc_sign_contribution_and_proof(single, share_pk, ssz, n, p, sig, NULL),
+             SC_ERR_SELECTION_PROOF);
+    CHECK_RC(sc_sign_sync_selection_proof(dv, share_pk, slot, 2, p, sig, sr), SC_OK);
+    CHECK_RC(sc_bls_verify(share_pk, sr, 32, sig), SC_OK);
+
+    /* A builder registration may name the share key or the group key (a
+     * Charon client registers the group key); a key loaded without a group
+     * key takes only its own, and fee recipient and gas rules still apply. */
+    {
+        sc_validator_registration reg;
+        memset(&reg, 0, sizeof reg);
+        memset(reg.fee_recipient, 0x11, 20);
+        reg.gas_limit = 36000000;
+        reg.timestamp = h.now;
+        memcpy(reg.pubkey, group_pk, 48);
+        CHECK_RC(sc_sign_validator_registration(dv, share_pk, &reg, sig), SC_OK);
+        CHECK_RC(sc_sign_validator_registration(single, share_pk, &reg, sig), SC_ERR_POLICY_PUBKEY);
+        memcpy(reg.pubkey, share_pk, 48);
+        CHECK_RC(sc_sign_validator_registration(dv, share_pk, &reg, sig), SC_OK);
+        CHECK_RC(sc_sign_validator_registration(single, share_pk, &reg, sig), SC_OK);
+        memcpy(reg.pubkey, other_pk, 48);
+        CHECK_RC(sc_sign_validator_registration(dv, share_pk, &reg, sig), SC_ERR_POLICY_PUBKEY);
+        memcpy(reg.pubkey, group_pk, 48);
+        memset(reg.fee_recipient, 0x33, 20);
+        CHECK_RC(sc_sign_validator_registration(dv, share_pk, &reg, sig), SC_ERR_POLICY_FEE_RECIPIENT);
+    }
+
+    /* A wrong group key: the group's proof is refused. */
+    sc_signer *wrong = new_signer(&h, &cfg, 4, 4);
+    g_loading = 1;
+    CHECK_RC(sc_signer_add_validator_group(wrong, share_pk, share_sk, 777, other_pk, NULL), SC_OK);
+    g_loading = 0;
+    sc_htr_uint64(slot, obj);
+    account_sign(5, D_SEL, V_FULU, gvr, obj, proof);
+    n = aggregate_ssz(ssz, 777, slot, proof);
+    CHECK_RC(sc_sign_aggregate_and_proof(wrong, share_pk, ssz, n, SC_AGGREGATE_ELECTRA, p, scratch,
+                                         sig, NULL),
+             SC_ERR_SELECTION_PROOF);
+
+    /* A group key that is no G1 point, or the point at infinity, loads
+     * nothing. */
+    sc_signer *bad = new_signer(&h, &cfg, 4, 4);
+    memset(junk, 0xab, sizeof junk);
+    g_loading = 1;
+    CHECK_RC(sc_signer_add_validator_group(bad, share_pk, share_sk, 777, inf, NULL), SC_ERR_BAD_KEY);
+    CHECK_RC(sc_signer_add_validator_group(bad, share_pk, share_sk, 777, junk, NULL), SC_ERR_BAD_KEY);
+    g_loading = 0;
+    CHECK_RC(sc_sign_selection_proof(bad, share_pk, slot, sig, NULL), SC_ERR_UNKNOWN_VALIDATOR);
+}
+
 /* ---- fork schedule updates ---------------------------------------------- */
 
 static const uint8_t V_NEXT[4] = {9, 0, 0, 0};
@@ -4428,6 +4544,7 @@ int main(int argc, char **argv)
     test_builder_auth_go(data_dir);
     test_gloas_restart();
     test_typed();
+    test_dv_share();
     test_set_schedule();
     test_fork_change_marks();
     test_slot_times();

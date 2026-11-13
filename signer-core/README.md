@@ -142,7 +142,17 @@ from a generic `Sign` of a stock client, behind the runner's
 `validator_pubkey` is the validator's on-chain key and identifies it for
 slashing protection and policy. The secret can be a threshold share of
 that key; the signature is then a partial signature that verifies under
-`share_pubkey_out`. `tests/test_unit.c` (`make_config`, `new_signer`,
+`share_pubkey_out`.
+
+`sc_signer_add_validator_group(s, share_pubkey, share_secret, index,
+group_pubkey, out)` loads a share of a distributed validator whose other
+shares the core does not see (an Obol Charon cluster) under the share's own
+key, which the client's requests name. The aggregate and contribution calls
+then check the selection proof in the message against `group_pubkey`, the
+validator's key, since the cluster combined that proof. Everything else,
+marks and partial selection proofs included, works on the share key. The
+host supplies the group key at load time, never from a request
+(`SC_ERR_BAD_KEY` if it is not a G1 point). `tests/test_unit.c` (`make_config`, `new_signer`,
 `host_ops`) shows a full config and host callbacks. `sc_signer_init`
 refuses a config whose callbacks are missing: a host sets only the ones its
 `mark_scope` needs.
@@ -348,7 +358,8 @@ core does not parse JSON; the caller does.
   but a validator loaded with an index signs an exit only for that index.
 - ValidatorRegistration only with `fee_recipient` in `fee_recipients`,
   `gas_limit` in `[gas_limit_min, gas_limit_max]`, `pubkey` equal to the
-  signing validator, and, if `registration_max_future_seconds` is non-zero,
+  signing validator or, for one loaded with a group key, to the group key
+  (a Charon client registers the group key), and, if `registration_max_future_seconds` is non-zero,
   a timestamp no further than that ahead of the clock.
 - If a validator was loaded with an index, block `proposer_index` and exit
   `validator_index` must match it.

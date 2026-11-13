@@ -38,8 +38,9 @@ func TestSigningMode(t *testing.T) {
 	if ok(th.PlatformCommitment()) != ok(si.PlatformCommitment()) {
 		t.Fatal("signing_mode moved platform_commitment")
 	}
-	// A bad byte in the setup.
-	for _, v := range []byte{0, 3} {
+	// A bad byte in the setup. A runner built before dv_share refused 3 the
+	// same way, so it never starts from a dv_share setup.
+	for _, v := range []byte{0, 4, 0xff} {
 		raw := bytes.Clone(b)
 		raw[at] = v
 		if _, err := DecodeSetup(raw); err == nil || !strings.Contains(err.Error(), "signing_mode") {
@@ -49,11 +50,47 @@ func TestSigningMode(t *testing.T) {
 	for _, c := range []struct {
 		s    string
 		want SigningMode
-	}{{"threshold", SigningModeThreshold}, {"single", SigningModeSingle}, {"", 0}, {"Single", 0}, {"1", 0}} {
+	}{{"threshold", SigningModeThreshold}, {"single", SigningModeSingle}, {"dv_share", SigningModeDVShare},
+		{"", 0}, {"Single", 0}, {"1", 0}, {"dv-share", 0}} {
 		m, err := ParseSigningMode(c.s)
 		if m != c.want || (err == nil) != (c.want != 0) {
 			t.Errorf("ParseSigningMode(%q) = %v, %v", c.s, m, err)
 		}
+	}
+}
+
+// signing_mode = dv_share is byte 3. It adds a value and changes no byte or
+// hash of a threshold or single setup (TestSigningMode pins those). It
+// takes splits as threshold does (n >= 2, the chain's threshold rule), needs
+// no GCP acceptance, refuses one, and allows clusters of many signers.
+func TestSigningModeDVShare(t *testing.T) {
+	s := samples(t)["setup-gcp"]
+	s.SigningMode = SigningModeDVShare
+	raw := must(s.Encode())
+	if raw[1+publicLen-1] != 3 {
+		t.Fatalf("dv_share byte %d, want 3", raw[1+publicLen-1])
+	}
+	got, err := DecodeSetup(raw)
+	if err != nil || got.SigningMode != SigningModeDVShare || got.SigningMode.String() != "dv_share" {
+		t.Fatalf("decode: %v, %v", got, err)
+	}
+	if err := s.Check(); err != nil {
+		t.Errorf("dv_share gcp setup without the acceptance: %v", err)
+	}
+	for _, c := range []struct {
+		t, n int
+		ok   bool
+	}{{1, 1, false}, {3, 4, true}, {5, 7, true}, {2, 4, false}} {
+		if err := CheckThresholdOn(s, c.t, c.n); (err == nil) != c.ok {
+			t.Errorf("dv_share %d of %d: %v", c.t, c.n, err)
+		}
+	}
+	if err := CheckMembers(SigningModeDVShare, 4); err != nil {
+		t.Errorf("dv_share cluster of 4: %v", err)
+	}
+	s.Platform.SealingKeyRelease.UnsafeSingleKeyAccepted = true
+	if _, err := s.Encode(); err == nil || !strings.Contains(err.Error(), "unsafe_single_key_accepted needs signing_mode = single") {
+		t.Errorf("dv_share setup with the acceptance: %v, want a refusal", err)
 	}
 }
 

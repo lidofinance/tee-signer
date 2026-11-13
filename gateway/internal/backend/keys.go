@@ -39,7 +39,7 @@ type group struct {
 // signature. A key that fits no t and no indices is refused: its
 // signatures would never combine. t = 1 means every share is pk itself;
 // the caller serves such a group only from a signer that reports
-// signing_mode = single (checkWhole). A group with pk next to other
+// signing_mode = single or dv_share (checkWhole). A group with pk next to other
 // shares is refused, and so is one unless 2t > k (checkOverlap).
 //
 // The search tries the indices in increasing order, so signers listed in

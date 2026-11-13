@@ -261,6 +261,12 @@ const (
 	// SigningModeSingle: the signer holds whole keys, 1 of 1 import orders
 	// only (CheckThresholdOn).
 	SigningModeSingle SigningMode = 2
+	// SigningModeDVShare: the signer holds shares of distributed validators
+	// whose other shares sit in other signers it does not see (an Obol
+	// Charon cluster). Import orders name t-of-n splits as for threshold;
+	// the runner serves each share under its own key and checks selection
+	// proofs against the validator key of the order.
+	SigningModeDVShare SigningMode = 3
 )
 
 // ClockProtocol is how the runner's clock asks its time servers
@@ -274,7 +280,7 @@ const (
 
 var (
 	clockProtocolNames = []string{ClockNTS: "nts", ClockNTP: "ntp"}
-	signingModeNames   = []string{SigningModeThreshold: "threshold", SigningModeSingle: "single"}
+	signingModeNames   = []string{SigningModeThreshold: "threshold", SigningModeSingle: "single", SigningModeDVShare: "dv_share"}
 	platformNames      = []string{PlatformNitro: "nitro", PlatformAzure: "azure", PlatformGCP: "gcp", PlatformDev: "dev"}
 	presetNames        = []string{PresetMainnet: "mainnet", PresetMinimal: "minimal"}
 	groupNames         = []string{GroupLocked: "locked", GroupOpen: "open"}
@@ -311,12 +317,12 @@ func (m SigningMode) String() string {
 }
 func (p ClockProtocol) String() string { return enumName(clockProtocolNames, uint8(p)) }
 
-// ParseSigningMode reads threshold or single.
+// ParseSigningMode reads threshold, single or dv_share.
 func ParseSigningMode(s string) (SigningMode, error) {
 	if v, ok := enumValue(signingModeNames, s); ok {
 		return SigningMode(v), nil
 	}
-	return 0, fmt.Errorf("signing_mode %q, want threshold or single", s)
+	return 0, fmt.Errorf("signing_mode %q, want threshold, single or dv_share", s)
 }
 
 // ParsePlatform reads nitro, azure, gcp or dev.
@@ -1461,7 +1467,7 @@ func (s *Setup) checkPublic() error {
 		return fmt.Errorf("setup: slashing_log_min_lock_days %d, want 1 to %d", s.SlashingLogMinLockDays, MaxLockDays)
 	}
 	if !enumValid(signingModeNames, uint8(s.SigningMode)) {
-		return fmt.Errorf("setup: signing_mode %d, want %d (threshold) or %d (single)", s.SigningMode, SigningModeThreshold, SigningModeSingle)
+		return fmt.Errorf("setup: signing_mode %d, want %d (threshold), %d (single) or %d (dv_share)", s.SigningMode, SigningModeThreshold, SigningModeSingle, SigningModeDVShare)
 	}
 	return nil
 }

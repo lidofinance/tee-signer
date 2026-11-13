@@ -516,7 +516,7 @@ func ParseSetup(name string, data []byte) (*setupwire.Setup, error) {
 	p.safety(&s.Safety)
 	s.MaxKeys = uint32(scalar(p, "max_keys", parseUint(32)))
 	s.SlashingLogMinLockDays = uint32(scalar(p, "slashing_log_min_lock_days", parseUint(32)))
-	s.SigningMode = setupwire.SigningMode(scalar(p, "signing_mode", enumParser(signingModeNames, "threshold or single")))
+	s.SigningMode = setupwire.SigningMode(scalar(p, "signing_mode", enumParser(signingModeNames, "threshold, single or dv_share")))
 	p.platform(&s.Platform)
 	p.locked(&s.Locked)
 	p.open(&s.Open)

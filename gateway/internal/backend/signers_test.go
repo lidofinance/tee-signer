@@ -452,7 +452,7 @@ func TestWholeKeyNeedsSingleMode(t *testing.T) {
 	for _, c := range []struct {
 		mode   string
 		served bool
-	}{{"single", true}, {"threshold", false}, {"", false}} {
+	}{{"single", true}, {"dv_share", true}, {"threshold", false}, {"", false}, {"dv-share", false}} {
 		single := cluster([]*testKey{w}, 1)[0]
 		single.mode = c.mode
 		fakes := append(cluster([]*testKey{k}, 3), single)
@@ -706,6 +706,34 @@ func TestWholeKeyModeAgesOut(t *testing.T) {
 	}
 	if _, ok := s.keys.lookup(w.pk); !ok {
 		t.Fatal("the whole key did not come back after HEALTH said single again")
+	}
+}
+
+// A dv_share signer lists each Charon share as a whole key; its
+// signing_mode ages out as single's does, and a switch to threshold drops
+// the key.
+func TestDVShareWholeKeyModeAgesOut(t *testing.T) {
+	w := splitKey(t, 1, 1)
+	dv := cluster([]*testKey{w}, 1)[0]
+	dv.mode = "dv_share"
+	s := newTestSigners(t, []*fakeRunner{dv})
+	if _, ok := s.keys.lookup(w.pk); !ok {
+		t.Fatal("the key of a dv_share signer is not served")
+	}
+	dv.set(func(f *fakeRunner) { f.healthErr = errors.New("health down") })
+	skewClock(s, 3*keysMaxAge+time.Second)
+	if _, err := s.Refresh(context.Background()); err == nil {
+		t.Fatal("a load with no key to serve passed")
+	}
+	if _, ok := s.keys.lookup(w.pk); ok {
+		t.Fatal("the dv_share key is still served after its signing_mode aged out")
+	}
+	dv.set(func(f *fakeRunner) { f.healthErr, f.mode = nil, "threshold" })
+	if _, err := s.Refresh(context.Background()); err == nil {
+		t.Fatal("a load with no key to serve passed")
+	}
+	if _, ok := s.keys.lookup(w.pk); ok {
+		t.Fatal("the whole key is served from a signer that reports threshold")
 	}
 }
 
