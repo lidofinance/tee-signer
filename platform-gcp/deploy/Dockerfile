@@ -52,7 +52,7 @@ LABEL "tee.launch_policy.allow_cgroups"="false"
 LABEL "tee.launch_policy.monitoring_memory_allow"="never"
 # "always" lets the operator read the runner's log in Cloud Logging during the
 # test. Use "never" for production shares.
-LABEL "tee.launch_policy.log_redirect"="always"
+LABEL "tee.launch_policy.log_redirect"="@LOG_REDIRECT@"
 # Confidential Space opens only the ports the image declares: without this
 # the launcher logs "Exposed Ports: map[]" and the host firewall drops 7100.
 EXPOSE 7100/tcp

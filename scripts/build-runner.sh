@@ -103,7 +103,15 @@ if [ ${#archs[@]} -eq 0 ]; then
   done
 fi
 # The NTS library of the cloud runners (no tests here: scripts/test-nts.sh).
-bash "$ROOT/scripts/build-nts.sh" --no-test "${archs[@]}"
+# NTS_PREBUILT=1: run_build_runner (common.sh) built it already, outside the
+# release builder, which has no Docker.
+if [ "${NTS_PREBUILT:-}" = 1 ]; then
+  for a in "${archs[@]}"; do
+    [ -f "$NTS_OUT/$a/lib/libsigner_nts.a" ] || { echo "NTS_PREBUILT=1 but no $NTS_OUT/$a/lib/libsigner_nts.a" >&2; exit 1; }
+  done
+else
+  bash "$ROOT/scripts/build-nts.sh" --no-test "${archs[@]}"
+fi
 
 # -trimpath and an empty build id keep the binary byte-identical across
 # rebuilds with the same toolchain, which keeps enclave measurements stable.
