@@ -20,7 +20,7 @@
 #            over 127 bytes, a malformed PROJECT_ID
 #   domain   a domain-scoped PROJECT_ID: the registry path
 #   account  every step that names the service account takes its email
-#            from gcloud, and stops on no match or two
+#            from gcloud, and stops on no match, two, or a failed list
 #
 # deploy.sh runs in a copy of the repo's scripts and cloud folders with a
 # fake gcloud that records its arguments, as in side-by-side-test.sh, so no
@@ -40,17 +40,20 @@ run_rc() { if out="$("$@" 2>&1)"; then rc=0; else rc=$?; fi; }
 has() { grep -q -F -- "$1" <<<"$2"; }
 
 # A fake gcloud: each call's arguments, one per line, then a blank line.
-# "iam service-accounts list" prints sa.list. Its workload account has an
-# email that no rule of the script could build, so a step that uses a built
-# address shows up.
+# "iam service-accounts list" prints sa.list, then exits with the status in
+# sa.rc. Its workload account has an email that no rule of the script could
+# build, so a step that uses a built address shows up.
 SA_EMAIL=signer-workload@from-gcloud.example.iam.gserviceaccount.com
 cat >"$work/bin/gcloud" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$@" "" >>"$work/gcloud.calls"
-if [ "\$1 \$2 \$3" = "iam service-accounts list" ]; then cat "$work/sa.list"; fi
+if [ "\$1 \$2 \$3" = "iam service-accounts list" ]; then cat "$work/sa.list"; exit "\$(cat "$work/sa.rc")"; fi
 EOF
 chmod +x "$work/bin/gcloud"
 printf '%s\n' 123456-compute@developer.gserviceaccount.com "$SA_EMAIL" >"$work/sa.list"
+echo 0 >"$work/sa.rc"
+# sa_deleted: some call was "gcloud iam service-accounts delete".
+sa_deleted() { tr '\n' ' ' <"$work/gcloud.calls" | grep -q -F "iam service-accounts delete"; }
 
 arch="$(uname -m)"
 case "$arch" in amd64) arch=x86_64 ;; arm64) arch=aarch64 ;; esac
@@ -242,13 +245,34 @@ sa_refused "wif-create without the account" "found no service account signer-wor
 : >"$work/gcloud.calls"
 run_rc dep CONFIRM=yes bash "$DEPLOY" teardown
 [ "$rc" = 0 ] && has "no service account signer-workload in" "$out" && ! has "run sa-create first" "$out" &&
-  ! grep -q "service-accounts delete" "$work/gcloud.calls" && ok "teardown without the account: nothing to delete" ||
+  ! sa_deleted && ok "teardown without the account: nothing to delete" ||
   bad "teardown without the account: rc $rc $out"
 p="$(dep bash "$DEPLOY" preflight 2>&1 || true)"
 has "ok    service account signer-workload is free" "$p" && ok "preflight: no account, the name is free" || bad "preflight without the account: $p"
 printf '%s\n' "$SA_EMAIL" signer-workload@other.example.iam.gserviceaccount.com >"$work/sa.list"
 sa_refused "sa-bindings with two accounts" "found 2 service accounts named signer-workload" add-iam-policy-binding -- sa-bindings
 sa_refused "provider-update with two accounts" "found 2 service accounts named signer-workload" workload-identity-pools -- provider-update
+# A name that only starts or ends like signer-workload is another account.
+printf '%s\n' signer-workload-old@from-gcloud.example.iam.gserviceaccount.com \
+  xsigner-workload@from-gcloud.example.iam.gserviceaccount.com >"$work/sa.list"
+sa_refused "sa-bindings with near-miss names only" "found no service account signer-workload" add-iam-policy-binding -- sa-bindings
+: >"$work/gcloud.calls"
+run_rc dep CONFIRM=yes bash "$DEPLOY" teardown
+[ "$rc" = 0 ] && has "no service account signer-workload in" "$out" && ! sa_deleted &&
+  ok "teardown with near-miss names only: nothing to delete" || bad "teardown with near-miss names: rc $rc $out $(cat "$work/gcloud.calls")"
+# rv-n2o.1: a failed list call stops the step, also when gcloud printed the
+# account before it failed. teardown must not read it as "no account".
+echo 1 >"$work/sa.rc"
+for list in "" "$SA_EMAIL"; do
+  printf '%s' "$list" >"$work/sa.list"
+  what="a failed list${list:+ after the account}"
+  sa_refused "sa-bindings with $what" "cannot list the service accounts of" add-iam-policy-binding -- sa-bindings
+  : >"$work/gcloud.calls"
+  run_rc dep CONFIRM=yes bash "$DEPLOY" teardown
+  [ "$rc" != 0 ] && has "cannot list the service accounts of" "$out" && ! has "nothing to delete" "$out" && ! sa_deleted &&
+    ok "refused: teardown with $what" || bad "teardown with $what: rc $rc $out"
+done
+echo 0 >"$work/sa.rc"
 printf '%s\n' "$SA_EMAIL" >"$work/sa.list"
 : >"$work/gcloud.calls"
 run_rc dep "${P2[@]}" CHAIN=ci-test SETUP_FILE="$work/gcp-2.bin" bash "$DEPLOY" vm-create </dev/null

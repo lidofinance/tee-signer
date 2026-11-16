@@ -475,7 +475,7 @@ cmd_vm_delete() {
 cmd_teardown() {
   # A second signer shares the network, rules, registry and service account
   # with the running one: list its own deletes, never the shared ones.
-  local r
+  local r emails
   if side_by_side; then
     show "teardown of a second signer: its own resources only (the network, firewall rules, registry, key ring and service account are shared)"
     show "  \$ $(quote gcloud compute instances delete "$VM" --zone="$ZONE" --project="$PROJECT_ID" --quiet)"
@@ -512,10 +512,14 @@ cmd_teardown() {
   run gcloud iam workload-identity-pools providers delete "$WIF_PROVIDER" --location=global \
     --workload-identity-pool="$WIF_POOL" --project="$PROJECT_ID" --quiet
   run gcloud iam workload-identity-pools delete "$WIF_POOL" --location=global --project="$PROJECT_ID" --quiet
-  # The account may be gone already: then there is nothing to delete.
-  if [ "$DRY" != 1 ] && [ -z "$(service_account_emails)" ]; then
-    show "no service account $SA_NAME in $PROJECT_ID: nothing to delete"
-    return 0
+  # The account may be gone already: then there is nothing to delete. A
+  # plain assignment, so a failed list call stops teardown under set -e.
+  if [ "$DRY" != 1 ]; then
+    emails="$(service_account_emails)"
+    if [ -z "$emails" ]; then
+      show "no service account $SA_NAME in $PROJECT_ID: nothing to delete"
+      return 0
+    fi
   fi
   service_account
   run gcloud iam service-accounts delete "$SERVICE_ACCOUNT" --project="$PROJECT_ID" --quiet
