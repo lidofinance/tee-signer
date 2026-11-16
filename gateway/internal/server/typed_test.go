@@ -33,9 +33,12 @@ func gloasServer(t *testing.T) (*httptest.Server, *fakeSigner) {
 // Exits stay refused by policy before any call.
 func TestExitRefusedBeforeTheSigners(t *testing.T) {
 	srv, f := newTestServer(t)
-	code, _, _ := post(t, srv, pubHex, "application/json", `{"type":"VOLUNTARY_EXIT",`+forkInfo+`,"voluntary_exit":{"epoch":"411400","validator_index":"1"}}`)
+	code, _, body := post(t, srv, pubHex, "application/json", `{"type":"VOLUNTARY_EXIT",`+forkInfo+`,"voluntary_exit":{"epoch":"411400","validator_index":"1"}}`)
 	if code != 412 || len(f.calls) != 0 {
 		t.Fatalf("exit: status %d, calls %v", code, f.calls)
+	}
+	if want := "refused by gateway policy: voluntary exits are never signed by this gateway"; !strings.Contains(body, want) {
+		t.Fatalf("exit: body %q, want it to hold %q", body, want)
 	}
 }
 

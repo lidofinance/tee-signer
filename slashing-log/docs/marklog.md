@@ -639,10 +639,11 @@ holds its true mark.
   the service account the VM runs as.
 - A new key release. The record keys open only under the key release that
   made them. On mainnet the AWS key policy is locked and the Azure release
-  policy is immutable, so each names one image and a new image cannot open
-  the old image's log. A mainnet signer on AWS or Azure therefore moves to
-  a new image as a new signer: a new setup, key and mark log, and the
-  shares imported again (`docs/upgrade.md`, "When this works"). On GCP,
+  policy is immutable. Neither can change, so neither can take a new
+  image, and a new image cannot open the old image's log. A mainnet signer
+  on AWS or Azure therefore moves to a new image as a new signer: a new
+  setup, key and mark log, and the shares imported again
+  (`docs/upgrade.md`, "When this works"). On GCP,
   and on AWS or Azure with a key rule that can still change, the key rule
   names the new image next to the old one, and the new image reads the old
   log as on a restart (`docs/upgrade.md`).

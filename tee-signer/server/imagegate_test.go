@@ -128,7 +128,7 @@ func TestImageCheckMatchAndMismatchPerPlatform(t *testing.T) {
 }
 
 // What an image the list does not name still answers: HEALTH, PUBLIC_KEYS,
-// IDENTITY and CONFIG_UPDATE. Everything that signs, hands over or imports
+// IDENTITY and CONFIG_UPDATE. Everything that signs or imports
 // gets NOT_READY before its own checks run.
 func TestImageCheckRefusesAllButStatusAndConfig(t *testing.T) {
 	e := gatedEnv(t, nil, "gcp", testImage(setupwire.ImageGCP, 1), testImage(setupwire.ImageGCP, 2))

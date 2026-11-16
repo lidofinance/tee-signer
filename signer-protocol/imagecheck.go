@@ -4,8 +4,7 @@ package backend
 const (
 	// ImageAllowed: the image is on allowed_image_measurements in force.
 	ImageAllowed = "allowed"
-	// ImageNotAllowed: it is not; the runner signs, hands over and imports
-	// nothing.
+	// ImageNotAllowed: it is not; the runner signs and imports nothing.
 	ImageNotAllowed = "not_allowed"
 	// ImageRestartNeeded: the image was not allowed when the runner
 	// started, so it loaded no share; the list in force names it now, and a

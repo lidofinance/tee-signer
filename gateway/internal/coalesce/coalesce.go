@@ -25,8 +25,8 @@ import (
 
 // shareable lists the Web3Signer request types that may share a result. It is
 // an allowlist: a type added later stays out until someone classifies it.
-// Attestations, blocks, exits, registrations and the Gloas types are not
-// here and never will be.
+// Attestations, blocks, registrations and the Gloas types are not here and
+// never will be. Exits never get this far: the policy refuses them first.
 var shareable = map[string]bool{
 	"RANDAO_REVEAL":                         true,
 	"AGGREGATION_SLOT":                      true,
