@@ -15,18 +15,24 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lidofinance/tee-signer/trusted-time/nts"
+	"github.com/lidofinance/tee-signer/trusted-time/nts/ntstest/ntsworld"
 )
 
 // shiftWorld is a fake world for the shift schedule: a local clock the test
 // moves, NTS servers that answer, lose or lie, and a coarse clock that reads
 // every 15 s and gives no time 75 s after its last reading (Anchored).
+//
+// The clock, the key exchanges and the datagrams are ntsworld's: every
+// answer here is a real NTS (or plain NTP) response that the core checks
+// and measures. This type only says what each server does with a query.
 type shiftWorld struct {
-	mu       sync.Mutex
-	now      int64 // local ns
-	tickAt   int64 // local ns of the running tick
-	off      int64 // real minus local
-	seed     uint64
+	w      *ntsworld.World
+	mu     sync.Mutex
+	tickAt int64 // local ns of the running tick
+	seed   uint64
+	// reply, if set, answers a query in place of the rules below when its
+	// second result is true (single tests).
+	reply    func(op string, t int64) (ntsworld.Reply, bool)
 	loss     map[string]float64
 	down     map[string]bool
 	wrong    map[string]time.Duration
@@ -49,11 +55,32 @@ type shiftWorld struct {
 	rateUntil map[string]int64
 }
 
-func (w *shiftWorld) local() int64 {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.now
+// shiftRealBase is real time at local time 0: 2027-01-15, after
+// nts.FloorTime, before which the core serves no time.
+const shiftRealBase = 1_800_000_000
+
+// newShiftWorld is a world at local time shiftBase.
+func newShiftWorld(seed uint64) *shiftWorld {
+	w := &shiftWorld{w: ntsworld.New(int64(shiftBase), time.Unix(shiftRealBase, 0).Add(shiftBase)), seed: seed, loss: map[string]float64{},
+		down: map[string]bool{}, wrong: map[string]time.Duration{}, contacts: map[string][]int64{},
+		downUntil: map[string]int64{}, rateUntil: map[string]int64{}}
+	w.w.Query = w.query
+	return w
 }
+
+// drive makes n a clock of this world: the world is its network and its
+// local clock, and after each round of parallel polls the world's clock
+// moves past the answers lost in it.
+func (w *shiftWorld) drive(n *NTS) *NTS {
+	n.Coarse, n.ops, n.roundDone = w, w.w, w.w.Settle
+	return n
+}
+
+func (w *shiftWorld) local() int64 { return w.w.Local() }
+
+// shiftSampleDelay is the root delay of every answer: half of it is the
+// sample's bound (15 ms), as the answers of the first simulations had.
+const shiftSampleDelay = 30 * time.Millisecond
 
 func (w *shiftWorld) inBlip(t int64) bool { return t >= w.blipFrom && t < w.blipTo }
 
@@ -66,8 +93,9 @@ func (w *shiftWorld) draw(op string, t int64) float64 {
 }
 
 // query plays one exchange. A lost answer costs the 1 s timeout: whatever
-// the clock does next in this tick happens after it.
-func (w *shiftWorld) query(op string, t int64) (nts.Sample, error) {
+// the clock does next in this tick happens after it (ntsworld.Settle).
+func (w *shiftWorld) query(a ntsworld.Ask) ntsworld.Reply {
+	op, t := a.Operator, a.At
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.contacts[op] = append(w.contacts[op], t)
@@ -75,18 +103,28 @@ func (w *shiftWorld) query(op string, t int64) (nts.Sample, error) {
 		w.early, w.answered, w.lost = map[string][]bool{}, map[string]bool{}, map[string][]bool{}
 	}
 	w.early[op] = append(w.early[op], w.inStart != nil && w.inStart() && !w.answered[op])
+	if w.reply != nil {
+		if r, ok := w.reply(op, t); ok {
+			w.lost[op] = append(w.lost[op], r.Lose || r.Hang)
+			w.answered[op] = w.answered[op] || (!r.Lose && !r.Hang && r.Kiss == "")
+			if r.RootDelay == 0 && r.RootDisp == 0 {
+				r.RootDelay = shiftSampleDelay
+			}
+			return r
+		}
+	}
 	if t < w.rateUntil[op] {
 		w.lost[op] = append(w.lost[op], false) // a RATE gets no retry
-		return nts.Sample{}, &nts.KissError{Code: "RATE"}
+		// Authenticated (plain NTP has none to give): the core obeys it.
+		return ntsworld.Reply{Kiss: "RATE"}
 	}
 	if w.inBlip(t) || w.down[op] || t < w.downUntil[op] || w.draw(op, t) < w.loss[op] {
 		w.lost[op] = append(w.lost[op], true)
-		w.now = max(w.now, t+int64(NTSShiftQueryTimeout))
-		return nts.Sample{}, errors.New("timeout")
+		return ntsworld.Reply{Lose: true}
 	}
 	w.lost[op] = append(w.lost[op], false)
 	w.answered[op] = true
-	return nts.Sample{Offset: w.off + int64(w.wrong[op]), Bound: 15 * time.Millisecond, Delay: 30 * time.Millisecond, T4: t}, nil
+	return ntsworld.Reply{Offset: w.wrong[op], RootDelay: shiftSampleDelay}
 }
 
 // gapsOf is the shortest gap between two contacts with one operator, and
@@ -134,7 +172,7 @@ func inStartOf(n *NTS) func() bool {
 func (w *shiftWorld) Now() (time.Time, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	t := w.now
+	t := w.w.Local()
 	const every = int64(15 * time.Second)
 	m := t - t%every
 	for m >= 0 && w.inBlip(m) && !w.ntsOnly {
@@ -143,7 +181,7 @@ func (w *shiftWorld) Now() (time.Time, error) {
 	if m < 0 || t-m >= int64(75*time.Second) {
 		return time.Time{}, errors.New("coarse: no reading")
 	}
-	return time.Unix(0, t+w.off), nil
+	return w.w.Real(), nil
 }
 
 // shiftBase is local time at the start of a run: a sample at local 0 would
@@ -205,14 +243,16 @@ func (r shiftResult) blockedPct() float64 { return 100 * float64(r.blocked) / fl
 
 func runShiftScenario(t testing.TB, sc shiftScenario) shiftResult {
 	t.Helper()
-	w := &shiftWorld{off: 1_800_000_000 * int64(time.Second), seed: sc.seed, loss: map[string]float64{}, down: map[string]bool{},
-		wrong: map[string]time.Duration{}, contacts: map[string][]int64{}}
-	n := &NTS{Coarse: w, Local: w.local, ScheduleSeed: fmt.Appendf(nil, "signer-%d", sc.seed), testQuery: w.queryCtx, noStartDelay: true}
+	w := newShiftWorld(sc.seed)
+	n := w.drive(&NTS{ScheduleSeed: fmt.Appendf(nil, "signer-%d", sc.seed), noStartDelay: true})
+	defer n.Close()
 	w.inStart = inStartOf(n)
 	for i := range sc.catalog {
 		n.Servers = append(n.Servers, NTSServer{Host: fmt.Sprintf("op%d.test", i), Operator: fmt.Sprintf("op%d", i)})
 	}
-	n.init()
+	if err := n.init(); err != nil {
+		t.Fatal(err)
+	}
 	name := func(place int) string { return n.Servers[n.shifts.order[place%sc.catalog]].Operator }
 	for i := range sc.catalog {
 		w.loss[name(i)] = sc.loss
@@ -238,16 +278,16 @@ func runShiftScenario(t testing.TB, sc shiftScenario) shiftResult {
 	var cur time.Duration
 	ctx := context.Background()
 	for sec := time.Duration(0); sec < sc.dur; sec += time.Second {
-		w.mu.Lock()
-		w.now = max(w.now, int64(shiftBase+sec))
+		w.w.Set(int64(shiftBase + sec))
 		if sc.jump != 0 && sec == sc.jumpAt {
-			w.off -= int64(sc.jump)
+			w.w.Jump(-sc.jump)
 		}
 		tick := sec%testTick == 0
 		if tick {
-			w.tickAt = w.now
+			w.mu.Lock()
+			w.tickAt = w.w.Local()
+			w.mu.Unlock()
 		}
-		w.mu.Unlock()
 		if tick {
 			_ = n.Refresh(ctx)
 		}
@@ -256,9 +296,7 @@ func runShiftScenario(t testing.TB, sc shiftScenario) shiftResult {
 		}
 		got, bound, err := n.Bounded()
 		if err == nil {
-			w.mu.Lock()
-			real := time.Unix(0, w.now+w.off)
-			w.mu.Unlock()
+			real := w.w.Real()
 			if lead := got.Sub(real) - bound; lead > 0 {
 				res.maxLead = max(res.maxLead, lead)
 				res.leadFor += time.Second
@@ -517,12 +555,6 @@ func TestNTSShiftCounterJump(t *testing.T) {
 	}
 }
 
-// queryCtx is query as the clock's testQuery hook; the fake world answers
-// at once, so it does not wait on ctx.
-func (w *shiftWorld) queryCtx(_ context.Context, op string, t int64) (nts.Sample, error) {
-	return w.query(op, t)
-}
-
 // A tick ends at its deadline (ntsRefreshLimit) even when every server
 // hangs, and the rounds after the deadline mark no contact: no fallback,
 // no burst, no use of the fallback cap. Takes ntsRefreshLimit of real time.
@@ -530,11 +562,11 @@ func TestNTSShiftTickDeadline(t *testing.T) {
 	if testing.Short() {
 		t.Skip("waits ntsRefreshLimit")
 	}
-	n := &NTS{Coarse: &coarseClock{}, Shifts: true, ScheduleSeed: []byte("deadline"), noStartDelay: true,
-		testQuery: func(ctx context.Context, _ string, _ int64) (nts.Sample, error) {
-			<-ctx.Done()
-			return nts.Sample{}, ctx.Err()
-		}}
+	// Every query hangs until the tick's deadline cuts it.
+	w := newShiftWorld(0)
+	w.reply = func(string, int64) (ntsworld.Reply, bool) { return ntsworld.Reply{Hang: true}, true }
+	n := w.drive(&NTS{Shifts: true, ScheduleSeed: []byte("deadline"), noStartDelay: true})
+	defer n.Close()
 	for i := range 8 {
 		n.Servers = append(n.Servers, NTSServer{Host: fmt.Sprintf("op%d.test", i), Operator: fmt.Sprintf("op%d", i)})
 	}
@@ -551,6 +583,18 @@ func TestNTSShiftTickDeadline(t *testing.T) {
 			t.Fatalf("%s: %+v after the deadline", op, c)
 		}
 	}
+	// The deadline cut the queries, not the servers: the core counted no
+	// loss and no error, and HEALTH names none.
+	for op, p := range n.Status().Peers {
+		if p.Stats.Queries != 1 || p.Stats.Errors != 0 || p.Stats.KEFail != 0 {
+			t.Fatalf("%s: %+v after the deadline", op, p.Stats)
+		}
+	}
+	for _, p := range s.Peers {
+		if p.Losses != 0 || p.LastError != "" {
+			t.Fatalf("HEALTH of %s after the deadline: %+v", p.Operator, p)
+		}
+	}
 }
 
 // NTSSummary answers while a Refresh hangs on a server (under -race it
@@ -558,17 +602,19 @@ func TestNTSShiftTickDeadline(t *testing.T) {
 // exactly NTSShiftActives servers report Active.
 func TestNTSSummaryDuringRefresh(t *testing.T) {
 	release := make(chan struct{})
-	n := &NTS{Coarse: &coarseClock{}, Shifts: true, ScheduleSeed: []byte("summary"), noStartDelay: true}
-	n.testQuery = func(ctx context.Context, op string, _ int64) (nts.Sample, error) {
-		if op == "op0" {
-			select {
-			case <-release:
-			case <-ctx.Done():
-			}
-			return nts.Sample{}, errors.New("timeout")
+	w := newShiftWorld(0)
+	// op0's answer is lost, and the test holds its query until release.
+	w.reply = func(op string, _ int64) (ntsworld.Reply, bool) {
+		if op != "op0" {
+			return ntsworld.Reply{}, false
 		}
-		return nts.Sample{Offset: time.Now().UnixNano() - n.local(), Bound: 5 * time.Millisecond, T4: n.local()}, nil
+		w.mu.Unlock()
+		<-release
+		w.mu.Lock()
+		return ntsworld.Reply{Lose: true}, true
 	}
+	n := w.drive(&NTS{Shifts: true, ScheduleSeed: []byte("summary"), noStartDelay: true})
+	defer n.Close()
 	for i := range 8 {
 		n.Servers = append(n.Servers, NTSServer{Host: fmt.Sprintf("op%d.test", i), Operator: fmt.Sprintf("op%d", i)})
 	}

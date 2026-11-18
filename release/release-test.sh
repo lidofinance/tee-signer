@@ -239,7 +239,6 @@ EOF
       mkdir -p "$d/repo/platform-azure/deploy" "$d/repo/sub"
       : >"$d/repo/sub/.keep"
       printf '#!/bin/sh\nexit 0\n' >"$d/repo/scripts/nitro-cli-image.sh"
-      printf '#!/bin/sh\nexit 0\n' >"$d/repo/scripts/fetch-nts.sh"
       printf 'import sys\nsys.exit(0)\n' >"$d/repo/release/image-variant.py"
       # shellcheck disable=SC2016 # expanded when the lane sources it
       printf 'OUT="$1/build/azure"\n' >"$d/repo/platform-azure/deploy/common.sh"
@@ -383,7 +382,7 @@ EOF
   mkdir -p "$n/scripts"
   cp "$HERE/../scripts/common.sh" "$HERE/../scripts/nitro-eif.sh" "$n/scripts/"
   printf '#!/bin/sh\nexit 0\n' >"$n/scripts/fetch.sh"
-  printf '#!/bin/sh\necho "build-nts.sh: line 92: aarch64-linux-gnu-nm: command not found" >&2\nexit 127\n' >"$n/scripts/build-runner.sh"
+  printf '#!/bin/sh\necho "build-core.sh: line 118: aarch64-linux-gnu-nm: command not found" >&2\nexit 127\n' >"$n/scripts/build-runner.sh"
   expect "nitro-eif: fails when the runner build fails" 1 env -u SIGNER_BUILDER_IMAGE DOCKER_LOG="$TMP/docker.log" FAKE_ID="$id" \
     PATH="$hostbin" NITRO_CLI_REUSE=1 bash "$n/scripts/nitro-eif.sh" aarch64
   if grep -q 'aarch64-linux-gnu-nm: command not found' "$TMP/out"; then ok "nitro-eif: prints the end of the runner build's log"; else bad "nitro-eif: prints the end of the runner build's log: $(tail -n 2 "$TMP/out")"; fi

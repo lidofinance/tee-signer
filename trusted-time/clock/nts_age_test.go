@@ -3,90 +3,84 @@
 package clock
 
 import (
-	"math/rand/v2"
-	"slices"
+	"context"
+	"errors"
+	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/lidofinance/tee-signer/trusted-time/nts"
 )
 
-// simNTS is an NTS clock on a fake local clock, with servers whose samples
-// the test sets. The samples agree on one offset.
-type simNTS struct {
-	n      *NTS
-	local  int64
-	offset int64
-}
-
-func newSimNTS(ops ...string) *simNTS {
-	s := &simNTS{local: int64(time.Hour)}
-	s.offset = time.Now().UnixNano() - s.local
-	s.n = &NTS{Coarse: &coarseClock{}, Local: func() int64 { return s.local }}
-	for _, op := range ops {
-		s.n.Servers = append(s.n.Servers, NTSServer{Host: op + ".test", Operator: op})
-	}
-	s.n.init()
-	return s
-}
-
-// answer gives peer i a sample taken at local time t4.
-func (s *simNTS) answer(i int, t4 int64) {
-	s.n.peers[i].sample = &nts.Sample{Offset: s.offset, Bound: 5 * time.Millisecond, T4: t4}
-}
-
-// combine forms a quorum at the current local time, as at the end of a
-// Refresh that read the coarse clock at start.
-func (s *simNTS) combine(start int64) error {
-	return s.n.combine(time.Unix(0, start+s.offset), start)
-}
-
-// A sample joins a quorum only if it stays under MaxAge until the next
-// quorum can replace it: a tick of Run plus the longest Refresh.
-func TestNTSClockJoinAgeBoundary(t *testing.T) {
+// joinAge with the defaults: MaxAge less a tick of Run and the longest
+// Refresh (one NTS-KE and one query). The core applies it: ntscore's
+// TestJoinAgeBoundary pins the boundary, TestLossyServerKeepsTimeServed
+// runs a day of Run's schedule with a server that loses half its answers.
+func TestNTSClockJoinAge(t *testing.T) {
 	if got, want := (&NTS{}).joinAge(), 46*time.Second; got != want {
 		t.Fatalf("join age %v, want %v (60 s - 4 s tick - 2 x 5 s exchange)", got, want)
 	}
+	// Under the shift schedule: no 4 x Interval cap, and the tick's deadline
+	// in place of the longest Refresh. It is the join age the clock hands
+	// the core (nts.Config.JoinAge), whose one age rule it is.
 	shifts := &NTS{Shifts: true}
-	if got, want := shifts.joinAge(), 76*time.Second; got != want || shifts.sampleMaxAge() != int64(want) {
+	if got, want := shifts.joinAge(), 76*time.Second; got != want || shifts.sampleMaxAge() != want {
 		t.Fatalf("shift join age %v, sample max age %v, want %v (90 s - 4 s tick - 10 s tick deadline)",
-			got, time.Duration(shifts.sampleMaxAge()), want)
+			got, shifts.sampleMaxAge(), want)
 	}
-	for _, c := range []struct {
-		age  time.Duration
-		join bool
-	}{{46 * time.Second, true}, {46*time.Second + 1, false}} {
-		s := newSimNTS("a", "b", "c", "old")
-		for i := range 3 {
-			s.answer(i, s.local)
+	// Without it the join age is also at most 4 x Interval.
+	if got := (&NTS{Interval: 8 * time.Second}).sampleMaxAge(); got != 32*time.Second {
+		t.Fatalf("sample max age %v with an 8 s interval, want 32 s", got)
+	}
+}
+
+// The join age reaches the core: with the servers out of reach, a sample
+// older than it enters no quorum, while the quorum in force, with the same
+// sample, still serves (it is under MaxAge).
+func TestNTSClockJoinAgeReachesTheCore(t *testing.T) {
+	fs := newServers(t, nil, "a", "b", "c")
+	n := newNTS(fs, &coarseClock{})
+	// joinAge = MaxAge - Interval/4 - 10 s = 400 ms, under 4 x Interval.
+	n.Interval, n.MaxAge = 400*time.Millisecond, 10*time.Second+500*time.Millisecond
+	if got := n.joinAge(); got != 400*time.Millisecond {
+		t.Fatalf("join age %v", got)
+	}
+	var ahead atomic.Int64
+	var blocked atomic.Bool
+	n.Local = func() int64 { return nts.Monotonic() + ahead.Load() }
+	n.Dial = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if blocked.Load() {
+			return nil, errors.New("blocked")
 		}
-		s.answer(3, s.local-int64(c.age))
-		if err := s.combine(s.local); err != nil {
-			t.Fatal(err)
-		}
-		members := s.n.Status().Members
-		if slices.Contains(members, "old") != c.join {
-			t.Fatalf("sample %v old: members %v, want it in: %v", c.age, members, c.join)
-		}
-		if !c.join {
-			continue
-		}
-		// The quorum serves until the next one can come: a tick and a
-		// Refresh of one NTS-KE and one query.
-		s.local += int64(NTSInterval/4 + 2*ntsExchangeTimeout)
-		if _, err := s.n.Now(); err != nil {
-			t.Fatalf("at the latest next quorum: %v", err)
-		}
-		s.local++
-		if _, err := s.n.Now(); err == nil {
-			t.Fatal("served past MaxAge")
-		}
+		var d net.Dialer
+		return d.DialContext(ctx, network, addr)
+	}
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	blocked.Store(true)
+	// Under the join age (and under the poll interval: nothing is asked):
+	// the samples form a quorum again.
+	ahead.Store(int64(300 * time.Millisecond))
+	if err := refresh(t, n); err != nil {
+		t.Fatalf("samples 300 ms old: %v", err)
+	}
+	// Over it: the polls fail and the samples enter no quorum; the quorum
+	// in force serves on, its samples well under MaxAge.
+	ahead.Store(int64(600 * time.Millisecond))
+	if err := refresh(t, n); err == nil || !strings.Contains(err.Error(), "0 fresh samples") {
+		t.Fatalf("samples 600 ms old: %v", err)
+	}
+	if _, err := n.Now(); err != nil {
+		t.Fatalf("Now with the quorum 600 ms old: %v", err)
 	}
 }
 
 // A MaxAge no longer than a tick and the longest Refresh would let no
-// sample join: Refresh refuses it before it contacts any server.
+// sample join: Refresh refuses it before it contacts any server, and a
+// corrected MaxAge takes.
 func TestNTSClockRefusesMaxAgeTooShort(t *testing.T) {
 	fs := newServers(t, nil, "a", "b", "c")
 	n := newNTS(fs, &coarseClock{})
@@ -103,87 +97,12 @@ func TestNTSClockRefusesMaxAgeTooShort(t *testing.T) {
 	if _, err := n.Now(); err == nil || !strings.Contains(err.Error(), "too short") {
 		t.Fatalf("Now: %v", err)
 	}
+	if sum := n.NTSSummary(); sum.Quorum || !strings.Contains(sum.Refused, "too short") {
+		t.Fatalf("summary %+v", sum)
+	}
 	// 1 ns over the minimum is accepted.
 	n.MaxAge = 14*time.Second + 1
 	if err := refresh(t, n); err != nil && strings.Contains(err.Error(), "too short") {
 		t.Fatalf("MaxAge just over the minimum: %v", err)
-	}
-}
-
-// One operator loses half its answers, the others answer every time. The
-// test runs Run's schedule on a fake clock for a day: a tick every Interval/4
-// (a tick that comes during a Refresh starts the next one when it ends),
-// each server asked when due, an answer after a round trip of 10 to 200 ms,
-// a lost one after the query timeout. Now must not fail once the first
-// quorum is in force.
-func TestNTSClockLossyServerKeepsNowServing(t *testing.T) {
-	s := newSimNTS("a", "b", "c", "lossy")
-	n := s.n
-	rng := rand.New(rand.NewPCG(1, 2))
-	tick := int64(n.interval() / 4)
-	base := s.local
-	nextTickAfter := func(x int64) int64 { return base + ((x-base)/tick+1)*tick }
-	served := false
-	var fails, quorums, withLossy int
-	// advance moves the fake clock to `to` in 100 ms steps and calls Now at each.
-	advance := func(to int64) {
-		for s.local < to {
-			s.local = min(s.local+int64(100*time.Millisecond), to)
-			if _, err := n.Now(); served && err != nil {
-				if fails == 0 {
-					t.Logf("first failure at %v: %v", time.Duration(s.local-base), err)
-				}
-				fails++
-			}
-		}
-	}
-	start := s.local
-	for end := s.local + int64(24*time.Hour); start < end; {
-		// The polls of this Refresh run in parallel; it ends with the slowest.
-		type answer struct {
-			i    int
-			at   int64
-			lost bool
-		}
-		var answers []answer
-		refreshEnd := start
-		for i, p := range n.peers {
-			if start < p.nextPoll {
-				continue
-			}
-			a := answer{i: i, at: start + int64(10*time.Millisecond) + rng.Int64N(int64(190*time.Millisecond))}
-			if p.srv.Operator == "lossy" && rng.IntN(2) == 0 {
-				a.at, a.lost = start+int64(ntsExchangeTimeout), true
-			}
-			answers = append(answers, a)
-			refreshEnd = max(refreshEnd, a.at)
-		}
-		advance(refreshEnd)
-		for _, a := range answers {
-			if !a.lost {
-				s.answer(a.i, a.at)
-			}
-			n.peers[a.i].nextPoll = a.at + int64(n.peers[a.i].poll)
-		}
-		if err := s.combine(start); err == nil {
-			served = true
-			quorums++
-			if slices.Contains(n.result.members, "lossy") {
-				withLossy++
-			}
-		}
-		next := nextTickAfter(start)
-		if next <= refreshEnd {
-			next = refreshEnd
-		}
-		advance(next)
-		start = next
-	}
-	t.Logf("%d quorums, %d with the lossy server; Now failed %d times", quorums, withLossy, fails)
-	if fails > 0 {
-		t.Fatalf("Now failed %d times with one server losing half its answers", fails)
-	}
-	if withLossy == 0 || withLossy == quorums {
-		t.Fatalf("the lossy server was in %d of %d quorums: the test does not reach the age limit", withLossy, quorums)
 	}
 }

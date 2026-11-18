@@ -1,14 +1,13 @@
-# Release builder: the C core, the link and every Go binary of a release are
-# built in this image, so the runner bytes do not depend on the build host.
-# The Rust NTS library keeps its own pinned image
-# (trusted-time/toolchain/toolchain.Dockerfile), and nitro-cli its own
+# Release builder: the C cores (the signer core and the NTS core), the link
+# and every Go binary of a release are built in this image, so the runner
+# bytes do not depend on the build host. nitro-cli keeps its own pinned image
 # (platform-aws/deploy/nitro-cli/Dockerfile).
 #
 # Every input is pinned:
 #   - the base image by its index digest (the same digest as the nitro-cli
 #     runtime stage),
 #   - the Debian packages (gcc, glibc, binutils, the aarch64 cross
-#     toolchain) by a snapshot.debian.org date: apt sees the archive as it
+#     toolchain, make for the NTS core's Makefile) by a snapshot.debian.org date: apt sees the archive as it
 #     was at SNAPSHOT and nothing newer. apt checks the Release files with
 #     the keyring of the base image,
 #   - Go by version and the sha256 that go.dev/dl publishes.
@@ -39,7 +38,7 @@ RUN rm -f /etc/apt/sources.list.d/debian.sources \
     "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/${SNAPSHOT} bookworm-security main" \
     >/etc/apt/sources.list \
  && apt-get -o Acquire::Retries=5 -o APT::Update::Error-Mode=any update \
- && pkgs="gcc libc6-dev binutils gcc-aarch64-linux-gnu libc6-dev-arm64-cross binutils-aarch64-linux-gnu file ca-certificates python3 jq" \
+ && pkgs="gcc libc6-dev binutils gcc-aarch64-linux-gnu libc6-dev-arm64-cross binutils-aarch64-linux-gnu make file ca-certificates python3 jq" \
  && ok=0 && for i in $(seq 1 30); do \
       apt-get -o Acquire::Retries=3 -qq install -d -y --no-install-recommends $pkgs && { ok=1; break; }; \
       echo "apt download try $i failed, retrying"; sleep 5; \

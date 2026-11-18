@@ -5,7 +5,6 @@
 
 Packages:
   - every Go module the binary links (go version -m -json: path, version, sum),
-  - the Rust crates of trusted-time/rust/Cargo.lock (NTS builds: tag nts),
   - blst at its pin (scripts/common.sh),
   - the Debian packages of the release builder whose code a static link pulls
     in (glibc, the gcc runtime), from /builder-packages.txt of the builder.
@@ -20,7 +19,6 @@ import re
 import subprocess
 import sys
 import time
-import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -85,14 +83,6 @@ def main():
             continue
         packages.append(pkg(d["Path"], d.get("Version", ""), f'pkg:golang/{d["Path"]}@{d.get("Version", "")}'))
     packages.append(pkg("golang-stdlib", info["GoVersion"], f'pkg:golang/stdlib@{info["GoVersion"]}'))
-    tags = next((s["Value"] for s in info.get("Settings", []) if s["Key"] == "-tags"), "")
-    if "nts" in tags.split(","):
-        lock = tomllib.loads((ROOT / "trusted-time/rust/Cargo.lock").read_text())
-        for c in lock["package"]:
-            if "source" not in c:
-                continue
-            ck = {"algorithm": "SHA256", "checksumValue": c["checksum"]} if "checksum" in c else None
-            packages.append(pkg(c["name"], c["version"], f'pkg:cargo/{c["name"]}@{c["version"]}', ck))
     packages.append(pkg("blst", common_pin("BLST_TAG"), f'pkg:github/supranational/blst@{common_pin("BLST_COMMIT")}'))
     goarch = next((s["Value"] for s in info.get("Settings", []) if s["Key"] == "GOARCH"), "")
     cgo = next((s["Value"] for s in info.get("Settings", []) if s["Key"] == "CGO_ENABLED"), "0")

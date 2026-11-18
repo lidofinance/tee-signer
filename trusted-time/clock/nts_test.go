@@ -4,10 +4,10 @@ package clock
 
 import (
 	"context"
-	"crypto/x509"
 	"errors"
 	"math"
 	"net"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -15,6 +15,8 @@ import (
 
 	"github.com/lidofinance/tee-signer/trusted-time/nts"
 	"github.com/lidofinance/tee-signer/trusted-time/nts/ntstest"
+	"github.com/lidofinance/tee-signer/trusted-time/nts/ntstest/ntsworld"
+	ntscore "github.com/lidofinance/tee-signer/trusted-time/ntscore/go"
 )
 
 // coarseClock plays the HTTPS-date quorum: the host clock plus Skew, or Err.
@@ -43,7 +45,7 @@ func newServers(t *testing.T, opts map[string]ntstest.NTPOptions, order ...strin
 	t.Helper()
 	var out []*fakeServer
 	for _, op := range order {
-		cert, pool, err := ntstest.Certificate("nts.test", time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+		cert, pool, err := ntstest.CertificatePEM("nts.test", time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -286,8 +288,8 @@ func TestNTSClockCoarseCheck(t *testing.T) {
 			}
 		}
 	}
-	if !coarseRefused(31*time.Second, NTSMaxCoarseDiff, NTSCoarseResolution) || coarseRefused(30999*time.Millisecond, NTSMaxCoarseDiff, NTSCoarseResolution) ||
-		!coarseRefused(-30001*time.Millisecond, NTSMaxCoarseDiff, NTSCoarseResolution) || coarseRefused(-30*time.Second, NTSMaxCoarseDiff, NTSCoarseResolution) {
+	if !ntscore.CoarseRefused(31*time.Second, NTSMaxCoarseDiff, NTSCoarseResolution) || ntscore.CoarseRefused(30999*time.Millisecond, NTSMaxCoarseDiff, NTSCoarseResolution) ||
+		!ntscore.CoarseRefused(-30001*time.Millisecond, NTSMaxCoarseDiff, NTSCoarseResolution) || ntscore.CoarseRefused(-30*time.Second, NTSMaxCoarseDiff, NTSCoarseResolution) {
 		t.Fatal("limits of the coarse check")
 	}
 	// No coarse time at all: no NTS-KE, no time.
@@ -461,10 +463,19 @@ func TestNTSClockNTSNRunsKeyExchangeAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 	fs[0].store.Forget()
-	time.Sleep(60 * time.Millisecond)
-	_ = refresh(t, n) // a gets NTSN, the quorum uses its earlier sample
-	if k := n.Status().Peers["a"].Stats.Kisses["NTSN"]; k != 1 {
-		t.Fatalf("NTSN count %d", k)
+	// RFC 8915 section 5.7: an NTSN is not authenticated, so a keeps
+	// polling with the cookies it holds, one per poll, and runs NTS-KE
+	// again only when they run out; the quorum uses its earlier sample
+	// meanwhile.
+	for i := 1; i <= 8; i++ {
+		time.Sleep(60 * time.Millisecond)
+		_ = refresh(t, n)
+		if k := n.Status().Peers["a"].Stats.Kisses["NTSN"]; k != i {
+			t.Fatalf("poll %d: NTSN count %d", i, k)
+		}
+		if s := fs[0].ke.Sessions.Load(); s != 1 {
+			t.Fatalf("poll %d: NTS-KE ran again with cookies left", i)
+		}
 	}
 	time.Sleep(60 * time.Millisecond)
 	if err := refresh(t, n); err != nil {
@@ -473,10 +484,40 @@ func TestNTSClockNTSNRunsKeyExchangeAgain(t *testing.T) {
 	if s := fs[0].ke.Sessions.Load(); s != 2 {
 		t.Fatalf("NTS-KE sessions with a: %d, want 2", s)
 	}
+	if n.Status().Peers["a"].Sample == nil {
+		t.Fatal("no sample from a after the new key exchange")
+	}
+}
+
+// A forged Kiss-o'-Death, one without an authenticator, is counted and
+// changes nothing else: the server is not disabled, its poll is not
+// doubled, and its next poll takes a sample again.
+func TestNTSClockIgnoresForgedKiss(t *testing.T) {
+	fs := newServers(t, map[string]ntstest.NTPOptions{"d": {Kiss: "DENY", KissPlain: true}}, "a", "b", "c", "d")
+	n := newNTS(fs, &coarseClock{})
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	st := n.Status()
+	if p := st.Peers["d"]; p.Disabled != "" || p.Poll != 50*time.Millisecond || p.Stats.Kisses["DENY"] != 1 || p.Sample != nil {
+		t.Fatalf("after a forged DENY: %+v", p)
+	}
+	fs[3].ntp.Set(opt(ntstest.NTPOptions{}))
+	time.Sleep(60 * time.Millisecond)
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	if p := n.Status().Peers["d"]; p.Sample == nil || fs[3].ke.Sessions.Load() != 1 {
+		t.Fatalf("after the forged DENY the server was not asked again: %+v, sessions %d", p, fs[3].ke.Sessions.Load())
+	}
 }
 
 // Some servers send the NAK as "NTS" and a zero octet (nts1.ntp.hr for a
-// stale cookie). The clock takes it as NTSN and runs NTS-KE again.
+// stale cookie). The core reads it as NTSN. An NTSN is never authenticated
+// (the server has no keys for the cookie), so it is counted and no more:
+// the keys stay, one cookie goes per poll, and NTS-KE runs again when they
+// run out or after the loss streak, not at once (a forged NTSN per poll
+// would otherwise force a TLS session per poll).
 func TestNTSClockNTSZeroNAKRunsKeyExchangeAgain(t *testing.T) {
 	fs := newServers(t, map[string]ntstest.NTPOptions{"a": {Kiss: "NTS\x00"}}, "a", "b", "c", "d")
 	n := newNTS(fs, &coarseClock{})
@@ -485,11 +526,25 @@ func TestNTSClockNTSZeroNAKRunsKeyExchangeAgain(t *testing.T) {
 	}
 	time.Sleep(60 * time.Millisecond)
 	_ = refresh(t, n)
-	if k := n.Status().Peers["a"].Stats.Kisses["NTSN"]; k < 1 {
-		t.Fatalf("NTSN count %d, kisses %v", k, n.Status().Peers["a"].Stats.Kisses)
+	p := n.Status().Peers["a"]
+	if k := p.Stats.Kisses["NTSN"]; k != 2 || len(p.Stats.Kisses) != 1 {
+		t.Fatalf("NTSN count %d, kisses %v", k, p.Stats.Kisses)
 	}
+	if s := fs[0].ke.Sessions.Load(); s != 1 || p.Stats.CookiesHeld != 6 {
+		t.Fatalf("NTS-KE sessions with a: %d, want 1 (the keys stay); %d cookies held, want 6", s, p.Stats.CookiesHeld)
+	}
+	// The cookies run out: then NTS-KE runs again.
+	for range 6 {
+		time.Sleep(60 * time.Millisecond)
+		_ = refresh(t, n)
+	}
+	if s := fs[0].ke.Sessions.Load(); s != 1 {
+		t.Fatalf("NTS-KE sessions with cookies left: %d", s)
+	}
+	time.Sleep(60 * time.Millisecond)
+	_ = refresh(t, n)
 	if s := fs[0].ke.Sessions.Load(); s != 2 {
-		t.Fatalf("NTS-KE sessions with a: %d, want 2", s)
+		t.Fatalf("NTS-KE sessions with a after the cookies ran out: %d, want 2", s)
 	}
 }
 
@@ -645,45 +700,77 @@ func opt(o ntstest.NTPOptions) ntstest.NTPOptions {
 	return o
 }
 
-// Without a coarse time the certificate clock gives the zero time, and
-// KeyExchange refuses it before it dials: the cause shows in the error,
-// and no certificate is checked at the system clock.
+// A coarse reading that is no time (not after nts.FloorTime: a host clock
+// reset to 2000, say) dates no certificate: the core refuses the key
+// exchange before the host dials, the cause shows in the error, and no
+// certificate is checked at the host's clock. With a good reading the same
+// servers give a time.
 func TestNTSCertificateClockWithoutCoarseTime(t *testing.T) {
-	n := &NTS{Coarse: &coarseClock{Err: errors.New("no coarse reading")}}
-	if got := n.certTime(); !got.IsZero() {
-		t.Fatalf("certificate time without a coarse reading: %v", got)
+	for _, at := range []time.Time{time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), nts.FloorTime.Add(-time.Minute)} {
+		fs := newServers(t, nil, "a", "b", "c")
+		n := newNTS(fs, &coarseClock{Skew: at.Sub(testClock())})
+		var dials atomic.Int64
+		n.Dial = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if network == "tcp" {
+				dials.Add(1)
+			}
+			var d net.Dialer
+			return d.DialContext(ctx, network, addr)
+		}
+		err := refresh(t, n)
+		if err == nil || !strings.Contains(err.Error(), "no trusted time") {
+			t.Fatalf("coarse time %v: %v", at, err)
+		}
+		if dials.Load() != 0 || fs[0].ke.Sessions.Load() != 0 {
+			t.Fatalf("coarse time %v: %d dials, %d sessions", at, dials.Load(), fs[0].ke.Sessions.Load())
+		}
+		if p := n.Status().Peers["a"]; p.Stats.KEFail != 1 || !strings.Contains(p.LastErr, "no trusted time") {
+			t.Fatalf("coarse time %v: peer %+v", at, p)
+		}
 	}
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
+	fs := newServers(t, nil, "a", "b", "c")
+	if err := refresh(t, newNTS(fs, &coarseClock{})); err != nil {
 		t.Fatal(err)
 	}
-	defer l.Close()
-	dialed := make(chan struct{}, 1)
-	go func() {
-		if c, err := l.Accept(); err == nil {
-			dialed <- struct{}{}
-			c.Close()
-		}
-	}()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	_, err = nts.KeyExchange(ctx, nts.KEConfig{Host: "nts.test", Addr: l.Addr().String(), Roots: x509.NewCertPool(), Time: n.certTime})
-	if err == nil || !strings.Contains(err.Error(), "no trusted time") {
-		t.Fatalf("key exchange without a coarse time: %v", err)
+}
+
+// An authenticated DENY costs the server maxPoll of silence and a new key
+// exchange, not the rest of the process: before maxPoll it is not asked,
+// after maxPoll it is asked again through NTS-KE, and a good answer clears
+// Disabled, halves the poll back and puts the server into the quorum.
+func TestNTSClockDenyServerComesBackAfterMaxPoll(t *testing.T) {
+	fs := newServers(t, map[string]ntstest.NTPOptions{"deny": {Kiss: "DENY"}}, "a", "b", "c", "deny")
+	n := newNTS(fs, &coarseClock{})
+	n.maxPoll = 100 * time.Millisecond
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
 	}
-	select {
-	case <-dialed:
-		t.Fatal("key exchange dialed without a certificate time")
-	case <-time.After(100 * time.Millisecond):
+	p := n.Status().Peers["deny"]
+	if p.Disabled != "DENY" || p.Poll != 100*time.Millisecond || p.Sample != nil || p.Stats.Kisses["DENY"] != 1 || fs[3].ke.Sessions.Load() != 1 {
+		t.Fatalf("after DENY: %+v, sessions %d", p, fs[3].ke.Sessions.Load())
 	}
-	n.Coarse = &coarseClock{}
-	if got := n.certTime(); got.Year() < 2026 {
-		t.Fatalf("certificate time with a coarse reading: %v", got)
+	// The server answers again, but it is not asked before maxPoll.
+	fs[3].ntp.Set(opt(ntstest.NTPOptions{}))
+	time.Sleep(60 * time.Millisecond)
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	if r := fs[3].ntp.Requests.Load(); r != 1 || n.Status().Peers["deny"].Disabled != "DENY" || len(n.Status().Members) != 3 {
+		t.Fatalf("before maxPoll: %d requests, %+v", r, n.Status().Peers["deny"])
+	}
+	time.Sleep(60 * time.Millisecond)
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	st := n.Status()
+	p = st.Peers["deny"]
+	if p.Disabled != "" || p.Sample == nil || p.Poll != 50*time.Millisecond || fs[3].ke.Sessions.Load() != 2 || fs[3].ntp.Requests.Load() != 2 || len(st.Members) != 4 {
+		t.Fatalf("after maxPoll: %+v, sessions %d, requests %d, members %v", p, fs[3].ke.Sessions.Load(), fs[3].ntp.Requests.Load(), st.Members)
 	}
 }
 
 // A server that drops queries without a kiss (it rotated its keys and
-// ignores old cookies) gets NTS-KE again after ntsKEAfterLost lost queries
+// ignores old cookies) gets NTS-KE again after nts.KEAfterLost lost queries
 // in a row, not after all its cookies are spent.
 func TestNTSClockKeyExchangeAfterLostQueries(t *testing.T) {
 	fs := newServers(t, nil, "a", "b", "c", "d")
@@ -693,12 +780,12 @@ func TestNTSClockKeyExchangeAfterLostQueries(t *testing.T) {
 		t.Fatal(err)
 	}
 	fs[0].ntp.Set(opt(ntstest.NTPOptions{Drop: true}))
-	for range ntsKEAfterLost {
+	for range nts.KEAfterLost {
 		time.Sleep(60 * time.Millisecond)
 		_ = refresh(t, n)
 	}
 	if s := fs[0].ke.Sessions.Load(); s != 1 {
-		t.Fatalf("NTS-KE sessions with a after %d lost: %d, want 1", ntsKEAfterLost, s)
+		t.Fatalf("NTS-KE sessions with a after %d lost: %d, want 1", nts.KEAfterLost, s)
 	}
 	// One NTS-KE per streak: 7 more lost queries (fewer than the 8 cookies
 	// the second NTS-KE gave) add no more.
@@ -707,7 +794,7 @@ func TestNTSClockKeyExchangeAfterLostQueries(t *testing.T) {
 		_ = refresh(t, n)
 	}
 	if s := fs[0].ke.Sessions.Load(); s != 2 {
-		t.Fatalf("NTS-KE sessions with a after %d lost: %d, want 2 (one per streak)", ntsKEAfterLost+7, s)
+		t.Fatalf("NTS-KE sessions with a after %d lost: %d, want 2 (one per streak)", nts.KEAfterLost+7, s)
 	}
 	fs[0].ntp.Set(opt(ntstest.NTPOptions{}))
 	time.Sleep(60 * time.Millisecond)
@@ -730,7 +817,7 @@ func TestNTSClockFailedLostKeyExchangeKeepsCookies(t *testing.T) {
 	}
 	fs[0].ntp.Set(opt(ntstest.NTPOptions{Drop: true}))
 	fs[0].ke.Close()
-	for range ntsKEAfterLost + 1 {
+	for range nts.KEAfterLost + 1 {
 		time.Sleep(60 * time.Millisecond)
 		_ = refresh(t, n)
 	}
@@ -777,40 +864,82 @@ func TestNTSRefreshRefusesBadListsAndSeeds(t *testing.T) {
 }
 
 // The NTS-KE of a loss streak that the caller's deadline cuts short is not
-// used up: the next contact tries it again.
+// used up, and it is no failure: no backoff, the cookies stay, and the next
+// contact tries it again. (The core ends the poll at the cut; the host's
+// "cancelled" only says who ended an exchange that gave nothing.)
 func TestNTSClockLostKeyExchangeCutByDeadline(t *testing.T) {
 	fs := newServers(t, nil, "a", "b", "c", "d")
 	n := newNTS(fs, &coarseClock{})
+	n.queryTimeout = 100 * time.Millisecond
 	if err := refresh(t, n); err != nil {
 		t.Fatal(err)
 	}
-	p := n.peers[0]
-	p.lostInRow = ntsKEAfterLost
+	fs[0].ntp.Set(opt(ntstest.NTPOptions{Drop: true}))
+	for range nts.KEAfterLost {
+		time.Sleep(60 * time.Millisecond)
+		_ = refresh(t, n)
+	}
+	before := n.Status().Peers["a"]
+	if fs[0].ke.Sessions.Load() != 1 || before.Stats.Errors != nts.KEAfterLost {
+		t.Fatalf("after %d lost queries: %d NTS-KE sessions, %+v", nts.KEAfterLost, fs[0].ke.Sessions.Load(), before.Stats)
+	}
+	// The next contact starts with the NTS-KE of the streak; the dial hangs
+	// until the caller's deadline.
 	n.Dial = func(ctx context.Context, _, _ string) (net.Conn, error) {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
+	time.Sleep(60 * time.Millisecond)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	if !n.keyExchange(ctx, p) {
-		t.Fatal("the old cookies are not usable after a cut NTS-KE")
+	_ = n.Refresh(ctx)
+	cancel()
+	p := n.Status().Peers["a"]
+	if p.Stats.KEFail != 0 || p.Stats.Errors != before.Stats.Errors || p.Stats.CookiesHeld != before.Stats.CookiesHeld {
+		t.Fatalf("after a cut NTS-KE: %+v, before %+v", p.Stats, before.Stats)
 	}
-	if p.lostKE || p.stats.KEFail != 0 {
-		t.Fatalf("after a cut NTS-KE: lostKE %v, KE failures %d", p.lostKE, p.stats.KEFail)
+	if h := n.NTSSummary().Peers[0]; h.KEFail != 0 || h.Losses != int64(nts.KEAfterLost) {
+		t.Fatalf("HEALTH after a cut NTS-KE: %+v", h)
+	}
+	// Not used up: with the network back, the next contact runs it.
+	n.Dial = nil
+	fs[0].ntp.Set(opt(ntstest.NTPOptions{}))
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	if s, p := fs[0].ke.Sessions.Load(), n.Status().Peers["a"]; s != 2 || p.Stats.KEOK != 2 || p.Stats.Samples != 2 {
+		t.Fatalf("after the cut: %d NTS-KE sessions, %+v", s, p.Stats)
 	}
 }
 
 // A wide answer is authenticated, so it ends a loss streak: the next lost
 // query does not run NTS-KE early.
 func TestNTSWideAnswerEndsLossStreak(t *testing.T) {
-	n := &NTS{MaxSampleBound: 100 * time.Millisecond}
-	p := &ntsPeer{lostInRow: ntsKEAfterLost, lostKE: true, stats: NTSPeerStats{Kisses: map[string]int{}}}
-	if n.record(p, nts.Sample{Bound: 200 * time.Millisecond}, nil) {
-		t.Fatal("a wide answer counts as a sample")
+	fs := newServers(t, nil, "a", "b", "c", "d")
+	n := newNTS(fs, &coarseClock{})
+	n.queryTimeout = 100 * time.Millisecond
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
 	}
-	var w *wideSampleError
-	if p.lostInRow != 0 || p.lostKE || !errors.As(p.lastErr, &w) || p.stats.Wide != 1 {
-		t.Fatalf("after a wide answer: lost in a row %d, lostKE %v, err %v", p.lostInRow, p.lostKE, p.lastErr)
+	step := func(o ntstest.NTPOptions, times int) {
+		t.Helper()
+		fs[0].ntp.Set(opt(o))
+		for range times {
+			time.Sleep(60 * time.Millisecond)
+			_ = refresh(t, n)
+		}
+	}
+	// Two lost, one wide, two lost: without the wide answer the fourth lost
+	// query would have started with NTS-KE.
+	step(ntstest.NTPOptions{Drop: true}, nts.KEAfterLost-1)
+	step(ntstest.NTPOptions{RootDisp: 400 * time.Millisecond}, 1)
+	step(ntstest.NTPOptions{Drop: true}, nts.KEAfterLost-1)
+	p := n.Status().Peers["a"]
+	if p.Stats.Wide != 1 || p.Stats.Errors != 2*(nts.KEAfterLost-1) || p.Stats.Samples != 1 || p.Stats.KEOK != 1 || fs[0].ke.Sessions.Load() != 1 {
+		t.Fatalf("after lost, wide, lost: %+v, %d NTS-KE sessions", p.Stats, fs[0].ke.Sessions.Load())
+	}
+	// The wide answer is no sample: the first one stays.
+	if p.Sample == nil || p.Stats.LastBound < 400*time.Millisecond {
+		t.Fatalf("after a wide answer: sample %+v, last bound %v", p.Sample, p.Stats.LastBound)
 	}
 }
 
@@ -851,12 +980,13 @@ func TestNTSClockRefusesWideSamples(t *testing.T) {
 // within the cap less the aging of the join age (38 ms at 76 s under the
 // shift schedule), 62 ms at the 100 ms cap. One wider at receipt never
 // joins. This keeps the error a host and wrong servers reach at twice the
-// cap (rv-dko.5).
+// cap (rv-dko.5). The rule is the core's; here the numbers the clock hands
+// it, and the rule seen through the clock in a virtual world.
 func TestNTSJoinsAgedBound(t *testing.T) {
 	n := &NTS{MaxSampleBound: 100 * time.Millisecond, Shifts: true}
 	maxAge := n.sampleMaxAge()
-	if maxAge != int64(76*time.Second) {
-		t.Fatalf("join age under the shift schedule: %v, the docs say 76 s", time.Duration(maxAge))
+	if maxAge != 76*time.Second {
+		t.Fatalf("join age under the shift schedule: %v, the docs say 76 s", maxAge)
 	}
 	if d := nts.Drift(76 * time.Second); d != 38*time.Millisecond {
 		t.Fatalf("aging of 76 s: %v, the docs say 38 ms", d)
@@ -865,36 +995,65 @@ func TestNTSJoinsAgedBound(t *testing.T) {
 	if rb != 62*time.Millisecond {
 		t.Fatalf("receipt bound %v, want 62 ms", rb)
 	}
-	p := &ntsPeer{sample: &nts.Sample{Bound: rb, T4: 1}}
 	for _, age := range []time.Duration{time.Second, 30 * time.Second, 60 * time.Second, 76 * time.Second} {
-		if !n.joins(p, 1+int64(age), maxAge) {
-			t.Fatalf("a sample at the receipt bound, aged %v, refused", age)
-		}
 		if aged := rb + nts.Drift(age); aged > n.maxSampleBound() {
 			t.Fatalf("aged %v the bound is %v, over the cap", age, aged)
 		}
 	}
-	p.sample.Bound = rb + 1
-	if n.joins(p, 1, maxAge) {
-		t.Fatal("a sample over the receipt bound joins")
-	}
-	p.sample.Bound = 50 * time.Millisecond
-	if n.joins(p, 2+maxAge, maxAge) {
-		t.Fatal("a sample over maxAge joins")
-	}
-	// record refuses the same samples, as wide.
-	q := &ntsPeer{stats: NTSPeerStats{Kisses: map[string]int{}}}
-	if n.record(q, nts.Sample{Bound: rb + time.Millisecond}, nil) || q.stats.Wide != 1 {
-		t.Fatalf("an answer over the receipt bound: wide %d", q.stats.Wide)
-	}
-	if !n.record(q, nts.Sample{Bound: rb}, nil) {
-		t.Fatal("an answer at the receipt bound refused")
-	}
 	// A cap under twice the aging (tests only; setups have at least 80 ms)
 	// keeps half of it.
-	small := &NTS{MaxSampleBound: 40 * time.Millisecond, Shifts: true}
+	small := &NTS{MaxSampleBound: 40 * time.Millisecond, MaxBound: 40 * time.Millisecond, Shifts: true}
 	if got := small.receiptBound(); got != 20*time.Millisecond {
 		t.Fatalf("receipt bound of a 40 ms cap: %v, want 20 ms", got)
+	}
+
+	// Through the core: op0 answers once with a bound just under the
+	// receipt bound and then no more. Its sample stays a member for the
+	// whole join age and leaves after it; an answer just over the receipt
+	// bound is refused as wide.
+	w := newSwapWorld()
+	disp := map[string]time.Duration{"op0": 61 * time.Millisecond}
+	var lose atomic.Bool
+	w.reply = func(op string, _ int64) (ntsworld.Reply, bool) {
+		if op != "op0" {
+			return ntsworld.Reply{}, false
+		}
+		return ntsworld.Reply{Lose: lose.Load(), RootDisp: disp[op]}, true
+	}
+	c := newSwapNTS(w, swapServers("op0", "op1", "op2", "op3", "op4")...)
+	c.ScheduleSeed, c.MaxSampleBound = nil, 100*time.Millisecond
+	defer c.Close()
+	ctx := context.Background()
+	w.at(0)
+	if err := c.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s0 := c.Status().Peers["op0"].Sample
+	// A root dispersion of 61 ms comes back as about 60.99 ms (NTP short
+	// format, 1/65536 s).
+	if s0 == nil || s0.Bound <= 60*time.Millisecond || s0.Bound > rb {
+		t.Fatalf("op0's sample %+v, want a bound in (60 ms, %v]", s0, rb)
+	}
+	lose.Store(true)
+	member := func() bool { return slices.Contains(c.NTSSummary().Members, "op0") }
+	for sec := testTick; sec <= 100*time.Second; sec += testTick {
+		w.at(sec)
+		if err := c.Refresh(ctx); err != nil {
+			t.Fatalf("at %v: %v", sec, err)
+		}
+		age := time.Duration(w.w.Local() - s0.T4)
+		if got, want := member(), age <= maxAge; got != want {
+			t.Fatalf("at %v the sample is %v old: member %v, want %v", sec, age, got, want)
+		}
+	}
+	lose.Store(false)
+	disp["op0"] = 63 * time.Millisecond
+	for sec := 100*time.Second + testTick; sec <= 4*time.Minute; sec += testTick {
+		w.at(sec)
+		_ = c.Refresh(ctx)
+	}
+	if p := c.Status().Peers["op0"]; p.Stats.Wide == 0 || p.Stats.Samples != 1 || member() {
+		t.Fatalf("answers just over the receipt bound: %+v, member %v", p.Stats, member())
 	}
 }
 
@@ -929,4 +1088,28 @@ func TestNTSWorstBoundWithThreeSamples(t *testing.T) {
 	if s4 := n4.NTSSummary(); len(s4.Members) != 4 || s4.WorstBoundNow != s4.BoundNow {
 		t.Fatalf("4 samples: members %v, worst %v, bound %v", s4.Members, s4.WorstBoundNow, s4.BoundNow)
 	}
+}
+
+// A query gets half the Interval when that is shorter than the exchange
+// timeout: a server that never answers costs a refresh about Interval/2
+// (here 100 ms, not the 5 s exchange timeout), the query is counted as an
+// error, and the other servers form the quorum meanwhile.
+func TestNTSClockQueryTimeoutIsHalfTheInterval(t *testing.T) {
+	fs := newServers(t, map[string]ntstest.NTPOptions{"mute": {Drop: true}}, "a", "b", "c", "mute")
+	n := newNTS(fs, &coarseClock{})
+	n.Interval = 200 * time.Millisecond
+	start := time.Now()
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	took := time.Since(start)
+	st := n.Status()
+	p := st.Peers["mute"]
+	if p.Sample != nil || p.LastErr == "" || p.Stats.Queries != 1 || p.Stats.Errors != 1 || len(st.Members) != 3 {
+		t.Fatalf("mute server: %+v, members %v", p, st.Members)
+	}
+	if took < 100*time.Millisecond || took >= ntsExchangeTimeout/2 {
+		t.Fatalf("refresh with a mute server took %v, want about %v", took, n.interval()/2)
+	}
+	t.Logf("refresh took %v, mute: %s", took, p.LastErr)
 }

@@ -68,8 +68,6 @@ jobs:
         run: bash scripts/deps.sh
       - if: env.CI_MODULES != 'none'
         run: make core
-      - if: env.CI_MODULES != 'none'
-        run: make nts
       # Tests the modules of CI_MODULES.
       - if: env.CI_MODULES != 'none'
         run: make test-modules

@@ -12,8 +12,9 @@
 #      or in a module the build's clouds may use. The AWS SDK, smithy-go,
 #      hf/nsm, mdlayher/vsock and socket and golang.org/x/{net,sync,sys} are
 #      for the AWS build only, fxamacker/cbor and x448/float16 too (the
-#      Nitro attestation document's CBOR). The Azure, GCP and dev builds hold
-#      nothing third-party.
+#      Nitro attestation document's CBOR). The NTS clock (tag nts) adds no
+#      module: its core is C of this repo, its wrapper the standard library.
+#      The Azure, GCP and dev builds hold nothing third-party.
 #   2. No package of another cloud: the nitro platform and the host agent's
 #      client and messages (hostagent/agentclient, hostagent/agentwire) only
 #      in AWS builds, azure and gcp only in theirs. No other package below
@@ -169,7 +170,7 @@ check_source() {
     esac
     linked "$list" "$want" || bad "$name ($goarch): $want is not linked, so the tag platform_$c did nothing"
   done
-  # The NTS library (tag nts) in the cloud builds, not in the dev ones.
+  # The NTS client (tag nts) in the cloud builds, not in the dev ones.
   if has_nts "$name"; then
     linked "$list" github.com/lidofinance/tee-signer/trusted-time/nts || bad "$name ($goarch): built with the tag nts but github.com/lidofinance/tee-signer/trusted-time/nts is not linked"
   elif linked "$list" github.com/lidofinance/tee-signer/trusted-time/nts; then

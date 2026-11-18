@@ -105,7 +105,14 @@ check markformat ALL markformat/markformat.go
 check scripts ALL scripts/fuzz.sh
 check devkit ALL devkit/fuzzcheck/fuzzcheck.go
 check workflow ALL .github/workflows/ci.yml
-check nts-rust ALL trusted-time/rust/src/lib.rs
+check nts-core ALL trusted-time/ntscore/c/client.c
+# The core's build flags and its fuzz targets and inputs are no C files,
+# and decide what a runner links and what the fuzzers replay.
+check nts-core-makefile ALL trusted-time/ntscore/c/Makefile
+check nts-core-fuzz-script ALL trusted-time/ntscore/c/fuzz/fuzz.sh
+check nts-core-fuzz-input ALL trusted-time/ntscore/c/fuzz/regress/client/crash-1
+# The binding is Go code of the module: the module and what depends on it.
+has nts-binding "$(affected nts-binding trusted-time/ntscore/go/core.go)" "trusted-time tee-signer" "devkit markformat"
 check c-file ALL platform/x.c
 check no-module ALL .gitignore
 # A base that does not exist, and FUZZ_ALL=1 on a docs-only change.

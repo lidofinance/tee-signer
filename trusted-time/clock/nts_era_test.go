@@ -7,14 +7,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lidofinance/tee-signer/trusted-time/nts"
 	"github.com/lidofinance/tee-signer/trusted-time/nts/ntstest"
 )
 
 // ntpEra is one NTP era: a 32-bit seconds field wraps after it.
 const ntpEra = time.Duration(1<<32) * time.Second
 
-// testAnchor is the era anchor the tests expect (eraAnchor).
-var testAnchor = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+// testAnchor is the era anchor the tests expect: nts.FloorTime, the core's
+// floor_unix_ns. NTP timestamps are read around it until a time is served,
+// and no time before it is served.
+var testAnchor = time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 
 // nearTestClock fails unless got is within a second of the test clock.
 func nearTestClock(t *testing.T, got time.Time) {
@@ -24,18 +27,21 @@ func nearTestClock(t *testing.T, got time.Time) {
 	}
 }
 
-// histOffsetNear fails unless the newest quorum in the drift history has the
-// honest offset (within a second).
-func histOffsetNear(t *testing.T, n *NTS) {
+// eraPivotOf is the time the core reads NTP timestamps around.
+func eraPivotOf(n *NTS) time.Time { return time.Unix(0, n.client.Summary().EraPivot) }
+
+// historyHonest fails if a refused quorum left a trace in the core: a drift
+// violation, or an era pivot away from the honest time (the pivot follows
+// the time served, never the coarse clock, so it is the test clock's time
+// or a little before it).
+func historyHonest(t *testing.T, n *NTS) {
 	t.Helper()
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if len(n.hist) == 0 {
-		t.Fatal("empty drift history")
+	st := n.client.Status()
+	if st.Violations != 0 {
+		t.Fatalf("%d drift violations: a refused quorum reached the drift check", st.Violations)
 	}
-	want := testClock().UnixNano() - n.local()
-	if d := time.Duration(n.hist[len(n.hist)-1].offset - want); d.Abs() > time.Second {
-		t.Fatalf("drift history holds a quorum %v from the honest offset", d)
+	if d := testClock().Sub(time.Unix(0, st.EraPivot)); d < -time.Second || d > time.Minute {
+		t.Fatalf("era pivot %v is %v before the test clock", time.Unix(0, st.EraPivot).UTC(), d)
 	}
 }
 
@@ -63,7 +69,7 @@ func TestNTSClockCoarseEraShiftNotFollowed(t *testing.T) {
 			nearTestClock(t, got)
 		}
 	}
-	histOffsetNear(t, n)
+	historyHonest(t, n)
 	coarse.Skew = 0
 	time.Sleep(60 * time.Millisecond)
 	if err := refresh(t, n); err != nil {
@@ -112,8 +118,10 @@ func TestNTSClockRefusesTimeBeforeEraAnchor(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "before the era anchor") {
 		t.Fatalf("got %v", err)
 	}
-	if len(n.hist) != 0 || n.violations != 0 {
-		t.Fatalf("refused quorum entered the drift history (%d, %d violations)", len(n.hist), n.violations)
+	// It entered no drift history: there is no drift reading and no
+	// violation, and the pivot did not move.
+	if st := n.client.Status(); st.HaveDrift || st.Violations != 0 || st.HaveResult || !eraPivotOf(n).Equal(testAnchor) {
+		t.Fatalf("refused quorum left a trace: drift reading %v, %d violations, pivot %v", st.HaveDrift, st.Violations, eraPivotOf(n).UTC())
 	}
 }
 
@@ -128,8 +136,10 @@ func TestNTSClockRefusesTimeFarAfterPivot(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "after the era pivot") {
 		t.Fatalf("got %v", err)
 	}
-	if len(n.hist) != 0 || n.violations != 0 {
-		t.Fatalf("refused quorum entered the drift history (%d, %d violations)", len(n.hist), n.violations)
+	// It entered no drift history: there is no drift reading and no
+	// violation, and the pivot did not move.
+	if st := n.client.Status(); st.HaveDrift || st.Violations != 0 || st.HaveResult || !eraPivotOf(n).Equal(testAnchor) {
+		t.Fatalf("refused quorum left a trace: drift reading %v, %d violations, pivot %v", st.HaveDrift, st.Violations, eraPivotOf(n).UTC())
 	}
 }
 
@@ -160,10 +170,7 @@ func TestNTSClockWindowRefusalKeepsDriftHistory(t *testing.T) {
 	if got, err := n.Now(); err == nil {
 		t.Fatalf("served %v after a refused quorum", got.UTC())
 	}
-	histOffsetNear(t, n)
-	if n.violations != 0 {
-		t.Fatalf("%d drift violations: the refused quorum reached the drift check", n.violations)
-	}
+	historyHonest(t, n)
 	setAll(0)
 	time.Sleep(60 * time.Millisecond)
 	if err := refresh(t, n); err != nil {
@@ -177,29 +184,51 @@ func TestNTSClockWindowRefusalKeepsDriftHistory(t *testing.T) {
 }
 
 // The era pivot is the anchor before any time is served, then the highest
-// time served, never below the anchor, and never the coarse clock's.
+// time served, never below the anchor, and never the coarse clock's. It is
+// the core's (the window's edges are checked there, ntscore's
+// TestEraWindow tests); here the clock is seen to leave it alone.
 func TestNTSClockEraPivot(t *testing.T) {
-	if !eraAnchor.Equal(testAnchor) {
-		t.Fatalf("era anchor %v, want %v", eraAnchor, testAnchor)
+	if !nts.FloorTime.Equal(testAnchor) {
+		t.Fatalf("era anchor %v, want %v", nts.FloorTime, testAnchor)
 	}
-	n := &NTS{Coarse: &coarseClock{Skew: ntpEra}}
-	if p := n.eraPivot(); !p.Equal(testAnchor) {
+	if !testClock().After(testAnchor) {
+		t.Skipf("the test clock %v is before the era anchor", testClock().UTC())
+	}
+	// Plain NTP: with NTS the certificate check at the shifted coarse time
+	// would fail first, and no answer would come at all.
+	n, coarse, _ := shiftedPlain(t, 0)
+	// A coarse clock one era off, before any time: the answers are read
+	// around the anchor, the quorum is refused, the pivot is the anchor.
+	coarse.Skew = ntpEra
+	if err := refresh(t, n); err == nil || !strings.Contains(err.Error(), "coarse clock") {
+		t.Fatalf("a coarse clock one era ahead: %v", err)
+	}
+	if p := eraPivotOf(n); !p.Equal(testAnchor) {
 		t.Fatalf("pivot %v before any time, want the anchor", p.UTC())
 	}
-	served := testClock()
-	n.highest = served
-	if p := n.eraPivot(); !p.Equal(served) {
+	coarse.Skew = 0
+	time.Sleep(60 * time.Millisecond)
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	served, err := n.Now()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The pivot follows at the next combine, and never passes the time
+	// served.
+	time.Sleep(60 * time.Millisecond)
+	if err := refresh(t, n); err != nil {
+		t.Fatal(err)
+	}
+	if p := eraPivotOf(n); p.Before(served) || p.After(testClock().Add(time.Second)) {
 		t.Fatalf("pivot %v after serving %v", p.UTC(), served.UTC())
 	}
-	n.highest = testAnchor.Add(-time.Hour)
-	if p := n.eraPivot(); !p.Equal(testAnchor) {
-		t.Fatalf("pivot %v below the anchor", p.UTC())
+	// The coarse clock one era ahead again: refused, and the pivot stays.
+	coarse.Skew = ntpEra
+	time.Sleep(60 * time.Millisecond)
+	if err := refresh(t, n); err == nil {
+		t.Fatal("a quorum 2^32 s from the coarse clock was served")
 	}
-	// Inside the window up to 20 years after the pivot, not past it.
-	if why := eraRefusal(testAnchor.Add(eraWindow), testAnchor); why != "" {
-		t.Fatalf("refused the window's edge: %s", why)
-	}
-	if eraRefusal(testAnchor.Add(eraWindow+time.Second), testAnchor) == "" || eraRefusal(testAnchor.Add(-time.Nanosecond), testAnchor) == "" {
-		t.Fatal("time outside the window accepted")
-	}
+	historyHonest(t, n)
 }

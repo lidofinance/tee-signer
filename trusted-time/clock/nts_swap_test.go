@@ -14,7 +14,26 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/trusted-time/nts"
+	"github.com/lidofinance/tee-signer/trusted-time/nts/ntstest/ntsworld"
 )
+
+// newSwapWorld is a world for single tests; newSwapNTS a clock in it under
+// the shift schedule with these servers.
+func newSwapWorld() *shiftWorld { return newShiftWorld(40) }
+
+func newSwapNTS(w *shiftWorld, servers ...NTSServer) *NTS {
+	n := w.drive(&NTS{Shifts: true, ScheduleSeed: []byte("swap"), noStartDelay: true, Servers: servers})
+	w.inStart = inStartOf(n)
+	return n
+}
+
+// inStart says whether the core is in a start state: before its first
+// quorum it is not (that state has no end of its own), after a swap or a
+// policy change that left no quorum it is, for StartWait at most.
+func inStart(n *NTS) bool { return n.client.Summary().Cold }
+
+// held says whether the clock holds a quorum result.
+func held(n *NTS) bool { return n.client.Summary().HaveResult }
 
 // swapServers is the server list of the named operators, as newFollowNTS
 // builds it.
@@ -81,7 +100,7 @@ func TestNTSSwapKeepsQuorum(t *testing.T) {
 			ops := opNames(tc.from)
 			var removed, added string
 			next := slices.Clone(ops)
-			before := map[string]*ntsPeer{}
+			before, kes := map[string]*ntsPeer{}, map[string]int{}
 			blocked := runSwapWorld(w, n, 0, 40*time.Minute, func(sec time.Duration) {
 				if sec != swapAt {
 					return
@@ -95,8 +114,9 @@ func TestNTSSwapKeepsQuorum(t *testing.T) {
 					added = fmt.Sprintf("op%d", tc.from)
 					next = append(next, added)
 				}
-				for _, p := range n.peers {
+				for i, p := range n.peers {
 					before[p.srv.Operator] = p
+					kes[p.srv.Operator] = n.client.Peer(i).Stats.KEOK
 				}
 				if err := n.SetServers(swapServers(next...), 0); err != nil {
 					t.Fatalf("%s: %v", name, err)
@@ -112,9 +132,14 @@ func TestNTSSwapKeepsQuorum(t *testing.T) {
 			if len(s.Peers) != tc.to || len(s.Actives) != ShiftActives(tc.to) || s.ServerSwaps != 1 {
 				t.Errorf("%s: %d peers, actives %v, %d swaps", name, len(s.Peers), s.Actives, s.ServerSwaps)
 			}
-			for _, p := range n.peers {
+			for i, p := range n.peers {
 				if old, ok := before[p.srv.Operator]; ok && old != p {
 					t.Errorf("%s: %s got a new peer", name, p.srv.Operator)
+				}
+				// In the core too: a kept server keeps its keys and cookies,
+				// so the answers after the swap need no new NTS-KE.
+				if was, ok := kes[p.srv.Operator]; ok && n.client.Peer(i).Stats.KEOK != was {
+					t.Errorf("%s: %s ran NTS-KE again after the swap (%d, was %d)", name, p.srv.Operator, n.client.Peer(i).Stats.KEOK, was)
 				}
 			}
 			if removed != "" {
@@ -162,15 +187,19 @@ func TestNTSSwapWaitsForRefresh(t *testing.T) {
 	release := make(chan struct{})
 	var mu sync.Mutex
 	var asked []string
-	n := &NTS{Coarse: w, Local: w.local, StartDelay: -1, Servers: swapServers(opNames(4)...)}
-	n.testQuery = func(ctx context.Context, op string, at int64) (nts.Sample, error) {
+	n := w.drive(&NTS{StartDelay: -1, Servers: swapServers(opNames(4)...)})
+	defer n.Close()
+	// Called with w.mu held; op0's query waits for release without it.
+	w.reply = func(op string, _ int64) (ntsworld.Reply, bool) {
 		mu.Lock()
 		asked = append(asked, op)
 		mu.Unlock()
 		if op == "op0" {
+			w.mu.Unlock()
 			<-release
+			w.mu.Lock()
 		}
-		return w.query(op, at)
+		return ntsworld.Reply{}, false
 	}
 	ctx := context.Background()
 	w.at(0)
@@ -288,6 +317,7 @@ func TestNTSSwapRefusal(t *testing.T) {
 	peers := slices.Clone(n.peers)
 	servers := slices.Clone(n.Servers)
 	sum := n.NTSSummary()
+	core := n.client.Status()
 	order := slices.Clone(n.shifts.order)
 	dup := swapServers(opNames(7)...)
 	dup = append(dup, NTSServer{Host: "other.test", Operator: "op0"})
@@ -321,7 +351,12 @@ func TestNTSSwapRefusal(t *testing.T) {
 		}
 	}
 	after := n.NTSSummary()
-	if !slices.Equal(n.peers, peers) || !slices.EqualFunc(n.Servers, servers, func(a, b NTSServer) bool { return a == b }) ||
+	// The core's list and state did not change either.
+	if now := n.client.Status(); len(now.Peers) != len(core.Peers) || !slices.Equal(now.Members, core.Members) || now.At != core.At {
+		t.Fatalf("a refused swap changed the core: %d peers, members %v at %d; before %d, %v at %d",
+			len(now.Peers), now.Members, now.At, len(core.Peers), core.Members, core.At)
+	}
+	if !slices.Equal(n.peers, peers) || !slices.EqualFunc(n.Servers, servers, sameServer) ||
 		!slices.Equal(n.shifts.order, order) || after.ServerSwaps != 0 || !slices.Equal(after.Actives, sum.Actives) {
 		t.Fatalf("a refused swap changed the clock: swaps %d, actives %v before %v", after.ServerSwaps, after.Actives, sum.Actives)
 	}
@@ -335,7 +370,7 @@ func TestNTSStartListRefused(t *testing.T) {
 		"label too long":  swapServers("op0", "op1", strings.Repeat("x", nts.MaxOperatorLen+1)),
 		"operator twice":  swapServers("op0", "op1", "op1"),
 	} {
-		n := &NTS{Coarse: w, Local: w.local, StartDelay: -1, testQuery: w.queryCtx, Servers: servers}
+		n := w.drive(&NTS{StartDelay: -1, Servers: servers})
 		w.at(0)
 		if err := n.Refresh(context.Background()); err == nil || !strings.Contains(n.NTSSummary().Refused, err.Error()) {
 			t.Errorf("%s: Refresh gave %v", name, err)
@@ -366,7 +401,8 @@ func TestNTSSwapChangedHostIsNewPeer(t *testing.T) {
 		if err := n.SetServers(list, 0); err != nil {
 			t.Fatal(err)
 		}
-		if n.peers[i] == old || n.peers[i].sample != nil || n.Status().Peers[op].Host != "moved.test" || n.peers[i].contacted != old.contacted {
+		if n.peers[i] == old || n.client.Peer(i).Sample != nil || n.client.Peer(i).Cookies != 0 || n.Status().Peers[op].Host != "moved.test" ||
+			n.peers[i].contacted != old.contacted {
 			t.Fatalf("%s kept its peer after a host change", op)
 		}
 	})
@@ -411,7 +447,9 @@ func TestNTSSwapRemovedMemberFailsClosed(t *testing.T) {
 	} {
 		w := newFollowWorld(12)
 		c := &coarseSwitch{w: w}
-		n := &NTS{Coarse: c, Local: w.local, StartDelay: -1, testQuery: w.queryCtx, Servers: swapServers(opNames(4)...)}
+		n := w.drive(&NTS{StartDelay: -1, Servers: swapServers(opNames(4)...)})
+		n.Coarse = c
+		defer n.Close()
 		ctx := context.Background()
 		for sec := time.Duration(0); sec < time.Minute; sec += testTick {
 			w.at(sec)
@@ -444,7 +482,8 @@ func TestNTSSwapRemovedMemberFailsClosed(t *testing.T) {
 // next Refresh, a removed one leaves the quorum at once.
 func TestNTSSwapWithoutShifts(t *testing.T) {
 	w := newFollowWorld(8)
-	n := &NTS{Coarse: w, Local: w.local, StartDelay: -1, testQuery: w.queryCtx, Servers: swapServers(opNames(5)...)}
+	n := w.drive(&NTS{StartDelay: -1, Servers: swapServers(opNames(5)...)})
+	defer n.Close()
 	w.wrong["op4"] = 40 * time.Millisecond
 	ctx := context.Background()
 	for sec := time.Duration(0); sec < 2*time.Minute; sec += testTick {
@@ -529,12 +568,25 @@ func TestNTSSwapCarriesStopAndRate(t *testing.T) {
 	for _, tc := range []string{"label back", "host changed", "host under a new label"} {
 		w := newFollowWorld(14)
 		n := newFollowNTS(w, 8, []byte("swap-carry"))
-		// op3 answers RATE before the first quorum.
+		// op3 answers RATE before the first quorum, and later DENY: both
+		// authenticated, so the core obeys them and stops op3 for
+		// NTSMaxPoll.
 		w.rateUntil["op3"] = int64(shiftBase + 30*time.Second)
 		runSwapWorld(w, n, 0, 3*time.Minute, nil)
+		w.reply = func(op string, _ int64) (ntsworld.Reply, bool) { return ntsworld.Reply{Kiss: "DENY"}, op == "op3" }
 		i, p := peerOf(n, "op3")
-		reEnable := w.local() + int64(n.maxPollD())
-		p.disabled, p.reEnable = "DENY", reEnable
+		at := 3 * time.Minute
+		for ; n.client.Peer(i).Disabled != "DENY"; at += testTick {
+			if at > 2*time.Hour {
+				t.Fatalf("%s: setup: op3 was never asked again", tc)
+			}
+			runSwapWorld(w, n, at, at+testTick, nil)
+		}
+		w.at(at)
+		reEnable := n.client.Peer(i).NextPoll
+		if d := time.Duration(reEnable - w.local()); d <= 0 || d > n.maxPollD() {
+			t.Fatalf("%s: setup: the core stops op3 for %v", tc, d)
+		}
 		st := n.shifts.state(i)
 		contacted := p.contacted
 		if st.rates == 0 || contacted == 0 {
@@ -557,13 +609,31 @@ func TestNTSSwapCarriesStopAndRate(t *testing.T) {
 		}
 		j, q := peerOf(n, label)
 		got := n.shifts.state(j)
-		if q == p || q.disabled != "DENY" || q.reEnable != reEnable || q.contacted != contacted || got != st {
-			t.Fatalf("%s: disabled %q until %d, contacted %d, schedule %+v; want DENY until %d, %d, %+v",
-				tc, q.disabled, q.reEnable, q.contacted, got, reEnable, contacted, st)
+		// The server is a new peer to the core, which knows no stop of it:
+		// the schedule keeps the stop.
+		if q == p || q.stop != "DENY" || q.stopUntil != reEnable || q.contacted != contacted || got != st || n.client.Peer(j).Disabled != "" {
+			t.Fatalf("%s: stop %q until %d, contacted %d, schedule %+v; want DENY until %d, %d, %+v",
+				tc, q.stop, q.stopUntil, q.contacted, got, reEnable, contacted, st)
 		}
 		if h := n.NTSSummary().Peers[j]; h.Off != "DENY" {
 			t.Fatalf("%s: health off %q", tc, h.Off)
 		}
+		if d := n.Status().Peers[label].Disabled; d != "DENY" {
+			t.Fatalf("%s: status disabled %q", tc, d)
+		}
+		// It is not asked while the stop lasts, and is after it.
+		w.reply = nil
+		before := len(contactsSince(w, label, 0))
+		end := time.Duration(reEnable) - shiftBase
+		runSwapWorld(w, n, at, end-end%testTick, nil)
+		if c := len(contactsSince(w, label, 0)); c != before {
+			t.Fatalf("%s: asked %d times while stopped", tc, c-before)
+		}
+		runSwapWorld(w, n, end-end%testTick, end+20*time.Minute, nil)
+		if c := len(contactsSince(w, label, 0)); c == before {
+			t.Fatalf("%s: never asked after the stop ended", tc)
+		}
+		n.Close()
 	}
 }
 
@@ -604,7 +674,7 @@ func TestNTSSwapFailClosedRestarts(t *testing.T) {
 	c := &coarseSwitch{w: w}
 	n.Coarse = c
 	runSwapWorld(w, n, 0, 3*time.Minute, nil)
-	if !n.served.Load() || !n.shifts.warm {
+	if !held(n) || inStart(n) || !n.shifts.warm {
 		t.Fatal("setup: no quorum")
 	}
 	gone := n.NTSSummary().Members[0]
@@ -612,12 +682,12 @@ func TestNTSSwapFailClosedRestarts(t *testing.T) {
 	if err := n.SetServers(swapServers(slices.DeleteFunc(opNames(8), func(op string) bool { return op == gone })...), 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := n.Now(); err == nil || n.served.Load() || n.shifts.warm {
-		t.Fatalf("after the failed re-combine: Now err %v, served %v, warm %v", err, n.served.Load(), n.shifts.warm)
+	if _, err := n.Now(); err == nil || !inStart(n) || n.shifts.warm {
+		t.Fatalf("after the failed re-combine: Now err %v, start state %v, warm %v", err, inStart(n), n.shifts.warm)
 	}
 	c.fail.Store(false)
 	runSwapWorld(w, n, 3*time.Minute, 3*time.Minute+2*testTick, nil)
-	if _, err := n.Now(); err != nil || !n.served.Load() || !n.shifts.warm {
-		t.Fatalf("after the next tick: Now err %v, served %v, warm %v", err, n.served.Load(), n.shifts.warm)
+	if _, err := n.Now(); err != nil || inStart(n) || !n.shifts.warm {
+		t.Fatalf("after the next tick: Now err %v, start state %v, warm %v", err, inStart(n), n.shifts.warm)
 	}
 }

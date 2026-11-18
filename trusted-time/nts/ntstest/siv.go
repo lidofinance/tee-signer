@@ -8,10 +8,12 @@ import (
 	"crypto/subtle"
 )
 
-// AES-SIV-CMAC-256 (RFC 5297), written here from the RFC with Go's AES so
-// the test server does not share code with the Rust client. NTS gives S2V
-// the vector (associated data, nonce) and then the plaintext (RFC 8915
-// section 5.6, RFC 5297 section 3).
+// AES-SIV-CMAC-256 (RFC 5297), written here from the RFC with Go's AES. It
+// shares no code with the client's AES-SIV in C (ntscore/siv.c, with its
+// own AES), and must not: the cross-check of the two
+// (TestSIVMatchesTestServer, FuzzSIV) depends on it. NTS gives S2V the
+// vector (associated data, nonce) and then the plaintext (RFC 8915 section
+// 5.6, RFC 5297 section 3).
 
 // dbl is multiplication by x in GF(2^128) (RFC 5297 section 2.3).
 func dbl(b [16]byte) [16]byte {

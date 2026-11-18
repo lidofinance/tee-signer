@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,27 +16,28 @@ import (
 
 // Follow-up 2026-11-09: seed set later, RATE, start retries, DNS.
 
-func newFollowWorld(seed uint64) *shiftWorld {
-	return &shiftWorld{off: 1_800_000_000 * int64(time.Second), seed: seed, loss: map[string]float64{}, down: map[string]bool{},
-		wrong: map[string]time.Duration{}, contacts: map[string][]int64{}, downUntil: map[string]int64{}, rateUntil: map[string]int64{}}
-}
+func newFollowWorld(seed uint64) *shiftWorld { return newShiftWorld(seed) }
 
+// newFollowNTS is a clock under the shift schedule in w, with catalog
+// servers op0, op1, ... The core it drives is freed with the test binary.
 func newFollowNTS(w *shiftWorld, catalog int, seed []byte) *NTS {
-	n := &NTS{Coarse: w, Local: w.local, Shifts: true, ScheduleSeed: seed, testQuery: w.queryCtx, noStartDelay: true}
+	n := w.drive(&NTS{Shifts: true, ScheduleSeed: seed, noStartDelay: true})
 	for i := range catalog {
 		n.Servers = append(n.Servers, NTSServer{Host: fmt.Sprintf("op%d.test", i), Operator: fmt.Sprintf("op%d", i)})
 	}
-	n.init()
+	if err := n.init(); err != nil {
+		panic(err)
+	}
 	w.inStart = inStartOf(n)
 	return n
 }
 
 // at sets the world to local time shiftBase+d and starts a tick there.
 func (w *shiftWorld) at(d time.Duration) {
+	w.w.Set(int64(shiftBase + d))
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.now = max(w.now, int64(shiftBase+d))
-	w.tickAt = w.now
+	w.tickAt = w.w.Local()
 }
 
 func minGapOf(w *shiftWorld) (time.Duration, string) { return gapsOf(w) }
@@ -191,11 +193,12 @@ func TestNTSShiftStartWithOperatorsDown(t *testing.T) {
 }
 
 // NTS-KE names the NTP server "localhost": under the shift schedule the
-// clock resolves it once at NTS-KE, so queries dial an address.
+// name is resolved once per NTS-KE (nts.Config.ResolveNTP), so queries
+// dial an address. The core still names the server as NTS-KE did.
 func TestNTSShiftResolvesNTPAddressAtKE(t *testing.T) {
 	var servers []NTSServer
 	for _, op := range []string{"a", "b", "c"} {
-		cert, pool, err := ntstest.Certificate("nts.test", time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+		cert, pool, err := ntstest.CertificatePEM("nts.test", time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -212,26 +215,41 @@ func TestNTSShiftResolvesNTPAddressAtKE(t *testing.T) {
 		t.Cleanup(ke.Close)
 		servers = append(servers, NTSServer{Host: "nts.test", Operator: op, Roots: pool, KEAddr: ke.Addr})
 	}
-	n := &NTS{Servers: servers, Coarse: &coarseClock{}, Shifts: true, noStartDelay: true}
+	var mu sync.Mutex
+	var udp []string
+	n := &NTS{Servers: servers, Coarse: &coarseClock{}, Shifts: true, noStartDelay: true, resolveAnyDial: true}
+	n.Dial = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if network == "udp" {
+			mu.Lock()
+			udp = append(udp, addr)
+			mu.Unlock()
+		}
+		var d net.Dialer
+		return d.DialContext(ctx, network, addr)
+	}
+	defer n.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := n.Refresh(ctx); err != nil {
 		t.Fatal(err)
 	}
 	for op, p := range n.Status().Peers {
-		host, _, err := net.SplitHostPort(p.NTPAddr)
-		if err != nil || net.ParseIP(host) == nil {
-			t.Fatalf("%s: NTP address %q, want an IP", op, p.NTPAddr)
+		if !strings.HasPrefix(p.NTPAddr, "localhost:") {
+			t.Fatalf("%s: the core's NTP address %q, want the name NTS-KE gave", op, p.NTPAddr)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(udp) != 3 {
+		t.Fatalf("UDP dials %v, want one per server", udp)
+	}
+	for _, addr := range udp {
+		host, _, err := net.SplitHostPort(addr)
+		if ip := net.ParseIP(host); err != nil || ip == nil || ip.To4() == nil {
+			t.Fatalf("dialed %q, want an IPv4 address", addr)
 		}
 	}
 	if _, err := n.Now(); err != nil {
 		t.Fatal(err)
-	}
-	// An address that is an IP, or that does not resolve, stays as it is.
-	if got := n.resolve(ctx, "127.0.0.1:123"); got != "127.0.0.1:123" {
-		t.Fatal(got)
-	}
-	if got := n.resolve(ctx, "no-such-host.invalid:123"); !strings.HasPrefix(got, "no-such-host.invalid") {
-		t.Fatal(got)
 	}
 }

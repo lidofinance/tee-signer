@@ -4,13 +4,14 @@ package clock
 
 import (
 	"context"
-	"crypto/x509"
 	"errors"
-	"net"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/lidofinance/tee-signer/trusted-time/nts/ntstest/ntsworld"
 )
 
 // swapStartCounts sums the schedule's fallbacks and retries, and its burst
@@ -32,15 +33,19 @@ func swapStartCounts(n *NTS) (fallbacks, bursts int64) {
 func TestNTSSwapStartStateEndsAfterStartWait(t *testing.T) {
 	for _, wait := range []time.Duration{0, 40 * time.Second} {
 		w := newFollowWorld(31)
-		n := newFollowNTS(w, 8, []byte("swap-start-wait"))
-		n.StartWait = wait
+		// StartWait is the core's configuration: set before the clock starts.
+		n := w.drive(&NTS{Shifts: true, ScheduleSeed: []byte("swap-start-wait"), noStartDelay: true, StartWait: wait, Servers: swapServers(opNames(8)...)})
+		if err := n.init(); err != nil {
+			t.Fatal(err)
+		}
+		w.inStart = inStartOf(n)
 		want := cmpOr(wait, NTSStartWait)
 		// The host drops every answer from 88 s before the swap, so no
 		// sample is fresh enough to join a quorum when the swap comes.
 		const dropAt = 3 * time.Minute
 		const swapAt = dropAt + 88*time.Second
 		runSwapWorld(w, n, 0, dropAt, nil)
-		if !n.served.Load() || !n.shifts.warm {
+		if !held(n) || inStart(n) || !n.shifts.warm {
 			t.Fatal("setup: no quorum")
 		}
 		gone := n.NTSSummary().Members[0]
@@ -55,13 +60,13 @@ func TestNTSSwapStartStateEndsAfterStartWait(t *testing.T) {
 		if err := n.SetServers(swapServers(next...), 0); err != nil {
 			t.Fatal(err)
 		}
-		if n.served.Load() || n.shifts.warm {
+		if !inStart(n) || n.shifts.warm {
 			t.Fatal("the failed swap left the clock out of its start state")
 		}
 		// The start wait: still the start state, with start retries.
 		end := swapAt + want
 		blocked := runSwapWorld(w, n, swapAt, end, nil)
-		if n.served.Load() || n.shifts.warm {
+		if !inStart(n) || n.shifts.warm {
 			t.Fatalf("wait %v: the start state ended before the start wait", want)
 		}
 		early := contactsSince(w, "op8", swapAt)
@@ -79,8 +84,8 @@ func TestNTSSwapStartStateEndsAfterStartWait(t *testing.T) {
 		// One tick past the wait the start state is over.
 		from := end + testTick
 		blocked += runSwapWorld(w, n, end, from, nil)
-		if !n.served.Load() || !n.shifts.warm {
-			t.Fatalf("wait %v: still in the start state %v after the swap: served %v, warm %v", want, from-swapAt, n.served.Load(), n.shifts.warm)
+		if inStart(n) || !n.shifts.warm {
+			t.Fatalf("wait %v: still in the start state %v after the swap: core %v, warm %v", want, from-swapAt, inStart(n), n.shifts.warm)
 		}
 		// The next hour runs on the normal schedule.
 		f0, b0 := swapStartCounts(n)
@@ -121,7 +126,7 @@ func TestNTSSwapStartStateEndsAfterStartWait(t *testing.T) {
 		// ticks.
 		clear(w.down)
 		runSwapWorld(w, n, to, to+90*time.Second, nil)
-		if _, err := n.Now(); err != nil || !n.served.Load() || !n.shifts.warm {
+		if _, err := n.Now(); err != nil || inStart(n) || !n.shifts.warm {
 			t.Fatalf("wait %v: no quorum after the answers came back: %v", want, err)
 		}
 		if m := n.NTSSummary().Members; len(m) < 3 || slices.Contains(m, gone) {
@@ -141,21 +146,19 @@ func TestNTSSwapStartStateKeyExchangeBacksOff(t *testing.T) {
 		want := cmpOr(wait, NTSStartWait)
 		var mu sync.Mutex
 		tries := map[string][]int64{}
-		roots := x509.NewCertPool()
-		servers := func(ops ...string) []NTSServer {
-			out := swapServers(ops...)
-			for i := range out {
-				out[i].KEAddr, out[i].Roots = out[i].Host+":4460", roots
+		var refuse atomic.Bool
+		n := w.drive(&NTS{StartDelay: -1, StartWait: wait, Servers: swapServers(opNames(4)...)})
+		defer n.Close()
+		// While refuse is set every NTS-KE fails, as a dial that is refused.
+		w.w.KE = func(a ntsworld.Ask) error {
+			if !refuse.Load() {
+				return nil
 			}
-			return out
+			mu.Lock()
+			defer mu.Unlock()
+			tries[a.Operator] = append(tries[a.Operator], a.At)
+			return errors.New("refused")
 		}
-		n := &NTS{Coarse: w, Local: w.local, StartDelay: -1, StartWait: wait, testQuery: w.queryCtx, randN: seeded(7), Servers: servers(opNames(4)...),
-			Dial: func(_ context.Context, _, addr string) (net.Conn, error) {
-				mu.Lock()
-				defer mu.Unlock()
-				tries[addr] = append(tries[addr], w.local())
-				return nil, errors.New("refused")
-			}}
 		ctx := context.Background()
 		const swapAt = time.Minute
 		for sec := time.Duration(0); sec < swapAt; sec += testTick {
@@ -168,29 +171,33 @@ func TestNTSSwapStartStateKeyExchangeBacksOff(t *testing.T) {
 		// One sample is left after the swap: no quorum. From here the
 		// servers are reached through NTS-KE, and the dial fails.
 		w.at(swapAt)
-		if err := n.SetServers(servers("op0", "op4", "op5", "op6"), 0); err != nil {
+		if err := n.SetServers(swapServers("op0", "op4", "op5", "op6"), 0); err != nil {
 			t.Fatal(err)
 		}
-		if n.served.Load() {
+		if !inStart(n) {
 			t.Fatal("the failed swap left the clock out of its start state")
 		}
-		n.testQuery = nil
+		refuse.Store(true)
+		w.down["op0"] = true
 		// The Refresh at the end of the wait ends the start state.
 		end := swapAt + want
 		to := end + time.Hour
 		for sec := swapAt; sec < to; sec += testTick {
 			w.at(sec)
+			// At the start of the tick: the lost answers of a Refresh move
+			// the world's clock on, and the core's start state ends on that
+			// clock, not at a Refresh.
+			if got := !inStart(n); got != (sec >= end) {
+				t.Fatalf("wait %v: out of the start state %v at %v after the swap", want, got, sec-swapAt)
+			}
 			_ = n.Refresh(ctx)
 			if _, err := n.Now(); err == nil {
 				t.Fatalf("wait %v: Now served a time %v after the swap, without a quorum", want, sec-swapAt)
 			}
-			if got := n.served.Load(); got != (sec >= end) {
-				t.Fatalf("wait %v: out of the start state %v at %v after the swap", want, got, sec-swapAt)
-			}
 		}
 		for _, op := range []string{"op4", "op5", "op6"} {
 			var in, after []int64
-			for _, at := range tries[op+".test:4460"] {
+			for _, at := range tries[op] {
 				if time.Duration(at) < shiftBase+end {
 					in = append(in, at)
 				} else {
@@ -208,14 +215,26 @@ func TestNTSSwapStartStateKeyExchangeBacksOff(t *testing.T) {
 			}
 			t.Logf("wait %v: %s got %d NTS-KE tries in the start wait, %d in the hour after", want, op, len(in), len(after))
 		}
-		n.testQuery = w.queryCtx
-		w.at(to)
-		if err := n.Refresh(ctx); err != nil {
-			t.Fatalf("wait %v: no quorum once the servers are back: %v", want, err)
+		// The servers are back. The core keeps its NTS-KE backoff (the wrapper
+		// cannot lift it), so the quorum forms once the backoff of three of
+		// them has run out: within NTSMaxPoll.
+		refuse.Store(false)
+		clear(w.down)
+		var err error
+		back := to
+		for ; back < to+NTSMaxPoll+time.Minute; back += testTick {
+			w.at(back)
+			if err = n.Refresh(ctx); err == nil {
+				break
+			}
+		}
+		if err != nil {
+			t.Fatalf("wait %v: no quorum within %v of the servers coming back: %v", want, back-to, err)
 		}
 		if _, err := n.Now(); err != nil {
 			t.Fatal(err)
 		}
+		t.Logf("wait %v: quorum %v after the servers came back", want, back-to)
 	}
 }
 
@@ -231,10 +250,10 @@ func TestNTSSwapThatKeepsQuorumHasNoStartState(t *testing.T) {
 	if err := n.SetServers(swapServers(slices.DeleteFunc(opNames(8), func(op string) bool { return op == gone })...), 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := n.Now(); err != nil || !n.served.Load() || !n.shifts.warm || n.coldUntil != 0 {
-		t.Fatalf("after the swap: Now err %v, served %v, warm %v, start state until %d", err, n.served.Load(), n.shifts.warm, n.coldUntil)
+	if _, err := n.Now(); err != nil || inStart(n) || !n.shifts.warm || n.coldSched {
+		t.Fatalf("after the swap: Now err %v, start state %v (schedule %v), warm %v", err, inStart(n), n.coldSched, n.shifts.warm)
 	}
-	if blocked := runSwapWorld(w, n, swapAt, swapAt+2*NTSStartWait, nil); blocked != 0 || n.coldUntil != 0 {
+	if blocked := runSwapWorld(w, n, swapAt, swapAt+2*NTSStartWait, nil); blocked != 0 || inStart(n) || n.coldSched {
 		t.Fatalf("Now failed %d s after a swap that kept the quorum", blocked)
 	}
 	if min, op := minGapOf(w); min < NTSShiftMinGap {
@@ -266,13 +285,15 @@ func TestNTSSwapStartStateEndsAtQuorum(t *testing.T) {
 			t.Fatal(err)
 		}
 		c.fail.Store(false)
-		if until := time.Duration(n.coldUntil) - shiftBase; until != at+NTSStartWait || n.served.Load() {
-			t.Fatalf("%s without %s: start state until %v, want %v; served %v", ops, gone, until, at+NTSStartWait, n.served.Load())
+		// The core's start state lasts StartWait from the swap: it is on
+		// just before that, on the core's own clock, and would be off at it.
+		if !inStart(n) || !n.coldSched || n.shifts.warm {
+			t.Fatalf("%s without %s: start state %v (schedule %v), warm %v", ops, gone, inStart(n), n.coldSched, n.shifts.warm)
 		}
 		runSwapWorld(w, n, at, at+2*time.Minute, nil)
 		at += 2 * time.Minute
-		if _, err := n.Now(); err != nil || n.coldUntil != 0 || !n.shifts.warm {
-			t.Fatalf("after the quorum: Now err %v, start state until %d, warm %v", err, n.coldUntil, n.shifts.warm)
+		if _, err := n.Now(); err != nil || inStart(n) || n.coldSched || !n.shifts.warm {
+			t.Fatalf("after the quorum: Now err %v, start state %v (schedule %v), warm %v", err, inStart(n), n.coldSched, n.shifts.warm)
 		}
 	}
 }
@@ -292,11 +313,11 @@ func TestNTSPolicyStartStateEndsAfterStartWait(t *testing.T) {
 		w.down[op] = true
 	}
 	runSwapWorld(w, n, at, at+NTSStartWait, nil)
-	if n.served.Load() || n.shifts.warm {
+	if !inStart(n) || n.shifts.warm {
 		t.Fatal("the start state ended before the start wait")
 	}
 	runSwapWorld(w, n, at+NTSStartWait, at+NTSStartWait+testTick, nil)
-	if _, err := n.Now(); err == nil || !n.served.Load() || !n.shifts.warm {
-		t.Fatalf("after the start wait: Now err %v, served %v, warm %v", err, n.served.Load(), n.shifts.warm)
+	if _, err := n.Now(); err == nil || inStart(n) || !n.shifts.warm {
+		t.Fatalf("after the start wait: Now err %v, start state %v, warm %v", err, inStart(n), n.shifts.warm)
 	}
 }

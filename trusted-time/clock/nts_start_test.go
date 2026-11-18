@@ -4,7 +4,6 @@ package clock
 
 import (
 	"context"
-	"crypto/x509"
 	"errors"
 	"math/rand/v2"
 	"net"
@@ -14,9 +13,11 @@ import (
 	"time"
 
 	"github.com/lidofinance/tee-signer/trusted-time/nts"
+	"github.com/lidofinance/tee-signer/trusted-time/nts/ntstest"
 )
 
-// seeded is a randN from a fixed seed, safe for the parallel polls.
+// seeded is a randN from a fixed seed (the start wait; the key exchange
+// retry's random is the core's, from its CSPRNG).
 func seeded(seed uint64) func(int64) int64 {
 	var mu sync.Mutex
 	r := rand.New(rand.NewPCG(seed, 1))
@@ -55,6 +56,11 @@ func triesToday(wait time.Duration) int {
 func TestNTSClockStartSpreadsKeyExchange(t *testing.T) {
 	const signers = 500
 	ops := []string{"a", "b", "c", "d"}
+	// Roots the core accepts; no server is reached, so any certificate does.
+	_, roots, err := ntstest.CertificatePEM("nts.test", time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, wait := range []time.Duration{90 * time.Second, 30 * time.Second} {
 		type pair struct {
 			signer int
@@ -74,11 +80,12 @@ func TestNTSClockStartSpreadsKeyExchange(t *testing.T) {
 					return nil, errors.New("refused")
 				}}
 			for _, op := range ops {
-				n.Servers = append(n.Servers, NTSServer{Host: op + ".test", Operator: op, KEAddr: op + ".test:4460", Roots: x509.NewCertPool()})
+				n.Servers = append(n.Servers, NTSServer{Host: op + ".test", Operator: op, KEAddr: op + ".test:4460", Roots: roots})
 			}
 			for n.Refresh(context.Background()) != nil && time.Duration(local.Load())+startLoopStep <= wait {
 				local.Add(int64(startLoopStep))
 			}
+			n.Close()
 		}
 		if len(tries) != signers*len(ops) {
 			t.Fatalf("wait %v: %d signer-server pairs made contact, want %d", wait, len(tries), signers*len(ops))
@@ -135,6 +142,7 @@ func TestNTSClockStartQuorumAtFirstRefresh(t *testing.T) {
 		if m := n.Status().Members; len(m) != 4 || time.Duration(ahead.Load()) >= NTSStartDelay {
 			t.Fatalf("first quorum %v after a start wait of %v", m, time.Duration(ahead.Load()))
 		}
+		n.Close()
 	}
 }
 

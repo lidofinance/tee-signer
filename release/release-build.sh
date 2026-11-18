@@ -7,7 +7,7 @@
 #   1. build the release builder image (release/builder.Dockerfile), no cache,
 #   2. fetch the Go modules into build/gomod (network: the Go proxy, go.sum),
 #      the pinned nitro-cli source and its image (network: GitHub, crates.io,
-#      Debian), the NTS crates (network: crates.io, Cargo.lock),
+#      Debian),
 #   3. scripts/generic-images.sh build with SIGNER_BUILDER_IMAGE set: the
 #      runners and parent tools in the builder, offline, then the three
 #      images, each built twice,
@@ -41,9 +41,8 @@
 #     the arm64 linuxkit of the EIF build. Docker Desktop has its own.
 #   - az with the confcom extension at the version of AZ_CONFCOM_VERSION.
 #   - git, python3, jq, file, cc (build-essential), nm and readelf
-#     (binutils), and the aarch64 nm (binutils-aarch64-linux-gnu): the NTS
-#     step checks its archives with them on the host. scripts/deps.sh
-#     installs these.
+#     (binutils), and the aarch64 nm (binutils-aarch64-linux-gnu).
+#     scripts/deps.sh installs these.
 #   - A Go of any version on PATH (it only reads build info; the build uses
 #     the builder's).
 #   - unshare and ip (util-linux, iproute2), and unprivileged user
@@ -175,7 +174,6 @@ docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e GOMODCACHE=/gomod \
   -v "$SIGNER_GOMODCACHE:/gomod" -v "$ROOT:$ROOT" -w "$ROOT" \
   "$SIGNER_BUILDER_IMAGE" bash release/build.sh fetch
 bash scripts/nitro-cli-image.sh >/dev/null
-bash scripts/fetch-nts.sh
 # The fetch steps had network and the tree read-write: they may write only
 # into build/ and logs/.
 tree_clean 'build/|logs/'

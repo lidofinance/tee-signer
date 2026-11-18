@@ -111,10 +111,13 @@ func TestNTSSetPolicyProtocol(t *testing.T) {
 		if _, err := n.Now(); err == nil {
 			t.Fatalf("to %s: time served before a quorum on it", p)
 		}
-		for _, peer := range n.peers {
-			if peer.sample != nil {
-				t.Fatalf("to %s: %s kept its sample", p, peer.srv.Operator)
+		for i, peer := range n.peers {
+			if ps := n.client.Peer(i); ps.Sample != nil || ps.Cookies != 0 {
+				t.Fatalf("to %s: %s kept its sample or its cookies", p, peer.srv.Operator)
 			}
+		}
+		if st := n.client.Status(); st.HaveDrift || st.HaveResult {
+			t.Fatalf("to %s: the core kept its result or its drift history", p)
 		}
 		if s := n.NTSSummary(); s.Protocol != p || s.Quorum || !strings.HasPrefix(n.Source(), string(p)+"(") {
 			t.Fatalf("to %s: summary %s quorum %v, source %s", p, s.Protocol, s.Quorum, n.Source())
