@@ -153,6 +153,17 @@ details" page names, except DigiCert Global Root CA (G1): no chain the
 runner sees ends there, and the Mozilla list no longer has it. If an Azure
 endpoint the runner calls moves to G1, add it.
 
+## From rc.2: long store outages end a signer
+
+From rc.3 a running runner that writes no mark log record for half of
+`slashing_log_min_lock_days` stops writing until a restart, and the
+restart stops at the age check. The signer then needs a new setup and a
+re-import, as one stopped that long always did. Set
+`slashing_log_min_lock_days` so that half of it is longer than any store
+outage you plan for, and alert on
+`tee_signer_mark_log_written_timestamp_seconds`
+([tooling/health-exporter/README.md](../tooling/health-exporter/README.md)).
+
 ## Rules
 
 - Keep t of n signers up. Switch one signer at a time, and finish it

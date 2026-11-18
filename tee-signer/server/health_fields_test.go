@@ -7,6 +7,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/slashing-log"
@@ -64,6 +65,34 @@ func TestHealthSaysTheMarkLogLockIsUnchecked(t *testing.T) {
 	}
 	if !h.Ready || h.MarkLogLost != "" {
 		t.Errorf("HEALTH after a check passed: ready %v, mark_log_lost %q", h.Ready, h.MarkLogLost)
+	}
+}
+
+// HEALTH reports when the mark log's last record was written, and once no
+// record landed for half the retention (rv-ic0.1), ready false and
+// mark_log_lost naming the gap.
+func TestHealthSaysTheMarkLogIsStale(t *testing.T) {
+	a := newTgtEnv(t, "dev", nil)
+	h, err := a.srv.health()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !h.Ready || h.MarkLogLost != "" || h.MarkLogWrittenUnix == 0 || h.MarkLogWrittenUnix > h.ClockUnix {
+		t.Fatalf("HEALTH before the gap: ready %v, mark_log_lost %q, written %d, clock %d", h.Ready, h.MarkLogLost, h.MarkLogWrittenUnix, h.ClockUnix)
+	}
+	written := h.MarkLogWrittenUnix
+	half := time.Duration(a.setup.SlashingLogMinLockDays) * 24 * time.Hour / 2
+	a.clock.mu.Lock()
+	a.clock.t = a.clock.t.Add(half + time.Hour)
+	a.clock.mu.Unlock()
+	if err := a.marks.Refresh(ctx); !errors.Is(err, markstore.ErrStale) {
+		t.Fatalf("refresh past half the retention: %v, want ErrStale", err)
+	}
+	if h, err = a.srv.health(); err != nil {
+		t.Fatal(err)
+	}
+	if h.Ready || !strings.HasPrefix(h.MarkLogLost, "mark log stopped: no record for half the retention") || h.MarkLogWrittenUnix != written {
+		t.Errorf("HEALTH after the gap: ready %v, mark_log_lost %q, written %d (was %d)", h.Ready, h.MarkLogLost, h.MarkLogWrittenUnix, written)
 	}
 }
 

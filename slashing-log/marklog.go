@@ -43,6 +43,13 @@ var ErrUnreadable = errors.New("markstore: a record of this signer is one this r
 // needs a new setup and a re-import.
 var ErrTooOld = errors.New("markstore: the newest record is older than half the retention; update bodies may have expired")
 
+// ErrStale: this runner wrote no record for half of
+// slashing_log_min_lock_days (the store was cut off, or a write landed that
+// late). A clone may have claimed the log meanwhile and its records may
+// have expired since, so a write now could land where the clone's record
+// was. The log writes nothing more; a restart runs the claim's age check.
+var ErrStale = errors.New("markstore: no record written for half the retention; this runner writes no more records")
+
 // ErrBodyMissing: no readable copy of an update body the config state names.
 var ErrBodyMissing = errors.New("markstore: no readable copy of the update body")
 
@@ -194,7 +201,14 @@ type MarkLog struct {
 	version uint64 // newest record this process wrote or read
 	hash    [32]byte
 	logID   [32]byte
-	written time.Time // time of the newest record
+	// written is the time of the newest record the claim read, or of the
+	// newest this process wrote and saw land within the write age bound
+	// (ackLocked). The write age check measures from it.
+	written time.Time
+	// unacked: a record landed that ackLocked could not date (the trusted
+	// clock failed after the create, or an earlier attempt's record was
+	// found). Raise writes again rather than trust its mark.
+	unacked bool
 	mark    backend.Watermark
 	// gate is the source gate the next record carries (SetSourceGate); at
 	// Claim the newest record's.
@@ -745,10 +759,67 @@ func (m *MarkLog) Raise(ctx context.Context, wm backend.Watermark) error {
 	if !m.claimed {
 		return errors.New("markstore: not claimed")
 	}
-	if m.lost == nil && Merge(m.mark, wm) == m.mark && m.version > 0 {
+	if m.lost == nil && !m.unacked && Merge(m.mark, wm) == m.mark && m.version > 0 {
 		return nil
 	}
 	return m.appendLocked(ctx, wm)
+}
+
+// staleLocked is the write age check (rv-ic0.1). It refuses a write, and
+// latches ErrStale, once more than half the retention has passed on the
+// trusted clock since base, the last record that landed in time.
+//
+// Why that bound is safe: while this runner could not write, a clone may
+// have claimed the log and signed. Every record of the clone landed after
+// base (it links above this runner's last record, so it was written after
+// that record), and the store keeps each record for at least the
+// retention from when it landed: S3 gets a per-object retention of
+// slashing_log_min_lock_days plus 25 hours, dated by a clock S3 holds to
+// within 15 minutes, and GCS and Azure keep objects for the locked
+// retention, which the lock check holds to at least
+// slashing_log_min_lock_days. So no record of the clone can go before
+// base + retention - 15 minutes, and a write of this runner that lands by
+// base + retention/2 meets the clone's record and conflicts (ErrLost).
+// The bound leaves half the retention for clock error, at least 12 hours.
+// It is the claim's bound too, so a runner may stay cut off for as long as
+// it may stay stopped. Normal gaps are far below it: Refresh writes a
+// record at least every retention/8 (at most a day) plus an hour.
+func (m *MarkLog) staleLocked(now, base time.Time) error {
+	if m.opt.Setup == nil || base.IsZero() {
+		return nil
+	}
+	age := now.Sub(base)
+	if age <= m.opt.Setup.Retention()/2 {
+		return nil
+	}
+	m.lost = fmt.Errorf("%w: the last record landed %s ago, the retention is %d days (a restart runs the claim's age check)",
+		ErrStale, age.Round(time.Second), m.opt.Setup.RetentionDays)
+	m.opt.Log.Error("mark log: no record written for half the retention; this runner writes no more records and signs nothing above its committed mark until a restart",
+		"age", age.Round(time.Second).String(), "retention_days", m.opt.Setup.RetentionDays, "version", m.version)
+	return m.lost
+}
+
+// ackLocked runs once a record of this process, made at time at, is in
+// the log. The host can hold a create back, so the record may have landed
+// long after at: ackLocked reads the trusted clock again and takes the
+// record as written (written = at) only if that reading is still within
+// the write age bound of base. Past it, the log latches ErrStale. If the
+// clock fails, the write fails and written stays at base.
+func (m *MarkLog) ackLocked(base, at time.Time) error {
+	if m.opt.Setup == nil || base.IsZero() {
+		m.written, m.unacked = at, false
+		return nil
+	}
+	t, err := m.now()
+	if err != nil {
+		m.unacked = true
+		return fmt.Errorf("markstore: the record landed, but the trusted clock cannot date it: %w", err)
+	}
+	if err := m.staleLocked(t, base); err != nil {
+		return err
+	}
+	m.written, m.unacked = at, false
+	return nil
 }
 
 // copiesLocked fills a record's body copies from what the log holds for the
@@ -767,6 +838,16 @@ func (m *MarkLog) appendLocked(ctx context.Context, wm backend.Watermark) error 
 	if m.lost != nil {
 		return m.lost
 	}
+	// The age check comes before the lock check: a store cut off fails
+	// both, and the latch must show (rv-ic0.4).
+	now, err := m.now()
+	if err != nil {
+		return err
+	}
+	base := m.written
+	if err := m.staleLocked(now, base); err != nil {
+		return err
+	}
 	if m.unchecked != nil {
 		if time.Since(m.uncheckedAt) < lockRecheckGap {
 			return fmt.Errorf("%w: %w", ErrLockUnchecked, m.unchecked)
@@ -774,10 +855,6 @@ func (m *MarkLog) appendLocked(ctx context.Context, wm backend.Watermark) error 
 		if err := m.checkLockLocked(ctx); err != nil {
 			return err
 		}
-	}
-	now, err := m.now()
-	if err != nil {
-		return err
 	}
 	wm = Merge(m.mark, wm)
 	prevV, prevH := m.version, m.hash
@@ -858,7 +935,7 @@ func (m *MarkLog) appendLocked(ctx context.Context, wm backend.Watermark) error 
 				// Our own write from an earlier attempt whose reply was lost: a
 				// record with this process's owner, linked to our last record.
 				// Its time stamp, and maybe its mark, differ from this attempt's.
-				m.version, m.hash, m.mark, m.written = v, Hash(e), r.Mark, time.Unix(int64(r.Time), 0)
+				m.version, m.hash, m.mark, m.unacked = v, Hash(e), r.Mark, true
 				if prevV == 0 {
 					m.logID = m.hash
 				}
@@ -867,7 +944,7 @@ func (m *MarkLog) appendLocked(ctx context.Context, wm backend.Watermark) error 
 				m.opt.Log.Warn("mark log: found this runner's own record of an attempt whose reply was lost", "version", v)
 				if Merge(r.Mark, wm) == r.Mark && r.State.Equal(m.state) &&
 					sameGate(r.SourceGate, m.gate) && sameShares(r.Shares, m.shares) {
-					return nil
+					return m.ackLocked(base, time.Unix(int64(r.Time), 0))
 				}
 				// It does not hold what this call writes: write that on top.
 				break
@@ -894,12 +971,15 @@ func (m *MarkLog) appendLocked(ctx context.Context, wm backend.Watermark) error 
 			m.opt.Log.Warn("mark log: write failed", "version", v, "create_ms", createMS, "err", err)
 			return fmt.Errorf("markstore: write version %d: %w", v, err)
 		}
-		m.version, m.hash, m.mark, m.written = v, Hash(enc), wm, now
+		m.version, m.hash, m.mark = v, Hash(enc), wm
 		if prevV == 0 {
 			m.logID = m.hash
 		}
 		m.writes++
 		m.writeHint()
+		if err := m.ackLocked(base, now); err != nil {
+			return err
+		}
 		// One line per record, for the timing of real stores: create_ms is
 		// the conditional create (with a read-back after a lost reply),
 		// total_ms adds the sealed hint.
@@ -1169,12 +1249,14 @@ func keepAlive(retention time.Duration) time.Duration { return min(retention/8, 
 // refresh age, so the copy must be new again before then.
 const bodyMargin = 2 * time.Hour
 
-// Refresh keeps the log readable for a restart (section 5): a body copy
-// older than half the retention less bodyMargin gets a new copy, and the log gets a new
-// record (same mark and state, the new copies) when a copy was written or
-// the newest record is older than keepAlive. With Options.LockDays it
-// checks the store's lock first (checkLockLocked). Without a setup it
-// does nothing.
+// Refresh keeps the log readable for a restart (section 5). It runs the
+// write age check first (staleLocked), before the lock check, so a runner
+// cut off from its store latches ErrStale before the store answers again.
+// With Options.LockDays it then checks the store's lock (checkLockLocked).
+// Then a body copy older than half the retention less bodyMargin gets a
+// new copy, and the log gets a new record (same mark and state, the new
+// copies) when a copy was written or the newest record is older than
+// keepAlive. Without a setup it does nothing.
 func (m *MarkLog) Refresh(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1184,14 +1266,17 @@ func (m *MarkLog) Refresh(ctx context.Context) error {
 	if m.lost != nil {
 		return m.lost
 	}
+	now, err := m.now()
+	if err != nil {
+		return err
+	}
+	if err := m.staleLocked(now, m.written); err != nil {
+		return err
+	}
 	if m.opt.LockDays > 0 {
 		if err := m.checkLockLocked(ctx); err != nil {
 			return err
 		}
-	}
-	now, err := m.now()
-	if err != nil {
-		return err
 	}
 	ret := m.opt.Setup.Retention()
 	wrote := false
@@ -1249,6 +1334,15 @@ func (m *MarkLog) Lost() error {
 	return m.lost
 }
 
+// Written is the time of the last record that landed within the write
+// age bound, or that the claim read; zero before Claim. HEALTH reports it
+// so monitoring can alert well before half the retention.
+func (m *MarkLog) Written() time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.written
+}
+
 // LockUnchecked is the error of the last lock check that could not read
 // the lock, nil once a check passes. Meanwhile the log writes no records
 // (ErrLockUnchecked).
@@ -1271,9 +1365,14 @@ func (m *MarkLog) Status() string {
 	if m.skipped > 0 {
 		s += fmt.Sprintf(" skipped=%d", m.skipped)
 	}
+	if !m.written.IsZero() {
+		s += fmt.Sprintf(" written=%d", m.written.Unix())
+	}
 	switch {
 	case errors.Is(m.lost, ErrNoLock):
 		s += " NOT-LOCKED"
+	case errors.Is(m.lost, ErrStale):
+		s += " STALE"
 	case m.lost != nil:
 		s += " LOST"
 	case m.unchecked != nil:

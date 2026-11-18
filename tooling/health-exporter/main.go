@@ -325,6 +325,10 @@ func render(w io.Writer, rs []*runner) {
 		}
 		gauge("tee_signer_validators", "Validator keys or shares loaded.", one, float64(h.Validators))
 		gauge("tee_signer_started_timestamp_seconds", "Runner start time, unix seconds.", one, float64(h.StartedUnix))
+		if h.MarkLogWrittenUnix != 0 {
+			gauge("tee_signer_mark_log_written_timestamp_seconds", "When the mark log's last record was written, unix seconds on the runner's trusted clock.",
+				one, float64(h.MarkLogWrittenUnix))
+		}
 		gauge("tee_signer_health_rtt_seconds", "Duration of the last HEALTH call on an open connection.", one, rtt.Seconds())
 		if skewOK {
 			gauge("tee_signer_clock_skew_seconds", "Runner clock minus this host's clock.", one, skew.Seconds())

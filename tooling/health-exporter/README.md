@@ -136,6 +136,7 @@ Every metric has the label `runner`, the name given on the command line.
 | `tee_signer_config_pending_effective_timestamp_seconds` | gauge | When the pending update of the group takes effect; 0 if none |
 | `tee_signer_validators` | gauge | Keys or shares loaded |
 | `tee_signer_started_timestamp_seconds` | gauge | Runner start time |
+| `tee_signer_mark_log_written_timestamp_seconds` | gauge | When the mark log's last record was written (HEALTH `mark_log_written_unix`); only from a runner with a mark log. Half of `slashing_log_min_lock_days` after it the runner writes no more records and needs a restart |
 | `tee_signer_health_rtt_seconds` | gauge | Duration of the last HEALTH call on an open connection |
 | `tee_signer_clock_skew_seconds` | gauge | Runner clock minus this host's clock, from the same call. A poll that opens a new connection makes a second call on it and takes both values from that one, so they leave out the dial and attestation check. Both are absent after a failed poll; skew is also absent when the runner reports no clock in ms |
 | `tee_signer_clock_trusted` | gauge | The runner's clock is a trusted source |
@@ -187,6 +188,10 @@ groups:
         expr: tee_signer_config_pending_effective_timestamp_seconds > 0
       - alert: TeeSignerRestarted
         expr: changes(tee_signer_started_timestamp_seconds[15m]) > 0
+      - alert: TeeSignerMarkLogNotWritten
+        # a running runner writes a record at least every retention/8
+        # (at most a day) plus an hour; 26 h fits a retention of 8 days or more
+        expr: time() - tee_signer_mark_log_written_timestamp_seconds > 26 * 3600
       - alert: TeeSignerFewerKeys
         expr: tee_signer_validators < 100  # the number of keys you imported
         for: 5m

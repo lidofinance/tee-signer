@@ -642,11 +642,11 @@ func Run(t *testing.T, kind wormfake.Kind, newLog NewLog) {
 		if _, ok := srv.Current(markstore.BodyName(s1.Hash, setupwire.GroupOpen, 1, 2)); !ok {
 			t.Fatal("no second copy of the body")
 		}
-		// Past the retention of copy 1 and of the first records. The admin
-		// deletes them.
-		srv.Advance(ret/2 - day + time.Hour)
-		for i := 0; i < 3; i++ {
-			srv.Advance(day)
+		// Past the retention of copy 1 and of the first records, with a
+		// refresh a day as a running runner has (no record for half the
+		// retention would stop it). The admin deletes them.
+		for left := ret/2 + 2*day + time.Hour; left > 0; left -= day {
+			srv.Advance(min(day, left))
 			if err := m.Refresh(ctx); err != nil {
 				t.Fatal(err)
 			}

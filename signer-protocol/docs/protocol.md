@@ -87,6 +87,11 @@ body  = version:u8  type:u8  id:u32  payload
 - A state copy refresh that fails makes HEALTH report `ready` false and
   `state_copy_failed` with the error. The next refresh that succeeds
   clears both.
+- A mark log that wrote no record for half of
+  `slashing_log_min_lock_days` makes HEALTH report `ready` false and
+  `mark_log_lost` (`mark log stopped: no record for half the retention:
+  ...`) until a restart. `mark_log_written_unix` is when its last record
+  was written, on the trusted clock.
 
 ## Responses
 

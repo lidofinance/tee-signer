@@ -245,6 +245,30 @@ roll the mark back.
   expired, and the runner stops. That signer needs a new setup and a share
   re-import. So `slashing_log_min_lock_days` bounds how long a signer may stay
   stopped: half of it.
+- Write age check. A running runner holds its own writes to the same
+  bound. Before each record, and at each refresh, it compares the trusted
+  clock with the time of its last record that landed in time, or of the
+  record the claim read. This runs before the lock check, so a store that
+  is cut off, lock read included, shows the latch and not a pause. After a create it reads the clock again, since
+  the host can hold a create back. Past half the retention it writes no
+  more records and latches (`markstore.ErrStale`): it signs nothing above
+  its committed mark until a restart, whose claim runs the age check.
+  Status then shows `STALE`, and HEALTH says `ready: false` and
+  `mark_log_lost: "mark log stopped: no record for half the retention:
+  ..."`. HEALTH `mark_log_written_unix` is the time of that last record,
+  so monitoring can alert long before. A clock that fails after a create
+  fails that write without a latch; the next write measures from the
+  record before it.
+  The bound holds because a clone that claims the log while this runner
+  is cut off writes above this runner's last record, so after it, and
+  the store keeps each of the clone's records for at least the retention
+  from when it landed (on S3 the runner dates each record's retention with a
+  clock S3 holds to within 15 minutes, and adds 25 hours). A write of this
+  runner that lands within half the retention of its last record meets
+  the clone's record and conflicts (`ErrLost`). Half the retention is at
+  least 12 hours; a running runner writes a record at least every
+  retention / 8 (at most a day) plus an hour, so only an outage that long
+  latches.
 - First start. An empty log and no shares listed: the claim record is
   record 1, with the setup's first config state (version 0 of both
   groups), and its hash is the log ID. An empty log with shares listed
@@ -593,8 +617,10 @@ the request once more. A second 401 is the error. The error text names
 the code, the `AuthenticationErrorDetail` and the `WWW-Authenticate`
 header, which say why Azure refused the token.
 
-Retention bounds how long a signer may stay stopped: the age check stops
-a runner whose newest record is older than half of `slashing_log_min_lock_days`.
+Retention bounds how long a signer may stay stopped, or cut off from its
+store while it runs: the age check stops a runner whose newest record is
+older than half of `slashing_log_min_lock_days`, and the write age check
+stops a running one whose last record is that old.
 For production, set it to at least the signer's planned life. A compliance
 mode bucket cannot be emptied before its retention ends, so a long
 retention keeps a test bucket for that long.
@@ -649,8 +675,9 @@ holds its true mark.
   and on AWS or Azure with a key rule that can still change, the key rule
   names the new image next to the old one, and the new image reads the old
   log as on a restart (`docs/upgrade.md`).
-- A signer down longer than half the retention period: the age check
-  stops it, and it needs a new setup and a re-import.
+- A signer down, or cut off from its store, longer than half the
+  retention period: the age check stops it at the claim, the write age
+  check while it runs, and it needs a new setup and a re-import.
 - Objects under future record names. Anyone who can write the log's
   bucket (an admin, or the runner's own cloud identity) can create junk
   under the next 17 version names. A writer gives up after 17 names in a
@@ -670,11 +697,12 @@ holds its true mark.
   expiration adds delete markers, which the reader reads past, and a
   noncurrent version expiration removes a version once its retention
   ends. The checks after a create (`checkHidden`, `checkMarker`) see a
-  hidden record only while its version exists, and the age check runs
-  only at the claim. So a runner that stays cut off from the bucket for
-  longer than the retention, while a clone claims the log and writes,
-  may find the clone's record gone and write its own in its place,
-  without seeing what the clone signed. The lock check warns of an
+  hidden record only while its version exists. A runner cut off from the
+  bucket for longer than the retention, while a clone claims the log and
+  writes, could find the clone's record gone and write its own in its
+  place without seeing what the clone signed; the write age check
+  (Rules) stops it at half the retention, before the clone's records can
+  go. The lock check warns of an
   expiration rule and does not stop on it. It also passes on any 403 to
   its read of the rules, whatever the error code, so a runner under an
   older bucket policy still starts; a rule is then not seen.

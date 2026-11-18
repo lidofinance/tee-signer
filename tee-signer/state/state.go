@@ -199,7 +199,8 @@ type MarkLog interface {
 	Raise(ctx context.Context, wm backend.Watermark) error
 	// Lost is the error the log latched: markstore.ErrLost after another
 	// instance wrote it, markstore.ErrNoLock once its store is no longer
-	// locked.
+	// locked, markstore.ErrStale once no record landed for half the
+	// retention.
 	Lost() error
 	// SourceGate is the source gate the log holds; SetSourceGate sets the
 	// one the next record carries.
@@ -381,6 +382,30 @@ func (h *Hooks) MarkLogStopped() error {
 		return err
 	}
 	return nil
+}
+
+// MarkLogStale is the error the mark log latched when no record landed
+// for half of slashing_log_min_lock_days (markstore.ErrStale), nil
+// otherwise. The log then writes no more records, so the runner signs
+// nothing above the mark it committed, until a restart.
+func (h *Hooks) MarkLogStale() error {
+	if h.marks == nil {
+		return nil
+	}
+	if err := h.marks.Lost(); errors.Is(err, markstore.ErrStale) {
+		return err
+	}
+	return nil
+}
+
+// MarkLogWritten is when the mark log's last record was written
+// (markstore.MarkLog.Written); zero without a mark log and for a log that
+// does not report it.
+func (h *Hooks) MarkLogWritten() time.Time {
+	if w, ok := h.marks.(interface{ Written() time.Time }); ok {
+		return w.Written()
+	}
+	return time.Time{}
 }
 
 // MarkLogUnchecked is the error of the mark log's last lock check that

@@ -123,8 +123,10 @@ type Health struct {
 	// store was no longer locked at a refresh (markstore.ErrNoLock), or
 	// "mark log paused: store lock unchecked: ..." while its last lock check
 	// could not read the lock (markstore.ErrLockUnchecked; cleared once a
-	// check passes). Ready is then false. Empty otherwise, and from runners
-	// before it.
+	// check passes), or "mark log stopped: no record for half the
+	// retention: ..." when no record landed for half of
+	// slashing_log_min_lock_days (markstore.ErrStale; until a restart).
+	// Ready is then false. Empty otherwise, and from runners before it.
 	MarkLogLost string `json:"mark_log_lost,omitempty"`
 	// RequestPanic says which state-changing request panicked; the
 	// runner then signs and changes nothing until it restarts, and Ready
@@ -157,6 +159,13 @@ type Health struct {
 	// Record describes the mark log (store, signer, owner, newest
 	// record), or "none".
 	Record string `json:"record,omitempty"`
+	// MarkLogWrittenUnix is when the mark log's last record was written,
+	// unix seconds on the trusted clock: the newest record the claim read,
+	// or the newest this runner wrote that landed within the write age
+	// bound. Half of slashing_log_min_lock_days after it the runner writes
+	// no more records (mark_log_lost), so alert long before. Zero without
+	// a mark log, and from runners before it.
+	MarkLogWrittenUnix uint64 `json:"mark_log_written_unix,omitempty"`
 	// AllowUnverifiedNonslashable is the config switch of that name: the
 	// runner signs bare roots it cannot check (root types 2 to 6).
 	AllowUnverifiedNonslashable bool `json:"allow_unverified_nonslashable"`
