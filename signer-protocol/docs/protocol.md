@@ -91,7 +91,8 @@ body  = version:u8  type:u8  id:u32  payload
   `slashing_log_min_lock_days` makes HEALTH report `ready` false and
   `mark_log_lost` (`mark log stopped: no record for half the retention:
   ...`) until a restart. `mark_log_written_unix` is when its last record
-  was written, on the trusted clock.
+  was written, on the trusted clock; without a setup (dev platform, debug
+  builds) on the host clock, with no stop.
 
 ## Responses
 

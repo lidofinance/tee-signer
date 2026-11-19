@@ -227,7 +227,11 @@ roll the mark back.
   mark, until a check passes. The next refresh checks again, and so does a
   write 30 seconds or more after the failed check. Status then shows
   `LOCK-UNCHECKED`, and HEALTH says `ready: false` and `mark_log_lost:
-  "mark log paused: store lock unchecked: ..."` until a check passes. Any lock check error at the claim stops the start.
+  "mark log paused: store lock unchecked: ..."` until a check passes. A
+  refresh reads the lock even while the trusted clock fails. The pause
+  writes no keep-alive record, so if no check passes within half the
+  retention of the last record, the write age check (below) stops the
+  runner for good. Any lock check error at the claim stops the start.
 - Shares, listed once. The runner lists its stored shares once, before
   the claim. The claim learns from that list whether the node holds
   shares, and the runner loads only that list. A share that a later
@@ -268,7 +272,18 @@ roll the mark back.
   the clone's record and conflicts (`ErrLost`). Half the retention is at
   least 12 hours; a running runner writes a record at least every
   retention / 8 (at most a day) plus an hour, so only an outage that long
-  latches.
+  latches. Any outage counts, though the store itself may work: the store
+  out of reach, a lock read that fails (`LOCK-UNCHECKED`), or a trusted
+  clock that fails. Each stops the keep-alive records, and the runner
+  fails closed.
+  The bound holds only while the trusted clock does not lag real time.
+  Where the host sets the rate of the guest's counter (not on Nitro), a
+  host that blocks the time servers and holds the counter can hold that
+  clock back without limit (`trusted-time/docs/nts.md`, "What the core
+  does"). A runner held back that way passes the check after the clone's
+  records are gone, writes in their place and signs. A planned check also
+  compares the store's own response `Date`, which the host cannot hold
+  back, with the time of the last record.
 - First start. An empty log and no shares listed: the claim record is
   record 1, with the setup's first config state (version 0 of both
   groups), and its hash is the log ID. An empty log with shares listed
@@ -702,7 +717,8 @@ holds its true mark.
   writes, could find the clone's record gone and write its own in its
   place without seeing what the clone signed; the write age check
   (Rules) stops it at half the retention, before the clone's records can
-  go. The lock check warns of an
+  go, as long as the trusted clock does not lag (Rules, "Write age
+  check"). The lock check warns of an
   expiration rule and does not stop on it. It also passes on any 403 to
   its read of the rules, whatever the error code, so a runner under an
   older bucket policy still starts; a rule is then not seen.

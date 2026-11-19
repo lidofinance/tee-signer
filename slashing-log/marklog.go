@@ -780,10 +780,22 @@ func (m *MarkLog) Raise(ctx context.Context, wm backend.Watermark) error {
 // slashing_log_min_lock_days. So no record of the clone can go before
 // base + retention - 15 minutes, and a write of this runner that lands by
 // base + retention/2 meets the clone's record and conflicts (ErrLost).
-// The bound leaves half the retention for clock error, at least 12 hours.
+// The bound leaves half the retention for clock error, at least 12 hours;
+// the trusted clock runs ahead by under two minutes (for a clock that
+// lags, see below).
 // It is the claim's bound too, so a runner may stay cut off for as long as
 // it may stay stopped. Normal gaps are far below it: Refresh writes a
 // record at least every retention/8 (at most a day) plus an hour.
+// Any cause of a gap counts: the store, a lock read that fails, or a
+// trusted clock that fails.
+//
+// The bound holds only while the trusted clock does not lag real time. On
+// a platform where the host sets the rate of the guest's counter, a host
+// that blocks the time servers and holds the counter can hold the clock
+// back without limit (trusted-time/docs/nts.md, "What the core does"). A
+// runner held back that way passes this check after the clone's records
+// are gone. A planned check also compares the store's own response Date,
+// which the host cannot hold back, with base.
 func (m *MarkLog) staleLocked(now, base time.Time) error {
 	if m.opt.Setup == nil || base.IsZero() {
 		return nil

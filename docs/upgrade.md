@@ -156,10 +156,15 @@ endpoint the runner calls moves to G1, add it.
 ## From rc.2: long store outages end a signer
 
 From rc.3 a running runner that writes no mark log record for half of
-`slashing_log_min_lock_days` stops writing until a restart, and the
-restart stops at the age check. The signer then needs a new setup and a
-re-import, as one stopped that long always did. Set
-`slashing_log_min_lock_days` so that half of it is longer than any store
+`slashing_log_min_lock_days` stops writing until a restart. The restart
+runs the age check, which stops it unless a newer record landed (a
+create the host held back past the bound can still land). The signer
+then needs a new setup and a re-import, as one stopped that long always
+did. Three outages stop the records, though the store itself may work:
+the store out of reach, a read of the store's lock that fails (for
+example a 403 from the management API), and a trusted clock that fails.
+Each counts toward the bound. Set
+`slashing_log_min_lock_days` so that half of it is longer than any such
 outage you plan for, and alert on
 `tee_signer_mark_log_written_timestamp_seconds`
 ([tooling/health-exporter/README.md](../tooling/health-exporter/README.md)).

@@ -123,9 +123,11 @@ type Health struct {
 	// store was no longer locked at a refresh (markstore.ErrNoLock), or
 	// "mark log paused: store lock unchecked: ..." while its last lock check
 	// could not read the lock (markstore.ErrLockUnchecked; cleared once a
-	// check passes), or "mark log stopped: no record for half the
-	// retention: ..." when no record landed for half of
-	// slashing_log_min_lock_days (markstore.ErrStale; until a restart).
+	// check passes within half of slashing_log_min_lock_days of the last
+	// record, else it turns into the stop below), or "mark log stopped: no
+	// record for half the retention: ..." when no record landed for half
+	// of slashing_log_min_lock_days, whatever the cause: the store, the
+	// lock read or the trusted clock (markstore.ErrStale; until a restart).
 	// Ready is then false. Empty otherwise, and from runners before it.
 	MarkLogLost string `json:"mark_log_lost,omitempty"`
 	// RequestPanic says which state-changing request panicked; the
@@ -163,8 +165,10 @@ type Health struct {
 	// unix seconds on the trusted clock: the newest record the claim read,
 	// or the newest this runner wrote that landed within the write age
 	// bound. Half of slashing_log_min_lock_days after it the runner writes
-	// no more records (mark_log_lost), so alert long before. Zero without
-	// a mark log, and from runners before it.
+	// no more records (mark_log_lost), so alert long before. Without a
+	// setup (the flag path of the dev platform and debug builds) it is
+	// host-clock time and nothing stops writes. Zero without a mark log,
+	// and from runners before it.
 	MarkLogWrittenUnix uint64 `json:"mark_log_written_unix,omitempty"`
 	// AllowUnverifiedNonslashable is the config switch of that name: the
 	// runner signs bare roots it cannot check (root types 2 to 6).
