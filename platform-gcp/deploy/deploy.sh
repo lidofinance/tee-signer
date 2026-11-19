@@ -160,32 +160,48 @@ operator_ip() {
   echo "$ip"
 }
 
-# The workload account's email as gcloud lists it. Nothing builds it from
-# PROJECT_ID: Google documents no form for a domain-scoped project. Prints
-# each listed email that starts with SA_NAME@.
+# The workload account's email as gcloud lists it. Prints each listed email
+# that matches, compared byte by byte (LC_ALL=C). For a plain PROJECT_ID
+# only SA_NAME@PROJECT_ID.iam.gserviceaccount.com, the form Google
+# documents, matches, so the App Engine default account
+# (PROJECT_ID@appspot.gserviceaccount.com) never does, also in a project
+# named SA_NAME. Google documents no form for a domain-scoped project: there
+# the email must start with SA_NAME@ and end in .iam.gserviceaccount.com.
 service_account_emails() {
   local all
   all="$(gcloud iam service-accounts list --project="$PROJECT_ID" --format='value(email)')" ||
     die "cannot list the service accounts of $PROJECT_ID"
-  awk -v p="$SA_NAME@" 'index($0, p) == 1' <<<"$all"
+  case "$PROJECT_ID" in
+    *:*)
+      LC_ALL=C awk -v p="$SA_NAME@" -v s=.iam.gserviceaccount.com \
+        'length($0) > length(p s) && index($0, p) == 1 && substr($0, length($0) - length(s) + 1) == s' <<<"$all" ;;
+    *) LC_ALL=C awk -v e="$SA_NAME@$PROJECT_ID.iam.gserviceaccount.com" '$0 == e' <<<"$all" ;;
+  esac
 }
 
 # service_account: set SERVICE_ACCOUNT to that email. It stops unless
 # exactly one account matches. The plan runs no gcloud and shows a
 # placeholder.
 service_account() {
-  local emails n
+  local emails
   if [ "$DRY" = 1 ]; then
     SERVICE_ACCOUNT="<email of $SA_NAME>"
     return 0
   fi
   emails="$(service_account_emails)"
-  n="$(grep -c . <<<"$emails" || true)"
-  [ "$n" != 0 ] || die "found no service account $SA_NAME in $PROJECT_ID: run sa-create first"
-  [ "$n" = 1 ] || die "found $n service accounts named $SA_NAME in $PROJECT_ID: $(tr '\n' ' ' <<<"$emails")"
+  [ -n "$emails" ] || die "found no service account $SA_NAME in $PROJECT_ID: run sa-create first"
+  pick_service_account "$emails"
+}
+
+# pick_service_account EMAILS: set SERVICE_ACCOUNT to the one email in
+# EMAILS, the output of service_account_emails. It stops on two or more.
+pick_service_account() {
+  local n
+  n="$(grep -c . <<<"$1" || true)"
+  [ "$n" = 1 ] || die "found $n service accounts named $SA_NAME in $PROJECT_ID: $(tr '\n' ' ' <<<"$1")"
   # It goes into the WIF condition between single quotes.
-  [[ "$emails" =~ ^[a-z0-9-]+@[a-z0-9.-]+$ ]] || die "gcloud lists service account '$emails', which is not an email address"
-  SERVICE_ACCOUNT="$emails"
+  LC_ALL=C grep -q -x -E '[a-z0-9-]+@[a-z0-9.-]+' <<<"$1" || die "gcloud lists service account '$1', which is not an email address"
+  SERVICE_ACCOUNT="$1"
   show "service account $SERVICE_ACCOUNT (from gcloud)"
 }
 
@@ -495,6 +511,16 @@ cmd_teardown() {
     die "teardown refuses with VM, ADDRESS_NAME, KMS_KEY, WIF_POOL or WIF_PROVIDER set: run the deletes above yourself"
   fi
   gate teardown "delete the VM, firewall rules, address, subnet, VPC, registry, WIF provider and pool, and the service account. The KMS key ring and key stay: GCP cannot delete them"
+  # Read the account list once, before the first delete: a failed list
+  # call or two matches stop teardown before it changes anything. A plain
+  # assignment, so a failed list call stops teardown under set -e.
+  SERVICE_ACCOUNT=""
+  if [ "$DRY" = 1 ]; then
+    SERVICE_ACCOUNT="<email of $SA_NAME>"
+  else
+    emails="$(service_account_emails)"
+    [ -z "$emails" ] || pick_service_account "$emails"
+  fi
   run gcloud compute instances delete "$VM" --zone="$ZONE" --project="$PROJECT_ID" --quiet
   run gcloud compute firewall-rules delete "$FW_RULE" --project="$PROJECT_ID" --quiet
   # The egress rules, if egress-create made them.
@@ -512,16 +538,14 @@ cmd_teardown() {
   run gcloud iam workload-identity-pools providers delete "$WIF_PROVIDER" --location=global \
     --workload-identity-pool="$WIF_POOL" --project="$PROJECT_ID" --quiet
   run gcloud iam workload-identity-pools delete "$WIF_POOL" --location=global --project="$PROJECT_ID" --quiet
-  # The account may be gone already: then there is nothing to delete. A
-  # plain assignment, so a failed list call stops teardown under set -e.
-  if [ "$DRY" != 1 ]; then
-    emails="$(service_account_emails)"
-    if [ -z "$emails" ]; then
-      show "no service account $SA_NAME in $PROJECT_ID: nothing to delete"
-      return 0
-    fi
+  # No account listed: it is gone already, or too new to be listed yet.
+  # A second teardown stops at the first resource that is gone, so the
+  # message says how to delete the account by hand.
+  if [ -z "$SERVICE_ACCOUNT" ]; then
+    show "found no service account $SA_NAME in $PROJECT_ID, so teardown deleted none."
+    show "If sa-create ran in the last few minutes, gcloud may not list the account yet. Wait, then check with $(quote gcloud iam service-accounts list --project="$PROJECT_ID") and delete it by hand: a second teardown stops at the VM that is gone."
+    return 0
   fi
-  service_account
   run gcloud iam service-accounts delete "$SERVICE_ACCOUNT" --project="$PROJECT_ID" --quiet
 }
 

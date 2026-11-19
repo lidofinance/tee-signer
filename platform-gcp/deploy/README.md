@@ -433,8 +433,12 @@ machine type, quota, and the newest Confidential Space image.
    Key rings and keys cannot be deleted. Only key versions can be destroyed.
 8. `sa-create`: `signer-workload`. The steps after it read the account's
    email from `gcloud iam service-accounts list` and stop unless exactly
-   one email starts with `signer-workload@`. The script never builds the
-   email from the project ID.
+   one listed email matches. For a plain project ID only
+   `signer-workload@<gcp-project>.iam.gserviceaccount.com` matches, so the
+   App Engine default account `<gcp-project>@appspot.gserviceaccount.com`
+   never does. Google documents no email form for a domain-scoped project:
+   there the email must start with `signer-workload@` and end in
+   `.iam.gserviceaccount.com`. The match compares bytes (`LC_ALL=C`).
 9. `sa-bindings`: the service account gets `artifactregistry.reader` on the
    repository only, and at project level
    `confidentialcomputing.workloadUser` (attestation tokens) and
@@ -480,7 +484,12 @@ check that the name is free. The gcloud account that runs them needs
 service account can take 60 seconds or more to become visible, because
 reads are eventually consistent. A step run right after `sa-create` can
 then stop with "found no service account ... run sa-create first". The
-script does not retry: wait and run the step again.
+script does not retry: wait and run the step again. `teardown` reads the
+list once, before its first delete, and stops there if the list call fails
+or two accounts match. If no account matches, it deletes the rest, says
+that it found no account and exits 0. Right after `sa-create` the account
+may then still exist: wait, list the accounts and delete it by hand, since
+a second `teardown` stops at the VM that is gone.
 
 After a rebuild: `build-image.sh`, `image-push`, `provider-update`,
 `vm-delete`, `vm-create`. The VM's state goes with it. Without a state copy
@@ -625,7 +634,7 @@ account must exist: run it after `sa-create`.
 | `gcp_image_digest` | the digest in `build/gcp/runner.digest` |
 | `gcp_audience` | `signer-runner-identity` |
 | `gcp_hwmodels` | `["GCP_AMD_SEV"]` with `HARDWARE=amd-sev`. Production: `["GCP_INTEL_TDX"]` only |
-| `gcp_service_account` | the email of `signer-workload` as gcloud lists it, for example `signer-workload@<gcp-project>.iam.gserviceaccount.com` |
+| `gcp_service_account` | the email of `signer-workload` as gcloud lists it: `signer-workload@<gcp-project>.iam.gserviceaccount.com` for a plain project ID |
 | `gcp_project_id` | `<gcp-project>`, the `PROJECT_ID` of the deploy. With `mainnet` set the client needs it and `gcp_service_account` |
 | `gcp_issuer` | not set: the default `https://confidentialcomputing.googleapis.com` |
 | `address` | `tcp:<signer-node-1-ip>:7100`. The address exists after `address-reserve`. Until then the file holds `tcp:SIGNER_IP:7100` (or set `SIGNER_ADDRESS`) |

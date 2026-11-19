@@ -20,7 +20,10 @@
 #            over 127 bytes, a malformed PROJECT_ID
 #   domain   a domain-scoped PROJECT_ID: the registry path
 #   account  every step that names the service account takes its email
-#            from gcloud, and stops on no match, two, or a failed list
+#            from gcloud, and stops on no match, two, or a failed list. A
+#            plain PROJECT_ID takes only SA_NAME@PROJECT_ID.iam.gserviceaccount.com,
+#            a domain-scoped one an email under .iam.gserviceaccount.com.
+#            teardown reads the list once, before its first delete
 #
 # deploy.sh runs in a copy of the repo's scripts and cloud folders with a
 # fake gcloud that records its arguments, as in side-by-side-test.sh, so no
@@ -41,9 +44,12 @@ has() { grep -q -F -- "$1" <<<"$2"; }
 
 # A fake gcloud: each call's arguments, one per line, then a blank line.
 # "iam service-accounts list" prints sa.list, then exits with the status in
-# sa.rc. Its workload account has an email that no rule of the script could
-# build, so a step that uses a built address shows up.
-SA_EMAIL=signer-workload@from-gcloud.example.iam.gserviceaccount.com
+# sa.rc. In the plain project of these tests the workload account has the
+# email Google documents. In a domain-scoped project it has one that no rule
+# of the script could build, so a step that uses a built address shows up.
+PROJECT=signer-ci-1
+SA_EMAIL=signer-workload@$PROJECT.iam.gserviceaccount.com
+DOM_EMAIL=signer-workload@from-gcloud.example.iam.gserviceaccount.com
 cat >"$work/bin/gcloud" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$@" "" >>"$work/gcloud.calls"
@@ -52,8 +58,14 @@ EOF
 chmod +x "$work/bin/gcloud"
 printf '%s\n' 123456-compute@developer.gserviceaccount.com "$SA_EMAIL" >"$work/sa.list"
 echo 0 >"$work/sa.rc"
-# sa_deleted: some call was "gcloud iam service-accounts delete".
-sa_deleted() { tr '\n' ' ' <"$work/gcloud.calls" | grep -q -F "iam service-accounts delete"; }
+# called WORDS: some gcloud call has these arguments in a row.
+called() { tr '\n' ' ' <"$work/gcloud.calls" | grep -q -F -- "$1"; }
+sa_deleted() { called "iam service-accounts delete"; }
+# sa_lists: the number of list calls. deletes: the number of delete calls.
+sa_lists() { tr '\n' ' ' <"$work/gcloud.calls" | grep -o "iam service-accounts list" | wc -l; }
+deletes() { grep -c -x -F delete "$work/gcloud.calls" || true; }
+# first_call: the arguments of the first gcloud call.
+first_call() { awk 'NF == 0 { exit } { printf "%s ", $0 }' "$work/gcloud.calls"; }
 
 arch="$(uname -m)"
 case "$arch" in amd64) arch=x86_64 ;; arm64) arch=aarch64 ;; esac
@@ -70,7 +82,7 @@ DEPLOY="$work/platform-gcp/deploy/deploy.sh"
 base=(-u SIGNER_BUILD_OVERLAY_DIR -u NETWORK_ENTRY -u PRIVATE_IP -u ENTRY_SOURCE_RANGES -u ENTRY_SOURCE_TAGS
   -u SUBNET -u SUBNET_RANGE -u NET_TAG -u FW_RULE -u FW_EGRESS_ALLOW -u FW_EGRESS_DENY -u CONFIRM
   -u PREV_IMAGE_DIGEST -u HARDWARE
-  MARK_STORE=gcs:bucket=signer-marks-2 PATH="$work/bin:$PATH")
+  PROJECT_ID="$PROJECT" MARK_STORE=gcs:bucket=signer-marks-2 PATH="$work/bin:$PATH")
 dep() { env "${base[@]}" "$@"; }
 # A private second signer with a subnet, tag and rules of its own.
 P2=(NETWORK_ENTRY=private PRIVATE_IP=10.10.1.10 ENTRY_SOURCE_TAGS=entry-gw SUBNET=signer-private SUBNET_RANGE=10.10.1.0/24
@@ -180,7 +192,9 @@ run_rc dep CHAIN=ci-test bash "$DEPLOY" provider-update </dev/null
 # rv-b9e.3: PROJECT_ID=example.com:signer names the KMS key by that ID and
 # the registry path as example.com/signer. rv-w8m.1: the plan names no
 # service account email, since only gcloud knows it.
-other_sa() { grep -o 'signer-workload@[a-z0-9.<>:-]*' <<<"$1" | grep -v -x -F "$SA_EMAIL" || true; }
+# other_sa: each signer-workload email in $1 other than the one wanted.
+want="$SA_EMAIL"
+other_sa() { grep -o 'signer-workload@[a-z0-9.<>:-]*' <<<"$1" | grep -v -x -F "$want" || true; }
 : >"$work/gcloud.calls"
 p="$(dep PROJECT_ID=example.com:signer bash "$DEPLOY" plan 2>&1)"
 miss=""
@@ -193,7 +207,10 @@ done
 
 # ---- service account email ----------------------------------------------------
 # rv-w8m.1: each step that names the workload account reads its email from
-# gcloud (sa.list) and never builds it from PROJECT_ID.
+# gcloud (sa.list). rv-d5i.3: for a plain PROJECT_ID the email must be
+# SA_NAME@PROJECT_ID.iam.gserviceaccount.com, the form Google documents. A
+# domain-scoped one has no documented form: the email must end in
+# .iam.gserviceaccount.com.
 sa_case() { # sa_case WHAT ENV... -- CMD...
   local what="$1" envs=() o
   shift
@@ -202,7 +219,7 @@ sa_case() { # sa_case WHAT ENV... -- CMD...
   : >"$work/gcloud.calls"
   run_rc dep "${envs[@]}" CONFIRM=yes bash "$DEPLOY" "$@"
   o="$(other_sa "$out $(cat "$work/gcloud.calls")")"
-  if [ "$rc" = 0 ] && has "$SA_EMAIL" "$(cat "$work/gcloud.calls")" && [ -z "$o" ]; then
+  if [ "$rc" = 0 ] && has "$want" "$(cat "$work/gcloud.calls")" && [ -z "$o" ]; then
     ok "$what: the email from gcloud"
   else
     bad "$what: rc $rc, other address [$o] $out $(cat "$work/gcloud.calls")"
@@ -213,13 +230,22 @@ sa_case "sa-bindings" -- sa-bindings
 sa_case "wif-create" -- wif-create
 sa_case "provider-update" -- provider-update
 sa_case "teardown" -- teardown
+printf '%s\n' 123456-compute@developer.gserviceaccount.com "$DOM_EMAIL" >"$work/sa.list"
+want="$DOM_EMAIL"
 sa_case "domain-scoped provider-update" PROJECT_ID=example.com:signer -- provider-update
 has "--project=example.com:signer" "$(cat "$work/gcloud.calls")" || bad "domain-scoped provider-update: the list call lacks the project"
 : >"$work/gcloud.calls"
 run_rc dep PROJECT_ID=example.com:signer CHAIN=ci-test GCP_TEST_DIR="$work/vc" CLIENT_CERT=/c.pem CLIENT_KEY=/c.key bash "$DEPLOY" verifier-config
 vc="$(jq -r .attestation.gcp_service_account "$work"/vc/gcp-signer*.json 2>/dev/null || true)"
-[ "$rc" = 0 ] && [ "$vc" = "$SA_EMAIL" ] && has "-gcp-service-account $SA_EMAIL " "$out" && [ -z "$(other_sa "$out")" ] &&
+[ "$rc" = 0 ] && [ "$vc" = "$DOM_EMAIL" ] && has "-gcp-service-account $DOM_EMAIL " "$out" && [ -z "$(other_sa "$out")" ] &&
   ok "domain-scoped verifier-config: gcp_service_account and the share-import flag from gcloud" || bad "verifier-config: rc $rc, [$vc] $out"
+want="$SA_EMAIL"
+# rv-d5i.1, rv-d5i.2: one list call, before the first delete.
+printf '%s\n' 123456-compute@developer.gserviceaccount.com "$SA_EMAIL" >"$work/sa.list"
+: >"$work/gcloud.calls"
+run_rc dep CONFIRM=yes bash "$DEPLOY" teardown
+[ "$rc" = 0 ] && [ "$(sa_lists)" = 1 ] && [[ "$(first_call)" == "iam service-accounts list "* ]] && sa_deleted &&
+  ok "teardown: one list call, before the first delete" || bad "teardown list calls: rc $rc, $(sa_lists) lists, first [$(first_call)] $out"
 
 # No match or two matches stop the step before any change.
 sa_refused() { # sa_refused WHAT PATTERN NOCALL ENV... -- CMD...
@@ -241,17 +267,26 @@ sa_refused "vm-create without the account" "found no service account signer-work
   "${P2[@]}" CHAIN=ci-test SETUP_FILE="$work/gcp-2.bin" -- vm-create
 sa_refused "wif-create without the account" "found no service account signer-workload" workload-identity-pools -- wif-create
 # rv-cr6.1: a teardown with the account already gone deletes the rest and
-# says so, without the sa-create hint.
+# says so, without the sa-create hint. rv-d5i.4: it says that a new account
+# may not be listed yet.
 : >"$work/gcloud.calls"
 run_rc dep CONFIRM=yes bash "$DEPLOY" teardown
 [ "$rc" = 0 ] && has "no service account signer-workload in" "$out" && ! has "run sa-create first" "$out" &&
-  ! sa_deleted && ok "teardown without the account: nothing to delete" ||
+  has "If sa-create ran in the last few minutes" "$out" && called "compute instances delete" && [ "$(sa_lists)" = 1 ] &&
+  ! sa_deleted && ok "teardown without the account: deletes the rest, says it found no account" ||
   bad "teardown without the account: rc $rc $out"
 p="$(dep bash "$DEPLOY" preflight 2>&1 || true)"
 has "ok    service account signer-workload is free" "$p" && ok "preflight: no account, the name is free" || bad "preflight without the account: $p"
-printf '%s\n' "$SA_EMAIL" signer-workload@other.example.iam.gserviceaccount.com >"$work/sa.list"
-sa_refused "sa-bindings with two accounts" "found 2 service accounts named signer-workload" add-iam-policy-binding -- sa-bindings
-sa_refused "provider-update with two accounts" "found 2 service accounts named signer-workload" workload-identity-pools -- provider-update
+printf '%s\n' "$DOM_EMAIL" signer-workload@other.example.iam.gserviceaccount.com >"$work/sa.list"
+sa_refused "sa-bindings with two accounts" "found 2 service accounts named signer-workload" add-iam-policy-binding \
+  PROJECT_ID=example.com:signer -- sa-bindings
+sa_refused "provider-update with two accounts" "found 2 service accounts named signer-workload" workload-identity-pools \
+  PROJECT_ID=example.com:signer -- provider-update
+# rv-d5i.1: two accounts stop teardown before its first delete.
+: >"$work/gcloud.calls"
+run_rc dep PROJECT_ID=example.com:signer CONFIRM=yes bash "$DEPLOY" teardown
+[ "$rc" != 0 ] && has "found 2 service accounts named signer-workload" "$out" && [ "$(deletes)" = 0 ] &&
+  ok "refused: teardown with two accounts, no delete" || bad "teardown with two accounts: rc $rc, $(deletes) deletes $out"
 # A name that only starts or ends like signer-workload is another account.
 printf '%s\n' signer-workload-old@from-gcloud.example.iam.gserviceaccount.com \
   xsigner-workload@from-gcloud.example.iam.gserviceaccount.com >"$work/sa.list"
@@ -267,10 +302,11 @@ for list in "" "$SA_EMAIL"; do
   printf '%s' "$list" >"$work/sa.list"
   what="a failed list${list:+ after the account}"
   sa_refused "sa-bindings with $what" "cannot list the service accounts of" add-iam-policy-binding -- sa-bindings
+  # rv-d5i.1: the list comes before the first delete, so no delete runs.
   : >"$work/gcloud.calls"
   run_rc dep CONFIRM=yes bash "$DEPLOY" teardown
-  [ "$rc" != 0 ] && has "cannot list the service accounts of" "$out" && ! has "nothing to delete" "$out" && ! sa_deleted &&
-    ok "refused: teardown with $what" || bad "teardown with $what: rc $rc $out"
+  [ "$rc" != 0 ] && has "cannot list the service accounts of" "$out" && ! has "found no service account" "$out" &&
+    [ "$(deletes)" = 0 ] && ok "refused: teardown with $what, no delete" || bad "teardown with $what: rc $rc, $(deletes) deletes $out"
 done
 echo 0 >"$work/sa.rc"
 printf '%s\n' "$SA_EMAIL" >"$work/sa.list"
@@ -280,6 +316,55 @@ run_rc dep "${P2[@]}" CHAIN=ci-test SETUP_FILE="$work/gcp-2.bin" bash "$DEPLOY" 
   bad "vm-create without CONFIRM: rc $rc $out $(cat "$work/gcloud.calls")"
 p="$(dep bash "$DEPLOY" preflight 2>&1 || true)"
 has "FAIL  service account signer-workload exists already" "$p" && ok "preflight: the account exists" || bad "preflight with the account: $p"
+
+# rv-d5i.3: a plain PROJECT_ID takes only the exact email.
+for e in signer-workload@evil.example.com signer-workload@other-project.iam.gserviceaccount.com signer-workload@- \
+  "$SA_EMAIL.evil.example" "signer-workload@SIGNER-CI-1.iam.gserviceaccount.com" "$SA_EMAIL "; do
+  printf '%s\n' "$e" >"$work/sa.list"
+  sa_refused "plain project with only [$e]" "found no service account signer-workload" add-iam-policy-binding -- sa-bindings
+done
+printf '%s\n' signer-workload@other-project.iam.gserviceaccount.com "$SA_EMAIL" signer-workload@evil.example.com >"$work/sa.list"
+sa_case "plain project: the exact email among others" -- sa-bindings
+# In a project named signer-workload, Google names the App Engine default
+# account signer-workload@appspot.gserviceaccount.com. It never matches.
+apps=signer-workload@appspot.gserviceaccount.com
+own=signer-workload@signer-workload.iam.gserviceaccount.com
+printf '%s\n' "$apps" >"$work/sa.list"
+sa_refused "App Engine account only, sa-bindings" "found no service account signer-workload" add-iam-policy-binding \
+  PROJECT_ID=signer-workload -- sa-bindings
+sa_refused "App Engine account only, wif-create" "found no service account signer-workload" workload-identity-pools \
+  PROJECT_ID=signer-workload -- wif-create
+: >"$work/gcloud.calls"
+run_rc dep PROJECT_ID=signer-workload CONFIRM=yes bash "$DEPLOY" teardown
+[ "$rc" = 0 ] && has "no service account signer-workload in signer-workload" "$out" && ! sa_deleted && ! has "$apps" "$out" &&
+  ok "teardown with the App Engine account only: it stays" || bad "teardown with the App Engine account only: rc $rc $out"
+p="$(dep PROJECT_ID=signer-workload bash "$DEPLOY" preflight 2>&1 || true)"
+has "ok    service account signer-workload is free" "$p" && ok "preflight: the App Engine account does not take the name" ||
+  bad "preflight with the App Engine account: $p"
+printf '%s\n' "$apps" "$own" >"$work/sa.list"
+want="$own"
+sa_case "App Engine account next to the workload account, sa-bindings" PROJECT_ID=signer-workload -- sa-bindings
+sa_case "App Engine account next to the workload account, teardown" PROJECT_ID=signer-workload -- teardown
+want="$SA_EMAIL"
+# A domain-scoped PROJECT_ID takes SA_NAME@ and a host under
+# .iam.gserviceaccount.com.
+printf '%s\n' "$DOM_EMAIL" signer-workload@example.com signer-workload@signer.example.com.appspot.gserviceaccount.com \
+  signer-workload@.iam.gserviceaccount.com "$DOM_EMAIL.evil.example" >"$work/sa.list"
+want="$DOM_EMAIL"
+sa_case "domain-scoped project: the one email under .iam.gserviceaccount.com" PROJECT_ID=example.com:signer -- sa-bindings
+want="$SA_EMAIL"
+printf '%s\n' signer-workload@example.com signer-workload@signer.example.com.appspot.gserviceaccount.com >"$work/sa.list"
+sa_refused "domain-scoped project without an .iam.gserviceaccount.com email" "found no service account signer-workload" \
+  add-iam-policy-binding PROJECT_ID=example.com:signer -- sa-bindings
+# The match runs under LC_ALL=C, so a-z takes no other letter.
+if locale -a 2>/dev/null | grep -qix 'en_US\.utf-\?8'; then
+  printf '%s\n' "signer-workload@préj.iam.gserviceaccount.com" >"$work/sa.list"
+  sa_refused "a non-ASCII host under en_US.UTF-8" "which is not an email address" add-iam-policy-binding \
+    PROJECT_ID=example.com:signer LC_ALL=en_US.UTF-8 -- sa-bindings
+else
+  echo "skip a non-ASCII host under en_US.UTF-8: the locale is not installed"
+fi
+printf '%s\n' "$SA_EMAIL" >"$work/sa.list"
 
 # ---- refused ----------------------------------------------------------------
 refused() { # refused WHAT PATTERN ENV... -- CMD

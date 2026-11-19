@@ -51,8 +51,8 @@ PROJECT_NUMBER="${PROJECT_NUMBER:-<gcp-project-number>}"
 # A project ID of 6 to 30 characters, or a domain-scoped one: a domain, ":"
 # and such an ID (example.com:signer), as the runner takes it in kms_key
 # (platform-gcp/gcp kmsKeyRE). A domain-scoped project's registry path is
-# DOMAIN/ID. Nothing here builds a service account email from the ID:
-# deploy.sh reads it from gcloud (service_account).
+# DOMAIN/ID. deploy.sh reads the service account email from gcloud and
+# checks it against the ID (service_account_emails).
 if [ "$PROJECT_ID" != "<gcp-project>" ]; then
   [[ "$PROJECT_ID" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+:)?[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]] ||
     die "PROJECT_ID=$PROJECT_ID is not a project ID (6 to 30 of a-z, 0-9 and -, optionally after a domain and \":\")"
