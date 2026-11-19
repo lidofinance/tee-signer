@@ -1253,10 +1253,11 @@ const bodyMargin = 2 * time.Hour
 // write age check first (staleLocked), before the lock check, so a runner
 // cut off from its store latches ErrStale before the store answers again.
 // With Options.LockDays it then checks the store's lock (checkLockLocked).
-// Then a body copy older than half the retention less bodyMargin gets a
-// new copy, and the log gets a new record (same mark and state, the new
-// copies) when a copy was written or the newest record is older than
-// keepAlive. Without a setup it does nothing.
+// When the trusted clock fails, it runs the lock check only and returns
+// the clock error. Then a body copy older than half the retention less
+// bodyMargin gets a new copy, and the log gets a new record (same mark
+// and state, the new copies) when a copy was written or the newest record
+// is older than keepAlive. Without a setup it does nothing.
 func (m *MarkLog) Refresh(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1268,6 +1269,12 @@ func (m *MarkLog) Refresh(ctx context.Context) error {
 	}
 	now, err := m.now()
 	if err != nil {
+		// No record can be dated without the clock, but the lock check
+		// needs none: run it, so a lock that reads again clears the pause
+		// and a lost lock latches now, then return the clock error.
+		if m.opt.LockDays > 0 {
+			_ = m.checkLockLocked(ctx)
+		}
 		return err
 	}
 	if err := m.staleLocked(now, m.written); err != nil {

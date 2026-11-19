@@ -15,8 +15,9 @@ var errDown = errors.New("connection refused")
 // landed runs after each create that reached the store.
 type cutLog struct {
 	*memLog
-	down   bool
-	landed func()
+	down     bool
+	unlocked bool // the lock reads, but no longer locks (ErrNoLock)
+	landed   func()
 }
 
 func (l *cutLog) Create(ctx context.Context, name string, data []byte) error {
@@ -48,6 +49,9 @@ func (l *cutLog) Get(ctx context.Context, e Entry) ([]byte, error) {
 func (l *cutLog) Lock(context.Context) (Lock, error) {
 	if l.down {
 		return Lock{}, errDown
+	}
+	if l.unlocked {
+		return Lock{Kind: "s3 object lock", Mode: "GOVERNANCE"}, nil
 	}
 	return Lock{Kind: "s3 object lock", Mode: "COMPLIANCE", Compliance: true, Retention: 30 * 24 * time.Hour}, nil
 }
@@ -263,5 +267,38 @@ func TestUndatedRecordKeepsTheOldBase(t *testing.T) {
 	}
 	if !m.Written().Equal(now) {
 		t.Fatalf("written %v, want %v", m.Written(), now)
+	}
+}
+
+// rv-bfx.3: Refresh reads the lock even while the trusted clock fails, and
+// then returns the clock error. A lock that reads again clears the pause,
+// and a lock that is gone latches ErrNoLock, without waiting for the clock.
+func TestRefreshChecksTheLockWhileTheClockFails(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_800_000_000, 0)
+	l, m, _ := cutRunner(t, &now)
+	l.down = true
+	if err := m.Refresh(ctx); !errors.Is(err, ErrLockUnchecked) {
+		t.Fatalf("refresh with the lock unreadable: %v, want ErrLockUnchecked", err)
+	}
+	clockErr := errors.New("no trusted time")
+	m.opt.Clock = func() (time.Time, error) { return time.Time{}, clockErr }
+
+	// The store and its lock read are back, the clock is not.
+	l.down = false
+	if err := m.Refresh(ctx); !errors.Is(err, clockErr) {
+		t.Fatalf("refresh without a clock: %v, want the clock error", err)
+	}
+	if err := m.LockUnchecked(); err != nil {
+		t.Fatalf("lock unchecked after a lock read that passed: %v", err)
+	}
+
+	// The store loses its lock while the clock still fails.
+	l.unlocked = true
+	if err := m.Refresh(ctx); !errors.Is(err, clockErr) {
+		t.Fatalf("refresh without a clock on an unlocked store: %v, want the clock error", err)
+	}
+	if !errors.Is(m.Lost(), ErrNoLock) {
+		t.Fatalf("lost %v, want ErrNoLock", m.Lost())
 	}
 }
