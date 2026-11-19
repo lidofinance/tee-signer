@@ -640,7 +640,9 @@ holds its true mark.
 - A new key release. The record keys open only under the key release that
   made them. On mainnet the AWS key policy is locked and the Azure release
   policy is immutable. Neither can change, so neither can take a new
-  image, and a new image cannot open the old image's log. A mainnet signer
+  image, and a new image cannot open the old image's log. A locked AWS
+  policy may also name a second image (`prev_pcrs`, such as the image it
+  replaces), but only one fixed when the key is created. A mainnet signer
   on AWS or Azure therefore moves to a new image as a new signer: a new
   setup, key and mark log, and the shares imported again
   (`docs/upgrade.md`, "When this works"). On GCP,
