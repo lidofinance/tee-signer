@@ -278,10 +278,11 @@ roll the mark back.
   clock that fails. Each stops the keep-alive records, and the runner
   fails closed.
   The bound holds only while the trusted clock does not lag real time.
-  Where the host sets the rate of the guest's counter (not on Nitro), a
-  host that blocks the time servers and holds the counter can hold that
-  clock back without limit (`trusted-time/docs/nts.md`, "What the core
-  does"). A runner held back that way passes the check after the clone's
+  Where the host can set the rate of the guest's counter (no platform's
+  documents rule it out, Nitro included), a host that blocks the time
+  servers and holds the counter can hold that clock back without limit
+  (`trusted-time/clock/nts.go`, the comment on the local clock rate). A
+  runner held back that way passes the check after the clone's
   records are gone, writes in their place and signs. A planned check also
   compares the store's own response `Date`, which the host cannot hold
   back, with the time of the last record.
