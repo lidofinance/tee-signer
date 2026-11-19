@@ -18,13 +18,17 @@
 //	    chain no runner build starts on is refused too
 //	    (runnerchain.CheckAnyBuild): a public network's fork version
 //	    with another root, a prod chain other than mainnet, mainnet's
-//	    values with other times.
+//	    values with other times. A prod chain setup with
+//	    slashing_log_min_lock_days below 7 is refused
+//	    (setupwire.CheckMinLockDays).
 //	setup-tool check [-platform P] [-chain CHAIN_JSON] FILE
 //	    Decode FILE strictly and print setup_sha256, platform, signer,
 //	    signing_mode, policy_root and platform_commitment. Refuse a setup
 //	    whose allowed_image_measurements lists no image of its platform
 //	    (setupwire.CheckOwnImageListed), as encode and signer-admin setup
-//	    do. With -platform, refuse a setup for another platform. With
+//	    do. A prod chain setup with slashing_log_min_lock_days below 7
+//	    gets a WARNING on stderr and passes: a running signer keeps it.
+//	    With -platform, refuse a setup for another platform. With
 //	    -chain, refuse
 //	    a setup whose chain or first fork schedule differs from the runner
 //	    chain.json (governance/chains/chain.sh picks that file by chain name).
@@ -217,6 +221,11 @@ func check(args []string) error {
 	}
 	if err := s.CheckOwnImageListed(); err != nil {
 		return fmt.Errorf("%s: %w", fs.Arg(0), err)
+	}
+	// The deploy scripts check the setup of a running signer at every
+	// deploy, so a setup encoded before the lock days rule only warns.
+	if err := s.CheckMinLockDays(); err != nil {
+		fmt.Fprintf(os.Stderr, "setup-tool: WARNING: %s: %v; the runner keeps serving it, a new setup needs %d days or more\n", fs.Arg(0), err, setupwire.MinLockDaysProd)
 	}
 	if *chain != "" {
 		c, err := readChain(*chain)

@@ -247,8 +247,9 @@ roll the mark back.
 - Age check. When the newest record is older than half of
   `slashing_log_min_lock_days` on the trusted clock, update bodies may have
   expired, and the runner stops. That signer needs a new setup and a share
-  re-import. So `slashing_log_min_lock_days` bounds how long a signer may stay
-  stopped: half of it.
+  re-import. So `slashing_log_min_lock_days` bounds how long a signer may
+  stay stopped: half of it. A new setup of a prod chain takes 7 days or
+  more (`setupwire.CheckMinLockDays`), a non-prod one 1 or more.
 - Write age check. A running runner holds its own writes to the same
   bound. Before each record, and at each refresh, it compares the trusted
   clock with the time of its last record that landed in time, or of the

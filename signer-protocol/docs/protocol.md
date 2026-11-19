@@ -93,6 +93,10 @@ body  = version:u8  type:u8  id:u32  payload
   ...`) until a restart. `mark_log_written_unix` is when its last record
   was written, on the trusted clock; without a setup (dev platform, debug
   builds) on the host clock, with no stop.
+- A setup of a prod chain with `slashing_log_min_lock_days` below 7, which
+  the tools no longer make (`setupwire.CheckMinLockDays`), makes HEALTH
+  report `lock_days_warning` with the reason. `ready` stays true: the
+  runner serves a setup encoded before that rule.
 
 ## Responses
 

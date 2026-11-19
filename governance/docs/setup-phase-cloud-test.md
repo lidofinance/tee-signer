@@ -133,7 +133,8 @@ Deploying non-prod images follows the steps below, with `CHAIN` set and
 4. The mark stores are an S3 bucket, a GCS bucket and an Azure container
    (`S3_BUCKET`, `GCS_BUCKET`, `AZ_ACCOUNT`, `AZ_CONTAINER`). Each has a
    locked 1-day retention, so every setup of this test sets
-   `slashing_log_min_lock_days = 1`. A runner stops when its newest record
+   `slashing_log_min_lock_days = 1` (a non-prod chain only: the tools
+   refuse fewer than 7 on a prod chain). A runner stops when its newest record
    is older than half of that (12 hours): a signer stopped for longer needs
    a new setup and a new import.
 

@@ -50,13 +50,14 @@ func withChain(t *testing.T, text, fork, root string) string {
 }
 
 // mainnetChain gives a human setup text mainnet's exact chain values, which
-// the mainnet build takes.
+// the mainnet build takes, and the prod floor's 7 lock days.
 func mainnetChain(t *testing.T, text string) string {
 	t.Helper()
 	return setLines(t, text, map[string]string{
 		"genesis_fork_version": mainnetFork, "genesis_validators_root": mainnetRoot,
 		"genesis_time": fmt.Sprint(setupwire.MainnetGenesisTime), "seconds_per_slot": fmt.Sprint(setupwire.MainnetSecondsPerSlot),
 		"slots_per_epoch": fmt.Sprint(setupwire.MainnetSlotsPerEpoch), "preset": "mainnet",
+		"slashing_log_min_lock_days": fmt.Sprint(setupwire.MinLockDaysProd),
 	})
 }
 

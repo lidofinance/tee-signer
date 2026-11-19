@@ -125,14 +125,15 @@ func setLines(t *testing.T, text string, values map[string]string) string {
 }
 
 // mainnetChain gives a human setup text mainnet's exact chain values, which
-// the mainnet build takes, and a change_delay_seconds at the prod floor.
+// the mainnet build takes, a change_delay_seconds at the prod floor and
+// the prod floor's 7 lock days.
 func mainnetChain(t *testing.T, text string) string {
 	t.Helper()
 	return setLines(t, text, map[string]string{
 		"genesis_fork_version": "0x00000000", "genesis_validators_root": "0x4b363db94e286120d76eb905340fdd4e54bfe9f06bf33ff6cf5ad27f511bfe95",
 		"genesis_time": fmt.Sprint(setupwire.MainnetGenesisTime), "seconds_per_slot": fmt.Sprint(setupwire.MainnetSecondsPerSlot),
 		"slots_per_epoch": fmt.Sprint(setupwire.MainnetSlotsPerEpoch), "preset": "mainnet",
-		"change_delay_seconds": fmt.Sprint(setupwire.DefaultTimeLock),
+		"change_delay_seconds": fmt.Sprint(setupwire.DefaultTimeLock), "slashing_log_min_lock_days": fmt.Sprint(setupwire.MinLockDaysProd),
 	})
 }
 
@@ -273,5 +274,61 @@ func TestEncodeProdChainChangeDelayFloor(t *testing.T) {
 	}
 	if err := check([]string{"-platform", "gcp", old}); err != nil {
 		t.Fatalf("check of a stored setup with change_delay_seconds 0: %v", err)
+	}
+}
+
+// encode refuses a new prod-chain setup whose slashing_log_min_lock_days
+// is below 7 and writes nothing; with 7 it writes the setup, and a
+// non-prod setup takes 1. check takes a stored mainnet setup with 1 day,
+// as a tool before the floor wrote it, and only warns: the deploy scripts
+// check the setup of a running signer at every deploy.
+func TestEncodeProdChainMinLockDays(t *testing.T) {
+	text, err := os.ReadFile(gcpSample)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mainnet := mainnetChain(t, string(text)) + gcpImage + "\n"
+	dir := t.TempDir()
+	write := func(name, text string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	for _, days := range []int{1, 6} {
+		out := filepath.Join(dir, fmt.Sprintf("d%d.setup", days))
+		err := encode(write("short.conf", setLines(t, mainnet, map[string]string{"slashing_log_min_lock_days": fmt.Sprint(days)})), out)
+		if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("slashing_log_min_lock_days %d on a prod chain", days)) || !strings.Contains(err.Error(), "at least 7") {
+			t.Fatalf("encode with %d days: %v, want the refusal naming the floor", days, err)
+		}
+		if _, err := os.Stat(out); !os.IsNotExist(err) {
+			t.Fatalf("encode wrote the refused setup (stat: %v)", err)
+		}
+	}
+	seven := setLines(t, mainnet, map[string]string{"slashing_log_min_lock_days": "7"})
+	if err := encode(write("seven.conf", seven), filepath.Join(dir, "seven.setup")); err != nil {
+		t.Fatalf("encode with 7 days: %v", err)
+	}
+	nonProd := string(text) + gcpImage + "\n"
+	if err := encode(write("ci.conf", setLines(t, nonProd, map[string]string{"slashing_log_min_lock_days": "1"})), filepath.Join(dir, "ci.setup")); err != nil {
+		t.Fatalf("encode of a non-prod setup with 1 day: %v", err)
+	}
+
+	s, err := setuptext.ParseSetup("seven.conf", []byte(seven))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SlashingLogMinLockDays = 1
+	raw, err := s.Encode()
+	if err != nil {
+		t.Fatalf("a stored mainnet setup with 1 day does not encode: %v", err)
+	}
+	old := filepath.Join(dir, "old.setup")
+	if err := os.WriteFile(old, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := check([]string{"-platform", "gcp", old}); err != nil {
+		t.Fatalf("check of a stored mainnet setup with 1 day: %v", err)
 	}
 }

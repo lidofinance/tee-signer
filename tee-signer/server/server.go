@@ -1629,6 +1629,9 @@ func (s *Server) health() (*backend.Health, error) {
 	if s.Updates != nil {
 		w := s.Updates.SetupWire()
 		h.SingleKey, h.SigningMode = singleKey(&w.Platform), w.SigningMode.String()
+		if err := w.CheckMinLockDays(); err != nil {
+			h.LockDaysWarning = err.Error()
+		}
 		h.LastUpdatePath = s.Updates.lastUpdatePath()
 	}
 	st := s.Signer.Stats()

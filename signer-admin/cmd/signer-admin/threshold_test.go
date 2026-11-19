@@ -428,3 +428,26 @@ func TestSetupProdChainChangeDelayFloor(t *testing.T) {
 	mustTool(t, "setup", "-out", filepath.Join(t.TempDir(), "out"), file("floor.conf", floor, true))
 	mustTool(t, "setup", "-out", filepath.Join(t.TempDir(), "out"), file("devnet.conf", 0, false))
 }
+
+// setup refuses a prod chain setup whose slashing_log_min_lock_days is
+// below 7 and names the floor; 7 passes, and a non-prod chain takes 1.
+func TestSetupProdChainMinLockDays(t *testing.T) {
+	dir := t.TempDir()
+	keys := approvers(t, dir, 3)
+	ca := caDER(t)
+	floor := int(setupwire.DefaultTimeLock)
+	file := func(name string, days int, mainnet bool) string {
+		text := setupText(dir, ca, genesisTime(), lockedText(keys, 2, floor, fee1), "a", "b")
+		if mainnet {
+			text = mainnetChain(t, text)
+		}
+		text = setLines(t, text, map[string]string{"slashing_log_min_lock_days": fmt.Sprint(days)})
+		return writeFile(t, filepath.Join(t.TempDir(), name), text)
+	}
+	wantIn(t, failTool(t, "setup", "-out", filepath.Join(t.TempDir(), "out"), file("one.conf", 1, true)),
+		"signer a", "slashing_log_min_lock_days 1 on a prod chain", "at least 7")
+	wantIn(t, failTool(t, "setup", "-out", filepath.Join(t.TempDir(), "out"), file("six.conf", 6, true)),
+		"slashing_log_min_lock_days 6 on a prod chain", "at least 7")
+	mustTool(t, "setup", "-out", filepath.Join(t.TempDir(), "out"), file("seven.conf", 7, true))
+	mustTool(t, "setup", "-out", filepath.Join(t.TempDir(), "out"), file("devnet.conf", 1, false))
+}

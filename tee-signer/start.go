@@ -190,6 +190,10 @@ func fromSetup(ctx context.Context, a *startArgs, log *slog.Logger) (_ *start, e
 	if st.Wire.Platform.SealingKeyRelease.UnsafeSingleKeyAccepted {
 		log.Warn("UNSAFE: the setup accepts a key held alone on GCP (sealing_key_release.unsafe_single_key_accepted); a 1 of 1 import order is taken", "why", setupwire.UnsafeSingleKeyWarning)
 	}
+	// The tools refuse such a setup now; one encoded before keeps running.
+	if err := st.Wire.CheckMinLockDays(); err != nil {
+		log.Warn("setup: the store lock days are below the prod chain floor of new setups; this runner serves it, HEALTH says lock_days_warning", "err", err)
+	}
 	return &start{setup: st, cfg: cfg, params: params, caPEM: st.ClientCAPEM(), prod: setupwire.ProdChain(cfg.GenesisForkVersion, cfg.GenesisValidatorsRoot),
 		noLockAccepted: st.Wire.Platform.SealingKeyRelease.NoLockAccepted,
 		markSpec:       st.SlashingLogStore(), stateSpec: st.EncryptedStateStore(), signerID: st.SignerID(),

@@ -531,9 +531,12 @@ func ParseSetup(name string, data []byte) (*setupwire.Setup, error) {
 		if err := s.CheckValues(); err != nil {
 			return nil, fmt.Errorf("%s: %w", name, err)
 		}
-		return s, nil
+	} else if _, err := s.Encode(); err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
 	}
-	if _, err := s.Encode(); err != nil {
+	// A human file is read to make a setup, so the rules of a new setup
+	// apply; the decoder of a stored setup does not run them.
+	if err := s.CheckMinLockDays(); err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 	return s, nil

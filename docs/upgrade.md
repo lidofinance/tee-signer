@@ -169,6 +169,19 @@ outage you plan for, and alert on
 `tee_signer_mark_log_written_timestamp_seconds`
 ([tooling/health-exporter/README.md](../tooling/health-exporter/README.md)).
 
+## From rc.2: at least 7 lock days on prod chains
+
+From rc.3 `setup-tool encode` and `signer-admin setup` refuse a setup of
+a prod chain (mainnet, or genesis values no row of the chain table
+matches) with `slashing_log_min_lock_days` below 7. Half of it is the
+longest store, lock read or clock outage a running signer survives (see
+above). Non-prod chains (Hoodi, devnets of the chain table) still take
+1. The setup format stays 6. A prod setup encoded before this rule keeps
+starting: the runner logs a warning at start and HEALTH says
+`lock_days_warning`, and `setup-tool check`, which the deploy scripts
+run, prints a WARNING and passes. Make the next setup of such a signer
+with 7 days or more.
+
 ## Rules
 
 - Keep t of n signers up. Switch one signer at a time, and finish it

@@ -104,6 +104,13 @@ type Health struct {
 	// says it, unattested, as it says key_lock. Runners without a setup
 	// and runners before it leave it out.
 	SingleKey string `json:"single_key,omitempty"`
+	// LockDaysWarning is set when the setup is of a prod chain and its
+	// slashing_log_min_lock_days is below 7, the floor the tools take for
+	// a new setup (setupwire.CheckMinLockDays). The runner serves such a
+	// setup, encoded before that rule, and stays ready; half of the value
+	// is the longest store, lock read or clock outage it survives. Empty
+	// otherwise, without a setup, and from runners before it.
+	LockDaysWarning string `json:"lock_days_warning,omitempty"`
 	// SigningMode is the setup's signing_mode: "threshold" (shares of
 	// t-of-n splits with n >= 2), "single" (whole keys, 1 of 1 import
 	// orders only) or "dv_share" (one share of each Charon distributed
