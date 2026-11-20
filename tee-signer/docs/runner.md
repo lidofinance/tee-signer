@@ -642,6 +642,14 @@ the key-release policy.
 - `scripts/generic-images.sh build` builds all three and writes their
   measurements; `check` compares a build with a recorded list.
 
+A pinned BuildKit and a pinned Dockerfile frontend build the GCP, Azure and
+Nitro enclave images: the layers and the image config. `scripts/common.sh`
+names the BuildKit image by digest (`BUILDKIT_IMAGE`), and the three build
+scripts run it in their own buildx builder (docker-container driver). The
+Dockerfiles pin the frontend by digest on their first line. The host's
+Docker only runs the BuildKit container. The first build on a host pulls
+both images from Docker Hub.
+
 A verifier recomputes the same measurements from the same commit and
 compares them with the setup's list and the key-release policy before it
 approves an update that allows the image.

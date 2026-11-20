@@ -28,7 +28,14 @@
 # SOURCE_DATE_EPOCH=0, rewrite-timestamp and no provenance or SBOM
 # attestations, as in platform-azure/deploy/build-image.sh. The file modes are explicit
 # (the Dockerfile's COPY --chmod, and install -m on the context files), so the
-# digest is the same whatever the builder's umask.
+# digest is the same whatever the builder's umask. The pinned BuildKit
+# (BUILDKIT_IMAGE in scripts/common.sh, run by the buildx builder
+# BUILDKIT_BUILDER) and the pinned Dockerfile frontend (the Dockerfile's
+# first line) build the image: the layers and the image config. The host's
+# Docker only runs the BuildKit container, and loads the archive. The first
+# build on a host pulls both images from Docker Hub (network). The build
+# stops if the Dockerfile lacks the frontend pin (need_frontend_pin) or the
+# builder runs another BuildKit (pinned_builder).
 set -euo pipefail
 # shellcheck source=common.sh
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
@@ -80,9 +87,13 @@ for notice in "$CTX/licenses/"*; do
   extra+=("licenses/${notice##*/}|$notice|-rw-r--r--")
 done
 devnet_hook gcp_image_ctx "$CTX"
+# The Dockerfile we build, after the overlay's hook, pins the frontend.
+need_frontend_pin "$CTX/Dockerfile" || die "the Dockerfile of the build does not pin the Dockerfile frontend"
+# The pinned BuildKit builds the image (pinned_builder in scripts/common.sh).
+pinned_builder || die "the builder $BUILDKIT_BUILDER does not run the pinned BuildKit $BUILDKIT_IMAGE"
 
 build_once() { # build_once <n>: archive in $OUT/runner-<n>.oci.tar, prints the manifest digest
-  SOURCE_DATE_EPOCH=0 docker buildx build -q --no-cache --provenance=false --sbom=false \
+  SOURCE_DATE_EPOCH=0 docker buildx build --builder "$BUILDKIT_BUILDER" -q --no-cache --provenance=false --sbom=false \
     --platform linux/amd64 --build-arg SOURCE_DATE_EPOCH=0 \
     --metadata-file "$OUT/build-$1.json" \
     --output "type=oci,dest=$OUT/runner-$1.oci.tar,name=$LOCAL_RUNNER_IMAGE,rewrite-timestamp=true" \

@@ -63,9 +63,11 @@ make build    # the runners, one per cloud, and the host tools; each passes the 
 
 Ubuntu 26.04 is not a supported workbench. Known differences there:
 `qemu-user-static` is a virtual package (install `qemu-user-binfmt`),
-the `docker.io` package has no buildx, and the image builds fail on the
-default Docker builder with `exporter option "rewrite-timestamp" conflicts
-with "unpack"`. A docker-container builder works:
+the `docker.io` package has no buildx, and an image build on the
+default Docker builder fails with `exporter option "rewrite-timestamp" conflicts
+with "unpack"`. The measured images build on their own docker-container
+builder (`BUILDKIT_BUILDER` in `scripts/common.sh`). For other builds, a
+docker-container builder works:
 `docker buildx create --use --driver docker-container`.
 
 ### Image variants

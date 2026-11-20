@@ -267,9 +267,20 @@ No chain config and no CA go into the image; `CHAIN` picks the runner build,
 the mainnet runner when unset. `build-image.sh` builds twice per run and
 compares the digests. The context file gets an explicit mode (`install -m`,
 `COPY --chmod`), as in `platform-azure/deploy`, so the digest does not depend
-on the builder's umask. A change to the runner or the flags changes the
-digest, and then `deploy.sh provider-update` points the WIF provider at the
-new one. A new chain or signer is a new setup only.
+on the builder's umask. A pinned BuildKit and a pinned Dockerfile frontend
+build the image: they build and compress the layers and write the image
+config. `build-image.sh` builds on the buildx builder `BUILDKIT_BUILDER`
+(docker-container driver), which runs `BUILDKIT_IMAGE`, the BuildKit image
+that `scripts/common.sh` names by version and index digest. The
+Dockerfile's first line pins the frontend
+(`# syntax=docker/dockerfile:VERSION@sha256:DIGEST`). The host's Docker only
+runs the BuildKit container and loads the OCI archive. Before the pins, the
+host's Docker did the build, and a newer one wrote the `EXPOSE` line of the
+image history in another form. The first build on a host pulls both images
+from Docker Hub. `build-image.sh` stops if the Dockerfile lacks the frontend
+pin or the builder runs another BuildKit image. A change to the runner or the flags
+changes the digest, and then `deploy.sh provider-update` points the WIF
+provider at the new one. A new chain or signer is a new setup only.
 
 Started outside Confidential Space with its exact entrypoint, the image
 stops at the first launcher call (`dial unix

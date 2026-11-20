@@ -10,6 +10,12 @@
 #   lane          release/build.sh fetch, and the checks at the start of
 #                 release/release-build.sh
 #   compare       release/compare.sh
+#   frontend      the first line of the measured image Dockerfiles, and
+#                 need_frontend_pin (scripts/common.sh) in the image builds
+#                 and nitro-eif.sh
+#   buildkit      the pinned BuildKit (BUILDKIT_IMAGE in scripts/common.sh),
+#                 pinned_builder, and --builder on every build of the
+#                 measured images
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TMP="$(mktemp -d)"
@@ -159,6 +165,10 @@ case "$1 $2" in
   "image inspect") echo "$FAKE_ID" ;;
   "buildx build") ;;
   "buildx version") echo "github.com/docker/buildx v0.30.0" ;;
+  # pinned_builder: the builder exists and runs FAKE_BK_REF, unless
+  # FAKE_BK_FAIL is set, when it is missing and cannot be created.
+  "buildx inspect" | "buildx create") [ -z "$FAKE_BK_FAIL" ] || exit 1 ;;
+  "container inspect") echo "$FAKE_BK_REF $FAKE_ID" ;;
   "info "*) echo "$FAKE_DRIVER_STATUS" ;;
   "run "*)
     [ -n "$FAKE_RUN_OK" ] || exit 97
@@ -195,7 +205,7 @@ EOF
   # cross nm is always the aarch64 one.
   local hstub="$TMP/lane-host" cross_nm=aarch64-linux-gnu-nm p
   mkdir -p "$hstub"
-  for p in nm aarch64-linux-gnu-nm x86_64-linux-gnu-nm readelf file cc jq ip; do
+  for p in nm aarch64-linux-gnu-nm x86_64-linux-gnu-nm readelf file cc jq ip envsubst; do
     printf '#!/bin/sh\nexit 0\n' >"$hstub/$p"
   done
   cat >"$hstub/uname" <<'EOF'
@@ -230,6 +240,9 @@ EOF
   cp "$HERE/build.sh" "$d/fetch/release/"
   : >"$TMP/go.log"
   (cd "$d/fetch" && GO_LOG="$TMP/go.log" PATH="$stub:$PATH" bash release/build.sh fetch) >/dev/null 2>&1 || bad "build.sh fetch with the go stub"
+  # The pinned BuildKit image, which the docker stub's builder runs.
+  local bk_ref
+  bk_ref="$(sed -n 's/^BUILDKIT_IMAGE="\(.*\)"$/\1/p' "$HERE/../scripts/common.sh")"
   local m
   for m in tee-signer platform-aws signer-admin; do
     if grep -qx "$m mod verify" "$TMP/go.log"; then ok "build.sh fetch: go mod verify in $m"; else bad "build.sh fetch: no go mod verify in $m"; fi
@@ -292,7 +305,7 @@ EOF
     for p in $hide; do mv "$hostbin/$p" "$TMP/hidden/"; done
     (cd "${cwd:-$d/repo}" && env -u SIGNER_BUILDER_IMAGE -u DVT DOCKER_LOG="$TMP/docker.log" FAKE_ID="$id" \
       FAKE_DRIVER_STATUS='[["driver-type","io.containerd.snapshotter.v1"]]' FAKE_UNSHARE_FAIL= FAKE_UNAME=x86_64 \
-      FAKE_RUN_OK= FAKE_SBOM_EMPTY= PATH="$hostbin" "$@" \
+      FAKE_RUN_OK= FAKE_SBOM_EMPTY= FAKE_BK_REF="$bk_ref" FAKE_BK_FAIL= PATH="$hostbin" "$@" \
       bash "$d/repo/release/release-build.sh" "${dist:-$d/dist}") >"$TMP/out" 2>&1 || rc=$?
     for p in $hide; do mv "$TMP/hidden/$p" "$hostbin/"; done
     hide="" cwd="" dist=""
@@ -334,12 +347,23 @@ EOF
   hide="$cross_nm"
   lane "release-build: refuses a host without $cross_nm" stop
   if grep -q "$cross_nm.*binutils-" "$TMP/out"; then ok "release-build: names the package of $cross_nm"; else bad "release-build: names the package of $cross_nm: $(tail -n 1 "$TMP/out")"; fi
+  # scripts/kms-policy.sh renders the KMS policy with envsubst.
+  repo
+  hide=envsubst
+  lane "release-build: refuses a host without envsubst" stop
+  if grep -q 'envsubst.*gettext-base' "$TMP/out"; then ok "release-build: names the package of envsubst"; else bad "release-build: names the package of envsubst: $(tail -n 1 "$TMP/out")"; fi
   repo
   lane "release-build: refuses a host where unshare -rn fails" stop FAKE_UNSHARE_FAIL=1
   if grep -q 'kernel.apparmor_restrict_unprivileged_userns' "$TMP/out"; then ok "release-build: names the userns sysctl"; else bad "release-build: names the userns sysctl: $(tail -n 1 "$TMP/out")"; fi
   repo
   lane "release-build: refuses a docker without the containerd image store" stop FAKE_DRIVER_STATUS='[["Backing Filesystem","extfs"]]'
   if grep -q 'containerd image store' "$TMP/out"; then ok "release-build: names the containerd image store"; else bad "release-build: names the containerd image store: $(tail -n 1 "$TMP/out")"; fi
+  # The pinned BuildKit builder is a prerequisite too: a host that cannot
+  # pull or start it stops before the first build, not at the image step.
+  repo
+  lane "release-build: refuses a host where the pinned BuildKit builder fails" stop FAKE_BK_FAIL=1
+  says "release-build: names the pinned BuildKit builder" "signer-buildkit.*moby/buildkit"
+  if grep -q '^buildx build' "$TMP/docker.log"; then bad "release-build: built the builder image before the BuildKit check"; else ok "release-build: no build before the BuildKit check"; fi
   repo
   lane "release-build: refuses a mainnet test lane" stop CHAIN=mainnet IMAGE_VARIANT=test
   says "release-build: says mainnet builds are prod only" "mainnet builds are prod only"
@@ -464,13 +488,201 @@ t_compare() {
   if grep -q '^same' "$TMP/out"; then bad "compare: printed same for an empty folder"; fi
 }
 
+# The GCP, Azure and Nitro enclave image Dockerfiles name the Dockerfile
+# frontend by version and digest on their first line, and all three name
+# the same one.
+# Without that line the build uses the frontend built into the host's
+# Docker, and the image config, so the digest, follows the host's Docker
+# version (EXPOSE in the history changed with docker/dockerfile 1.29.0).
+t_frontend() {
+  local f first want=""
+  for f in platform-gcp/deploy/Dockerfile platform-azure/deploy/Dockerfile platform-aws/deploy/enclave/Dockerfile; do
+    first="$(head -n 1 "$HERE/../$f")"
+    if [[ ! "$first" =~ ^#\ syntax=docker/dockerfile:[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}$ ]]; then
+      bad "frontend: $f does not start with '# syntax=docker/dockerfile:VERSION@sha256:DIGEST': '$first'"
+    elif [ -n "$want" ] && [ "$first" != "$want" ]; then
+      bad "frontend: $f names another frontend than the GCP Dockerfile: '$first'"
+    else
+      ok "frontend: $f pins the Dockerfile frontend"
+      want="$first"
+    fi
+  done
+
+  # The build scripts check the same line in the Dockerfile they build
+  # (need_frontend_pin in scripts/common.sh), after the build overlay's
+  # image hook, which may change the build context.
+  local d="$TMP/frontend" pin s hook chk build
+  mkdir -p "$d"
+  pin="$(head -n 1 "$HERE/../platform-gcp/deploy/Dockerfile")"
+  printf '%s
+FROM scratch
+' "$pin" >"$d/pinned"
+  printf 'FROM scratch
+' >"$d/none"
+  printf '# syntax=docker/dockerfile:1.29.0
+FROM scratch
+' >"$d/tag"
+  printf 'FROM scratch
+%s
+' "$pin" >"$d/second"
+  expect "frontend: need_frontend_pin takes a pinned Dockerfile" 0 frontend_pin "$d/pinned"
+  refuses "frontend: need_frontend_pin refuses a Dockerfile without the pin" "does not start with" frontend_pin "$d/none"
+  refuses "frontend: need_frontend_pin refuses a version without a digest" "does not start with" frontend_pin "$d/tag"
+  refuses "frontend: need_frontend_pin refuses the pin on line 2" "does not start with" frontend_pin "$d/second"
+  for s in gcp azure; do
+    f="$HERE/../platform-$s/deploy/build-image.sh"
+    hook="$(grep -n "^devnet_hook ${s}_image_ctx " "$f" | cut -d: -f1 || true)"
+    chk="$(grep -n '^need_frontend_pin "$CTX/Dockerfile" || die ' "$f" | cut -d: -f1 || true)"
+    build="$(grep -n '^d1="$(build_once 1)"' "$f" | cut -d: -f1 || true)"
+    if [ -n "$hook" ] && [ -n "$chk" ] && [ -n "$build" ] && [ "$hook" -lt "$chk" ] && [ "$chk" -lt "$build" ]; then
+      ok "frontend: platform-$s build-image.sh checks the pin after the overlay hook, before the build"
+    else
+      bad "frontend: platform-$s build-image.sh does not run need_frontend_pin on \$CTX/Dockerfile between the overlay hook and the build (lines: hook '$hook', check '$chk', build '$build')"
+    fi
+  done
+  # nitro-eif.sh has no overlay hook: it checks the Dockerfile after it
+  # copies it into the build context, before the first EIF build.
+  f="$HERE/../scripts/nitro-eif.sh"
+  hook="$(grep -n '^install -m 0644 "$ROOT/platform-aws/deploy/enclave/Dockerfile" "$CTX/Dockerfile"$' "$f" | cut -d: -f1 || true)"
+  chk="$(grep -n '^need_frontend_pin "$CTX/Dockerfile" || die ' "$f" | cut -d: -f1 || true)"
+  build="$(grep -n '^build_eif ""$' "$f" | cut -d: -f1 || true)"
+  if [ -n "$hook" ] && [ -n "$chk" ] && [ -n "$build" ] && [ "$hook" -lt "$chk" ] && [ "$chk" -lt "$build" ]; then
+    ok "frontend: nitro-eif.sh checks the pin after the copy into the context, before the build"
+  else
+    bad "frontend: nitro-eif.sh does not run need_frontend_pin on \$CTX/Dockerfile between the copy into the context and the build (lines: copy '$hook', check '$chk', build '$build')"
+  fi
+}
+# frontend_pin FILE: need_frontend_pin of scripts/common.sh on FILE.
+frontend_pin() {
+  env -u SIGNER_BUILD_OVERLAY_DIR CHAIN=mainnet bash -c '. "$1/scripts/common.sh" && need_frontend_pin "$2"' _ "$HERE/.." "$1"
+}
+
+# The measured images build on one BuildKit, pinned by digest in one
+# place (BUILDKIT_IMAGE in scripts/common.sh), in the buildx builder
+# BUILDKIT_BUILDER. Without it the host's BuildKit builds and compresses
+# the layers and writes the image config, so the digests follow the host's
+# Docker.
+t_buildkit() {
+  local common="$HERE/../scripts/common.sh" line ref digest files
+  line="$(grep -E '^BUILDKIT_IMAGE=' "$common" || true)"
+  if [ "$(grep -cE '^BUILDKIT_IMAGE=' "$common" || true)" = 1 ] &&
+    [[ "$line" =~ ^BUILDKIT_IMAGE=\"moby/buildkit:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}\"$ ]]; then
+    ok "buildkit: scripts/common.sh pins BUILDKIT_IMAGE by version and digest"
+  else
+    bad "buildkit: scripts/common.sh has no single BUILDKIT_IMAGE=\"moby/buildkit:vX.Y.Z@sha256:DIGEST\" line: '$line'"
+  fi
+  ref="${line#BUILDKIT_IMAGE=\"}" ref="${ref%\"}" digest="${ref##*@sha256:}"
+  # The digest is in one file only: every user reads BUILDKIT_IMAGE. In a
+  # git checkout git grep reads the tracked files. A tree without git, such
+  # as a git archive copy, gets a grep over all its files.
+  local root
+  root="$(cd "$HERE/.." && pwd -P)"
+  files=""
+  if [ -z "$line" ]; then
+    :
+  elif command -v git >/dev/null 2>&1 &&
+    [ "$(git -C "$root" rev-parse --show-toplevel 2>/dev/null)" = "$root" ]; then
+    files="$(git -C "$root" grep -l -F -- "$digest" | LC_ALL=C sort | tr '\n' ' ' || true)"
+  else
+    files="$(cd "$root" && grep -rlF --exclude-dir=.git -- "$digest" . | sed 's|^\./||' | LC_ALL=C sort | tr '\n' ' ' || true)"
+  fi
+  if [ -z "$line" ]; then
+    bad "buildkit: no BuildKit digest to look for"
+  elif [ "$files" = "scripts/common.sh " ]; then
+    ok "buildkit: the BuildKit digest is in scripts/common.sh only"
+  else
+    bad "buildkit: the BuildKit digest is in '$files', want scripts/common.sh only"
+  fi
+  if [[ "$(grep -E '^BUILDKIT_BUILDER=' "$common" || true)" =~ ^BUILDKIT_BUILDER=[a-z0-9-]+$ ]]; then
+    ok "buildkit: scripts/common.sh names the builder (BUILDKIT_BUILDER)"
+  else
+    bad "buildkit: scripts/common.sh has no fixed BUILDKIT_BUILDER name"
+  fi
+
+  # Every image build of the three scripts names the builder, after
+  # pinned_builder checked it. No build falls back to the default builder.
+  local f rel builds nobuilder chk first
+  for rel in platform-gcp/deploy/build-image.sh platform-azure/deploy/build-image.sh scripts/nitro-eif.sh; do
+    f="$HERE/../$rel"
+    builds="$(grep -nE 'docker (buildx )?build( |$)' "$f" | grep -vE '^[0-9]+: *#' || true)"
+    # shellcheck disable=SC2016 # the literal text in the script
+    nobuilder="$(printf '%s\n' "$builds" | grep -vF -- '--builder "$BUILDKIT_BUILDER"' | grep -v '^$' || true)"
+    chk="$(grep -n '^pinned_builder || die ' "$f" | head -n 1 | cut -d: -f1 || true)"
+    first="$(printf '%s\n' "$builds" | head -n 1 | cut -d: -f1)"
+    if [ -z "$builds" ]; then
+      bad "buildkit: $rel has no image build"
+    elif [ -n "$nobuilder" ]; then
+      bad "buildkit: $rel builds without --builder \"\$BUILDKIT_BUILDER\": $nobuilder"
+    elif [ -z "$chk" ] || [ "$chk" -gt "$first" ]; then
+      bad "buildkit: $rel does not run pinned_builder before its first build (check '$chk', build '$first')"
+    elif grep -qE 'buildx (use|create)' "$f"; then
+      bad "buildkit: $rel picks or creates a builder itself"
+    else
+      ok "buildkit: $rel builds on the pinned builder only"
+    fi
+  done
+
+  # pinned_builder with a docker stub. The stub keeps the image of the
+  # builder's container in a file, and logs every create and rm.
+  local d="$TMP/buildkit" stub="$TMP/buildkit-bin"
+  mkdir -p "$d" "$stub"
+  cat >"$stub/docker" <<'EOF'
+#!/bin/sh
+case "$1 $2" in
+  "buildx inspect") [ -f "$BK_STATE" ] || exit 1 ;;
+  "buildx create")
+    echo "$*" >>"$BK_LOG"
+    img=""
+    for a in "$@"; do case "$a" in image=*) img="${a#image=}" ;; esac; done
+    if [ -n "$BK_CREATE_IMAGE" ]; then echo "$BK_CREATE_IMAGE" >"$BK_STATE"; else echo "$img" >"$BK_STATE"; fi ;;
+  "buildx rm") echo "$*" >>"$BK_LOG"; rm -f "$BK_STATE" ;;
+  "container inspect")
+    [ -f "$BK_STATE" ] || exit 1
+    echo "$(cat "$BK_STATE") sha256:id-of-$(cat "$BK_STATE")" ;;
+  "image inspect") echo "sha256:id-of-$(eval echo "\${$#}")" ;;
+  *) exit 97 ;;
+esac
+EOF
+  chmod +x "$stub/docker"
+  local st="$d/state" lg="$d/log"
+  : >"$lg"
+  rm -f "$st"
+  expect "buildkit: pinned_builder creates a missing builder" 0 pinned BK_STATE="$st" BK_LOG="$lg"
+  if grep -qF -- "buildx create --name signer-buildkit --driver docker-container --driver-opt image=$ref" "$lg"; then
+    ok "buildkit: the new builder runs BUILDKIT_IMAGE"
+  else
+    bad "buildkit: pinned_builder did not create the builder with BUILDKIT_IMAGE: $(cat "$lg")"
+  fi
+  : >"$lg"
+  expect "buildkit: pinned_builder keeps a builder that runs BUILDKIT_IMAGE" 0 pinned BK_STATE="$st" BK_LOG="$lg"
+  if [ -s "$lg" ]; then bad "buildkit: pinned_builder changed a good builder: $(cat "$lg")"; else ok "buildkit: a good builder stays as it is"; fi
+  echo "moby/buildkit:v0.1.0" >"$st"
+  expect "buildkit: pinned_builder replaces a builder of another image" 0 pinned BK_STATE="$st" BK_LOG="$lg"
+  if grep -q '^buildx rm signer-buildkit' "$lg" && grep -q '^buildx create ' "$lg" && [ "$(cat "$st")" = "$ref" ]; then
+    ok "buildkit: the builder of another image is removed and created again"
+  else
+    bad "buildkit: the builder of another image was not replaced: $(cat "$lg")"
+  fi
+  rm -f "$st"
+  refuses "buildkit: pinned_builder refuses a new builder that runs another image" "runs .*not $ref" \
+    pinned BK_STATE="$st" BK_LOG="$lg" BK_CREATE_IMAGE=moby/buildkit:latest
+}
+# pinned VAR=VALUE...: pinned_builder of scripts/common.sh, with the docker
+# stub of t_buildkit first on PATH.
+pinned() {
+  env -u SIGNER_BUILD_OVERLAY_DIR CHAIN=mainnet BK_CREATE_IMAGE= "$@" PATH="$TMP/buildkit-bin:$PATH" \
+    bash -c '. "$1/scripts/common.sh" && pinned_builder' _ "$HERE/.."
+}
+
 sections=("$@")
-[ ${#sections[@]} -gt 0 ] || sections=(measurements lane compare)
+[ ${#sections[@]} -gt 0 ] || sections=(measurements lane compare frontend buildkit)
 for s in "${sections[@]}"; do
   case "$s" in
     measurements) t_measurements ;;
     lane) t_lane ;;
     compare) t_compare ;;
+    frontend) t_frontend ;;
+    buildkit) t_buildkit ;;
     *) echo "release-test: unknown section $s" >&2; exit 2 ;;
   esac
 done

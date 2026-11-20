@@ -4,7 +4,8 @@
 # design keeps fixed; no chain config, no client CA, no key-release name, no
 # store, no signer or network name. Each signer's values come in its setup
 # at start, through the platform's channel (governance/docs/setup-phase-cloud-test.md).
-# Local only: nothing is pushed or pulled and no cloud is called.
+# Local only: nothing is pushed and no cloud is called. The only pulls are
+# the pinned BuildKit and Dockerfile frontend (see Environment below).
 #
 #   scripts/generic-images.sh build [DIR]   build the three images and write
 #                                           their fingerprints to DIR/fingerprints.txt
@@ -49,9 +50,13 @@
 # Environment: for the policy, ACR_NAME and VAULT (any names: az confcom runs with --omit-id,
 # so the policy does not depend on them; default signeracr and
 # signer-vault). Go runs with GOPROXY=off and GOTOOLCHAIN=local, and the
-# EIF build uses the local nitro-cli image (NITRO_CLI_REUSE=1): nothing here
-# downloads. The pinned sources in third_party/ and the docker images
-# (nitro-cli, the NTS toolchain, and what the overlay needs) must be there.
+# EIF build uses the local nitro-cli image (NITRO_CLI_REUSE=1). The pinned
+# BuildKit (BUILDKIT_IMAGE in scripts/common.sh) and the pinned Dockerfile
+# frontend build the three images; the host's Docker only runs the BuildKit
+# container. These two images, from Docker Hub, are the only downloads
+# here. The pinned sources in
+# third_party/ and the docker images (nitro-cli, the NTS toolchain, and what
+# the overlay needs) must be there.
 set -euo pipefail
 # shellcheck source=common.sh
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"

@@ -1,3 +1,8 @@
+# syntax=docker/dockerfile:1.29.0@sha256:572cebbc2b15e6f84c077742952674889cb63cd5e9b80abdffcbe587b6f19183
+# The line above pins the Dockerfile frontend by version and digest. Without
+# it, the build uses the frontend that comes with the BuildKit of the build,
+# and the image config changes with that BuildKit. The build scripts run the
+# BuildKit pinned in scripts/common.sh (BUILDKIT_IMAGE).
 # Workload image for Confidential Space. One image for every operator:
 # the release runner and the flags that are the same for everyone.
 #

@@ -52,6 +52,17 @@
 # checked (no arm64 host here), and neither was a launch: the first launch
 # on Graviton is the check, with the PCRs of nitro-cli describe-enclaves.
 #
+# The pinned BuildKit (BUILDKIT_IMAGE in scripts/common.sh, run by the
+# buildx builder BUILDKIT_BUILDER) and the pinned Dockerfile frontend (the
+# Dockerfile's first line) build the image: the layers and the image
+# config. The host's Docker only runs the BuildKit container. The first
+# build on a host pulls both images from Docker Hub (network). The build
+# stops if the Dockerfile lacks the frontend pin (need_frontend_pin) or the
+# builder runs another BuildKit (pinned_builder). That builder keeps its
+# images to itself, so the build writes a docker archive, docker load puts
+# it into the host's Docker, and the script checks that the loaded image is
+# the one built. nitro-cli reads it from the host's Docker as before.
+#
 # The EIF is built twice from scratch to check that the PCRs repeat. Then
 # scripts/eif-check.sh reads the EIF itself: kernel header, the runner in
 # the ramdisk, and PCR0/1/2 recomputed without nitro-cli.
@@ -129,6 +140,10 @@ install -m 0555 "$RUNNER" "$CTX/runner"
 mkdir -m 0755 "$CTX/licenses"
 install -m 0644 "$RUNNER.licenses/"* "$CTX/licenses/"
 install -m 0644 "$ROOT/platform-aws/deploy/enclave/Dockerfile" "$CTX/Dockerfile"
+# The Dockerfile we build pins the frontend.
+need_frontend_pin "$CTX/Dockerfile" || die "the Dockerfile of the build does not pin the Dockerfile frontend"
+# The pinned BuildKit builds the image (pinned_builder in scripts/common.sh).
+pinned_builder || die "the builder $BUILDKIT_BUILDER does not run the pinned BuildKit $BUILDKIT_IMAGE"
 # Do not reset mtimes here: BuildKit skips re-sending context files whose
 # size and mtime look unchanged, which once put a stale runner in the
 # image. rewrite-timestamp below clamps layer timestamps instead.
@@ -145,9 +160,24 @@ build_eif() { # build_eif <tag>
   # SOURCE_DATE_EPOCH + rewrite-timestamp pin file and image timestamps,
   # and no provenance/SBOM attestations: a plain `docker build` gives a new
   # image (and new PCR0/PCR2) on every --no-cache build.
-  SOURCE_DATE_EPOCH=0 docker buildx build -q --no-cache --provenance=false --sbom=false \
+  # The builder's BuildKit runs in a container, so the image goes through a
+  # docker archive into the host's Docker, where nitro-cli reads it.
+  local archive="$OUT/enclave-$arch$tag.tar" meta="$OUT/enclave-$arch$tag.json" built config loaded
+  rm -f "$archive" "$meta"
+  SOURCE_DATE_EPOCH=0 docker buildx build --builder "$BUILDKIT_BUILDER" -q --no-cache --provenance=false --sbom=false \
     --platform "linux/$(goarch_of "$arch")" --build-arg SOURCE_DATE_EPOCH=0 \
-    --output "type=docker,name=$ENCLAVE_IMAGE,rewrite-timestamp=true" "$CTX" >/dev/null
+    --metadata-file "$meta" \
+    --output "type=docker,dest=$archive,name=$ENCLAVE_IMAGE,rewrite-timestamp=true" "$CTX" >/dev/null
+  built="$(jq -r '."containerimage.digest"' "$meta")"
+  config="$(jq -r '."containerimage.config.digest"' "$meta")"
+  docker load -i "$archive" >/dev/null
+  rm -f "$archive"
+  # The loaded image is the one built: its id is the manifest digest
+  # (containerd image store) or the config digest (the older image store).
+  loaded="$(docker image inspect "$ENCLAVE_IMAGE" --format '{{.Id}}')"
+  [ "$loaded" = "$built" ] || [ "$loaded" = "$config" ] ||
+    die "the loaded $ENCLAVE_IMAGE is $loaded, not the image built ($built, config $config)"
+  log "enclave image $built loaded as $ENCLAVE_IMAGE"
   # The image must hold exactly the runner we passed in, with the mode the
   # Dockerfile sets, and nothing of an operator.
   local cid got gotmode

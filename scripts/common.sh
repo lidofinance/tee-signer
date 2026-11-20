@@ -378,6 +378,65 @@ run_build_runner() {
     "$SIGNER_BUILDER_IMAGE" bash scripts/build-runner.sh "$@"
 }
 
+# The BuildKit that builds the measured images (platform-*/deploy/build-image.sh,
+# scripts/nitro-eif.sh), pinned by the digest of its image index. It runs
+# in a container of the buildx builder BUILDKIT_BUILDER (docker-container
+# driver). This BuildKit and the pinned Dockerfile frontend (need_frontend_pin)
+# build the image: they build and compress the layers and write the image
+# config. The host's Docker only runs the BuildKit container, so the
+# digests do not follow the host's Docker or buildx version. The first
+# build on a host pulls this image from Docker Hub.
+BUILDKIT_IMAGE="moby/buildkit:v0.35.1@sha256:baf6138eb8c37644800c7c913fba051e840ebb9ba13eaf92d92ef9a1712d0b4c"
+BUILDKIT_BUILDER=signer-buildkit
+
+# pinned_builder: the buildx builder BUILDKIT_BUILDER exists and its
+# container runs BUILDKIT_IMAGE. A missing builder is created. A builder
+# whose container runs another image, or has no container, is removed and
+# created again. The image builds call it first and pass
+# --builder "$BUILDKIT_BUILDER" to every build, so no build falls back to
+# the host's default builder. release/release-test.sh tests it.
+pinned_builder() {
+  local got want
+  if docker buildx inspect "$BUILDKIT_BUILDER" >/dev/null 2>&1; then
+    # A builder made earlier may have a stopped or no container: start it.
+    docker buildx inspect --bootstrap "$BUILDKIT_BUILDER" >/dev/null 2>&1 || true
+    got="$(builder_image)"
+    want="$BUILDKIT_IMAGE $(docker image inspect --format '{{.Id}}' "$BUILDKIT_IMAGE" 2>/dev/null || true)"
+    [ "$got" != "$want" ] || return 0
+    log "builder $BUILDKIT_BUILDER runs '$got', not $BUILDKIT_IMAGE: creating it again"
+    docker buildx rm "$BUILDKIT_BUILDER" >/dev/null 2>&1 ||
+      { echo "cannot remove the builder $BUILDKIT_BUILDER" >&2; return 1; }
+  fi
+  log "creating the builder $BUILDKIT_BUILDER on $BUILDKIT_IMAGE (pulls it from Docker Hub unless Docker has it)"
+  docker buildx create --name "$BUILDKIT_BUILDER" --driver docker-container \
+    --driver-opt "image=$BUILDKIT_IMAGE" --bootstrap >/dev/null ||
+    { echo "cannot create the builder $BUILDKIT_BUILDER on $BUILDKIT_IMAGE" >&2; return 1; }
+  got="$(builder_image)"
+  want="$BUILDKIT_IMAGE $(docker image inspect --format '{{.Id}}' "$BUILDKIT_IMAGE" 2>/dev/null || true)"
+  [ "$got" = "$want" ] ||
+    { echo "the builder $BUILDKIT_BUILDER runs '$got', not $BUILDKIT_IMAGE" >&2; return 1; }
+}
+# builder_image: the image name and the image id of the container of
+# BUILDKIT_BUILDER (buildx names it buildx_buildkit_<builder>0).
+builder_image() {
+  docker container inspect --format '{{.Config.Image}} {{.Image}}' "buildx_buildkit_${BUILDKIT_BUILDER}0" 2>/dev/null || true
+}
+
+# need_frontend_pin DOCKERFILE: the first line of DOCKERFILE names the
+# Dockerfile frontend by version and digest
+# (# syntax=docker/dockerfile:X.Y.Z@sha256:DIGEST). Without that line the
+# build uses the frontend that comes with the BuildKit of the build, and the
+# image config would change with it. The image builds
+# (platform-*/deploy/build-image.sh, scripts/nitro-eif.sh) run it on the
+# Dockerfile they build, and release/release-test.sh tests it.
+need_frontend_pin() {
+  local first
+  first="$(head -n 1 "$1")"
+  [[ "$first" =~ ^#\ syntax=docker/dockerfile:[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}$ ]] && return 0
+  echo "$1 does not start with '# syntax=docker/dockerfile:VERSION@sha256:DIGEST': '$first'" >&2
+  return 1
+}
+
 # setup_value FILE KEY: the first value of KEY in the human form of a setup.
 setup_value() {
   setup_tool show "$1" | sed -n "s/^$2 = //p" | head -n 1
