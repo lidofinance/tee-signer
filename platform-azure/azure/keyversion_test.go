@@ -90,3 +90,24 @@ func TestGetKeyAnswerOfAnotherVersion(t *testing.T) {
 		t.Fatalf("bare name: %q %v", v, err)
 	}
 }
+
+// The key id of a Get Key answer goes
+// into key_release_hash as the host answered it, and checkedVersion
+// compares only its name and version. A host that is not the vault (any
+// akv_endpoint is taken today) answers with a key id under
+// <name>.vault.azure.net, and the hash then names a vault the runner never
+// asked. The answered key.kid must name the vault asked,
+// and a start stops before the release otherwise.
+func TestGetKeyAnswerOfAnotherVault(t *testing.T) {
+	f := newKVFixture(t)
+	f.kv.immutable = true
+	f.kv.kidHost = "signer-poc-kv.vault.azure.net"
+	rule, _, err := releaseChecked(context.Background(), mainnetOptions, f.releaser, "signer-kek-1/"+testKeyVersion)
+	if err == nil {
+		t.Fatalf("Get Key at %s answered key.kid under %s and the start went on (key_lock %s): the key id is not compared with the vault asked",
+			f.kv.host(), f.kv.kidHost, rule.Lock)
+	}
+	if len(f.kv.paths) != 0 {
+		t.Fatalf("released before the key id check: %v", f.kv.paths)
+	}
+}

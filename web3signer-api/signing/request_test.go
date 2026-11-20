@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -294,6 +295,134 @@ func TestBadRequests(t *testing.T) {
 		if _, err := Parse([]byte(body), testChain); !IsBadRequest(err) {
 			t.Errorf("%s: want bad request, got %v", name, err)
 		}
+	}
+}
+
+// maxErrorText is the longest error text Parse may return, whatever the
+// body: the gateway logs it on every bad request.
+const maxErrorText = 1 << 10
+
+// allocated is the fewest bytes f allocated in three runs. TotalAlloc counts
+// every goroutine of the process, so one run can carry another's
+// allocations; a cost that belongs to f shows in every run.
+func allocated(f func()) uint64 {
+	least := ^uint64(0)
+	for range 3 {
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		f()
+		runtime.ReadMemStats(&after)
+		least = min(least, after.TotalAlloc-before.TotalAlloc)
+	}
+
+	return least
+}
+
+// A string field of the body must not be
+// copied whole into the error. Each field below is one 1 MiB string of
+// 0x7f, which %q and strconv.Quote turn into \x7f (4 bytes a byte), and
+// the gateway's log handler quotes once more. The error text stays under
+// maxErrorText. Where the error is built here (ours), Parse also allocates
+// at most 16 bytes per body byte plus 64 KiB, the bound
+// devkit/fuzzcheck.Bounded sets for decoders of untrusted bytes; the
+// attestation's error is built inside go-eth2-client, so only its text is
+// checked.
+func TestLongFieldErrorIsBounded(t *testing.T) {
+	filler := strings.Repeat("\x7f", 1<<20)
+	cases := []struct {
+		name, prefix, suffix string
+		ours                 bool
+	}{
+		{"type", `{"type":"`, `"}`, true},
+		{"beacon_block.version", `{"type":"BLOCK_V2","beacon_block":{"version":"`, `"}}`, true},
+		{"aggregate_and_proof.version", `{"type":"AGGREGATE_AND_PROOF_V2","aggregate_and_proof":{"version":"`, `","data":{}}}`, true},
+		{"randao_reveal.epoch", `{"type":"RANDAO_REVEAL","randao_reveal":{"epoch":"`, `"}}`, true},
+		{"proposer_preferences.version", `{"type":"PROPOSER_PREFERENCES","proposer_preferences":{"version":"`, `","data":{}}}`, true},
+		{"attestation.slot", `{"type":"ATTESTATION","attestation":{"slot":"`, `"}}`, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			body := []byte(c.prefix + filler + c.suffix)
+			var err error
+			got := allocated(func() { _, err = Parse(body, testChain) })
+			if !IsBadRequest(err) {
+				t.Fatalf("want a bad request, got %v", err)
+			}
+			if n := len(err.Error()); n > maxErrorText {
+				t.Errorf("a %d-byte %s gives a %d-byte error text, want at most %d: the field is copied into the error whole",
+					len(filler), c.name, n, maxErrorText)
+			}
+			if limit := uint64(16*len(body) + 64<<10); c.ours && got > limit {
+				t.Errorf("Parse of a %d-byte body with a long %s allocated %d bytes (%.1f per body byte), want at most %d",
+					len(body), c.name, got, float64(got)/float64(len(body)), limit)
+			}
+		})
+	}
+}
+
+// bitlist is an SSZ bitlist of n bits, all zero, in the 0x hex of the JSON
+// API: n/8+1 bytes with the length bit set.
+func bitlist(n int) string {
+	b := make([]byte, n/8+1)
+	b[n/8] = 1 << (n % 8)
+
+	return fmt.Sprintf("%#x", b)
+}
+
+// An aggregate whose aggregation_bits is longer than the preset allows is a
+// bad request, so no oversized message reaches a signer: the limit is
+// MAX_VALIDATORS_PER_COMMITTEE bits before Electra and that times
+// MAX_COMMITTEES_PER_SLOT from Electra on.
+func TestAggregationBitsOverTheLimit(t *testing.T) {
+	vectors := loadVectors(t)
+	deneb := fixForkKeys(vectors["AGGREGATE_AND_PROOF_V2 (DENEB)"])
+	var electra map[string]any
+	if err := json.Unmarshal(deneb, &electra); err != nil {
+		t.Fatal(err)
+	}
+	// Electra: the Deneb aggregate with mainnet's 64 committee bits.
+	aap := electra["aggregate_and_proof"].(map[string]any)
+	aap["version"] = "ELECTRA"
+	aap["data"].(map[string]any)["aggregate"].(map[string]any)["committee_bits"] = "0x0100000000000000"
+	electraBody, err := json.Marshal(electra)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name  string
+		body  []byte
+		chain Chain
+		limit int
+	}{
+		{"deneb minimal", deneb, testChain, 2048},
+		{"deneb mainnet", deneb, mustChain("mainnet"), 2048},
+		{"electra mainnet", electraBody, mustChain("mainnet"), 2048 * 64},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			withBits := func(n int) []byte {
+				var m map[string]any
+				if err := json.Unmarshal(c.body, &m); err != nil {
+					t.Fatal(err)
+				}
+				delete(m, "signingRoot")
+				delete(m, "signing_root")
+				data := m["aggregate_and_proof"].(map[string]any)["data"].(map[string]any)
+				data["aggregate"].(map[string]any)["aggregation_bits"] = bitlist(n)
+				b, err := json.Marshal(m)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				return b
+			}
+			if job, err := Parse(withBits(c.limit), c.chain); err != nil || job.Method != MethodGeneric {
+				t.Fatalf("aggregation_bits of %d bits, the limit: job %v, err %v", c.limit, job, err)
+			}
+			job, err := Parse(withBits(c.limit+1), c.chain)
+			if !IsBadRequest(err) || job != nil {
+				t.Fatalf("aggregation_bits of %d bits, over the limit of %d: job %v, err %v; want a bad request", c.limit+1, c.limit, job, err)
+			}
+		})
 	}
 }
 

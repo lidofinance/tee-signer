@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -87,5 +88,40 @@ func TestBuilderRequestAuth(t *testing.T) {
 	code, _, body := post(t, ts, pubHex, "application/json", auth)
 	if code != 200 || len(f.calls) != 1 || f.calls[0] != "builder_request_auth" || [4]byte(f.domain[:4]) != eth2.DomainBuilderRequestAuth {
 		t.Fatalf("%d %s, calls %v, domain %#x", code, body, f.calls, f.domain)
+	}
+}
+
+// envelopeBody is an EXECUTION_PAYLOAD_ENVELOPE request for a self-built
+// payload at slot 13164547 that carries tx as its one transaction.
+func envelopeBody(tx []byte) string {
+	zeros := func(n int) string { return "0x" + strings.Repeat("00", n) }
+
+	return `{"type":"EXECUTION_PAYLOAD_ENVELOPE",` + forkInfo + `,"execution_payload_envelope":{"version":"GLOAS","data":{` +
+		`"payload":{"parent_hash":"` + zeros(32) + `","fee_recipient":"` + zeros(20) + `","state_root":"` + zeros(32) +
+		`","receipts_root":"` + zeros(32) + `","logs_bloom":"` + zeros(256) + `","prev_randao":"` + zeros(32) +
+		`","block_number":"1","gas_limit":"60000000","gas_used":"0","timestamp":"1800000000","extra_data":"0x",` +
+		`"base_fee_per_gas":"7","block_hash":"` + zeros(32) + `","transactions":["0x` + hex.EncodeToString(tx) + `"],` +
+		`"withdrawals":[],"blob_gas_used":"0","excess_blob_gas":"0","block_access_list":"0x","slot_number":"13164547"},` +
+		`"execution_requests":{"deposits":[],"withdrawals":[],"consolidations":[],"builder_deposits":[],"builder_exits":[]},` +
+		`"builder_index":"18446744073709551615","beacon_block_root":"` + zeros(32) + `","parent_beacon_block_root":"` + zeros(32) + `"}}}`
+}
+
+// The gateway needs the whole payload
+// of an envelope, every transaction in hex, so the JSON is twice the
+// payload. A block of 60M gas holds one transaction of 6,000,000 zero bytes
+// (10 gas a byte at the calldata floor), a 12.0 MB body over the 10 MiB
+// limit of every request: the validator could not sign the envelope of its
+// own payload.
+func TestFullGloasEnvelopeIsSigned(t *testing.T) {
+	ts, f := gloasServer(t)
+	code, _, body := post(t, ts, pubHex, "application/json", envelopeBody([]byte{1, 2, 3}))
+	if code != 200 || len(f.calls) != 1 {
+		t.Fatalf("small envelope: %d %s, calls %v", code, body, f.calls)
+	}
+	full := envelopeBody(make([]byte, 6_000_000))
+	code, _, body = post(t, ts, pubHex, "application/json", full)
+	if code != 200 || len(f.calls) != 2 {
+		t.Fatalf("envelope with a 6,000,000-byte transaction (%d-byte body): %d %s, calls %v; want it signed",
+			len(full), code, body, f.calls)
 	}
 }

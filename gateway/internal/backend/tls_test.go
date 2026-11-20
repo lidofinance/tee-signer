@@ -330,6 +330,39 @@ func TestNodeAttestsEveryNewConnection(t *testing.T) {
 	}
 }
 
+// A request whose context ended before it reached the wire, as one that
+// waited its whole deadline for a busy pool, is not sent and leaves the
+// attested connection: the next request needs no new dial and IDENTITY.
+// The node may take the idle connection or see the end of the context
+// first; neither may cost the connection. A SIGN sent with too little time
+// left still drops it.
+func TestNodeEndedContextKeepsTheConnection(t *testing.T) {
+	ca := newTestCA(t)
+	k := splitKey(t, 2, 3)
+	r := startTLSRunner(t, ca, k, 0, false, nil)
+	n := testNode(t, devConnection(t, ca, r))
+	if _, err := n.PublicKeys(ctxShort(t)); err != nil {
+		t.Fatal(err)
+	}
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := proto.SignRequest{Pubkey: proto.Pubkey(k.pk), Message: &proto.AttestationData{Slot: 1}}
+	for i := range 20 {
+		if _, err := n.Sign(ended, req); !errors.Is(err, context.Canceled) {
+			t.Fatalf("request %d with an ended context: %v, want context.Canceled", i, err)
+		}
+	}
+	if got := r.seen(wire.TypeSign); got != 0 {
+		t.Fatalf("%d SIGN requests sent for ended contexts", got)
+	}
+	if _, err := n.Sign(ctxShort(t), req); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.seen(wire.TypeIdentity); got != 1 {
+		t.Fatalf("%d IDENTITY requests, want 1: a request that was not sent dropped the attested connection", got)
+	}
+}
+
 // After a restart of the signer every connection of the pool is
 // closed. The first request must not fail on them: its second try goes on
 // a new connection, whatever the number of closed ones.

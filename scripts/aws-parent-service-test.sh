@@ -26,6 +26,10 @@
 #             touches neither; cleanup leaves the enclave alone
 #   cleanup   after a run killed with SIGKILL, cleanup terminates the
 #             enclave it started
+#   squat     another local user's
+#             process named like a parent tool (a fake pgrep plays it) stops
+#             neither parent-service.sh run nor the real parent-run.sh; the
+#             tool logs are not fixed names in the /tmp all users share
 # shellcheck disable=SC2016 # wait_for evaluates its condition later
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -96,6 +100,30 @@ case "$1" in
 esac
 X
 chmod +x "$work/bin/nitro-cli"
+# pgrep as on a parent where another user runs a process named $SQUAT: a
+# search for that name finds it unless it is limited to this user's
+# processes (-u or -U with this uid or user name). Unset, the real pgrep.
+cat >"$work/bin/pgrep" <<'X'
+#!/usr/bin/env bash
+if [ -n "${SQUAT:-}" ] && [ "${!#}" = "$SQUAT" ]; then
+  mine=0 prev=""
+  for a in "$@"; do
+    case "$prev" in -u | -U) case ",$a," in *",$(id -u),"* | *",$(id -un),"*) mine=1 ;; esac ;; esac
+    prev="$a"
+  done
+  [ "$mine" = 1 ] || { echo 4242; exit 0; }
+fi
+exec "$REAL_PGREP" "$@"
+X
+# rpm is the first command of step 1 of the real parent-run.sh (the
+# packages, then sudo): reaching it means the checks before it passed.
+# It records that and stops the script there.
+cat >"$work/bin/rpm" <<'X'
+#!/usr/bin/env bash
+: >"$FAKE/step1"
+kill -KILL "$PPID"
+X
+chmod +x "$work/bin/pgrep" "$work/bin/rpm"
 # The parent tools: copies of sleep under their names, so pgrep -x finds them.
 for t in hostagent forwarder udprelay vsock-proxy; do cp "$(command -v sleep)" "$work/tools/$t"; done
 # hostagent starts late, as on a slow machine: pgrep -x finds it only after
@@ -121,7 +149,7 @@ nitro-cli run-enclave --eif-path x.eif --cpu-count 1 --memory 512 --enclave-cid 
 nohup "$T/forwarder" 1000 >/dev/null 2>&1 &
 X
 SVC="$work/opt/parent-service.sh"
-envs=(FAKE="$work/fake" PATH="$work/bin:$PATH" STATE_DIR="$work/state" RUNTIME_DIRECTORY="$work/run"
+envs=(FAKE="$work/fake" PATH="$work/bin:$PATH" REAL_PGREP="$(command -v pgrep)" STATE_DIR="$work/state" RUNTIME_DIRECTORY="$work/run"
   WATCH_INTERVAL=0.2 BACKOFF_BASE=1 BACKOFF_MAX=2 BACKOFF_RESET=600)
 svc() { env "${envs[@]}" bash "$SVC" "$@"; }
 # svc_bg LOG: run in the background; pid is parent-service.sh itself.
@@ -263,6 +291,59 @@ if [ "$rc" = 1 ] && [ "$ms" -ge 1000 ] && has "hostagent is not running after pa
   ok "missing: a tool that never starts, exit 1 after START_WAIT, enclave terminated"
 else
   bad "missing: rc $rc after ${ms} ms, enclave $(cat "$work/fake/enclave" 2>/dev/null): $log8"
+fi
+
+# ---- squat: another local user on the parent ------------------------------------
+# The "already running" checks must count
+# the service user's processes only. A process of another user named
+# forwarder made run exit 3, which RestartPreventExitStatus=3 turns into a
+# unit that stays failed until an operator acts.
+reset
+env "${envs[@]}" SQUAT=forwarder bash "$SVC" run >"$work/run9.log" 2>&1 &
+pid=$!
+wait_for 'has "parent-service: running:" "$(cat "$work/run9.log")" || ! kill -0 "$pid" 2>/dev/null' || true
+if kill -0 "$pid" 2>/dev/null && [ -f "$work/fake/starts" ]; then
+  ok "squat: another user's process named forwarder, run starts anyway"
+  kill -TERM "$pid"
+  wait "$pid" || true
+else
+  rc=0
+  wait "$pid" || rc=$?
+  bad "squat: another user's process named forwarder stops parent-service.sh run (rc $rc; on exit 3 the unit stays failed): $(cat "$work/run9.log")"
+fi
+svc cleanup >/dev/null
+# The same check in the real parent-run.sh (it bites a manual run, and the
+# service in a race). Its tools are stubs; the fake rpm stops it at step 1.
+reset
+mkdir -p "$work/pr"
+cp "$ROOT/platform-aws/deploy/parent-run.sh" "$work/pr/"
+: >"$work/pr/runner-$(uname -m).eif"
+: >"$work/setup"
+printf '#!/usr/bin/env bash\n[ "${3:-}" != -proxy-routes ] || echo "8000 kms.eu-central-1.amazonaws.com 443"\n' >"$work/pr/hostagent"
+printf '#!/usr/bin/env bash\n' >"$work/pr/forwarder"
+printf '#!/usr/bin/env bash\n' >"$work/pr/udprelay"
+chmod +x "$work/pr/hostagent" "$work/pr/forwarder" "$work/pr/udprelay"
+# pr_run [VAR=value...]: the real parent-run.sh up to step 1; log in pr.log.
+# The subshell keeps bash's "Killed" notice out of the output.
+pr_run() { rm -f "$work/fake/step1"; (env "${envs[@]}" CPU_COUNT=1 SETUP="$work/setup" "$@" bash "$work/pr/parent-run.sh" >"$work/pr.log" 2>&1 || true) 2>/dev/null; }
+pr_run
+if [ ! -f "$work/fake/step1" ]; then
+  bad "squat: parent-run.sh with no tool running does not reach step 1: $(cat "$work/pr.log")"
+else
+  pr_run SQUAT=forwarder
+  [ -f "$work/fake/step1" ] && ok "squat: another user's process named forwarder, parent-run.sh goes on" ||
+    bad "squat: another user's process named forwarder stops parent-run.sh: $(cat "$work/pr.log")"
+fi
+# A log name in /tmp that another user
+# created first fails every start while the file stays; with the kernel's
+# link protections off, a symlink there has the service truncate a file of
+# its user (the sealed data key in STATE_DIR). Wanted: PrivateTmp= in the
+# unit, or the logs in a folder of the service user.
+tmplogs="$(grep -n -v '^[[:space:]]*#' "$ROOT/platform-aws/deploy/parent-run.sh" | grep -F '/tmp/' || true)"
+if grep -q -x -E 'PrivateTmp=(yes|true|on|1)' <<<"$u" || [ -z "$tmplogs" ]; then
+  ok "squat: the tool logs are not in a /tmp other users share"
+else
+  bad "squat: parent-run.sh opens the tool logs under /tmp, which other users share, and the unit has no PrivateTmp=: $tmplogs"
 fi
 
 reset

@@ -360,6 +360,27 @@ fn kiss_of_death_packets() {
     assert_eq!(verify(&reply_with(r)), Ok(Response::KissOfDeath(KissCode::Rate)));
 }
 
+// A Kiss-o'-Death has no authenticator, so
+// anyone who sees the request can forge one with our origin and Unique
+// Identifier. It must not use up the request: the server's authentic
+// response that comes after it must still give the time.
+#[test]
+fn unauthenticated_kiss_leaves_the_request_open() {
+    let read = request().2;
+    for code in [*b"DENY", *b"RSTR", *b"RATE", *b"NTSN"] {
+        let mut pending = pending();
+        let _ = pending.verify_response(&s2c(), &kiss_of_death(&read, &code, true));
+        let authentic = server_response(&S2C, &read, &ServerReply::default());
+        match pending.verify_response(&s2c(), &authentic) {
+            Ok(Response::Time(_)) => {}
+            other => panic!(
+                "after a forged {} Kiss-o'-Death the authentic response gave {other:?}, want the time",
+                String::from_utf8_lossy(&code)
+            ),
+        }
+    }
+}
+
 #[test]
 fn unsynchronized_or_bad_stratum_is_refused() {
     assert_eq!(verify(&reply_with(ServerReply { leap: 3, ..ServerReply::default() })), Err(NtpError::Unsynchronized));

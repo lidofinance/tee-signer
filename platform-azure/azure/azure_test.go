@@ -256,6 +256,81 @@ func TestNewRefusesBadSettings(t *testing.T) {
 	}
 }
 
+// endpointRefused runs New with one endpoint option set to host and says
+// whether New stopped at that option. A host the options take goes on to
+// the release and stops at the SEV-SNP device of the test machine, before
+// any request.
+func endpointRefused(t *testing.T, option, host string) (bool, error) {
+	t.Helper()
+	p := map[string]string{"maa_endpoint": "sharedneu.neu.attest.azure.net", "akv_endpoint": "signer-poc-kv.vault.azure.net", "kid": "signer-kek-1"}
+	p[option] = host
+	_, err := New(platform.Options{StateDir: t.TempDir(), Params: p})
+	if err == nil {
+		t.Fatalf("%s=%s: New succeeded without hardware", option, host)
+	}
+	return strings.Contains(err.Error(), option), err
+}
+
+// akv_endpoint may be any host, so a
+// host the setup's author runs answers Get Key with a "locked" rule and
+// releases a key he made, and the sealing key derives from it. The fix
+// holds akv_endpoint to <name>.vault.azure.net, with
+// no port, in New, so a start refuses any other host before a request.
+// Whether the setup's author counts as an attacker is a product decision;
+// this test asserts the host rule. Which other suffixes (Managed HSM,
+// sovereign clouds) are allowed is a product decision and not tested. The
+// debug build may keep loopback hosts for the e2e tests.
+func TestNewKeepsAKVEndpointToKeyVault(t *testing.T) {
+	refused := []string{
+		"kv.attacker.example",                            // outside Azure
+		"signer-poc-kv.vault.azure.net.attacker.example", // Key Vault's suffix as a prefix
+		"vault.azure.net",                                // the suffix without a vault name
+		"signer-poc-kvvault.azure.net",                   // no dot before the suffix
+		"signer-poc-kv.vault.azure.net:8443",             // a port
+		"169.254.169.254",                                // an IP literal
+	}
+	if len(debugOptions) == 0 {
+		refused = append(refused, "127.0.0.1:8443", "localhost")
+	}
+	for _, host := range refused {
+		if ok, err := endpointRefused(t, "akv_endpoint", host); !ok {
+			t.Errorf("akv_endpoint %q is not a Key Vault host, but New took it and went on to the release: %v", host, err)
+		}
+	}
+	if ok, err := endpointRefused(t, "akv_endpoint", "signer-poc-kv.vault.azure.net"); ok {
+		t.Errorf("a Key Vault host refused: %v", err)
+	}
+}
+
+// maa_endpoint passes the
+// same free host pattern, and the release policy's authority must name it.
+// The same suffix rule applies to maa_endpoint:
+// <provider>.<region>.attest.azure.net. Whether a custom provider (not a
+// shared one) is allowed is an open product question.
+func TestNewKeepsMAAEndpointToAzureAttestation(t *testing.T) {
+	refused := []string{
+		"maa.attacker.example",                            // outside Azure
+		"sharedneu.neu.attest.azure.net.attacker.example", // the suffix as a prefix
+		"attest.azure.net",                                // the suffix alone
+		"sharedneu.neuattest.azure.net",                   // no dot before the suffix
+		"sharedneu.neu.attest.azure.net:8443",             // a port
+		"169.254.169.254",                                 // an IP literal
+	}
+	if len(debugOptions) == 0 {
+		refused = append(refused, "127.0.0.1:8443", "localhost")
+	}
+	for _, host := range refused {
+		if ok, err := endpointRefused(t, "maa_endpoint", host); !ok {
+			t.Errorf("maa_endpoint %q is not an Azure Attestation host, but New took it and went on to the release: %v", host, err)
+		}
+	}
+	for _, good := range []string{"sharedneu.neu.attest.azure.net", "sharedweu.weu.attest.azure.net"} {
+		if ok, err := endpointRefused(t, "maa_endpoint", good); ok {
+			t.Errorf("shared provider %s refused: %v", good, err)
+		}
+	}
+}
+
 func TestParseRSAJWK(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
 	got, err := parseRSAJWK([]byte(jwkOf(key)))

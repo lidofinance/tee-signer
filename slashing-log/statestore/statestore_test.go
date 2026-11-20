@@ -237,6 +237,46 @@ func TestCloneLoses(t *testing.T) {
 	}
 }
 
+// A commit must not skip a
+// name taken by an object that is not a commit. On S3 such an object can
+// be put without retention and deleted by version once a clone has
+// committed past it; the two instances then commit side by side and
+// neither latches. The clone's commit over the taken names must fail, and
+// once the names are free again the two must meet on one name.
+func TestCommitNeverSkipsTakenName(t *testing.T) {
+	l := newMemLog()
+	la, lb := newLocal(t), newLocal(t)
+	a, _ := open(t, la, l, keysOf("image-a"), Options{})
+	if err := a.Put("shares/aa", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	b, err := open(t, lb, l, keysOf("image-a"), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Objects that are no commit under the next maxSkips names.
+	var planted []string
+	for v := uint64(2); v < 2+maxSkips; v++ {
+		n := Name(setupA, "signer-1", v)
+		l.objs[n] = [][]byte{[]byte("not a commit")}
+		planted = append(planted, n)
+	}
+	err = b.Put("shares/bb", []byte("b's"))
+	if top := Name(setupA, "signer-1", 2+maxSkips); err == nil || len(l.objs[top]) != 0 {
+		t.Fatalf("the clone's commit skipped %d taken names (err %v); it must fail and write nothing past them, "+
+			"or it commits beside the first instance once they are deleted", maxSkips, err)
+	}
+	for _, n := range planted {
+		delete(l.objs, n)
+	}
+	if err := a.Put("shares/cc", []byte("a's")); err != nil {
+		t.Fatalf("the first instance after the names are free again: %v", err)
+	}
+	if err := b.Put("shares/bb", []byte("b's")); err == nil {
+		t.Fatal("the clone committed after the first instance did: two writers of one copy")
+	}
+}
+
 // hiddenLog creates commits and then answers ErrHidden, as a store does
 // when a delete marker or another version hides an object of the name.
 type hiddenLog struct{ markstore.Log }

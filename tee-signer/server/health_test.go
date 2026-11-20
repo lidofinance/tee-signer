@@ -108,3 +108,58 @@ func TestHealthStateCopyFailed(t *testing.T) {
 		t.Fatalf("after a good refresh: %+v %v", h, err)
 	}
 }
+
+// ntsClock is the system clock with the NTS state sum.
+type ntsClock struct {
+	clock.System
+	sum clock.NTSSummary
+}
+
+func (c ntsClock) NTSSummary() clock.NTSSummary { return c.sum }
+
+// HEALTH answers within the frame
+// whatever text the clock carries. Two of its text fields have no cap: a
+// coarse host's last_error (a TLS name error quotes the certificate's
+// names) and refused. 175,000 control octets take 1.05 MB in JSON, over
+// the 1 MiB frame, and today the runner then sends no answer and closes
+// the connection; the gateway withdraws every key of a signer whose
+// HEALTH fails for 90 s. The answer must still come, on the same
+// connection, with the text cut.
+func TestHealthAnswersWithinTheFrameWhateverTheClockText(t *testing.T) {
+	long := strings.Repeat("\x01", 175_000)
+	coarse := clock.NTSSummary{Protocol: clock.ProtocolNTS, Quorum: true, Members: []string{"a", "b", "c"},
+		Coarse: []clock.SourceStats{
+			{Name: "https-date(https://a.test/)", Queries: 4, Answers: 4},
+			{Name: "https-date(https://b.test/)", Queries: 4, Failures: 4, LastAnswerAge: -1, LastError: long},
+		}}
+	refused := clock.NTSSummary{Protocol: clock.ProtocolNTS, Refused: long}
+	for _, tc := range []struct {
+		name string
+		sum  clock.NTSSummary
+	}{{"coarse[].last_error", coarse}, {"refused", refused}} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := keyServer(t, 1)
+			s.Platform.Clock = ntsClock{sum: tc.sum}
+			peer, done := serveOne(s)
+			defer func() { peer.Close(); <-done }()
+			peer.SetDeadline(time.Now().Add(10 * time.Second))
+			for id := uint32(1); id <= 2; id++ {
+				if err := wire.WriteFrame(peer, wire.Frame{Type: wire.TypeHealth, ID: id}); err != nil {
+					t.Fatalf("%s: HEALTH %d: write: %v", tc.name, id, err)
+				}
+				f, err := wire.ReadFrame(peer)
+				if err != nil {
+					t.Fatalf("clock_nts.%s of %d octets: HEALTH %d got no answer (%v); the runner must answer within the %d-octet frame, "+
+						"with the text cut, not close the connection", tc.name, len(long), id, err, wire.MaxFrame)
+				}
+				body, err := wire.DecodeResponse(f.Payload)
+				if err != nil {
+					t.Fatalf("clock_nts.%s of %d octets: HEALTH %d refused: %v; want the status with the text cut", tc.name, len(long), id, err)
+				}
+				if h, err := wire.DecodeHealth(body); err != nil || h.NTS == nil {
+					t.Fatalf("%s: HEALTH %d: %+v, %v; want the status with clock_nts", tc.name, id, h, err)
+				}
+			}
+		})
+	}
+}

@@ -300,6 +300,40 @@ func TestBodyTooLarge(t *testing.T) {
 	}
 }
 
+// maxBadRequestLine is the longest "bad request" log line a body may cause.
+const maxBadRequestLine = 4 << 10
+
+// The "bad request" log line has a bound
+// whatever the body. Each body is 1 MiB of 0x7f in one string field; today
+// the parse error quotes it (\x7f, 4 bytes a byte) and the log handler
+// quotes it again, so one request writes a line five times the body. The
+// attestation's error comes from go-eth2-client, so the gateway's own
+// logging must cut it.
+func TestBadRequestLogLineIsBounded(t *testing.T) {
+	filler := strings.Repeat("\x7f", 1<<20)
+	for name, body := range map[string]string{
+		"type":                `{"type":"` + filler + `"}`,
+		"randao_reveal.epoch": `{"type":"RANDAO_REVEAL",` + forkInfo + `,"randao_reveal":{"epoch":"` + filler + `"}}`,
+		"attestation.slot":    `{"type":"ATTESTATION",` + forkInfo + `,"attestation":{"slot":"` + filler + `"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			logs := &lockedBuffer{}
+			srv, f := newTestServerLog(t, logs)
+			if code, _, got := post(t, srv, pubHex, "", body); code != http.StatusBadRequest || len(f.calls) != 0 {
+				t.Fatalf("got %d %s, calls %v; want 400 and no call", code, got, f.calls)
+			}
+			lines := logs.lines("bad request")
+			if len(lines) != 1 {
+				t.Fatalf("%d bad request lines, want 1", len(lines))
+			}
+			if n := len(lines[0]); n > maxBadRequestLine {
+				t.Errorf("a %d-byte %s gives a %d-byte log line, want at most %d: the field reaches the log whole",
+					len(filler), name, n, maxBadRequestLine)
+			}
+		})
+	}
+}
+
 // The identifier may come without 0x and in upper case (Web3Signer normalises it).
 func TestIdentifierNormalisation(t *testing.T) {
 	srv, _ := newTestServer(t)

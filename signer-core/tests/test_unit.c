@@ -1184,6 +1184,9 @@ static void test_import_store_failure(void)
         CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_OK);
         CHECK_RC(sc_signer_get_state(s, k.pk, &before), SC_OK);
 
+        /* The clock at E + 18: the imported maxima are within its horizon
+         * (test_import_above_horizon). */
+        set_epoch(&h, E + 18);
         sc_watermark imp = {(E + 15) * 32, E + 5, E + 20,
                             SC_WM_HAS_BLOCK | SC_WM_HAS_ATTESTATION};
         int writes = h.writes;
@@ -1256,6 +1259,65 @@ static void test_import_below_floor(void)
     }
 }
 
+/*
+ * An import takes no maxima above the
+ * restart floor its clock gives, F = epoch(now) + max_epochs_ahead +
+ * SC_RESTART_FLOOR_EPOCHS. No signer under the same clock signed past
+ * epoch(now) + max_epochs_ahead, so higher maxima are no history; with
+ * device marks they raise the one device mark, and after a restart every
+ * key of the device starts above them and signs no vote or block. The
+ * runner refuses such maxima first (checkMaxima); the core must refuse them
+ * as well, with no write and the validator left as it was. Maxima up to
+ * epoch(now) + max_epochs_ahead are taken.
+ */
+static void test_import_above_horizon(void)
+{
+    const uint64_t M = UINT64_MAX;
+    const uint32_t both = SC_WM_HAS_BLOCK | SC_WM_HAS_ATTESTATION;
+    for (uint32_t scope = SC_MARKS_PER_VALIDATOR; scope <= SC_MARKS_PER_DEVICE; scope++) {
+        host_t h = {0};
+        sc_config cfg;
+        sc_slashing_state st, st2;
+        uint8_t sig[96];
+        make_config(&cfg); /* max_epochs_ahead 2 */
+        cfg.mark_scope = scope;
+        const uint64_t F = E + cfg.max_epochs_ahead + SC_RESTART_FLOOR_EPOCHS;
+        const uint64_t honest = E + cfg.max_epochs_ahead;
+        /* {block_slot, source_epoch, target_epoch, flags}: each one above F. */
+        const sc_watermark over[] = {
+            {M, M, M, both},
+            {0, E, F + 1, SC_WM_HAS_ATTESTATION},
+            {0, F + 1, F + 1, SC_WM_HAS_ATTESTATION},
+            {(F + 1) * 32, 0, 0, SC_WM_HAS_BLOCK},
+        };
+
+        set_epoch(&h, E);
+        sc_signer *s = new_signer(&h, &cfg, 4, 0);
+        vkeys k1 = add_validator(s, 60, SC_INDEX_UNKNOWN);
+        vkeys k2 = add_validator(s, 61, SC_INDEX_UNKNOWN);
+        CHECK_RC(sc_signer_get_state(s, k1.pk, &st), SC_OK);
+        for (size_t i = 0; i < sizeof over / sizeof over[0]; i++)
+            CHECK_RC(sc_signer_import(s, k1.pk, cfg.genesis_validators_root, &over[i]), SC_ERR_ARG);
+        CHECK(h.writes == 0); /* no mark raised above the clock horizon */
+        CHECK_RC(sc_signer_get_state(s, k1.pk, &st2), SC_OK);
+        CHECK(memcmp(&st, &st2, sizeof st) == 0);
+
+        sc_watermark at = {(honest + 1) * 32 - 1, honest, honest, both};
+        CHECK_RC(sc_signer_import(s, k1.pk, cfg.genesis_validators_root, &at), SC_OK);
+
+        /* Restart on the same store: the other key signs past F. */
+        sc_signer_wipe(s);
+        s = new_signer(&h, &cfg, 4, 0);
+        add_validator(s, 60, SC_INDEX_UNKNOWN);
+        add_validator(s, 61, SC_INDEX_UNKNOWN);
+        set_epoch(&h, F + 2);
+        sc_attestation_data a = att(F, F + 2, 1);
+        CHECK_RC(sc_sign_attestation(s, k2.pk, &a, sig), SC_OK);
+        sc_beacon_block_header b = blk((F + 2) * 32, 1);
+        CHECK_RC(sc_sign_block(s, k2.pk, &b, sig), SC_OK);
+    }
+}
+
 /* One run: the last attestation and the last block repeat with the same
  * signature and no write; an older vote or another root does not. */
 static void test_repeats_in_run(void)
@@ -1276,6 +1338,20 @@ static void test_repeats_in_run(void)
     CHECK(memcmp(sig1, sig2, 96) == 0 && h.writes == writes);
     sc_attestation_data other = att(E - 1, E, 2);
     CHECK_RC(sc_sign_attestation(s, k.pk, &other, sig), SC_ERR_SLASH_TARGET);
+    /* A repeat is the whole signing root: a change of any one field of the
+     * data at the same target is a double vote. */
+    for (int f = 0; f < 6; f++) {
+        other = a;
+        switch (f) {
+        case 0: other.slot += 1; break;
+        case 1: other.index = 1; break;
+        case 2: other.beacon_block_root[31] ^= 1; break;
+        case 3: other.source.epoch += 1; break; /* E, the target */
+        case 4: other.source.root[31] ^= 1; break;
+        default: other.target.root[31] ^= 1; break;
+        }
+        CHECK_RC(sc_sign_attestation(s, k.pk, &other, sig), SC_ERR_SLASH_TARGET);
+    }
     sc_attestation_data next = att(E, E + 1, 1);
     CHECK_RC(sc_sign_attestation(s, k.pk, &next, sig), SC_OK);
     CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_ERR_SLASH_SOURCE); /* only the last root */
@@ -1287,6 +1363,17 @@ static void test_repeats_in_run(void)
     CHECK(memcmp(bsig, sig, 96) == 0);
     sc_beacon_block_header b2 = blk(E * 32 + 1, 2);
     CHECK_RC(sc_sign_block(s, k.pk, &b2, sig), SC_ERR_SLASH_BLOCK);
+    /* The same for each field of the header at the same slot. */
+    for (int f = 0; f < 4; f++) {
+        b2 = b;
+        switch (f) {
+        case 0: b2.proposer_index = 1; break;
+        case 1: b2.parent_root[31] ^= 1; break;
+        case 2: b2.state_root[31] ^= 1; break;
+        default: b2.body_root[31] ^= 1; break;
+        }
+        CHECK_RC(sc_sign_block(s, k.pk, &b2, sig), SC_ERR_SLASH_BLOCK);
+    }
 
     /* A repeat still passes the policy checks: here the clock horizon. */
     set_epoch(&h, E - 2);
@@ -1524,13 +1611,14 @@ static void test_device_marks(void)
     CHECK_RC(sc_sign_attestation(s, k[1].pk, &a, sig), SC_OK);
     CHECK(h.writes == 5);
 
-    /* An EIP-3076 import raises the device mark (one write). */
-    sc_watermark imp = {0, E + 10, E + 10, SC_WM_HAS_ATTESTATION};
+    /* An EIP-3076 import raises the device mark (one write); E + 8 is the
+     * clock horizon. */
+    sc_watermark imp = {0, E + 8, E + 8, SC_WM_HAS_ATTESTATION};
     CHECK_RC(sc_signer_import(s, k[0].pk, cfg.genesis_validators_root, &imp), SC_OK);
     CHECK(h.writes == 6);
     CHECK_RC(sc_signer_get_state(s, k[0].pk, &st), SC_OK);
-    CHECK(st.committed.target_epoch == E + 10 && st.committed.source_epoch == E + 10 &&
-          st.ram.target_epoch == E + 10);
+    CHECK(st.committed.target_epoch == E + 8 && st.committed.source_epoch == E + 8 &&
+          st.ram.target_epoch == E + 8);
     set_epoch(&h, E + 7);
     a = att(E + 5, E + 7, 4);
     CHECK_RC(sc_sign_attestation(s, k[1].pk, &a, sig), SC_OK); /* inside the device mark */
@@ -1784,12 +1872,10 @@ static sc_attestation_data att_in(uint64_t source, uint64_t target, uint64_t slo
 /*
  * The same through the signer. With a normal clock horizon a message near
  * UINT64_MAX never reaches the marks: SC_ERR_POLICY_FUTURE refuses it
- * first, while an import of UINT64_MAX values goes in and then refuses
- * every vote and block. With max_epochs_ahead at UINT64_MAX the horizon
- * saturates and the signer signs at the top of the range: its stored block
- * mark saturates, its target mark lands one window above the highest
- * target a slot allows, and a restart refuses everything, with both mark
- * scopes.
+ * first. With max_epochs_ahead at UINT64_MAX the horizon saturates: the
+ * restart floor puts every bound at UINT64_MAX, an import of UINT64_MAX
+ * values goes in and is stored as it is, and nothing signs, before a
+ * restart or after, with both mark scopes.
  */
 static void test_saturation_signer(void)
 {
@@ -1812,20 +1898,14 @@ static void test_saturation_signer(void)
         CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_ERR_POLICY_FUTURE);
         CHECK_RC(sc_sign_block(s, k.pk, &b, sig), SC_ERR_POLICY_FUTURE);
         CHECK(h.writes == 0);
-        CHECK_RC(sc_signer_import(s, k.pk, cfg.genesis_validators_root, &all), SC_OK);
-        CHECK_RC(sc_signer_get_state(s, k.pk, &st), SC_OK);
-        CHECK(h.writes == 1 && st.committed.block_slot == M && st.committed.source_epoch == M &&
-              st.committed.target_epoch == M && st.ram.target_epoch == M);
-        a = att(E - 1, E, 1);
-        b = blk(E * 32, 1);
-        CHECK_RC(sc_sign_attestation(s, k.pk, &a, sig), SC_ERR_SLASH_SOURCE);
-        CHECK_RC(sc_sign_block(s, k.pk, &b, sig), SC_ERR_SLASH_BLOCK);
+        /* An import of UINT64_MAX values at this clock: test_import_above_horizon. */
 
         /* A horizon that reaches UINT64_MAX: the restart floor saturates
          * at the load, so the validator starts with every bound at
          * UINT64_MAX and signs no block or vote, before a restart or after.
-         * Genesis at 0 with 1 s slots and the clock at UINT64_MAX, so every
-         * slot has started. */
+         * An import of UINT64_MAX values is inside this horizon: taken and
+         * stored once. Genesis at 0 with 1 s slots and the clock at
+         * UINT64_MAX, so every slot has started. */
         host_t h2 = {0};
         cfg.max_epochs_ahead = M;
         cfg.genesis_time = 0;
@@ -1841,7 +1921,15 @@ static void test_saturation_signer(void)
             CHECK_RC(sc_sign_attestation(s2, k2.pk, &a, sig), SC_ERR_SLASH_SOURCE);
             b = blk(M, 2);
             CHECK_RC(sc_sign_block(s2, k2.pk, &b, sig), SC_ERR_SLASH_BLOCK);
-            CHECK(h2.writes == 0);
+            if (run == 0) {
+                CHECK(h2.writes == 0);
+                CHECK_RC(sc_signer_import(s2, k2.pk, cfg.genesis_validators_root, &all), SC_OK);
+                CHECK_RC(sc_signer_get_state(s2, k2.pk, &st), SC_OK);
+                CHECK(st.committed.block_slot == M && st.committed.source_epoch == M &&
+                      st.committed.target_epoch == M);
+                CHECK_RC(sc_sign_attestation(s2, k2.pk, &a, sig), SC_ERR_SLASH_SOURCE);
+            }
+            CHECK(h2.writes == 1); /* the import's write; the restart reads it back */
             sc_signer_wipe(s2);
         }
     }
@@ -3023,6 +3111,55 @@ static void test_typed(void)
 
     CHECK(SC_ERR_SELECTION_PROOF == 25);
     CHECK(strcmp(sc_status_name(SC_ERR_SELECTION_PROOF), "SC_ERR_SELECTION_PROOF") == 0);
+}
+
+/* sc_decode_aggregate_and_proof of an AggregateAndProof (mainnet preset)
+ * whose aggregation_bits are nbytes - 1 zero bytes and last, in a heap
+ * buffer of the exact length, so a sanitizer build sees a read past it. */
+static int decode_bits(int form, size_t nbytes, uint8_t last)
+{
+    const size_t att_fixed = 4 + 128 + 96 + (form == SC_AGGREGATE_PHASE0 ? 0 : 8);
+    const size_t len = 108 + att_fixed + nbytes;
+    uint8_t *b = calloc(len, 1), *scratch = malloc(SC_TYPED_SCRATCH_LEN);
+    sc_aggregate_info ai;
+    int rc;
+    CHECK(b != NULL && scratch != NULL);
+    b[8] = 108;                                   /* offset of aggregate */
+    b[108] = (uint8_t)att_fixed;                  /* offset of aggregation_bits */
+    if (form != SC_AGGREGATE_PHASE0)
+        b[108 + 4 + 128 + 96] = 0x01;             /* committee_bits: committee 0 */
+    if (nbytes)
+        b[len - 1] = last;
+    rc = sc_decode_aggregate_and_proof(b, len, form, &SC_PRESET_MAINNET, scratch, &ai);
+    free(b);
+    free(scratch);
+    return rc;
+}
+
+/* The aggregation_bits limit: MAX_VALIDATORS_PER_COMMITTEE bits for phase0,
+ * times MAX_COMMITTEES_PER_SLOT from Electra (2048 and 131072 on mainnet).
+ * A list of exactly the limit decodes (the longest the scratch must hold);
+ * one bit more, a delimiter in a byte past the limit, no delimiter or no
+ * byte do not. */
+static void test_aggregate_bits_limit(void)
+{
+    const sc_preset *p = &SC_PRESET_MAINNET;
+    for (int form = SC_AGGREGATE_PHASE0; form <= SC_AGGREGATE_GLOAS; form++) {
+        const uint64_t per_slot = form == SC_AGGREGATE_PHASE0 ? 1 : p->max_committees_per_slot;
+        const uint64_t limit = p->max_validators_per_committee * per_slot;
+        const size_t full = (size_t)(limit / 8) + 1; /* bytes of a list of limit bits */
+        CHECK(limit == (form == SC_AGGREGATE_PHASE0 ? 2048 : 131072));
+        CHECK_RC(decode_bits(form, 1, 0x01), SC_OK);          /* empty list */
+        CHECK_RC(decode_bits(form, full - 1, 0x80), SC_OK);   /* limit - 1 bits */
+        CHECK_RC(decode_bits(form, full, 0x01), SC_OK);       /* limit bits */
+        CHECK_RC(decode_bits(form, full, 0x02), SC_ERR_DECODE);   /* limit + 1 bits */
+        CHECK_RC(decode_bits(form, full + 1, 0x01), SC_ERR_DECODE); /* limit + 8 bits */
+        CHECK_RC(decode_bits(form, 1, 0x00), SC_ERR_DECODE);  /* no delimiter */
+        CHECK_RC(decode_bits(form, full, 0x00), SC_ERR_DECODE);
+        CHECK_RC(decode_bits(form, 0, 0), SC_ERR_DECODE);     /* no byte */
+    }
+    CHECK_RC(decode_bits(-1, 1, 0x01), SC_ERR_ARG);
+    CHECK_RC(decode_bits(3, 1, 0x01), SC_ERR_ARG);
 }
 
 /* ---- DVT build only (SC_DVT): sc_signer_add_validator_group ------------- */
@@ -4483,6 +4620,23 @@ static void test_restart_floor(void)
         CHECK(st.ram.block_slot == high.block_slot && st.ram.source_epoch == high.source_epoch &&
               st.ram.target_epoch == high.target_epoch);
         h.load_raw = 0;
+
+        /* A load with the clock at 0 or before genesis reads epoch 0, not a
+         * wrapped one: the floor stays at most max_epochs_ahead +
+         * SC_RESTART_FLOOR_EPOCHS, and the key signs once the chain is past it. */
+        const uint64_t before[] = {0, GENESIS_TIME - SC_SLOT_MARGIN_SECONDS};
+        for (int i = 0; i < 2; i++) {
+            host_t h0 = {0};
+            vkeys k0;
+            h0.now = before[i];
+            sc_signer *s0 = new_signer(&h0, &cfg, 1, 0);
+            CHECK_RC(add_at_clock(s0, 46, &k0), SC_OK);
+            CHECK_RC(sc_signer_get_floor(s0, k0.pk, &floor), SC_OK);
+            CHECK(floor <= cfg.max_epochs_ahead + SC_RESTART_FLOOR_EPOCHS);
+            set_epoch(&h0, floor + 1);
+            a = att(floor, floor + 1, 1);
+            CHECK_RC(sc_sign_attestation(s0, k0.pk, &a, sig), SC_OK);
+        }
     }
 }
 
@@ -4517,6 +4671,7 @@ int main(int argc, char **argv)
     test_import();
     test_import_store_failure();
     test_import_below_floor();
+    test_import_above_horizon();
     test_hash_cache();
     test_table_and_errors();
     test_duplicate_share();
@@ -4547,6 +4702,7 @@ int main(int argc, char **argv)
     test_builder_auth_go(data_dir);
     test_gloas_restart();
     test_typed();
+    test_aggregate_bits_limit();
     /* The build variant, for scripts/test.sh; test_dv_share in DVT builds only. */
 #ifdef SC_DVT
     test_dv_share();

@@ -2,8 +2,14 @@ package attest
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/x509"
 	"encoding/hex"
+	"errors"
+	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -430,6 +436,40 @@ func TestNitroSynthetic(t *testing.T) {
 		_, err := VerifyNitro(append(bytes.Clone(good), 0x00), opts())
 		wantErr(t, err, ErrFormat)
 	})
+	t.Run("COSE_Sign1 envelope variants", func(t *testing.T) {
+		// Each shape a strict COSE_Sign1 reader must refuse: one tag 18 in
+		// its one-byte form only, a definite array of exactly 4, byte
+		// strings where the format wants them, alg in the protected header
+		// only and once.
+		var arr []cbor.RawMessage
+		if err := cbor.Unmarshal(good, &arr); err != nil || len(arr) != 4 || good[0] != 0x84 {
+			t.Fatalf("good document: %d elements, %v", len(arr), err)
+		}
+		enc := func(v ...any) []byte {
+			b, err := cbor.Marshal(v)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return b
+		}
+		for name, doc := range map[string][]byte{
+			"tag 18 twice":             append([]byte{0xd2, 0xd2}, good...),
+			"tag 18 in two-byte form":  append([]byte{0xd8, 0x12}, good...),
+			"another tag":              append([]byte{0xc1}, good...),
+			"indefinite outer array":   append(append([]byte{0x9f}, good[1:]...), 0xff),
+			"five elements":            append(append([]byte{0x85}, good[1:]...), 0xf6),
+			"detached payload":         enc(arr[0], arr[1], nil, arr[3]),
+			"protected header as map":  enc(map[int]int{1: coseAlgES384}, arr[1], arr[2], arr[3]),
+			"alg only in unprotected":  enc([]byte{0xa0}, map[int]int{1: coseAlgES384}, arr[2], arr[3]),
+			"protected alg twice":      enc([]byte{0xa2, 0x01, 0x38, 0x22, 0x01, 0x38, 0x22}, arr[1], arr[2], arr[3]),
+			"signature as text string": enc(arr[0], arr[1], arr[2], strings.Repeat("a", 96)),
+		} {
+			_, err := VerifyNitro(doc, opts())
+			if !errors.Is(err, ErrFormat) {
+				t.Errorf("%s: got %v, want %v", name, err, ErrFormat)
+			}
+		}
+	})
 	t.Run("config needs PCRs and freshness", func(t *testing.T) {
 		o := opts()
 		o.PCRs = nil
@@ -440,6 +480,61 @@ func TestNitroSynthetic(t *testing.T) {
 		_, err = VerifyNitro(good, o)
 		wantErr(t, err, ErrConfig)
 	})
+}
+
+// VerifyNitro takes a cabundle of any
+// length and hands every entry to the chain builder before the COSE
+// signature check; about 2,000 entries cost 0.65 s of CPU per answer. A
+// real NSM bundle holds 4. A bundle of 22 must be refused as malformed
+// before any of it is parsed; today it is accepted.
+func TestNitroCABundleBounded(t *testing.T) {
+	now := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	ca := newTestCA(t, now)
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := [][]byte{ca.Root.Raw}
+	for i := range 20 {
+		// Self-signed CAs that carry the name of the leaf's issuer.
+		tmpl := &x509.Certificate{SerialNumber: big.NewInt(int64(1000 + i)), Subject: ca.Inter.Subject,
+			NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), IsCA: true, BasicConstraintsValid: true,
+			KeyUsage: x509.KeyUsageCertSign}
+		der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &k.PublicKey, k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bundle = append(bundle, der)
+	}
+	bundle = append(bundle, ca.Inter.Raw)
+	doc := ca.NitroDoc(t, testgen.NitroSpec{TS: now, Nonce: []byte("n"), Bundle: bundle})
+	_, err = VerifyNitro(doc, NitroOptions{Roots: []*x509.Certificate{ca.Root}, Now: now, AcceptAnyPCRs: true, Nonce: []byte("n")})
+	if !errors.Is(err, ErrFormat) {
+		t.Fatalf("a cabundle of %d certificates: got %v, want %v: the bundle length is not limited", len(bundle), err, ErrFormat)
+	}
+}
+
+// VerifyNitro has no size limit of
+// its own; only the wire frame (1 MiB) bounds a document. A real one is
+// about 5 KiB. A 600 KiB document, here a good one with filler in the
+// unprotected header, which no signature covers, must be refused before it
+// is decoded; today it is accepted.
+func TestNitroDocumentSizeBounded(t *testing.T) {
+	now := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	ca := newTestCA(t, now)
+	o := NitroOptions{Roots: []*x509.Certificate{ca.Root}, Now: now, AcceptAnyPCRs: true, Nonce: []byte("n")}
+	good := ca.NitroDoc(t, testgen.NitroSpec{TS: now, Nonce: []byte("n")})
+	var arr []cbor.RawMessage
+	if err := cbor.Unmarshal(good, &arr); err != nil {
+		t.Fatal(err)
+	}
+	fat, err := cbor.Marshal([]any{arr[0], map[int][]byte{99: make([]byte, 600<<10)}, arr[2], arr[3]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyNitro(fat, o); !errors.Is(err, ErrFormat) {
+		t.Fatalf("a document of %d bytes: got %v, want %v: the document size is not limited", len(fat), err, ErrFormat)
+	}
 }
 
 // An expected PCR must be 48 bytes, and the document must have that index.

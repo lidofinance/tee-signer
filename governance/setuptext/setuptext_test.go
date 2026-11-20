@@ -362,3 +362,31 @@ func TestSigningModeNoteNamesEveryMode(t *testing.T) {
 		}
 	}
 }
+
+// A comment may carry a carriage return or an escape sequence,
+// which can hide on screen a line the
+// parser takes. What holds: approvers sign from the canonical form, which
+// is made from the parsed values and carries no comment byte, so the hidden
+// value shows there. The parser may also refuse such a file outright.
+func TestCanonicalFormShowsLineHiddenByComment(t *testing.T) {
+	const hidden = "0x00000000000000000000000000000000000000aa"
+	text := string(readFile(t, "testdata/setup-nitro.conf")) +
+		"# \x1b[2K\n" +
+		"allowed_fee_recipients = " + hidden + " #\r" + strings.Repeat(" ", 70) + "\n"
+	s, err := ParseSetup("setup.conf", []byte(text))
+	if err != nil {
+		return
+	}
+	if len(s.Locked.AllowedFeeRecipients) != 3 {
+		t.Fatalf("%d fee recipients, want the golden two and the hidden one", len(s.Locked.AllowedFeeRecipients))
+	}
+	canon := string(must(FormatSetup(s)))
+	if !strings.Contains(canon, "allowed_fee_recipients = "+hidden+"\n") {
+		t.Fatalf("the canonical form does not show the hidden fee recipient on a line of its own:\n%s", canon)
+	}
+	for i := 0; i < len(canon); i++ {
+		if c := canon[i]; (c < 0x20 && c != '\n') || c > 0x7e {
+			t.Fatalf("the canonical form carries byte %#02x at %d", c, i)
+		}
+	}
+}

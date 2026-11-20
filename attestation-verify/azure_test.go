@@ -3,6 +3,7 @@ package attest
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -246,6 +247,16 @@ func TestMAA(t *testing.T) {
 			}
 		}
 	})
+	t.Run("claims of another JSON type fail closed", func(t *testing.T) {
+		o := opts()
+		o.Policy = nil
+		_, err := VerifyMAA(sign(set(clone(aci), "x-ms-sevsnpvm-is-debuggable", "false")), o)
+		wantErr(t, err, ErrDebug)
+		_, err = VerifyMAA(sign(set(clone(aci), "x-ms-sevsnpvm-vmpl", "0")), o)
+		wantErr(t, err, ErrClaim)
+		_, err = VerifyMAA(sign(set(clone(aci), "x-ms-sevsnpvm-vmpl", 0.5)), o)
+		wantErr(t, err, ErrClaim)
+	})
 	t.Run("config", func(t *testing.T) {
 		for _, o := range []MAAOptions{
 			{Keys: ks, ComplianceStatus: ComplianceACI, HostData: []string{maaHostData}, MaxAge: time.Minute},
@@ -258,6 +269,30 @@ func TestMAA(t *testing.T) {
 			wantErr(t, err, ErrConfig)
 		}
 	})
+}
+
+// VerifyMAA does not read the
+// migration claim. An MAA SEV-SNP token proves a genuine AMD chip, not an
+// Azure host; a guest whose policy lets a migration agent read it must be
+// refused, as the debug bit is. Microsoft spells the claim two ways, so
+// each is tried. A minimum TCB (the SVN claims) is a product decision and
+// not tested here.
+func TestMAARefusesMigrationAllowed(t *testing.T) {
+	now := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	key := testRSA(t, 0)
+	// The options runnerclient's azure-maa verifier passes, with no SKR
+	// policy.
+	o := MAAOptions{Issuer: maaIssuer, Keys: keySet(t, jwksFor(t, "maa-test-kid", key, true)), Now: now,
+		ComplianceStatus: ComplianceACI, HostData: []string{maaHostData}, RuntimeData: maaRuntime}
+	if _, err := VerifyMAA(signJWT(t, key, "maa-test-kid", aciClaims(now), nil), o); err != nil {
+		t.Fatalf("the ACI sample with migration false: %v", err)
+	}
+	for _, claim := range []string{"x-ms-sevsnpvm-migration-allowed", "x-ms-sevsnpvm-migrationallowed"} {
+		_, err := VerifyMAA(signJWT(t, key, "maa-test-kid", set(aciClaims(now), claim, true), nil), o)
+		if !errors.Is(err, ErrClaim) {
+			t.Errorf("%s true: got %v, want %v: the migration claim is not read", claim, err, ErrClaim)
+		}
+	}
 }
 
 // TestMAAJWKSSnapshot parses the key set of the shared West Europe

@@ -5,13 +5,16 @@ package clock
 import (
 	"context"
 	"crypto/x509"
+	"encoding/binary"
 	"errors"
 	"math"
 	"net"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/lidofinance/tee-signer/trusted-time/nts"
 	"github.com/lidofinance/tee-signer/trusted-time/nts/ntstest"
@@ -451,6 +454,135 @@ func TestNTSClockDenyExpires(t *testing.T) {
 	p := n.Status().Peers["deny"]
 	if p.Disabled != "" || fs[3].ntp.Requests.Load() == deny || p.Stats.Samples != 1 {
 		t.Fatalf("after maxPoll: disabled %q, requests %d, samples %d", p.Disabled, fs[3].ntp.Requests.Load(), p.Stats.Samples)
+	}
+}
+
+// kissForger is a party on the side of the path to one NTP address: it
+// sees each request and puts a Kiss-o'-Death in front of the server's
+// answer, built from the clear octets of the request only (the transmit
+// timestamp as origin, and the Unique Identifier field). It drops nothing.
+type kissForger struct {
+	target string
+	code   string
+	forged atomic.Int32 // forged packets the client read
+}
+
+func (f *kissForger) dial(ctx context.Context, network, addr string) (net.Conn, error) {
+	var d net.Dialer
+	c, err := d.DialContext(ctx, network, addr)
+	if err != nil || network != "udp" || addr != f.target {
+		return c, err
+	}
+	return &kissConn{Conn: c, f: f}, nil
+}
+
+type kissConn struct {
+	net.Conn
+	f    *kissForger
+	mu   sync.Mutex
+	next []byte // the forged answer to the last request, not read yet
+}
+
+func (c *kissConn) Write(p []byte) (int, error) {
+	kod := make([]byte, 48, 48+64)
+	kod[0] = 3<<6 | 4<<3 | 4 // leap 3, version 4, server
+	kod[1] = 0               // stratum 0: Kiss-o'-Death
+	copy(kod[12:16], c.f.code)
+	copy(kod[24:32], p[40:48]) // origin: the request's transmit timestamp
+	if len(p) >= 52 {
+		// The request's first extension field, the Unique Identifier.
+		l := int(binary.BigEndian.Uint16(p[50:52]))
+		kod = append(kod, p[48:48+l]...)
+	}
+	c.mu.Lock()
+	c.next = kod
+	c.mu.Unlock()
+	return c.Conn.Write(p)
+}
+
+func (c *kissConn) Read(p []byte) (int, error) {
+	c.mu.Lock()
+	kod := c.next
+	c.next = nil
+	c.mu.Unlock()
+	if kod != nil {
+		c.f.forged.Add(1)
+		return copy(p, kod), nil
+	}
+	return c.Conn.Read(p)
+}
+
+// A Kiss-o'-Death carries no
+// authenticator, so anyone who sees an NTS request can answer it first. An
+// unauthenticated one must neither cost the server's authentic answer nor
+// stop (DENY, for maxPoll) or slow (RATE) that server.
+func TestNTSClockForgedKissDoesNotStopServer(t *testing.T) {
+	for _, code := range []string{"DENY", "RATE"} {
+		t.Run(code, func(t *testing.T) {
+			fs := newServers(t, nil, "a", "b", "c", "d", "e")
+			n := newNTS(fs, &coarseClock{})
+			f := &kissForger{target: fs[0].ntp.Addr, code: code}
+			n.Dial = f.dial
+			if err := refresh(t, n); err != nil {
+				t.Fatal(err)
+			}
+			if f.forged.Load() == 0 || fs[0].ntp.Requests.Load() == 0 {
+				t.Fatalf("no forged %s reached the client (forged %d, requests %d)", code, f.forged.Load(), fs[0].ntp.Requests.Load())
+			}
+			st := n.Status()
+			a, b := st.Peers["a"], st.Peers["b"]
+			if a.Stats.Samples != 1 || a.Disabled != "" || a.Poll != b.Poll {
+				t.Fatalf("a forged %s Kiss-o'-Death took server a's round: samples %d, disabled %q, poll %v (b: %v), kisses %v; "+
+					"the authentic answer that came after it must count",
+					code, a.Stats.Samples, a.Disabled, a.Poll, b.Poll, a.Stats.Kisses)
+			}
+		})
+	}
+}
+
+// The code of a
+// Kiss-o'-Death is four octets anyone who sees a request can choose. The
+// per-server Kisses counts must stay a handful of keys (RATE, DENY, RSTR,
+// NTSN and one for the rest), not grow by one per new code for the life of
+// the process and every "nts: status" line.
+func TestNTSClockKissCodesKeepFewKeys(t *testing.T) {
+	n := newNTS(nil, &coarseClock{})
+	p := n.newPeer(NTSServer{Host: "nts.test", Operator: "a"})
+	for i := range 1000 {
+		code := string([]byte{'A' + byte(i/676%26), 'A' + byte(i/26%26), 'A' + byte(i%26), 'X'})
+		n.record(p, nts.Sample{}, &nts.KissError{Code: code})
+	}
+	if k := len(p.stats.Kisses); k > 5 {
+		t.Fatalf("1000 distinct kiss codes left %d keys in Kisses, want at most 5", k)
+	}
+}
+
+// HEALTH carries each NTS server's last error cut to ntsHealthErrMax
+// octets, so a server or a party on its path cannot grow the runner's
+// HEALTH answer through it (the coarse clock takes the same path). Here the NTS-KE server's
+// certificate has one 100,000-octet name, which Go quotes in its error.
+func TestNTSSummaryCutsLongErrors(t *testing.T) {
+	fs := newServers(t, nil, "a", "b", "c")
+	long := strings.Repeat("\x01", 100_000)
+	cert, _, err := ntstest.Certificate(long, time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ke, err := ntstest.StartKE(cert, fs[0].store, ntstest.KEOptions{NTPServer: "127.0.0.1", NTPPort: fs[0].ntp.Port})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(ke.Close)
+	fs[0].srv.KEAddr = ke.Addr
+	n := newNTS(fs, &coarseClock{})
+	_ = refresh(t, n)
+	if full := n.Status().Peers["a"].LastErr; len(full) < len(long) {
+		t.Fatalf("the NTS-KE error does not carry the long name (%d octets): %.200q", len(full), full)
+	}
+	for _, p := range n.NTSSummary().Peers {
+		if p.Operator == "a" && (p.LastError == "" || len(p.LastError) > ntsHealthErrMax+len("...") || !utf8.ValidString(p.LastError)) {
+			t.Fatalf("HEALTH last_error of a: %d octets, want 1 to %d of valid UTF-8", len(p.LastError), ntsHealthErrMax+len("..."))
+		}
 	}
 }
 

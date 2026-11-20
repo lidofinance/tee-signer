@@ -261,6 +261,31 @@ static void aggregates(void)
         snprintf(name, sizeof name, "built-form%d", form);
         put("aggregate_and_proof", name, in, n);
     }
+    /* aggregation_bits at the mainnet limit (2048 bits phase0, 131072 from
+     * Electra) and one bit over it, as tests/test_unit.c
+     * test_aggregate_bits_limit. */
+    for (int form = 0; form < 3; form++) {
+        const size_t att_fixed = 4 + 128 + 96 + (form ? 8 : 0);
+        const size_t full = (form ? 131072 : 2048) / 8 + 1;
+        const size_t n = 2 + 108 + att_fixed + full;
+        uint8_t *in = calloc(n, 1);
+        char name[32];
+        if (!in) {
+            fprintf(stderr, "mkseeds: out of memory\n");
+            exit(1);
+        }
+        in[1] = (uint8_t)form;
+        in[2 + 8] = 108;
+        in[2 + 108] = (uint8_t)att_fixed;
+        if (form)
+            in[2 + 108 + 4 + 128 + 96] = 1;
+        for (int over = 0; over < 2; over++) {
+            in[n - 1] = over ? 0x02 : 0x01;
+            snprintf(name, sizeof name, "bits-%s-form%d", over ? "over" : "limit", form);
+            put("aggregate_and_proof", name, in, n);
+        }
+        free(in);
+    }
 }
 
 /* Walks dir for data.yaml files (the tarball nests them one level deeper

@@ -77,7 +77,7 @@ func TestNewWithoutHardware(t *testing.T) {
 		t.Skip("the debug build can fake the hardware")
 	}
 	_, err := New(platform.Options{StateDir: t.TempDir(), Params: map[string]string{
-		"maa_endpoint": "127.0.0.1:1", "akv_endpoint": "127.0.0.1:2", "kid": "signer-kek-1"}})
+		"maa_endpoint": "sharedneu.neu.attest.azure.net", "akv_endpoint": "signer-poc-kv.vault.azure.net", "kid": "signer-kek-1"}})
 	if err == nil || !strings.Contains(err.Error(), "no SEV-SNP guest device") {
 		t.Fatalf("got %v", err)
 	}

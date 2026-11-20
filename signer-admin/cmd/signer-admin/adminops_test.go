@@ -73,6 +73,44 @@ func TestIssueClientCert(t *testing.T) {
 		"-role", "admin", "-name", "coord2", "-out", out), "role admin")
 }
 
+// Issue-client-cert checks its output
+// paths with os.Stat and writes the private key with os.WriteFile; both
+// follow a symlink. A dangling symlink at the key path looks absent, and
+// the new admin key lands where whoever planted the link chose. Each such
+// path must be refused (O_EXCL does), with nothing written through it.
+func TestIssueClientCertRefusesSymlinkAtKeyPath(t *testing.T) {
+	dir := t.TempDir()
+	writePKI(t, dir, newPKI(t))
+	pki := func(f string) string { return filepath.Join(dir, "pki", f) }
+	for _, c := range []struct {
+		name, keyFile string
+		args          []string
+	}{
+		{"admin leaf", "leaf-key.pem", []string{"-ca-cert", pki("admin-ca.pem"), "-ca-key", pki("admin-ca-key.pem"), "-role", "admin", "-name", "leaf"}},
+		{"intermediate", "inter-ca-key.pem", []string{"-ca-cert", pki("root-ca.pem"), "-ca-key", pki("root-ca-key.pem"), "-make-intermediate", "admin", "-name", "inter"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			out, elsewhere := filepath.Join(dir, c.name, "out"), filepath.Join(dir, c.name, "elsewhere")
+			for _, d := range []string{out, elsewhere} {
+				if err := os.MkdirAll(d, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			target := filepath.Join(elsewhere, "taken.pem")
+			if err := os.Symlink(target, filepath.Join(out, c.keyFile)); err != nil {
+				t.Fatal(err)
+			}
+			res, err := tool(t, append(append([]string{"issue-client-cert"}, c.args...), "-out", out)...)
+			if _, serr := os.Lstat(target); serr == nil {
+				t.Fatalf("the private key was written through the symlink at %s to %s (command error %v)", c.keyFile, target, err)
+			}
+			if err == nil {
+				t.Fatalf("a symlink at %s was not refused:\n%s", c.keyFile, res)
+			}
+		})
+	}
+}
+
 // readCerts parses every certificate of a PEM file.
 func readCerts(t *testing.T, path string) []*x509.Certificate {
 	t.Helper()

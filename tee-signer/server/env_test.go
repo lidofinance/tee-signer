@@ -74,6 +74,9 @@ type tgtEnv struct {
 	// logDelay, if set, is the time each call to the mark log's store
 	// takes, as a remote store's round trip.
 	logDelay time.Duration
+	// hold, if set, holds a record write of the mark log's store once it
+	// is armed (logwait_test.go).
+	hold *writeHold
 	// loseShareRecord: the next record with a pending share set root
 	// lands, but its write answers with a timeout, as a lost reply. Not
 	// with lockDays.
@@ -199,6 +202,9 @@ func (e *tgtEnv) start() {
 	}
 	if e.logDelay > 0 {
 		l = slowLog{Log: l, delay: e.logDelay}
+	}
+	if e.hold != nil {
+		l = heldLog{Log: l, hold: e.hold}
 	}
 	m, err := markstore.New(l, e.setup.SignerName, dev.NewDevKeys("server test env"), markstore.Options{Setup: ms, Clock: e.clock.Now, Log: quiet, LockDays: e.lockDays})
 	if err != nil {

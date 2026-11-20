@@ -2,12 +2,24 @@ package clock
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/json"
 	"errors"
+	"io"
+	"log"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 type fakeSource struct {
@@ -99,5 +111,85 @@ func TestQuorumSourceStats(t *testing.T) {
 	}
 	if got := (&Anchored{Src: a, Interval: time.Second}).SourceStats(); got != nil {
 		t.Fatalf("a source without stats: %+v", got)
+	}
+}
+
+// selfSigned is a certificate for names that no client trusts.
+func selfSigned(t *testing.T, names ...string) tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "coarse"}, DNSNames: names,
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+}
+
+// A coarse source's LastError goes into
+// HEALTH (coarse[].last_error), so its length must be bounded whatever the
+// host or the path sends: one oversized certificate name or Date header
+// must not push the runner's HEALTH answer over the 1 MiB frame. The cap
+// is the one HEALTH already applies to each NTS server's last_error
+// (ntsHealthErrMax in nts.go, 256 octets plus "...").
+func TestQuorumSourceStatsBoundsLastError(t *testing.T) {
+	const want = 256 + len("...")
+	ok := func() Source { return &fakeSource{name: "ok", t: base} }
+	for _, tc := range []struct {
+		name   string
+		source func(t *testing.T) Source
+	}{
+		// A party on the path of one coarse host answers the TLS handshake
+		// with its own certificate: no trusted key, one 175,000-octet name.
+		// Go checks the name first and quotes the certificate's names.
+		{"certificate name", func(t *testing.T) Source {
+			srv := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+			srv.TLS = &tls.Config{Certificates: []tls.Certificate{selfSigned(t, strings.Repeat("\x01", 175_000))}}
+			srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+			srv.StartTLS()
+			t.Cleanup(srv.Close)
+			c := &http.Client{Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{RootCAs: x509.NewCertPool()},
+				DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+					var d net.Dialer
+					return d.DialContext(ctx, network, srv.Listener.Addr().String())
+				},
+			}}
+			return &HTTPSDate{URL: "https://coarse.test", Client: c}
+		}},
+		// The coarse host itself, with a valid certificate, sends a Date
+		// header that does not parse; the error quotes it.
+		{"date header", func(t *testing.T) Source {
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Date", strings.Repeat("A", 400_000))
+			}))
+			t.Cleanup(srv.Close)
+			return &HTTPSDate{URL: srv.URL, Client: srv.Client()}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := &Quorum{Sources: []Source{ok(), ok(), tc.source(t)}, Min: 2}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if _, err := q.Fetch(ctx); err != nil {
+				t.Fatalf("quorum of the two good sources: %.200v", err)
+			}
+			got := q.SourceStats()[2].LastError
+			if got == "" {
+				t.Fatal("the failing source has no last error")
+			}
+			if len(got) > want || !utf8.ValidString(got) {
+				js, _ := json.Marshal(got)
+				t.Fatalf("LastError is %d octets (%d in JSON), want at most %d of valid UTF-8; starts %.60q",
+					len(got), len(js), want, got)
+			}
+		})
 	}
 }

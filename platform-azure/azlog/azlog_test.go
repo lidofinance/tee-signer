@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/lidofinance/tee-signer/slashing-log"
@@ -42,6 +43,26 @@ func TestAzureBlobLog(t *testing.T) {
 func TestAzureOpenNeedsToken(t *testing.T) {
 	if _, err := Open("account=a,container=c", markstore.Env{}); err == nil {
 		t.Fatal("opened without a token source")
+	}
+}
+
+// A nil Env.HTTP falls back to
+// http.DefaultClient, which trusts the system roots and follows proxy
+// variables; the platform's client trusts the cloud's roots only. Open, or
+// the first request, must refuse a nil client instead. The fake is plain
+// HTTP on loopback, which http.DefaultClient reaches.
+func TestAzureNilClientIsRefused(t *testing.T) {
+	srv := wormfake.New(wormfake.Azure, "marks")
+	defer srv.Close()
+	var hits atomic.Int32
+	srv.Auth = func(*http.Request) error { hits.Add(1); return nil }
+	tok := func(context.Context) (string, error) { return "mi-token", nil }
+	l, err := Open("account=acct,container=marks,endpoint="+srv.URL, markstore.Env{Token: tok})
+	if err == nil {
+		_, err = l.List(context.Background(), "")
+	}
+	if err == nil || hits.Load() != 0 {
+		t.Fatalf("a nil client sent %d request(s) through http.DefaultClient (err %v), want an error and no request", hits.Load(), err)
 	}
 }
 

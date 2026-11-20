@@ -557,6 +557,43 @@ func TestBodyCopySkipsAnOlderIdenticalObject(t *testing.T) {
 	}
 }
 
+// Objects under every copy name a body
+// copy could take make the copy fail; anyone with create rights on the
+// store can put them there. Refresh must still write the keep-alive
+// record and then report the failed copy, so a restart does not find the
+// log older than half the retention.
+func TestRefreshKeepsAliveWhenABodyCopyFails(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_800_000_000, 0)
+	s := testSetup("s")
+	l := &memLog{objs: map[string][][]byte{}}
+	m, _ := New(l, "s", testKey(1), Options{Setup: s, Clock: clockAt(&now), Log: quiet})
+	if _, _, err := m.Claim(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	_, _, h, err := m.PutBody(ctx, openUpdate(t, 2, 5))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := m.State()
+	st.Open = GroupState{Version: 2, Hash: h}
+	if err := m.SetState(ctx, st); err != nil {
+		t.Fatal(err)
+	}
+	for n := uint32(2); n <= 2+maxSkips; n++ {
+		l.objs[BodyName(s.Hash, setupwire.GroupOpen, 2, n)] = [][]byte{[]byte("planted")}
+	}
+	_, before := m.Mark()
+	now = now.Add(s.Retention()/2 - time.Hour)
+	if err := m.Refresh(ctx); err == nil {
+		t.Fatal("Refresh reported no error with every body copy name taken")
+	}
+	if _, after := m.Mark(); after != before+1 {
+		t.Fatalf("Refresh with a failed body copy wrote no keep-alive record (version %d, then %d); "+
+			"planted objects under body names stop the log's keep-alive", before, after)
+	}
+}
+
 // Two updates stored before either state is written: writing the first
 // state keeps the second body, so its state can follow (supersede).
 func TestBodiesKeptUntilNamed(t *testing.T) {

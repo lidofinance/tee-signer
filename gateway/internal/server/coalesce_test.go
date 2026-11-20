@@ -329,6 +329,43 @@ func TestServerSharesOnlySameKeyRootAndType(t *testing.T) {
 	}
 }
 
+// A SYNC_COMMITTEE_MESSAGE signs the
+// block root alone, so messages for one root and different slots have one
+// signing root, but the slot goes to the signer, which refuses one too far
+// ahead. A message for another slot makes its own call: it must not join a
+// call in flight for a far slot and get that call's refusal.
+func TestServerSyncMessageSharesOnlySameSlot(t *testing.T) {
+	srv, f, _ := newSharingServer(t, time.Hour)
+	gate := make(chan struct{})
+	var open sync.Once
+	release := func() { open.Do(func() { close(gate) }) }
+	// Before srv.Close, which waits for the handlers.
+	t.Cleanup(release)
+	f.set(gate, nil)
+	farBody := strings.Replace(syncMessageBody, `"slot":"13164545"`, `"slot":"45164545"`, 1)
+	if farBody == syncMessageBody {
+		t.Fatal("the far-slot body is the same as the near one")
+	}
+	far := postAsync(srv, pubHex, farBody)
+	waitStarted(t, f, 1)
+	near := postAsync(srv, pubHex, syncMessageBody)
+	select {
+	case <-f.started:
+	case <-time.After(2 * time.Second):
+		release()
+		t.Fatalf("the message for slot 13164545 joined the call in flight for slot 45164545: %d call, want 2", f.count())
+	}
+	release()
+	for name, ch := range map[string]<-chan reply{"far": far, "near": near} {
+		if r := <-ch; r.err != nil || r.code != 200 {
+			t.Fatalf("%s: %+v", name, r)
+		}
+	}
+	if n := f.count(); n != 2 {
+		t.Fatalf("%d calls, want 2", n)
+	}
+}
+
 // Without WithCoalescing every request makes its own call.
 func TestServerWithoutCoalescing(t *testing.T) {
 	srv, f, logs := newSharingServer(t, -1)

@@ -363,6 +363,9 @@ type fakeKV struct {
 	newer        *rsa.PrivateKey
 	newerVersion string
 	lie          *rsa.PrivateKey
+	// kidHost, if set, is the vault host the answered key ids name
+	// instead of the fake's own.
+	kidHost string
 
 	mu      sync.Mutex
 	targets []string
@@ -407,7 +410,11 @@ func (kv *fakeKV) keyVersion() string {
 }
 
 func (kv *fakeKV) kid(version string) string {
-	return "https://" + kv.host() + "/keys/" + kv.name + "/" + version
+	host := kv.host()
+	if kv.kidHost != "" {
+		host = kv.kidHost
+	}
+	return "https://" + host + "/keys/" + kv.name + "/" + version
 }
 
 // released is the key and version a release of path gives, or false for a

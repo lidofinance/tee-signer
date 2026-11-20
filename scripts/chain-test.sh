@@ -103,6 +103,17 @@ make_yaml "$T/c6.yaml" '.PRESET_BASE = "minimal"'
 expect_fail "check-source: the minimal preset" bash "$CHAIN" check-source hoodi "$T/c6.yaml" "$T/gvr.txt"
 echo "0x$(printf '00%.0s' {1..32})" >"$T/gvr-bad.txt"
 expect_fail "check-source: another genesis validators root" bash "$CHAIN" check-source hoodi "$T/config.yaml" "$T/gvr-bad.txt"
+# With a genesis_validators_root.txt,
+# check-source put MIN_GENESIS_TIME and GENESIS_DELAY of the upstream
+# config.yaml into $(( )), where bash runs a $(...) in an array subscript.
+# A value that is not a number must be refused and run nothing. The check
+# fails on the DIFF line either way, so the marker file is what tells.
+for key in MIN_GENESIS_TIME GENESIS_DELAY; do
+  make_yaml "$T/c-$key.yaml" ".$key = \"bad[\$(touch\${IFS}$T/ran-$key)]\""
+  expect_fail "check-source: $key not a number" bash "$CHAIN" check-source hoodi "$T/c-$key.yaml" "$T/gvr.txt"
+  [ ! -e "$T/ran-$key" ] && ok "check-source: $key from config.yaml runs no command" ||
+    bad "check-source: $key of config.yaml ran a command in \$(( )) (chain.sh check-source)"
+done
 
 # ---- check-beacon: a beacon API made of files, read through file:// ----
 make_beacon() { # make_beacon DIR [jq filter on the fork schedule]
@@ -237,6 +248,27 @@ for c in hoodi devnet ci-test; do
 done
 expect_fail "build: SIGNER_BUILD_OVERLAY_DIR with a mainnet build" env -u CHAIN SIGNER_BUILD_OVERLAY_DIR="$T" bash -c 'printf "true\n" >"$2/hooks.sh"; bash "$1/scripts/build-runner.sh" x86_64' _ "$ROOT" "$T"
 grep -q "build overlay goes into non-prod builds only" "$T/out" && ok "the refusal names the non-prod builds" || bad "overlay refusal: $(cat "$T/out")"
+# The caller's GOFLAGS reached the go
+# commands of a mainnet build, so GOFLAGS=-overlay= replaced source files
+# with no gate message, the overlay the line above refuses. A fake go
+# records the GOFLAGS of each go command that lists or builds code and
+# stops the build at the first one; go env and go version run for real.
+mkdir -p "$T/fakego"
+cat >"$T/fakego/go" <<'X'
+#!/usr/bin/env bash
+case "${1:-}" in env | version) exec "$REAL_GO" "$@" ;; esac
+echo "go $1: GOFLAGS=${GOFLAGS:-}" >>"$GO_CALLS"
+exit 1
+X
+chmod +x "$T/fakego/go"
+: >"$T/go-calls"
+expect_fail "build: a mainnet build with the fake go stops" env -u CHAIN -u SIGNER_BUILD_OVERLAY_DIR REAL_GO="$(command -v go)" GO_CALLS="$T/go-calls" \
+  PATH="$T/fakego:$PATH" GOFLAGS="-mod=readonly -overlay=$T/overlay.json" bash "$ROOT/scripts/build-runner.sh" x86_64
+if grep -q -- "-overlay=" "$T/go-calls"; then
+  bad "build: the caller's GOFLAGS -overlay= reaches the go commands of a mainnet build: $(head -n 1 "$T/go-calls")"
+else
+  ok "build: the caller's GOFLAGS -overlay= reaches no go command of a mainnet build"
+fi
 # The overlay's hooks.sh is shell code from outside the tree: on a prod
 # chain common.sh refuses the overlay before it sources the file, so a
 # hooks.sh that redefines chain_is_prod gets no say.

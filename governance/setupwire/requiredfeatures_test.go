@@ -3,6 +3,7 @@ package setupwire
 import (
 	"bytes"
 	"fmt"
+	"math/rand"
 	"reflect"
 	"slices"
 	"strings"
@@ -46,6 +47,43 @@ func TestRequiredFeaturesLayout(t *testing.T) {
 	short.PolicySalts.Locked = short.PolicySalts.Locked[:15]
 	if _, err := short.Encode(); err == nil {
 		t.Fatal("15 locked salts encoded")
+	}
+}
+
+// required_features joined the locked group as its 16th leaf while
+// UpdateVersion stayed 2. What
+// keeps a locked body of the 15-leaf layout out is the layout itself: with
+// the leaf's two bytes and its salt removed, the 16-leaf reader refuses it,
+// whatever the salts hold, including salts that start with the bytes of an
+// empty leaf. A later leaf change must keep this, or move UpdateVersion.
+func TestFifteenLeafLockedBodyRefused(t *testing.T) {
+	s := samples(t)["setup-nitro"]
+	body := signedUpdate(t, s, lockedBody(s), []byte{0, 2}, nil).Body
+	body.Locked.RequiredFeatures = nil
+	b := val(body.Encode())
+	if _, err := DecodeUpdateBody(b); err != nil {
+		t.Fatalf("the 16-leaf body does not decode: %v", err)
+	}
+	// The body ends in the empty leaf (version, count 0) and 16 salts.
+	at := len(b) - NumLockedLeaves*32 - 2
+	if b[at] != RequiredFeaturesVersion || b[at+1] != 0 {
+		t.Fatalf("bytes %d, %d are %#x %#x, want the empty required_features leaf", at, at+1, b[at], b[at+1])
+	}
+	old := slices.Concat(b[:at], b[at+2:len(b)-32])
+	if _, err := DecodeUpdateBody(old); err == nil {
+		t.Fatal("a locked body of the 15-leaf layout decodes")
+	}
+	r := rand.New(rand.NewSource(7))
+	salts := old[at:]
+	for i := range 2000 {
+		r.Read(salts)
+		if i%2 == 0 {
+			// What the 16-leaf reader takes as the leaf's version and count.
+			salts[0], salts[1] = RequiredFeaturesVersion, 0
+		}
+		if _, err := DecodeUpdateBody(old); err == nil {
+			t.Fatalf("trial %d: a locked body of the 15-leaf layout decodes", i)
+		}
 	}
 }
 

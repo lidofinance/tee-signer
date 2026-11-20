@@ -1,6 +1,7 @@
 package approver
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/ed25519"
 	"os"
@@ -103,6 +104,34 @@ func TestSexp(t *testing.T) {
 	}
 	if got := assuanEscape("a b+c%\n"); got != "a+b%2Bc%25%0A" {
 		t.Fatalf("escape %q", got)
+	}
+}
+
+// ParseSexp recurses once per '(' with
+// no depth limit, and about 2 MB of '(' from whatever answers on the agent
+// socket ends signer-admin with a fatal stack overflow, which no recover
+// catches. The agent's answers nest 4 deep; a list nested far deeper must
+// be refused. 10,000 levels show the missing limit without the crash.
+func TestSexpDepthLimit(t *testing.T) {
+	const depth = 10_000
+	deep := strings.Repeat("(", depth) + "1:a" + strings.Repeat(")", depth)
+	if _, err := parseSexp([]byte(deep)); err == nil {
+		t.Fatalf("an s-expression nested %d deep parses: the nesting depth is not limited", depth)
+	}
+	if _, err := ed25519FromSexp([]byte(deep)); err == nil {
+		t.Fatal("ed25519FromSexp took the deep s-expression")
+	}
+}
+
+// Read joins the D lines of an answer
+// without a limit, so the agent's peer decides how much the tool holds. A
+// key or a signature s-expression is under 1 KB; 1 MiB must be refused.
+func TestAgentReadSizeLimit(t *testing.T) {
+	line := "D " + strings.Repeat("a", 1023) + "\n"
+	answer := strings.Repeat(line, 1024) + "OK\n"
+	a := &agentConn{r: bufio.NewReaderSize(strings.NewReader(answer), 4096)}
+	if data, err := a.read(); err == nil {
+		t.Fatalf("read took %d bytes of D lines: the answer size is not limited", len(data))
 	}
 }
 
