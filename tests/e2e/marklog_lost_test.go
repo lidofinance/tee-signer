@@ -271,7 +271,10 @@ func TestE2EMarkLogLostState(t *testing.T) {
 	t.Logf("another image: %s", lastLine(other.logText(), "runner:"))
 
 	// Another position: its own log works; its record copied under this
-	// signer's next name does not count.
+	// signer's next name does not count. The file log cannot report an
+	// object's lock, so the claim does not skip the copy either: it stops
+	// there and the runner does not start (markstore.ErrNameTaken). Once the
+	// copy is gone, the runner claims that name with its own mark.
 	addr2 := fmt.Sprintf("tcp:127.0.0.1:%d", freePort(t))
 	pos2 := newRunner(t, "s2", c, addr2, "-mark-store", "file:"+logDir, "-mark-signer", "s2")
 	pos2.start()
@@ -291,12 +294,26 @@ func TestE2EMarkLogLostState(t *testing.T) {
 	}
 	os.RemoveAll(r.stateDir)
 	r.start()
-	waitHealth(t, client(t, addr), "reporting the lost shares", func(h *backend.Health) bool { return h.LoadFailed != "" })
-	text := r.logText()
-	if !strings.Contains(text, "not a valid record") || lastClaim(t, text) != fmt.Sprint(next+1) {
-		t.Fatalf("the record of position s2 under the name of s1 version %d: claim at %s", next, lastClaim(t, text))
+	if !waitExit(t, r, 20*time.Second) {
+		t.Fatalf("the runner started over the record of position s2 under the name of s1 version %d", next)
 	}
-	t.Logf("position s2's record copied to s1 version %d: skipped, s1 claims version %d with its own mark", next, next+1)
+	text := r.logText()
+	if !strings.Contains(text, "not a valid record") || !strings.Contains(text, "may not skip it") {
+		t.Fatalf("the record of position s2 under the name of s1 version %d: %s", next, lastLine(text, "runner:"))
+	}
+	if recs := logRecords(t, logDir, "s1"); recs[len(recs)-1] != fmt.Sprintf("%020d", next) {
+		t.Fatalf("s1 wrote %s past the copy at version %d", recs[len(recs)-1], next)
+	}
+	t.Logf("position s2's record copied to s1 version %d: %s", next, lastLine(text, "runner:"))
+	if err := os.Remove(copied); err != nil {
+		t.Fatal(err)
+	}
+	r.start()
+	waitHealth(t, client(t, addr), "reporting the lost shares", func(h *backend.Health) bool { return h.LoadFailed != "" })
+	if got := lastClaim(t, r.logText()); got != fmt.Sprint(next) {
+		t.Fatalf("once the copy is gone: claim at %s, want %d", got, next)
+	}
+	t.Logf("once the copy is gone, s1 claims version %d with its own mark and reports the lost shares", next)
 }
 
 func lastLine(text, prefix string) string {
