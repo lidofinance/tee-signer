@@ -170,8 +170,9 @@ fingerprint_format() {
 # equal this run's CHAIN and variant (from DVT), and variant the one
 # release/image-variant.py reads from the GCP image and the Azure
 # policies of this build (IMAGE_VARIANT plays no part); a
-# commit other than the checked-out one only gets a note, and a lane line
-# that is not there is not asked for. Blank lines and
+# commit other than the checked-out one only gets a note. A release file
+# without build_variant is compared as default; any other lane line that
+# is not there is not asked for. Blank lines and
 # lines that start with # are skipped; any other line refuses the whole
 # file before anything is compared. FILE is data: it is read with read and
 # compared in the shell, and no part of it goes into a sed program or a
@@ -233,6 +234,10 @@ cmd_check() {
     want="${rec[$name]}" got="${cur[$name]:-}"
     if [ "$got" = "$want" ]; then echo "ok    $name ${want:0:24}..."; else echo "FAIL  $name '$got', want $want"; ok=0; fi
   done
+  # A release file without build_variant (v0.1.0-rc.2) is of a default
+  # lane, as release/measurements.py reads it. A file without lane lines
+  # is not a release file and gets none.
+  [ "${#lane[@]}" = 0 ] || [ -n "${lane[build_variant]+x}" ] || lane[build_variant]=default
   local -A run=([chain]="$CHAIN" [build_variant]="$(variant)")
   [ -z "${lane[variant]+x}" ] || run[variant]="$(output_variant)"
   local -A from=([chain]=CHAIN [variant]="the GCP image and Azure policies" [build_variant]=DVT)

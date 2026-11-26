@@ -213,9 +213,11 @@ if check "$T/fp.txt" && [ -z "$(lane_out)" ]; then
 else
   bad "check: a file without lane lines"; show
 fi
+# A release file without build_variant (v0.1.0-rc.2) is of a default
+# lane, as release/measurements.py reads it.
 { cat "$T/fp.txt"; lane | grep -v '^build_variant '; } >"$T/fp-release-old.txt"
-if check "$T/fp-release-old.txt" && [ "$(grep -c '^ok ' "$T/out")" = 15 ] && ! grep -q 'build_variant' "$T/out"; then
-  ok "check: a release file without build_variant, nothing said about it"
+if check "$T/fp-release-old.txt" && [ "$(grep -c '^ok ' "$T/out")" = 16 ] && grep -q '^ok    build_variant default' "$T/out"; then
+  ok "check: a release file without build_variant is of a default lane"
 else
   bad "check: a release file without build_variant"; show
 fi
@@ -261,6 +263,17 @@ mismatch "variant test in the file, prod images, IMAGE_VARIANT=test" variant "$T
 fake_variant test
 sed 's/^build_variant default/build_variant dvt/' "$T/fp-release.txt" >"$T/fp-lane-dvt.txt"
 mismatch "build_variant dvt in the file, DVT unset" build_variant "$T/fp-lane-dvt.txt"
+# DVT=1 on dvt outputs equal to the default ones: a release file without
+# build_variant is of a default lane and fails; a file without lane lines
+# (v0.1.0-rc.1, or a plain build) says nothing about lanes.
+for f in aarch64/bin/runner-aws x86_64/bin/runner-azure x86_64/bin/runner-gcp; do cp "$B/$f" "$B/$f-dvt"; done
+for dir in nitro gcp azure; do cp -r "$B/$dir" "$B/$dir-dvt"; done
+mismatch "a release file without build_variant, DVT=1" build_variant "$T/fp-release-old.txt" DVT=1
+if check "$T/fp.txt" DVT=1 && [ -z "$(lane_out)" ] && [ "$(grep -c '^ok ' "$T/out")" = 12 ]; then
+  ok "check: a file without lane lines, DVT=1, nothing said about lanes"
+else
+  bad "check: a file without lane lines, DVT=1"; show
+fi
 sed "s/^commit .*/commit $OTHER_COMMIT/" "$T/fp-release.txt" >"$T/fp-lane-commit-other.txt"
 if check "$T/fp-lane-commit-other.txt" && [ "$(grep -c '^ok ' "$T/out")" = 15 ] && grep -q "^note  commit $OTHER_COMMIT" "$T/out" && ! grep -q '^FAIL ' "$T/out"; then
   ok "check: another commit in the file, a note and exit 0"
