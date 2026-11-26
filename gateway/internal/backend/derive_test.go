@@ -667,13 +667,14 @@ func TestKeyLoadNOfNGuessKeepsTheRealThreshold(t *testing.T) {
 // share key at each PUBLIC_KEYS.
 type churnRunner struct {
 	*fakeRunner
-	pk phase0.BLSPubKey
+	pk  phase0.BLSPubKey
+	off atomic.Bool // lists no share of pk while set
 }
 
 func (c *churnRunner) PublicKeys(ctx context.Context) ([]proto.ValidatorKey, error) {
 	keys, err := c.fakeRunner.PublicKeys(ctx)
-	if err != nil {
-		return nil, err
+	if err != nil || c.off.Load() {
+		return keys, err
 	}
 	x, err := crand.Int(crand.Reader, groupR)
 	if err != nil || x.Sign() == 0 {
@@ -683,24 +684,91 @@ func (c *churnRunner) PublicKeys(ctx context.Context) ([]proto.ValidatorKey, err
 	return append(keys, proto.ValidatorKey{Pubkey: proto.Pubkey(c.pk), SharePubkey: proto.Pubkey(pubOf(blstKey(x))), Index: proto.IndexUnknown}), nil
 }
 
+// followUpFails is a signer that lists no key in a follow-up load while
+// fail is set, so that load fails (the signers hold no key the gateway
+// can sign for); calls counts those answers. A signer that does not
+// answer would not do: the load keeps its last list.
+type followUpFails struct {
+	runner
+	fail  *atomic.Bool
+	calls *atomic.Int64
+}
+
+func (f followUpFails) PublicKeys(ctx context.Context) ([]proto.ValidatorKey, error) {
+	if f.fail.Load() && ctx.Value(followUpKey{}) != nil {
+		f.calls.Add(1)
+
+		return nil, nil
+	}
+
+	return f.runner.PublicKeys(ctx)
+}
+
+// churnCluster is 3 signers with two 2-of-3 keys. Once the churn starts,
+// the first signer lists a new share key of a third key at every
+// PUBLIC_KEYS, and the other two the real shares of that key. The first
+// load runs before the churn starts, so the two good keys give the guess
+// that the churning key then fails. searches counts the full searches of
+// the churning key. wrap, if not nil, wraps each runner.
+func churnCluster(t *testing.T, maxAge time.Duration, log *slog.Logger, wrap func(runner) runner) (s *Signers, good []*testKey, churn *churnRunner, fakes []*fakeRunner, searches *atomic.Int64) {
+	t.Helper()
+	good = []*testKey{splitKey(t, 2, 3), splitKey(t, 2, 3)}
+	extra := splitKey(t, 2, 3)
+	fakes = cluster(good, 3)
+	churn = &churnRunner{fakeRunner: fakes[0], pk: extra.pk}
+	churn.off.Store(true)
+	rs := []runner{churn, fakes[1], fakes[2]}
+	if wrap != nil {
+		for i := range rs {
+			rs[i] = wrap(rs[i])
+		}
+	}
+	s = newSigners(names(3), rs, 0, 2*time.Second, log)
+	t.Cleanup(func() { s.Close() })
+	s.keys.maxAge = maxAge
+	searches = new(atomic.Int64)
+	s.derive = func(pk phase0.BLSPubKey, shares []share, maxIndex int, guesses ...guess) (group, error) {
+		if pk == extra.pk {
+			searches.Add(1)
+		}
+
+		return deriveGroup(pk, shares, maxIndex, guesses...)
+	}
+	if _, err := s.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for i, f := range fakes[1:] {
+		f.set(func(f *fakeRunner) {
+			f.keys = append(f.keys, proto.ValidatorKey{Pubkey: proto.Pubkey(extra.pk), SharePubkey: proto.Pubkey(pubOf(&extra.shares[i+1])), Index: proto.IndexUnknown})
+		})
+	}
+	churn.off.Store(false)
+
+	return s, good, churn, fakes, searches
+}
+
+// refusals is the number of "key refused" lines that name pk.
+func refusals(log string, pk phase0.BLSPubKey) int {
+	n := 0
+	for _, l := range strings.Split(log, "\n") {
+		if strings.Contains(l, "key refused") && strings.Contains(l, fmt.Sprintf("%#x", pk)) {
+			n++
+		}
+	}
+
+	return n
+}
+
 // A signer that lists a new share key for one key at every PUBLIC_KEYS
 // keeps that key waiting for its search at every load. The loads stay
-// bounded: at most one follow-up load per keysMaxAge, and a follow-up
-// load starts no other.
+// bounded: the load that finds the key defers it, the follow-up load
+// searches it and refuses it, once, and starts no other load.
 func TestKeyLoadChurnIsBounded(t *testing.T) {
-	good := []*testKey{splitKey(t, 2, 3), splitKey(t, 2, 3)}
-	extra := splitKey(t, 2, 3)
-	fakes := cluster(good, 3)
-	for i, f := range fakes[1:] {
-		f.keys = append(f.keys, proto.ValidatorKey{Pubkey: proto.Pubkey(extra.pk), SharePubkey: proto.Pubkey(pubOf(&extra.shares[i+1])), Index: proto.IndexUnknown})
-	}
-	rs := []runner{&churnRunner{fakeRunner: fakes[0], pk: extra.pk}, fakes[1], fakes[2]}
-	s := newSigners(names(3), rs, 0, 2*time.Second, discard())
-	defer s.Close()
-	for range 2 {
-		if _, err := s.Refresh(context.Background()); err != nil {
-			t.Fatal(err)
-		}
+	var log syncBuilder
+	s, good, churn, fakes, _ := churnCluster(t, keysMaxAge, slog.New(slog.NewTextHandler(&log, nil)), nil)
+	from := len(log.String())
+	if _, err := s.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 	loads := func() int {
 		fakes[1].mu.Lock()
@@ -713,9 +781,96 @@ func TestKeyLoadChurnIsBounded(t *testing.T) {
 	if n := loads() - before; n > 1 {
 		t.Fatalf("%d loads in 2 s after the last refresh; want at most 1", n)
 	}
+	if n := refusals(log.String()[from:], churn.pk); n != 1 {
+		t.Fatalf("%d key refused lines for the churning key; want 1, from the follow-up load:\n%s", n, log.String()[from:])
+	}
 	for _, k := range good {
 		if _, ok := s.keys.lookup(k.pk); !ok {
 			t.Fatal("a good key is not served")
+		}
+	}
+}
+
+// Refresh in a loop with a churning signer: every load defers the
+// churning key, and each follow-up load searches it once. Follow-up
+// loads start at most once per keysMaxAge.
+func TestKeyLoadFollowUpsWaitKeysMaxAge(t *testing.T) {
+	const maxAge, run = 300 * time.Millisecond, 1500 * time.Millisecond
+	s, _, _, _, searches := churnCluster(t, maxAge, discard(), nil)
+	for end := time.Now().Add(run); time.Now().Before(end); time.Sleep(10 * time.Millisecond) {
+		if _, err := s.Refresh(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n := searches.Load()
+	if most := int64(run/maxAge) + 1; n < 2 || n > most {
+		t.Fatalf("%d follow-up loads in %s with keysMaxAge %s; want 2 to %d", n, run, maxAge, most)
+	}
+	t.Logf("%d follow-up loads in %s, keysMaxAge %s", n, run, maxAge)
+}
+
+// An honest key that fits no guess, next to a churning signer, is served
+// by the follow-up load: the churn does not starve it.
+func TestKeyLoadServesADeferredKeyNextToChurn(t *testing.T) {
+	s, _, _, fakes, _ := churnCluster(t, keysMaxAge, discard(), nil)
+	setRoot(fakes)
+	// Signers 1, 2, 3 hold the shares at indices 3, 1, 2: the indices of
+	// the good keys do not fit, so the key waits for the follow-up load.
+	odd := splitKey(t, 2, 3)
+	for i, x := range []int{2, 0, 1} {
+		fakes[i].set(func(f *fakeRunner) {
+			f.keys = append(f.keys, proto.ValidatorKey{Pubkey: proto.Pubkey(odd.pk), SharePubkey: proto.Pubkey(pubOf(&odd.shares[x])), Index: proto.IndexUnknown})
+			f.secret[proto.Pubkey(odd.pk)] = &odd.shares[x]
+		})
+	}
+	if _, err := s.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if g, ok := s.keys.lookup(odd.pk); ok {
+			if g.threshold != 2 {
+				t.Fatalf("group %+v", g)
+			}
+
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the key that fits no guess is not served after the follow-up load")
+		}
+	}
+	if _, err := signWith(t, s, odd.pk); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A follow-up load that fails (no key is left) leaves no follow-up
+// pending for good: the next load that defers a key starts a new one.
+func TestKeyLoadFollowUpFailsThenRunsAgain(t *testing.T) {
+	const maxAge = 200 * time.Millisecond
+	var fail atomic.Bool
+	var calls atomic.Int64
+	fail.Store(true)
+	s, _, _, _, searches := churnCluster(t, maxAge, discard(), func(r runner) runner {
+		return followUpFails{runner: r, fail: &fail, calls: &calls}
+	})
+	if _, err := s.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(10 * time.Second); calls.Load() < 3 || len(s.keys.loading) > 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("no follow-up load ran to its end")
+		}
+	}
+	if n := searches.Load(); n != 0 {
+		t.Fatalf("the failed follow-up load searched %d times", n)
+	}
+	fail.Store(false)
+	if _, err := s.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(10 * time.Second); searches.Load() == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("no follow-up load after a failed one")
 		}
 	}
 }
