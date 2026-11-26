@@ -2,7 +2,10 @@ package backend
 
 import (
 	"context"
+	crand "crypto/rand"
 	"errors"
+	"fmt"
+	"log/slog"
 	"math/big"
 	"os"
 	"slices"
@@ -551,5 +554,221 @@ func TestKeyLoadServesGoodKeysFirst(t *testing.T) {
 	}
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("the key with a foreign share searched %d times", got)
+	}
+}
+
+// sharesAt is share x_i of k on signer i: the key split with index x_i
+// on signer i.
+func sharesAt(k *testKey, x ...uint64) []share {
+	sh := make([]share, len(x))
+	for i, xi := range x {
+		sh[i] = share{node: i, pub: pubOf(&k.shares[xi-1])}
+	}
+
+	return sh
+}
+
+// Honest shares of a t-of-n split also fit n-of-n at other indices, or at
+// a multiple of those. A guess with such indices must not serve the key
+// as n-of-n: deriveGroup ends at the real threshold.
+func TestDeriveGroupNOfNGuessKeepsTheRealThreshold(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		t, n     int
+		maxIndex int
+		real     []uint64 // the index of the split on each signer
+		guess    []uint64 // n-of-n indices that every share fits
+	}{
+		{"3 of 4", 3, 4, 4, []uint64{3, 2, 1, 4}, []uint64{1, 2, 3, 4}},
+		{"3 of 4, guess at twice the indices", 3, 4, 8, []uint64{3, 2, 1, 4}, []uint64{2, 4, 6, 8}},
+		{"3 of 4, guess at twice the real indices", 3, 4, 8, []uint64{3, 2, 1, 4}, []uint64{6, 4, 2, 8}},
+		{"5 of 6", 5, 6, 6, []uint64{1, 2, 3, 4, 5, 6}, []uint64{5, 4, 3, 2, 1, 6}},
+		{"4 of 6", 4, 6, 6, []uint64{1, 2, 3, 4, 5, 6}, []uint64{1, 4, 3, 2, 5, 6}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			k := splitKey(t, c.t, c.n)
+			sh := sharesAt(k, c.real...)
+			f, ok := newFit(k.pk, sh)
+			if !ok || !f.everySubset(c.guess, c.n) {
+				t.Fatalf("the shares do not fit %d of %d at %v", c.n, c.n, c.guess)
+			}
+			got, err := deriveGroup(k.pk, sh, c.maxIndex, guess{threshold: c.n, index: c.guess})
+			if err != nil || got.threshold != c.t {
+				t.Fatalf("group %+v, %v; want threshold %d", got, err, c.t)
+			}
+			idx := make([]uint64, len(got.shares))
+			for i, s := range got.shares {
+				idx[i] = s.index
+			}
+			if !f.everySubset(idx, c.t) {
+				t.Fatalf("indices %v do not fit %d of %d", idx, c.t, c.n)
+			}
+		})
+	}
+}
+
+// A 4-of-6 guess on a 4-of-5 key held by 5 of those signers: the key is
+// served 4 of 5 with indices that fit, whether they are the indices of
+// the guess or not.
+func TestDeriveGroupGuessOfALargerSplit(t *testing.T) {
+	g6 := []uint64{2, 3, 4, 5, 6} // the 4-of-6 indices of signers 2 to 6
+	for _, real := range [][]uint64{{2, 3, 4, 5, 6}, {1, 2, 3, 4, 5}, {5, 4, 3, 2, 1}} {
+		k := splitKey(t, 4, 6)
+		sh := sharesAt(k, real...)
+		got, err := deriveGroup(k.pk, sh, 6, guess{threshold: 4, index: g6})
+		if err != nil || got.threshold != 4 {
+			t.Fatalf("real %v: group %+v, %v", real, got, err)
+		}
+		f, _ := newFit(k.pk, sh)
+		idx := make([]uint64, len(got.shares))
+		for i, s := range got.shares {
+			idx[i] = s.index
+		}
+		if !f.everySubset(idx, 4) || f.everySubset(idx, 3) {
+			t.Fatalf("real %v: indices %v do not fit 4 of 5", real, idx)
+		}
+	}
+}
+
+// Through the load: a 6-of-6 key at 1 to 6 first, then a 5-of-6 key at
+// 5,4,3,2,1,6 on the same signers, whose shares also fit 6 of 6 at 1 to
+// 6. The second is served 5 of 6 and signs with one signer down.
+func TestKeyLoadNOfNGuessKeepsTheRealThreshold(t *testing.T) {
+	all := splitKey(t, 6, 6)
+	fakes := cluster([]*testKey{all}, 6)
+	setRoot(fakes)
+	s := newTestSigners(t, fakes)
+	defer s.Close()
+	if g, ok := s.keys.lookup(all.pk); !ok || g.threshold != 6 {
+		t.Fatalf("6 of 6 key: group %+v", g)
+	}
+	k := splitKey(t, 5, 6)
+	x := []int{5, 4, 3, 2, 1, 6}
+	for i, f := range fakes {
+		f.set(func(f *fakeRunner) {
+			f.keys = append(f.keys, proto.ValidatorKey{Pubkey: proto.Pubkey(k.pk), SharePubkey: proto.Pubkey(pubOf(&k.shares[x[i]-1])), Index: proto.IndexUnknown})
+			f.secret[proto.Pubkey(k.pk)] = &k.shares[x[i]-1]
+		})
+	}
+	if _, err := s.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	searched(t, s)
+	if g, ok := s.keys.lookup(k.pk); !ok || g.threshold != 5 {
+		t.Fatalf("5 of 6 key: group %+v", g)
+	}
+	fakes[5].set(func(f *fakeRunner) { f.err = errors.New("down") })
+	if _, err := signWith(t, s, k.pk); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// churnRunner lists one more key than its fakeRunner, with a new random
+// share key at each PUBLIC_KEYS.
+type churnRunner struct {
+	*fakeRunner
+	pk phase0.BLSPubKey
+}
+
+func (c *churnRunner) PublicKeys(ctx context.Context) ([]proto.ValidatorKey, error) {
+	keys, err := c.fakeRunner.PublicKeys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	x, err := crand.Int(crand.Reader, groupR)
+	if err != nil || x.Sign() == 0 {
+		return nil, errors.New("no random share")
+	}
+
+	return append(keys, proto.ValidatorKey{Pubkey: proto.Pubkey(c.pk), SharePubkey: proto.Pubkey(pubOf(blstKey(x))), Index: proto.IndexUnknown}), nil
+}
+
+// A signer that lists a new share key for one key at every PUBLIC_KEYS
+// keeps that key waiting for its search at every load. The loads stay
+// bounded: at most one follow-up load per keysMaxAge, and a follow-up
+// load starts no other.
+func TestKeyLoadChurnIsBounded(t *testing.T) {
+	good := []*testKey{splitKey(t, 2, 3), splitKey(t, 2, 3)}
+	extra := splitKey(t, 2, 3)
+	fakes := cluster(good, 3)
+	for i, f := range fakes[1:] {
+		f.keys = append(f.keys, proto.ValidatorKey{Pubkey: proto.Pubkey(extra.pk), SharePubkey: proto.Pubkey(pubOf(&extra.shares[i+1])), Index: proto.IndexUnknown})
+	}
+	rs := []runner{&churnRunner{fakeRunner: fakes[0], pk: extra.pk}, fakes[1], fakes[2]}
+	s := newSigners(names(3), rs, 0, 2*time.Second, discard())
+	defer s.Close()
+	for range 2 {
+		if _, err := s.Refresh(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	loads := func() int {
+		fakes[1].mu.Lock()
+		defer fakes[1].mu.Unlock()
+
+		return fakes[1].health
+	}
+	before := loads()
+	time.Sleep(2 * time.Second)
+	if n := loads() - before; n > 1 {
+		t.Fatalf("%d loads in 2 s after the last refresh; want at most 1", n)
+	}
+	for _, k := range good {
+		if _, ok := s.keys.lookup(k.pk); !ok {
+			t.Fatal("a good key is not served")
+		}
+	}
+}
+
+// A signer that lists a validator key twice would count as two signers,
+// so the gateway refuses the key: an honest 3-of-4 key that signer 4 lists
+// again with the share at index 5, and a key whose two shares are both on
+// signer 4. The other keys stay served, and the log names the signer.
+func TestKeyListedTwiceBySignerRefused(t *testing.T) {
+	good, a, line := splitKey(t, 3, 4), splitKey(t, 3, 5), splitKey(t, 2, 2)
+	fakes := cluster([]*testKey{good}, 4)
+	for i, f := range fakes {
+		f.keys = append(f.keys, proto.ValidatorKey{Pubkey: proto.Pubkey(a.pk), SharePubkey: proto.Pubkey(pubOf(&a.shares[i])), Index: proto.IndexUnknown})
+		f.secret[proto.Pubkey(a.pk)] = &a.shares[i]
+	}
+	fakes[3].keys = append(fakes[3].keys,
+		proto.ValidatorKey{Pubkey: proto.Pubkey(a.pk), SharePubkey: proto.Pubkey(pubOf(&a.shares[4])), Index: proto.IndexUnknown},
+		proto.ValidatorKey{Pubkey: proto.Pubkey(line.pk), SharePubkey: proto.Pubkey(pubOf(&line.shares[0])), Index: proto.IndexUnknown},
+		proto.ValidatorKey{Pubkey: proto.Pubkey(line.pk), SharePubkey: proto.Pubkey(pubOf(&line.shares[1])), Index: proto.IndexUnknown})
+	setRoot(fakes)
+	var log syncBuilder
+	s := newSigners(names(4), runners(fakes), 5, 2*time.Second, slog.New(slog.NewTextHandler(&log, nil)))
+	defer s.Close()
+	if _, err := s.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	searched(t, s)
+	if g, ok := s.keys.lookup(a.pk); ok {
+		t.Fatalf("the key signer-4 lists twice is served: %+v", g)
+	}
+	if g, ok := s.keys.lookup(line.pk); ok {
+		t.Fatalf("the key with both shares on signer-4 is served: %+v", g)
+	}
+	if _, err := signWith(t, s, good.pk); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []*testKey{a, line} {
+		want := fmt.Sprintf("%#x", k.pk)
+		found := false
+		for _, l := range strings.Split(log.String(), "\n") {
+			if strings.Contains(l, "key refused") && strings.Contains(l, want) && strings.Contains(l, "signer-4") {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("no key refused line names signer-4 for %s:\n%s", want, log.String())
+		}
+	}
+	// The refusal is logged once while the listing stays.
+	if _, err := s.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(log.String(), fmt.Sprintf("%#x", line.pk)); n != 1 {
+		t.Fatalf("%d log lines name the key with both shares on signer-4; want 1:\n%s", n, log.String())
 	}
 }

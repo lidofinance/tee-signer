@@ -108,6 +108,14 @@ type Signers struct {
 	// and wait for the full search in a load of their own. Only the load
 	// that holds the key-load token writes it.
 	deferred map[string]bool
+	// followAt is when the last follow-up load for deferred keys started,
+	// and followPending is set while one is due: at most one runs per
+	// keysMaxAge, and a follow-up load defers no key.
+	followAt      time.Time
+	followPending bool
+	// listedTwice is the signers, by validator key, that list the key more
+	// than once, as last logged.
+	listedTwice map[phase0.BLSPubKey]string
 	// ctx ends at Close; the load for deferred keys runs under it.
 	ctx  context.Context
 	stop context.CancelFunc
@@ -189,7 +197,8 @@ func newSigners(names []string, nodes []runner, maxIndex int, timeout time.Durat
 	s := &Signers{nodes: nodes, names: names, maxIndex: min(maxIndex, maxShareIndex), timeout: timeout, log: log,
 		listed: make([][]proto.ValidatorKey, len(nodes)), modes: make([]string, len(nodes)), modesAt: make([]time.Time, len(nodes)),
 		newerLevel: make([]int, len(nodes)), derived: map[string]derivedGroup{}, m: metrics.New(),
-		warns: newWarnLimit(warnEvery), derive: deriveGroup, deferred: map[string]bool{}}
+		warns: newWarnLimit(warnEvery), derive: deriveGroup, deferred: map[string]bool{},
+		listedTwice: map[phase0.BLSPubKey]string{}}
 	s.ctx, s.stop = context.WithCancel(context.Background())
 	s.keys = newKeyList(s.loadKeys, keysMaxAge, log)
 	s.modeMaxAge = modeMaxRefreshes * s.keys.maxAge
@@ -248,10 +257,17 @@ func (s *Signers) Close() error {
 // The groups of keys not seen before are derived without s.mu, so whole
 // keys sign meanwhile, on one goroutine per CPU (deriveAll). A key that
 // fits no guess of the groups found so far waits: the load serves the
-// others and starts another load, which runs the full search for it. A
-// load whose ctx ends first fails and keeps the groups derived by then
-// for the next.
+// others and starts a follow-up load, which runs the full search for every
+// key that fits no guess. A follow-up starts at most once per keysMaxAge,
+// later if the last one was sooner, and starts no other: a signer that
+// lists a new share key at every answer keeps its key waiting, but not
+// the loads looping. A load whose ctx ends first fails and keeps the
+// groups derived by then for the next.
+//
+// A key that one signer lists more than once is refused: that signer
+// would count as several.
 func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, error) {
+	followUp := ctx.Value(followUpKey{}) != nil
 	type answer struct {
 		keys    []proto.ValidatorKey
 		err     error
@@ -292,6 +308,9 @@ func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, err
 	wg.Wait()
 
 	s.mu.Lock()
+	if followUp {
+		s.followPending, s.followAt = false, time.Now()
+	}
 	now := s.keys.now()
 	var errs []error
 	for i, a := range answers {
@@ -322,14 +341,32 @@ func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, err
 		}
 	}
 	shares := map[phase0.BLSPubKey][]share{}
+	twice := map[phase0.BLSPubKey][]string{}
 	answered := false
 	for i, keys := range s.listed {
 		answered = answered || keys != nil
 		for _, k := range keys {
 			pk := phase0.BLSPubKey(k.Pubkey)
+			if sh := shares[pk]; len(sh) > 0 && sh[len(sh)-1].node == i {
+				if names := twice[pk]; len(names) == 0 || names[len(names)-1] != s.names[i] {
+					twice[pk] = append(names, s.names[i])
+				}
+
+				continue
+			}
 			shares[pk] = append(shares[pk], share{node: i, pub: phase0.BLSPubKey(k.SharePubkey)})
 		}
 	}
+	listedTwice := make(map[phase0.BLSPubKey]string, len(twice))
+	for pk, names := range twice {
+		delete(shares, pk)
+		listedTwice[pk] = strings.Join(names, ",")
+		if s.listedTwice[pk] != listedTwice[pk] {
+			s.log.Warn("key refused", "pubkey", fmt.Sprintf("%#x", pk), "signer", listedTwice[pk],
+				"err", "the signer lists the key more than once")
+		}
+	}
+	s.listedTwice = listedTwice
 	if !answered {
 		s.mu.Unlock()
 
@@ -344,7 +381,7 @@ func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, err
 	}
 	s.mu.Unlock()
 
-	fresh, later, err := s.deriveAll(ctx, todo)
+	fresh, later, err := s.deriveAll(ctx, todo, followUp)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -392,13 +429,10 @@ func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, err
 	}
 	s.derived = derived
 	s.deferred = waiting
-	if len(later) > 0 {
+	if len(later) > 0 && !s.followPending {
 		s.log.Info("keys that fit no guess wait for the next load", "keys", len(later))
-		go func() {
-			if _, err := s.keys.reload(s.ctx); err != nil && s.ctx.Err() == nil {
-				s.log.Warn("key load failed", "err", err.Error())
-			}
-		}()
+		s.followPending = true
+		go s.followUp(time.Until(s.followAt.Add(s.keys.maxAge)))
 	}
 	if len(groups) == 0 {
 		return nil, errors.New("the signers hold no key the gateway can sign for")
@@ -406,6 +440,25 @@ func (s *Signers) loadKeys(ctx context.Context) (map[phase0.BLSPubKey]group, err
 	s.m.Keys.Set(float64(len(groups)))
 
 	return groups, nil
+}
+
+// followUpKey marks the ctx of a follow-up load.
+type followUpKey struct{}
+
+// followUp runs a follow-up load after wait, unless Close comes first.
+func (s *Signers) followUp(wait time.Duration) {
+	if wait > 0 {
+		t := time.NewTimer(wait)
+		defer t.Stop()
+		select {
+		case <-t.C:
+		case <-s.ctx.Done():
+			return
+		}
+	}
+	if _, err := s.keys.reload(context.WithValue(s.ctx, followUpKey{}, true)); err != nil && s.ctx.Err() == nil {
+		s.log.Warn("key load failed", "err", err.Error())
+	}
 }
 
 // deriveJob is a key whose group loadKeys derives.
@@ -418,11 +471,11 @@ type deriveJob struct {
 // deriveAll derives the groups of the jobs on one goroutine per CPU, by
 // groupID. Each tries the thresholds and indices of the groups derived so
 // far first. A job that fits none of them runs the full search when there
-// is no guess for its signers yet or it waited at the last load
-// (s.deferred); otherwise deriveAll returns it in later. Once ctx ends it
-// starts no more and returns the groups derived by then with the error of
-// ctx.
-func (s *Signers) deriveAll(ctx context.Context, todo []deriveJob) (out map[string]derivedGroup, later []deriveJob, err error) {
+// is no guess for its signers yet, it waited at the last load
+// (s.deferred), or searchAll is set; otherwise deriveAll returns it in
+// later. Once ctx ends it starts no more and returns the groups derived
+// by then with the error of ctx.
+func (s *Signers) deriveAll(ctx context.Context, todo []deriveJob, searchAll bool) (out map[string]derivedGroup, later []deriveJob, err error) {
 	out = make(map[string]derivedGroup, len(todo))
 	var mu sync.Mutex
 	jobs := make(chan deriveJob)
@@ -436,7 +489,7 @@ func (s *Signers) deriveAll(ctx context.Context, todo []deriveJob) (out map[stri
 				switch {
 				case done:
 					d.g, d.err = g, gerr
-				case len(guesses) > 0 && !s.deferred[j.id]:
+				case len(guesses) > 0 && !s.deferred[j.id] && !searchAll:
 					mu.Lock()
 					later = append(later, j)
 					mu.Unlock()

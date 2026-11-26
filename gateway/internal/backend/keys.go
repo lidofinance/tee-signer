@@ -55,7 +55,10 @@ type group struct {
 // whose indices fit every t of the shares, and fit no lower t above k/2,
 // is taken once the search finds no t up to k/2, the thresholds
 // checkOverlap refuses. The groups taken and refused are those of the
-// full search. Only the threshold can differ, for shares made to fit two
+// full search. A guess that ends at t = k shares (k >= 3) is not taken:
+// honest shares of a t-of-k split can fit k of k at other indices, for
+// every polynomial, so only the full search finds the real threshold.
+// Below k the threshold can differ only for shares made to fit two
 // polynomials: a lower t above k/2 with other indices is not looked for,
 // and signing then waits for the larger t of partial signatures.
 func deriveGroup(pk phase0.BLSPubKey, shares []share, maxIndex int, guesses ...guess) (group, error) {
@@ -117,6 +120,11 @@ func guessGroup(pk phase0.BLSPubKey, shares []share, maxIndex int, guesses []gue
 		// those of a key split with a lower threshold than the guess.
 		for t-1 > k/2 && f.everySubset(g.index, t-1) {
 			t--
+		}
+		if t == k && k >= 3 {
+			// Shares of a lower split can fit k of k at other indices: the
+			// full search decides. With 2 shares t is 2 whatever the split.
+			continue
 		}
 		idx := g.index
 		if lt, lidx, ok := f.search(k/2, maxIndex); ok {
