@@ -271,10 +271,12 @@ func TestE2EMarkLogLostState(t *testing.T) {
 	t.Logf("another image: %s", lastLine(other.logText(), "runner:"))
 
 	// Another position: its own log works; its record copied under this
-	// signer's next name does not count. The file log cannot report an
-	// object's lock, so the claim does not skip the copy either: it stops
-	// there and the runner does not start (markstore.ErrNameTaken). Once the
-	// copy is gone, the runner claims that name with its own mark.
+	// signer's next name does not count. This runner has no setup, so the
+	// retention of a record is not known and the claim never skips a taken
+	// name (the file log cannot report an object's lock either). The claim
+	// stops at the copy and the runner does not start
+	// (markstore.ErrNameTaken). Once the copy is gone, the runner claims
+	// that name with its own mark.
 	addr2 := fmt.Sprintf("tcp:127.0.0.1:%d", freePort(t))
 	pos2 := newRunner(t, "s2", c, addr2, "-mark-store", "file:"+logDir, "-mark-signer", "s2")
 	pos2.start()
