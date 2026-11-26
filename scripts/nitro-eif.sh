@@ -52,6 +52,24 @@
 # checked (no arm64 host here), and neither was a launch: the first launch
 # on Graviton is the check, with the PCRs of nitro-cli describe-enclaves.
 #
+# The pinned BuildKit (BUILDKIT_IMAGE in scripts/common.sh, run by a
+# buildx builder made for the run) and the pinned Dockerfile frontend (the
+# Dockerfile's first line) build the image: the layers and the image
+# config. The host's Docker only runs the BuildKit container. Each run
+# makes a new builder, so each run pulls the frontend from Docker Hub
+# (network), and the BuildKit image too when the host's Docker does not
+# have it. The build stops if the Dockerfile lacks the frontend pin
+# (need_frontend_pin) or the builder runs another BuildKit
+# (pinned_builder). That builder keeps its
+# images to itself, so the build writes a docker archive, docker load puts
+# it into the host's Docker, and the script checks that the loaded image is
+# the one built. nitro-cli reads it from the host's Docker as before.
+#
+# pinned_builder makes a new builder for each run (docker-container
+# driver, one node, started with --bootstrap), and the script removes it
+# when it ends, also on failure. Run from generic-images.sh or
+# release-build.sh, it builds on their builder (BUILDKIT_BUILDER).
+#
 # The EIF is built twice from scratch to check that the PCRs repeat. Then
 # scripts/eif-check.sh reads the EIF itself: kernel header, the runner in
 # the ramdisk, and PCR0/1/2 recomputed without nitro-cli.
@@ -129,6 +147,13 @@ install -m 0555 "$RUNNER" "$CTX/runner"
 mkdir -m 0755 "$CTX/licenses"
 install -m 0644 "$RUNNER.licenses/"* "$CTX/licenses/"
 install -m 0644 "$ROOT/platform-aws/deploy/enclave/Dockerfile" "$CTX/Dockerfile"
+# The Dockerfile we build pins the frontend.
+need_frontend_pin "$CTX/Dockerfile" || die "the Dockerfile of the build does not pin the Dockerfile frontend"
+# The pinned BuildKit builds the image, on a builder made for this run or
+# on the calling run's (pinned_builder in scripts/common.sh). drop_builder
+# removes a builder made here when the script ends.
+trap drop_builder EXIT
+pinned_builder || die "no builder that runs the pinned BuildKit $BUILDKIT_IMAGE"
 # Do not reset mtimes here: BuildKit skips re-sending context files whose
 # size and mtime look unchanged, which once put a stale runner in the
 # image. rewrite-timestamp below clamps layer timestamps instead.
@@ -145,9 +170,24 @@ build_eif() { # build_eif <tag>
   # SOURCE_DATE_EPOCH + rewrite-timestamp pin file and image timestamps,
   # and no provenance/SBOM attestations: a plain `docker build` gives a new
   # image (and new PCR0/PCR2) on every --no-cache build.
-  SOURCE_DATE_EPOCH=0 docker buildx build -q --no-cache --provenance=false --sbom=false \
+  # The builder's BuildKit runs in a container, so the image goes through a
+  # docker archive into the host's Docker, where nitro-cli reads it.
+  local archive="$OUT/enclave-$arch$tag.tar" meta="$OUT/enclave-$arch$tag.json" built config loaded
+  rm -f "$archive" "$meta"
+  SOURCE_DATE_EPOCH=0 docker buildx build --builder "$BUILDKIT_BUILDER" -q --no-cache --provenance=false --sbom=false \
     --platform "linux/$(goarch_of "$arch")" --build-arg SOURCE_DATE_EPOCH=0 \
-    --output "type=docker,name=$ENCLAVE_IMAGE,rewrite-timestamp=true" "$CTX" >/dev/null
+    --metadata-file "$meta" \
+    --output "type=docker,dest=$archive,name=$ENCLAVE_IMAGE,rewrite-timestamp=true" "$CTX" >/dev/null
+  built="$(jq -r '."containerimage.digest"' "$meta")"
+  config="$(jq -r '."containerimage.config.digest"' "$meta")"
+  docker load -i "$archive" >/dev/null
+  rm -f "$archive"
+  # The loaded image is the one built: its id is the manifest digest
+  # (containerd image store) or the config digest (the older image store).
+  loaded="$(docker image inspect "$ENCLAVE_IMAGE" --format '{{.Id}}')"
+  [ "$loaded" = "$built" ] || [ "$loaded" = "$config" ] ||
+    die "the loaded $ENCLAVE_IMAGE is $loaded, not the image built ($built, config $config)"
+  log "enclave image $built loaded as $ENCLAVE_IMAGE"
   # The image must hold exactly the runner we passed in, with the mode the
   # Dockerfile sets, and nothing of an operator.
   local cid got gotmode

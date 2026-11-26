@@ -103,8 +103,11 @@ builds apart:
   hoodi` (or `devnet`, `ci-test`) refuses more. signer-admin reads each
   signer's build from HEALTH and drafts with that build's waits.
 
-Build, offline: `CHAIN=hoodi scripts/generic-images.sh build`
-(`CHAIN=devnet` also needs `CHAIN_JSON`). The chain goes into every name:
+Build: `CHAIN=hoodi scripts/generic-images.sh build` (`CHAIN=devnet` also
+needs `CHAIN_JSON`). The runner builds run offline. Each run pulls the
+pinned Dockerfile frontend from Docker Hub, and the pinned BuildKit too when
+the host's Docker does not have it. These two build the images, and the
+host's Docker only runs the BuildKit container. The chain goes into every name:
 runners `runner-<cloud>-hoodi`, folders `build/nitro-hoodi` and
 `build/gcp-hoodi`, local images `signer-cloud/{azure,gcp}-runner-hoodi`,
 registry tags `generic-hoodi-ts` (Azure) and `generic-hoodi` (GCP).

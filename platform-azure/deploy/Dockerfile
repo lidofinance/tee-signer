@@ -1,3 +1,8 @@
+# syntax=docker/dockerfile:1.29.0@sha256:572cebbc2b15e6f84c077742952674889cb63cd5e9b80abdffcbe587b6f19183
+# The line above pins the Dockerfile frontend by version and digest. Without
+# it, the build uses the frontend that comes with the BuildKit of the build,
+# and the image config changes with that BuildKit. The build scripts run the
+# BuildKit pinned in scripts/common.sh (BUILDKIT_IMAGE).
 # Runner image for ACI confidential containers (platform-azure/deploy/README.md). One
 # image serves every signer of every operator: it holds the release runner
 # and nothing else. Build it with build-image.sh.

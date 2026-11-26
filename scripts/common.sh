@@ -378,6 +378,153 @@ run_build_runner() {
     "$SIGNER_BUILDER_IMAGE" bash scripts/build-runner.sh "$@"
 }
 
+# The BuildKit that builds the measured images (platform-*/deploy/build-image.sh,
+# scripts/nitro-eif.sh), pinned by the digest of its image index. It runs
+# in the container of a buildx builder (docker-container driver) that each
+# run makes for itself (pinned_builder) and removes at its end
+# (drop_builder). This BuildKit and the pinned Dockerfile frontend
+# (need_frontend_pin) build the image: they build and compress the layers
+# and write the image config. The host's Docker only runs the BuildKit
+# container, so the digests do not follow the host's Docker or buildx
+# version. Each run makes a new builder, so each run pulls the pinned
+# frontend from Docker Hub, and this image too when the host's Docker does
+# not have it.
+BUILDKIT_IMAGE="moby/buildkit:v0.35.1@sha256:baf6138eb8c37644800c7c913fba051e840ebb9ba13eaf92d92ef9a1712d0b4c"
+# The builders are named BUILDKIT_PREFIX-<UTC time>-b<boot>-p<pid>: the
+# boot of this host (boot_tag) and the pid of the script that made it.
+# The scripts before this naming used one builder called signer-buildkit
+# and kept it; pinned_builder leaves that one alone.
+BUILDKIT_PREFIX=signer-buildkit
+# BUILDKIT_BUILDER: the builder of this run. pinned_builder sets and
+# exports it, so the child scripts of a run use the run's builder.
+BUILDKIT_BUILDER="${BUILDKIT_BUILDER:-}"
+
+# pinned_builder: sets BUILDKIT_BUILDER to a builder that runs
+# BUILDKIT_IMAGE. With BUILDKIT_BUILDER set by the calling run
+# (release-build.sh, generic-images.sh), it checks that builder
+# (builder_shape) and uses it. Otherwise it removes the builders of runs
+# that are gone (drop_stale_builders) and makes a new builder with
+# --bootstrap. It fails if the builder cannot be made or does not start, or
+# fails builder_shape. The caller sets "trap drop_builder EXIT" first, so
+# the builder is removed when the script ends, also on failure. The image
+# builds pass --builder "$BUILDKIT_BUILDER" to every build, so no build
+# falls back to the host's default builder. release/release-test.sh tests
+# it.
+pinned_builder() {
+  local name
+  if [ -n "$BUILDKIT_BUILDER" ]; then
+    builder_shape "$BUILDKIT_BUILDER" ||
+      { echo "BUILDKIT_BUILDER=$BUILDKIT_BUILDER is not a builder of the pinned BuildKit (unset it, and the build makes its own)" >&2; return 1; }
+    log "builder $BUILDKIT_BUILDER of the calling run runs $BUILDKIT_IMAGE"
+    return 0
+  fi
+  drop_stale_builders
+  name="$BUILDKIT_PREFIX-$(date -u +%Y%m%d-%H%M%S)-b$(boot_tag)-p$$"
+  # Set before the create: drop_builder removes a builder that was made
+  # but did not start.
+  BUILDKIT_BUILDER="$name" BUILDKIT_OWNER=$$
+  export BUILDKIT_BUILDER
+  log "creating the builder $name on $BUILDKIT_IMAGE (Docker Hub: the BuildKit image unless Docker has it; the frontend on its first build)"
+  if ! docker buildx create --name "$name" --driver docker-container \
+    --driver-opt "image=$BUILDKIT_IMAGE" --bootstrap >/dev/null; then
+    echo "cannot create or start the builder $name on $BUILDKIT_IMAGE" >&2
+    drop_builder
+    return 1
+  fi
+  builder_shape "$name" || { drop_builder; return 1; }
+}
+
+# builder_shape NAME: the builder NAME has the docker-container driver and
+# one node, that node runs, and its container runs BUILDKIT_IMAGE (image
+# name and image id).
+builder_shape() {
+  local name="$1" driver nodes node status got want
+  read -r driver nodes node status < <(docker buildx inspect "$name" 2>/dev/null | awk '
+    /^Driver:/ && !n { d = $2 }
+    /^Nodes:/ { n = 1; next }
+    n && /^Name:/ { c++; if (c == 1) nd = $2 }
+    n && /^Status:/ && c == 1 { st = $2 }
+    END { print (d == "" ? "-" : d), c + 0, (nd == "" ? "-" : nd), (st == "" ? "-" : st) }')
+  [ "$driver" != - ] || { echo "no builder $name" >&2; return 1; }
+  [ "$driver" = docker-container ] || { echo "the builder $name has the driver '$driver', not docker-container" >&2; return 1; }
+  [ "$nodes" = 1 ] || { echo "the builder $name has $nodes nodes, not 1" >&2; return 1; }
+  [ "$status" = running ] || { echo "the node $node of the builder $name is '$status', not running" >&2; return 1; }
+  got="$(docker container inspect --format '{{.Config.Image}} {{.Image}} {{.State.Running}}' "buildx_buildkit_$node" 2>/dev/null || true)"
+  want="$BUILDKIT_IMAGE $(docker image inspect --format '{{.Id}}' "$BUILDKIT_IMAGE" 2>/dev/null || true) true"
+  [ "$got" = "$want" ] || { echo "the builder $name runs '$got', not $BUILDKIT_IMAGE" >&2; return 1; }
+}
+
+# drop_builder: removes the builder that pinned_builder made in this
+# script, if any. A builder of the calling run stays: the run that made it
+# removes it. For "trap drop_builder EXIT".
+drop_builder() {
+  [ "${BUILDKIT_OWNER:-}" = "$$" ] || return 0
+  BUILDKIT_OWNER=
+  docker buildx inspect "$BUILDKIT_BUILDER" >/dev/null 2>&1 || return 0
+  docker buildx rm "$BUILDKIT_BUILDER" >/dev/null 2>&1 ||
+    log "cannot remove the builder $BUILDKIT_BUILDER (docker buildx rm $BUILDKIT_BUILDER)"
+}
+
+# drop_stale_builders: removes the builders BUILDKIT_PREFIX-*-b<boot>-p<pid>
+# of this boot whose pid is gone: runs that ended without drop_builder
+# (killed, or the host lost power). It keeps a builder whose pid is alive,
+# since another run may build on it, and a builder of another boot, which
+# may be of another host that shares this Docker; it logs those. Other
+# names, signer-buildkit too, are not its business.
+drop_stale_builders() {
+  local me name boot pid
+  me="$(boot_tag)"
+  for name in $(docker buildx ls --format '{{.Name}}' 2>/dev/null || true); do
+    if [ "$name" = "$BUILDKIT_PREFIX" ]; then
+      log "the builder $BUILDKIT_PREFIX of an earlier version of these scripts is not used any more: docker buildx rm $BUILDKIT_PREFIX removes it"
+      continue
+    fi
+    [[ "$name" =~ ^$BUILDKIT_PREFIX-[0-9]{8}-[0-9]{6}-b([0-9]+)-p([0-9]+)$ ]] || continue
+    boot="${BASH_REMATCH[1]}" pid="${BASH_REMATCH[2]}"
+    # buildx ls lists the nodes too (NAME0): only a builder inspects.
+    docker buildx inspect "$name" >/dev/null 2>&1 || continue
+    if [ "$boot" != "$me" ]; then
+      log "keeping the builder $name: made on another boot or host (docker buildx rm $name removes it)"
+    elif pid_alive "$pid"; then
+      log "keeping the builder $name: its run (pid $pid) is alive"
+    else
+      log "removing the builder $name: its run (pid $pid) is gone"
+      docker buildx rm "$name" >/dev/null 2>&1 || log "cannot remove the builder $name"
+    fi
+  done
+}
+
+# boot_tag: a number for this boot of this host (the cksum of the Linux
+# boot id, or of the macOS boot time).
+boot_tag() {
+  { cat /proc/sys/kernel/random/boot_id 2>/dev/null || sysctl -n kern.boottime 2>/dev/null || true; } | cksum | cut -d' ' -f1
+}
+
+# pid_alive PID: a process PID runs on this host. /proc where there is
+# one, as kill -0 fails for a process of another user.
+pid_alive() {
+  if [ -d /proc/self ]; then
+    [ -d "/proc/$1" ]
+  else
+    kill -0 "$1" 2>/dev/null || ps -p "$1" >/dev/null 2>&1
+  fi
+}
+
+# need_frontend_pin DOCKERFILE: the first line of DOCKERFILE names the
+# Dockerfile frontend by version and digest
+# (# syntax=docker/dockerfile:X.Y.Z@sha256:DIGEST). Without that line the
+# build uses the frontend that comes with the BuildKit of the build, and the
+# image config would change with it. The image builds
+# (platform-*/deploy/build-image.sh, scripts/nitro-eif.sh) run it on the
+# Dockerfile they build, and release/release-test.sh tests it.
+need_frontend_pin() {
+  local first
+  first="$(head -n 1 "$1")"
+  [[ "$first" =~ ^#\ syntax=docker/dockerfile:[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}$ ]] && return 0
+  echo "$1 does not start with '# syntax=docker/dockerfile:VERSION@sha256:DIGEST': '$first'" >&2
+  return 1
+}
+
 # setup_value FILE KEY: the first value of KEY in the human form of a setup.
 setup_value() {
   setup_tool show "$1" | sed -n "s/^$2 = //p" | head -n 1
