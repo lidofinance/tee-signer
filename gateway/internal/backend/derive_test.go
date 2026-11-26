@@ -460,7 +460,8 @@ func randPerm(t *testing.T, n int) []int {
 }
 
 // Share keys P and 2P interpolate with indices 1 and 2 to the point at
-// infinity; a key listed at infinity is refused.
+// infinity; a key listed at infinity is refused. So is a whole key at
+// infinity on a single-mode signer: no signature verifies under it.
 func TestDeriveGroupRefusesKeyAtInfinity(t *testing.T) {
 	a := randScalar(t)
 	twice := new(big.Int).Lsh(a, 1)
@@ -470,6 +471,9 @@ func TestDeriveGroupRefusesKeyAtInfinity(t *testing.T) {
 	sh := []share{{node: 0, pub: pubOf(blstKey(a))}, {node: 1, pub: pubOf(blstKey(twice))}}
 	if g, err := deriveGroup(inf, sh, 2); err == nil {
 		t.Fatalf("served %+v", g)
+	}
+	if g, err := deriveGroup(inf, []share{{node: 0, pub: inf}}, 1); err == nil {
+		t.Fatalf("whole key at infinity served: %+v", g)
 	}
 }
 

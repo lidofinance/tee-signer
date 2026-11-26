@@ -80,6 +80,11 @@ func guessGroup(pk phase0.BLSPubKey, shares []share, maxIndex int, guesses []gue
 	if k == 0 {
 		return group{}, true, errors.New("no share")
 	}
+	// Before the whole-key case, which does not decode pk: no signature
+	// verifies under a key at infinity.
+	if pk[0]&0x40 != 0 { // the infinity flag
+		return group{}, true, errors.New("the validator key is the point at infinity")
+	}
 	if maxIndex < k {
 		return group{}, true, fmt.Errorf("%d shares, but share indices go to %d only", k, maxIndex)
 	}
