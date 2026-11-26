@@ -14,8 +14,8 @@
 #      images, each built twice. A pinned BuildKit (BUILDKIT_IMAGE in
 #      scripts/common.sh, in the lane's buildx builder) and the pinned
 #      Dockerfile frontend of each Dockerfile build the three images
-#      (network on the first build: Docker Hub, moby/buildkit and
-#      docker/dockerfile). The host's Docker only runs the BuildKit
+#      (network on each run: Docker Hub, docker/dockerfile, and
+#      moby/buildkit when Docker does not have it). The host's Docker only runs the BuildKit
 #      container, so the images do not follow the host's Docker version,
 #   4. check that the GCP and Azure images are of IMAGE_VARIANT
 #      (release/image-variant.py),
@@ -64,8 +64,13 @@
 #     removes the signer-buildkit-* builders of this boot whose run is
 #     gone, and keeps those of live runs and of other boots. It does not
 #     touch signer-buildkit, the one builder of earlier versions of the
-#     scripts; docker buildx rm signer-buildkit removes it. The first lane
-#     on a host pulls the BuildKit image from Docker Hub.
+#     scripts; docker buildx rm signer-buildkit removes it. Runs in
+#     different containers or PID namespaces that share one buildx config
+#     folder (HOME or BUILDX_CONFIG) are not supported: one run's cleanup
+#     may remove the other's builder, and that build then fails.
+#   - Docker Hub access on every run. Each lane's new builder pulls the
+#     pinned Dockerfile frontend, and the BuildKit image when the host's
+#     Docker does not have it. A host without Docker Hub cannot build.
 #   - qemu-user-static (binfmt_misc entry qemu-aarch64 with the F flag) for
 #     the arm64 linuxkit of the EIF build. Docker Desktop has its own.
 #   - az with the confcom extension at the version of AZ_CONFCOM_VERSION.

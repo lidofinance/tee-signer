@@ -66,7 +66,11 @@ Ubuntu 26.04 is not a supported workbench. Known differences there:
 the `docker.io` package has no buildx, and an image build on the
 default Docker builder fails with `exporter option "rewrite-timestamp" conflicts
 with "unpack"`. The measured images build on a docker-container builder that
-each run makes and removes (`pinned_builder` in `scripts/common.sh`). For other builds, a
+each run makes and removes (`pinned_builder` in `scripts/common.sh`).
+Each such run pulls the pinned Dockerfile frontend from Docker Hub. Runs in
+different containers or PID namespaces that share one buildx config folder
+(`HOME` or `BUILDX_CONFIG`) are not supported: one run's cleanup may remove
+the other's builder, and that build then fails. For other builds, a
 docker-container builder works:
 `docker buildx create --use --driver docker-container`.
 

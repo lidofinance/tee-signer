@@ -55,9 +55,10 @@
 # The pinned BuildKit (BUILDKIT_IMAGE in scripts/common.sh, run by a
 # buildx builder made for the run) and the pinned Dockerfile frontend (the
 # Dockerfile's first line) build the image: the layers and the image
-# config. The host's Docker only runs the BuildKit container. The first
-# build on a host pulls both images from Docker Hub (network). The build
-# stops if the Dockerfile lacks the frontend pin (need_frontend_pin) or the
+# config. The host's Docker only runs the BuildKit container. Each run
+# makes a new builder, so each run pulls the frontend from Docker Hub
+# (network), and the BuildKit image too when the host's Docker does not
+# have it. The build stops if the Dockerfile lacks the frontend pin (need_frontend_pin) or the
 # builder runs another BuildKit (pinned_builder). That builder keeps its
 # images to itself, so the build writes a docker archive, docker load puts
 # it into the host's Docker, and the script checks that the loaded image is

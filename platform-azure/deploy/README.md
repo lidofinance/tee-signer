@@ -815,8 +815,9 @@ frontend (`# syntax=docker/dockerfile:VERSION@sha256:DIGEST`). The host's
 Docker only runs the BuildKit container and loads the OCI archive. Before
 the pins, the host's Docker did the build, and its version changed the
 image config (docker/dockerfile 1.29.0 changed how the image history
-writes `EXPOSE`). The first build on a host pulls both images from Docker
-Hub. `build-image.sh` stops if the Dockerfile lacks the frontend pin or the
+writes `EXPOSE`). Each run makes a new builder, so each run pulls the
+frontend from Docker Hub, and the BuildKit image too when the host's Docker
+does not have it. `build-image.sh` stops if the Dockerfile lacks the frontend pin or the
 builder runs another BuildKit image.
 
 ### Azure steps

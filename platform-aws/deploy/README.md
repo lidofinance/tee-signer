@@ -559,8 +559,9 @@ and removes it at the end (`pinned_builder` in `scripts/common.sh`). The first l
 layers and write the image config. The host's Docker only runs the
 BuildKit container. The script loads the image into the host's Docker from
 a docker archive and checks that the loaded image is the one built.
-nitro-cli reads it from there. The first build on a host pulls both images
-from Docker Hub. The script stops if the Dockerfile lacks the frontend pin
+nitro-cli reads it from there. Each run makes a new builder, so each run
+pulls the frontend from Docker Hub, and the BuildKit image too when the
+host's Docker does not have it. The script stops if the Dockerfile lacks the frontend pin
 or the builder runs another BuildKit image. The EIF takes the files, the
 command and the environment of the image, not its history.
 

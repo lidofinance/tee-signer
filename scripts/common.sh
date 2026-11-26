@@ -386,7 +386,9 @@ run_build_runner() {
 # (need_frontend_pin) build the image: they build and compress the layers
 # and write the image config. The host's Docker only runs the BuildKit
 # container, so the digests do not follow the host's Docker or buildx
-# version. The first build on a host pulls this image from Docker Hub.
+# version. Each run makes a new builder, so each run pulls the pinned
+# frontend from Docker Hub, and this image too when the host's Docker does
+# not have it.
 BUILDKIT_IMAGE="moby/buildkit:v0.35.1@sha256:baf6138eb8c37644800c7c913fba051e840ebb9ba13eaf92d92ef9a1712d0b4c"
 # The builders are named BUILDKIT_PREFIX-<UTC time>-b<boot>-p<pid>: the
 # boot of this host (boot_tag) and the pid of the script that made it.
@@ -422,7 +424,7 @@ pinned_builder() {
   # but did not start.
   BUILDKIT_BUILDER="$name" BUILDKIT_OWNER=$$
   export BUILDKIT_BUILDER
-  log "creating the builder $name on $BUILDKIT_IMAGE (pulls it from Docker Hub unless Docker has it)"
+  log "creating the builder $name on $BUILDKIT_IMAGE (Docker Hub: the BuildKit image unless Docker has it; each build pulls the frontend)"
   if ! docker buildx create --name "$name" --driver docker-container \
     --driver-opt "image=$BUILDKIT_IMAGE" --bootstrap >/dev/null; then
     echo "cannot create or start the builder $name on $BUILDKIT_IMAGE" >&2

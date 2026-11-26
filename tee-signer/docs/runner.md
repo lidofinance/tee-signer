@@ -648,8 +648,9 @@ names the BuildKit image by digest (`BUILDKIT_IMAGE`), and the three build
 scripts run it in a buildx builder (docker-container driver) that each run
 makes and removes at its end. The
 Dockerfiles pin the frontend by digest on their first line. The host's
-Docker only runs the BuildKit container. The first build on a host pulls
-both images from Docker Hub.
+Docker only runs the BuildKit container. Each run makes a new builder, so
+each run pulls the frontend from Docker Hub, and the BuildKit image too
+when the host's Docker does not have it.
 
 A verifier recomputes the same measurements from the same commit and
 compares them with the setup's list and the key-release policy before it
