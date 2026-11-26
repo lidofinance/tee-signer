@@ -13,9 +13,9 @@
 #                                           with FILE, the recorded values; FILE
 #                                           must hold each name once, in the
 #                                           format build writes; a release's
-#                                           lane lines chain, variant and
-#                                           build_variant must match CHAIN,
-#                                           IMAGE_VARIANT and DVT
+#                                           lane lines chain and
+#                                           build_variant must match CHAIN
+#                                           and DVT, and variant the images
 #
 # Check a release with the generic-images.sh of this version or later:
 # check refuses a file that lacks any of the names this version writes.
@@ -166,14 +166,34 @@ fingerprint_format() {
 # the current build's. The lane lines variant, build_variant, commit and
 # chain, which release/release-build.sh adds to a release's
 # fingerprints-<chain>.txt, may each appear once, with a value
-# release-build.sh writes. chain, variant and build_variant, when there,
-# must equal this run's CHAIN, IMAGE_VARIANT and variant (from DVT); a
+# release-build.sh writes. chain and build_variant, when there, must
+# equal this run's CHAIN and variant (from DVT), and variant the one
+# release/image-variant.py reads from the GCP image and the Azure
+# policies of this build (IMAGE_VARIANT plays no part); a
 # commit other than the checked-out one only gets a note, and a lane line
 # that is not there is not asked for. Blank lines and
 # lines that start with # are skipped; any other line refuses the whole
 # file before anything is compared. FILE is data: it is read with read and
 # compared in the shell, and no part of it goes into a sed program or a
 # command.
+# output_variant: the variant of this build's GCP image and Azure
+# policies, read by release/image-variant.py as release-build.sh checks
+# it, or "unknown (reason)".
+output_variant() {
+  local fp out policies
+  fp="$(mktemp)"
+  fingerprints >"$fp"
+  shopt -s nullglob
+  policies=("$AZ_OUT"/signer-*/policy.rego)
+  shopt -u nullglob
+  if out="$(python3 -I "$ROOT/release/image-variant.py" detect "$fp" "$GCP_OUT/runner.oci.tar" ${policies[@]+"${policies[@]}"} 2>&1)"; then
+    echo "$out"
+  else
+    echo "unknown ($(printf '%s' "$out" | tail -n 1))"
+  fi
+  rm -f "$fp"
+}
+
 cmd_check() {
   # The format checks use [0-9], [a-f] and [a-z]; in another locale these
   # match more than ASCII. Only check runs in C: build keeps the caller's
@@ -213,8 +233,9 @@ cmd_check() {
     want="${rec[$name]}" got="${cur[$name]:-}"
     if [ "$got" = "$want" ]; then echo "ok    $name ${want:0:24}..."; else echo "FAIL  $name '$got', want $want"; ok=0; fi
   done
-  local -A run=([chain]="$CHAIN" [variant]="$IMAGE_VARIANT" [build_variant]="$(variant)")
-  local -A from=([chain]=CHAIN [variant]=IMAGE_VARIANT [build_variant]=DVT)
+  local -A run=([chain]="$CHAIN" [build_variant]="$(variant)")
+  [ -z "${lane[variant]+x}" ] || run[variant]="$(output_variant)"
+  local -A from=([chain]=CHAIN [variant]="the GCP image and Azure policies" [build_variant]=DVT)
   for name in chain variant build_variant; do
     [ -n "${lane[$name]+x}" ] || continue
     want="${lane[$name]}" got="${run[$name]}"

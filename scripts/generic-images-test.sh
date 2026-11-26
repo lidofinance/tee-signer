@@ -24,6 +24,8 @@ R="$T/repo"
 mkdir -p "$R/scripts" "$R/platform-azure/deploy"
 cp "$ROOT/scripts/generic-images.sh" "$ROOT/scripts/common.sh" "$R/scripts/"
 cp "$ROOT/platform-azure/deploy/common.sh" "$R/platform-azure/deploy/"
+mkdir -p "$R/release"
+cp "$ROOT/release/image-variant.py" "$R/release/"
 
 # Fake outputs of a mainnet build of the default variant.
 B="$R/build"
@@ -34,10 +36,45 @@ for f in aarch64/bin/runner-aws aarch64/bin/hostagent aarch64/bin/forwarder aarc
   echo "fake $f" >"$B/$f"
 done
 echo "sha256:$(printf '1%.0s' {1..64})" >"$B/azure/runner.digest"
-printf '2%.0s' {1..64} >"$B/azure/policy.sha256"
-echo "sha256:$(printf '3%.0s' {1..64})" >"$B/gcp/runner.digest"
 sha() { sha256sum <"$1" | cut -d' ' -f1; }
-{
+# oci_tar FILE REDIRECT: a GCP OCI archive whose image config has the
+# label log_redirect REDIRECT; prints the manifest digest (as in
+# release/release-test.sh).
+oci_tar() {
+  python3 -I - "$1" "$2" <<'PYEOF'
+import hashlib, io, json, sys, tarfile
+out, redirect = sys.argv[1], sys.argv[2]
+blobs = {}
+def add(obj):
+    data = json.dumps(obj).encode()
+    d = hashlib.sha256(data).hexdigest()
+    blobs[d] = data
+    return "sha256:" + d
+cfg = add({"config": {"Labels": {"tee.launch_policy.log_redirect": redirect}}})
+man = add({"schemaVersion": 2, "config": {"digest": cfg}, "layers": []})
+index = json.dumps({"schemaVersion": 2, "manifests": [{"digest": man}]}).encode()
+with tarfile.open(out, "w") as t:
+    for name, data in [("index.json", index)] + [("blobs/sha256/" + d, b) for d, b in blobs.items()]:
+        i = tarfile.TarInfo(name)
+        i.size = len(data)
+        t.addfile(i, io.BytesIO(data))
+print(man)
+PYEOF
+}
+# fake_variant test|prod: the GCP archive and the one Azure policy of that
+# variant, as release/image-variant.py reads them (test: log_redirect
+# always, allow_stdio_access true).
+fake_variant() {
+  local redirect=always stdio=true
+  [ "$1" = test ] || redirect=never stdio=false
+  oci_tar "$B/gcp/runner.oci.tar" "$redirect" >"$B/gcp/runner.digest"
+  mkdir -p "$B/azure/signer-1"
+  echo 'containers := [{"allow_stdio_access":'"$stdio"'}]' >"$B/azure/signer-1/policy.rego"
+  sha "$B/azure/signer-1/policy.rego" >"$B/azure/policy.sha256"
+}
+fake_variant test
+# write_fp: the fingerprints of the fake build, as build writes them.
+write_fp() {
   echo "# generic images, as generic-images.sh build writes them"
   echo "nitro.PCR0 $(printf 'a%.0s' {1..96})"
   echo "nitro.PCR1 $(printf 'b%.0s' {1..96})"
@@ -47,11 +84,12 @@ sha() { sha256sum <"$1" | cut -d' ' -f1; }
   echo "parent.forwarder $(sha "$B/aarch64/bin/forwarder")"
   echo "parent.udprelay $(sha "$B/aarch64/bin/udprelay")"
   echo "azure.image sha256:$(printf '1%.0s' {1..64})"
-  echo "azure.cce_policy $(printf '2%.0s' {1..64})"
+  echo "azure.cce_policy $(cat "$B/azure/policy.sha256")"
   echo "azure.runner $(sha "$B/x86_64/bin/runner-azure")"
-  echo "gcp.image sha256:$(printf '3%.0s' {1..64})"
+  echo "gcp.image $(cat "$B/gcp/runner.digest")"
   echo "gcp.runner $(sha "$B/x86_64/bin/runner-gcp")"
-} >"$T/fp.txt"
+}
+write_fp >"$T/fp.txt"
 
 # check FILE [NAME=VALUE...]: generic-images.sh check FILE on the fake
 # build, with the settings given; output in $T/out.
@@ -199,14 +237,28 @@ mismatch() {
 }
 sed 's/^chain mainnet/chain hoodi/' "$T/fp-release.txt" >"$T/fp-lane-hoodi.txt"
 mismatch "chain hoodi in the file, a mainnet build" chain "$T/fp-lane-hoodi.txt"
+# variant is read from the images (release/image-variant.py), not from
+# IMAGE_VARIANT: the same test images pass as test and fail as prod under
+# either setting, and prod images the other way round.
 sed 's/^variant test/variant prod/' "$T/fp-release.txt" >"$T/fp-lane-prod.txt"
-mismatch "variant prod in the file, IMAGE_VARIANT unset (test)" variant "$T/fp-lane-prod.txt"
-mismatch "variant test in the file, IMAGE_VARIANT=prod" variant "$T/fp-release.txt" IMAGE_VARIANT=prod
-if check "$T/fp-lane-prod.txt" IMAGE_VARIANT=prod && [ "$(grep -c '^ok ' "$T/out")" = 16 ]; then
-  ok "check: variant prod in the file, IMAGE_VARIANT=prod"
+for setting in test prod; do
+  if check "$T/fp-release.txt" IMAGE_VARIANT=$setting && [ "$(grep -c '^ok ' "$T/out")" = 16 ]; then
+    ok "check: variant test in the file, test images, IMAGE_VARIANT=$setting"
+  else
+    bad "check: variant test in the file, test images, IMAGE_VARIANT=$setting"; show
+  fi
+  mismatch "variant prod in the file, test images, IMAGE_VARIANT=$setting" variant "$T/fp-lane-prod.txt" IMAGE_VARIANT=$setting
+done
+fake_variant prod
+{ write_fp; lane | sed 's/^variant test/variant prod/'; } >"$T/fp-prod.txt"
+{ write_fp; lane; } >"$T/fp-prod-as-test.txt"
+if check "$T/fp-prod.txt" && [ "$(grep -c '^ok ' "$T/out")" = 16 ]; then
+  ok "check: variant prod in the file, prod images, IMAGE_VARIANT unset"
 else
-  bad "check: variant prod with IMAGE_VARIANT=prod"; show
+  bad "check: variant prod in the file, prod images"; show
 fi
+mismatch "variant test in the file, prod images, IMAGE_VARIANT=test" variant "$T/fp-prod-as-test.txt" IMAGE_VARIANT=test
+fake_variant test
 sed 's/^build_variant default/build_variant dvt/' "$T/fp-release.txt" >"$T/fp-lane-dvt.txt"
 mismatch "build_variant dvt in the file, DVT unset" build_variant "$T/fp-lane-dvt.txt"
 sed "s/^commit .*/commit $OTHER_COMMIT/" "$T/fp-release.txt" >"$T/fp-lane-commit-other.txt"
