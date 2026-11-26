@@ -597,3 +597,21 @@ go_overlay_flags() {
     printf -- '-overlay=%s\n' "$(devnet_go_overlay "$ROOT" "$BUILD")"
   fi
 }
+
+# DVT_MARKS: strings only the dvt code puts into a runner: a file name, and
+# two function names (cgo files keep no plain file name in the binary).
+DVT_MARKS=(tee-signer/server/dvshare.go 'core.(*Signer).AddValidatorGroup' 'server.(*Server).dvShare')
+
+# dvt_marks FILE yes|no: FILE holds every DVT mark (yes, a dvt runner) or
+# none (no, a default runner). The marks are text: as a regex "(*" never
+# matches. On a miss it names the mark on stderr and fails.
+dvt_marks() {
+  local m
+  for m in "${DVT_MARKS[@]}"; do
+    if grep -qaF -- "$m" "$1"; then
+      [ "$2" = yes ] || { echo "$1 holds $m: a default build has no dv_share code" >&2; return 1; }
+    else
+      [ "$2" = no ] || { echo "$1 has no $m: a dvt build has the dv_share code" >&2; return 1; }
+    fi
+  done
+}
