@@ -17,6 +17,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/lidofinance/tee-signer/signer-protocol/clientcert"
 )
 
 // The log messages, also counted by the tests.
@@ -155,6 +157,9 @@ func (w *Watcher) check(certPEM, keyPEM []byte, now time.Time) (*Pair, error) {
 	cert, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("client_cert %s and client_key %s: %w", w.certPath, w.keyPath, err)
+	}
+	if err := clientcert.CheckFile(cert.Certificate); err != nil {
+		return nil, fmt.Errorf("client_cert %s: the signers refuse this certificate list in the handshake: %w", w.certPath, err)
 	}
 	leaf := cert.Leaf
 	if now.Before(leaf.NotBefore) {

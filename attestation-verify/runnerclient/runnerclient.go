@@ -48,6 +48,7 @@ import (
 	"github.com/lidofinance/tee-signer/governance/runnerchain"
 	"github.com/lidofinance/tee-signer/governance/setupwire"
 	"github.com/lidofinance/tee-signer/signer-protocol"
+	"github.com/lidofinance/tee-signer/signer-protocol/clientcert"
 	"github.com/lidofinance/tee-signer/signer-protocol/remote"
 	"github.com/lidofinance/tee-signer/signer-protocol/transport"
 )
@@ -276,6 +277,9 @@ func loadPair(certPath, keyPath string) (tls.Certificate, error) {
 	}
 	if cert.Leaf != nil && time.Now().After(cert.Leaf.NotAfter) {
 		return zero, fmt.Errorf("client_cert: expired on %s", cert.Leaf.NotAfter.UTC().Format(time.RFC3339))
+	}
+	if err := clientcert.CheckFile(cert.Certificate); err != nil {
+		return zero, fmt.Errorf("client_cert: the runner refuses this certificate list in the handshake: %w", err)
 	}
 	return cert, nil
 }

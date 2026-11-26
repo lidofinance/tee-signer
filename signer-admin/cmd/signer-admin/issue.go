@@ -22,6 +22,7 @@ import (
 
 	adminapprover "github.com/lidofinance/tee-signer/signer-admin/approver"
 	cloud "github.com/lidofinance/tee-signer/signer-protocol"
+	"github.com/lidofinance/tee-signer/signer-protocol/clientcert"
 )
 
 // Client certificates of the roles (docs/protocol.md, "Client roles"). The runner reads the role from the
@@ -45,6 +46,10 @@ import (
 // an intermediate, the file a client sends) and DIR/CN-key.pem (mode 0600).
 // An intermediate goes to DIR/CN-ca.pem and DIR/CN-ca-key.pem. Keys are
 // ECDSA P-256. The CA key file must be mode 0600, as an approver key.
+// Before it writes anything, issue-client-cert checks the certificate file
+// with the rule the runner puts on a client's list (signer-protocol/
+// clientcert) and refuses a file the runner would refuse, for example one
+// with an intermediate of a P-521 key.
 
 var certNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
@@ -162,6 +167,20 @@ func issue(out io.Writer, issuer *x509.Certificate, signer crypto.Signer, role, 
 	if ca {
 		certPath, keyPath = filepath.Join(dir, name+"-ca.pem"), filepath.Join(dir, name+"-ca-key.pem")
 	}
+	chain := [][]byte{der}
+	if !ca && !isRoot(issuer) {
+		chain = append(chain, issuer.Raw)
+	}
+	if err := clientcert.CheckFile(chain); err != nil {
+		if len(chain) == 1 {
+			return fmt.Errorf("not issuing %s: the runner would refuse it: %w", certPath, err)
+		}
+		// The leaf is always in bounds, so the issuer is not. The runner
+		// still takes this leaf when the issuer is pinned in
+		// allowed_client_ca, but this tool does not issue it.
+		return fmt.Errorf("not issuing %s: the issuer is outside the client certificate bounds; "+
+			"the runner refuses this certificate file unless the issuer is pinned in allowed_client_ca: %w", certPath, err)
+	}
 	for _, p := range []string{certPath, keyPath} {
 		if _, err := os.Stat(p); err == nil {
 			return fmt.Errorf("%s exists; not overwriting it", p)
@@ -170,9 +189,9 @@ func issue(out io.Writer, issuer *x509.Certificate, signer crypto.Signer, role, 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	certs := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-	if !ca && !isRoot(issuer) {
-		certs = append(certs, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: issuer.Raw})...)
+	var certs []byte
+	for _, c := range chain {
+		certs = append(certs, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c})...)
 	}
 	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
 		return err

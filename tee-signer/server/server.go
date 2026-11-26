@@ -766,7 +766,7 @@ func (s *Server) handleConn(ctx context.Context, c net.Conn) {
 			}
 			return
 		}
-		cs := tc.ConnectionState()
+		cs := attls.ConnectionState(tc)
 		cl = s.clientOf(&cs)
 		if cl.undated {
 			s.Log.Warn("tls handshake without trusted time: HEALTH only until the clock has a reading", "remote", c.RemoteAddr().String(),

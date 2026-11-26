@@ -7,7 +7,6 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -167,7 +166,7 @@ func TestHandshakeTimeout(t *testing.T) {
 	s := &Server{Log: quiet, Platform: &platform.Platform{Name: "nitro"}}
 	done := make(chan struct{})
 	go func() {
-		s.handleConn(context.Background(), tls.Server(srvSide, cfg))
+		s.handleConn(context.Background(), attls.Server(srvSide, cfg))
 		close(done)
 	}()
 	select {

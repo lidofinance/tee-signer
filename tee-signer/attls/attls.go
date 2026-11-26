@@ -31,6 +31,7 @@ import (
 
 	"github.com/lidofinance/tee-signer/signer-protocol"
 	"github.com/lidofinance/tee-signer/signer-protocol/buildchain"
+	"github.com/lidofinance/tee-signer/signer-protocol/clientcert"
 	"github.com/lidofinance/tee-signer/signer-protocol/transport"
 )
 
@@ -54,6 +55,14 @@ import (
 // only until a trusted reading checks the chain with its dates (VerifyAt).
 // If now fails later in the handshake, the handshake fails.
 //
+// The client certificate list must fit a client chain of the role model
+// (clientcert.Check): a list with more than clientcert.MaxCerts
+// certificates besides copies of a pinned CA, a certificate over
+// clientcert.MaxCertBytes or a key of another kind is refused before any
+// signature check. crypto/tls then sees no verified
+// chain: read the connection state with ConnectionState, on a connection
+// of Listen or Server.
+//
 // Session tickets are off. Every connection does the full handshake and
 // so the full certificate check.
 func ServerConfig(caPEM []byte, now func() (time.Time, error), opts ...Option) (*tls.Config, []byte, error) {
@@ -69,6 +78,7 @@ func ServerConfig(caPEM []byte, now func() (time.Time, error), opts ...Option) (
 	for _, c := range cas {
 		undatedRoots.AddCert(undated(c))
 	}
+	registerPinned(undatedRoots, cas)
 	if now == nil {
 		now = func() (time.Time, error) { return time.Now(), nil }
 	}
@@ -109,15 +119,18 @@ func ServerConfig(caPEM []byte, now func() (time.Time, error), opts ...Option) (
 	}
 	h := sha256.Sum256(leaf.RawSubjectPublicKeyInfo)
 	cfg := &tls.Config{
-		MinVersion:             tls.VersionTLS13,
-		Certificates:           []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leaf}},
-		ClientAuth:             tls.RequireAndVerifyClientCert,
+		MinVersion:   tls.VersionTLS13,
+		Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leaf}},
+		// crypto/tls only requires a certificate. The chain check is
+		// this package's own (VerifyConnection), so that a list that no
+		// client chain has is refused before crypto/x509 sees it
+		// (checkClientCerts).
+		ClientAuth:             tls.RequireAnyClientCert,
 		ClientCAs:              pool,
 		SessionTicketsDisabled: true,
-		// crypto/tls verifies the client chain at cfg.Time(). On a clock
-		// error it gets 1970-01-01T00:00:01Z, before every certificate's
-		// NotBefore. Not the zero time: crypto/x509 reads a zero
-		// CurrentTime as "use the system clock" (ATTEST-ROLES-03).
+		// Any other time crypto/tls reads comes from the trusted clock too.
+		// On a clock error 1970-01-01T00:00:01Z, not the zero time, which
+		// crypto/x509 reads as "use the system clock" (ATTEST-ROLES-03).
 		Time: func() time.Time {
 			t, err := now()
 			if err != nil {
@@ -125,24 +138,41 @@ func ServerConfig(caPEM []byte, now func() (time.Time, error), opts ...Option) (
 			}
 			return t
 		},
-		// After the chain check, one more trusted reading: the handshake
-		// fails if the clock failed in between, or if a certificate of a
-		// verified chain is outside its dates at that reading.
-		VerifyConnection: func(cs tls.ConnectionState) error {
+	}
+	// The chain check with trusted time: the list bounds, then the check
+	// crypto/tls makes with RequireAndVerifyClientCert, at one trusted
+	// reading, then the dates of every certificate of the verified chains
+	// at that reading and the revoked set. The handshake fails if the
+	// clock fails here. keep, if not nil, gets the verified chains for
+	// ConnectionState.
+	verify := func(keep *peerConn) func(tls.ConnectionState) error {
+		return func(cs tls.ConnectionState) error {
+			certs, err := checkClientCerts(cs.PeerCertificates, pool)
+			if err != nil {
+				return err
+			}
 			t, err := now()
 			if err != nil {
 				return fmt.Errorf("attls: no trusted time to check the client certificate: %w", err)
 			}
-			if err := CheckDates(&cs, t); err != nil {
+			chains, err := verifyChain(certs, x509.VerifyOptions{Roots: pool, CurrentTime: t, KeyUsages: clientAuth})
+			if err != nil {
+				return &tls.CertificateVerificationError{UnverifiedCertificates: cs.PeerCertificates, Err: err}
+			}
+			if err := CheckDates(&tls.ConnectionState{VerifiedChains: chains}, t); err != nil {
 				return err
 			}
-			return o.revoked.Check(cs.VerifiedChains)
-		},
+			if err := o.revoked.Check(chains); err != nil {
+				return err
+			}
+			keep.keepChains(chains)
+			return nil
+		}
 	}
-	// Without trusted time at ClientHello: the chain check without dates,
-	// and no verified chain in the connection state.
+	cfg.VerifyConnection = verify(nil)
+	// Without trusted time at ClientHello: the list bounds and the chain
+	// check without dates, and no verified chain in the connection state.
 	noTime := cfg.Clone()
-	noTime.ClientAuth = tls.RequireAnyClientCert
 	noTime.VerifyConnection = func(cs tls.ConnectionState) error {
 		chains, err := verifyUndated(undatedRoots, cs.PeerCertificates)
 		if err != nil {
@@ -150,17 +180,58 @@ func ServerConfig(caPEM []byte, now func() (time.Time, error), opts ...Option) (
 		}
 		return o.revoked.Check(chains)
 	}
-	cfg.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
+	cfg.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
 		if _, err := now(); err != nil {
 			return noTime, nil
 		}
-		return nil, nil // keep this config
+		keep := connOf(hello.Conn)
+		if keep == nil {
+			return nil, nil // keep this config: the chains go nowhere
+		}
+		c := cfg.Clone()
+		c.VerifyConnection = verify(keep)
+		return c, nil
 	}
 	return cfg, h[:], nil
 }
 
 // clientAuth is the key usage crypto/tls asks of a client chain.
 var clientAuth = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
+
+// checkClientCerts refuses a client certificate list (leaf first) outside
+// the bounds of clientcert.Check, before any signature check. A copy of a
+// CA of pool (a pool of this package: ServerConfig, UndatedRoots) after
+// the leaf does not count. It returns the list with each certificate once.
+func checkClientCerts(certs []*x509.Certificate, pool *x509.CertPool) ([]*x509.Certificate, error) {
+	kept, err := clientcert.Check(certs, pinnedIn(pool))
+	if err != nil {
+		return nil, fmt.Errorf("attls: client certificate list: %w", err)
+	}
+	return kept, nil
+}
+
+// pinnedSets maps each CA pool this package made to the SHA-256 of the
+// DER of its certificates.
+var pinnedSets sync.Map // *x509.CertPool -> map[[32]byte]bool
+
+func registerPinned(pool *x509.CertPool, cas []*x509.Certificate) {
+	m := make(map[[32]byte]bool, len(cas))
+	for _, c := range cas {
+		m[sha256.Sum256(c.Raw)] = true
+	}
+	pinnedSets.Store(pool, m)
+}
+
+// pinnedIn reports a copy of a CA of pool; nil for a pool this package
+// did not make, whose copies then count like any certificate.
+func pinnedIn(pool *x509.CertPool) func(*x509.Certificate) bool {
+	v, ok := pinnedSets.Load(pool)
+	if !ok {
+		return nil
+	}
+	m := v.(map[[32]byte]bool)
+	return func(c *x509.Certificate) bool { return m[sha256.Sum256(c.Raw)] }
+}
 
 // undated is a copy of c that is valid at any time. Its signed bytes are
 // c's, so signatures still check against it; only the parsed dates
@@ -177,14 +248,26 @@ func undated(c *x509.Certificate) *x509.Certificate {
 // nonzero time, never the system clock. The chains it returns hold the
 // undated copies, whose DER is the original's.
 func verifyUndated(roots *x509.CertPool, certs []*x509.Certificate) ([][]*x509.Certificate, error) {
-	if len(certs) == 0 {
-		return nil, errors.New("attls: no client certificate")
+	certs, err := checkClientCerts(certs, roots)
+	if err != nil {
+		return nil, err
 	}
-	opts := x509.VerifyOptions{Roots: roots, Intermediates: x509.NewCertPool(), CurrentTime: noTrustedTime, KeyUsages: clientAuth}
+	u := make([]*x509.Certificate, len(certs))
+	for i, c := range certs {
+		u[i] = undated(c)
+	}
+	return verifyChain(u, x509.VerifyOptions{Roots: roots, CurrentTime: noTrustedTime, KeyUsages: clientAuth})
+}
+
+// verifyChain builds the chains of certs[0] with certs[1:] as the
+// intermediates. Every chain check of this package goes through it, so a
+// test can count what reaches crypto/x509.
+var verifyChain = func(certs []*x509.Certificate, opts x509.VerifyOptions) ([][]*x509.Certificate, error) {
+	opts.Intermediates = x509.NewCertPool()
 	for _, c := range certs[1:] {
-		opts.Intermediates.AddCert(undated(c))
+		opts.Intermediates.AddCert(c)
 	}
-	return undated(certs[0]).Verify(opts)
+	return certs[0].Verify(opts)
 }
 
 // UndatedRoots is the pool of undated copies of the CA certificates in
@@ -198,6 +281,7 @@ func UndatedRoots(caPEM []byte) (*x509.CertPool, error) {
 	for _, c := range cas {
 		p.AddCert(undated(c))
 	}
+	registerPinned(p, cas)
 	return p, nil
 }
 
@@ -225,14 +309,12 @@ func VerifyAt(roots *x509.CertPool, peer []*x509.Certificate, t time.Time) ([][]
 		return nil, errors.New("attls: no client CA to check the certificate against")
 	case t.IsZero():
 		return nil, errors.New("attls: no trusted time to check the certificate at")
-	case len(peer) == 0:
-		return nil, errors.New("attls: no client certificate")
 	}
-	opts := x509.VerifyOptions{Roots: roots, Intermediates: x509.NewCertPool(), CurrentTime: t, KeyUsages: clientAuth}
-	for _, c := range peer[1:] {
-		opts.Intermediates.AddCert(c)
+	certs, err := checkClientCerts(peer, roots)
+	if err != nil {
+		return nil, err
 	}
-	chains, err := peer[0].Verify(opts)
+	chains, err := verifyChain(certs, x509.VerifyOptions{Roots: roots, CurrentTime: t, KeyUsages: clientAuth})
 	if err != nil {
 		return nil, fmt.Errorf("attls: client certificate at the trusted time %s: %w", t.UTC().Format(time.RFC3339), err)
 	}
@@ -595,6 +677,7 @@ func parseCAs(caPEM []byte) (*x509.CertPool, []*x509.Certificate, error) {
 	if len(cas) == 0 {
 		return nil, nil, errors.New("attls: no CA certificate in the client CA file")
 	}
+	registerPinned(pool, cas)
 	return pool, cas, nil
 }
 
@@ -630,13 +713,13 @@ func (l firstByteListener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 	_ = c.SetReadDeadline(time.Now().Add(FirstByteTimeout))
-	return &firstByteConn{Conn: c}, nil
+	return &firstByteConn{peerConn: peerConn{Conn: c}}, nil
 }
 
 // firstByteConn clears the read deadline once the first byte has come.
 // The handshake then runs under the server's own time limit.
 type firstByteConn struct {
-	net.Conn
+	peerConn
 	seen atomic.Bool
 }
 
@@ -646,4 +729,53 @@ func (c *firstByteConn) Read(b []byte) (int, error) {
 		_ = c.Conn.SetReadDeadline(time.Time{})
 	}
 	return n, err
+}
+
+// peerConn is the connection under a TLS server connection of Listen or
+// Server. The handshake of a ServerConfig leaves the client chains it
+// verified on it, for ConnectionState: crypto/tls does not check the
+// chain under that config, so its own state has none.
+type peerConn struct {
+	net.Conn
+	chains atomic.Pointer[[][]*x509.Certificate]
+}
+
+// keepChains keeps chains on c. A nil c keeps nothing.
+func (c *peerConn) keepChains(chains [][]*x509.Certificate) {
+	if c != nil {
+		c.chains.Store(&chains)
+	}
+}
+
+// connOf is the peerConn of a connection that a TLS server connection
+// runs on, or nil.
+func connOf(c net.Conn) *peerConn {
+	switch c := c.(type) {
+	case *firstByteConn:
+		return &c.peerConn
+	case *peerConn:
+		return c
+	}
+	return nil
+}
+
+// Server is tls.Server for a connection that does not come from Listen.
+// ConnectionState gives the client chains of its handshake.
+func Server(c net.Conn, cfg *tls.Config) *tls.Conn {
+	return tls.Server(&peerConn{Conn: c}, cfg)
+}
+
+// ConnectionState is c.ConnectionState() of a server connection of Listen
+// or Server under a ServerConfig, with the client chains the handshake
+// verified as VerifiedChains. Without trusted time at the handshake, on a
+// handshake that has not finished, or on any other connection, it has no
+// verified chain: RoleOf gives RoleNone.
+func ConnectionState(c *tls.Conn) tls.ConnectionState {
+	cs := c.ConnectionState()
+	if p := connOf(c.NetConn()); p != nil && cs.HandshakeComplete {
+		if chains := p.chains.Load(); chains != nil {
+			cs.VerifiedChains = *chains
+		}
+	}
+	return cs
 }

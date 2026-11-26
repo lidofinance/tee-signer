@@ -179,7 +179,7 @@ func handshake(t *testing.T, cfg *tls.Config, cert tls.Certificate) tls.Connecti
 			return
 		}
 		defer c.Close()
-		s := tls.Server(c, cfg)
+		s := Server(c, cfg)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := s.HandshakeContext(ctx); err != nil {
@@ -187,7 +187,7 @@ func handshake(t *testing.T, cfg *tls.Config, cert tls.Certificate) tls.Connecti
 			close(got)
 			return
 		}
-		got <- s.ConnectionState()
+		got <- ConnectionState(s)
 	}()
 	c, err := tls.Dial("tcp", l.Addr().String(), &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS13,
 		Certificates: []tls.Certificate{cert}})

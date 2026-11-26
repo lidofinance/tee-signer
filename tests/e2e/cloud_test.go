@@ -259,9 +259,14 @@ func TestE2EMutualTLS(t *testing.T) {
 	// name, so force it to present the rogue one.
 	rogue := rogueCfg.Certificates[0]
 	forced := &tls.Config{GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return &rogue, nil }}
-	if err := try("client certificate from another CA", remote.WithTLS(forced, remote.DevVerifier)); !strings.Contains(err.Error(), "unknown certificate authority") {
+	// The runner checks the chain after crypto/tls, which then sends the
+	// alert bad certificate whatever the reason (tee-signer/attls), so the
+	// reason is read from the runner log.
+	from := len(r.logText())
+	if err := try("client certificate from another CA", remote.WithTLS(forced, remote.DevVerifier)); !strings.Contains(err.Error(), "bad certificate") {
 		t.Fatalf("want the runner to reject the CA, got %v", err)
 	}
+	wantHandshakeLog(t, r, from, "unknown authority")
 	if err := try("pinned to another key", remote.WithTLS(goodCfg, nil), remote.WithTLSKeyPin(make([]byte, 32))); !strings.Contains(err.Error(), "pinned") {
 		t.Fatalf("want a pin mismatch, got %v", err)
 	}
@@ -306,7 +311,7 @@ func TestE2EMutualTLS(t *testing.T) {
 func TestE2EClientCertificateUsesTheRunnerClock(t *testing.T) {
 	c := newChain(t)
 	caFile, cfg := testPKIValid(t, t.TempDir(), "clock", 10*365*24*time.Hour, time.Hour)
-	start := func(name string, extra ...string) *remote.Client {
+	start := func(name string, extra ...string) (*remote.Client, *runner) {
 		addr := fmt.Sprintf("tcp:127.0.0.1:%d", freePort(t))
 		r := newRunnerArgs(t, name, c, addr, append([]string{"-tls-client-ca", caFile}, extra...)...)
 		r.start()
@@ -315,15 +320,20 @@ func TestE2EClientCertificateUsesTheRunnerClock(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { cl.Close() })
-		return cl
+		return cl, r
 	}
-	waitReady(t, start("runner-clock-normal"))
+	normal, _ := start("runner-clock-normal")
+	waitReady(t, normal)
 
-	ahead := start("runner-clock-ahead", "-platform-opt", "clock_offset=2h")
+	ahead, aheadRunner := start("runner-clock-ahead", "-platform-opt", "clock_offset=2h")
 	deadline := time.Now().Add(20 * time.Second)
 	for {
 		_, err := ahead.Health(ctx)
-		if err != nil && strings.Contains(err.Error(), "expired certificate") {
+		// The alert is bad certificate for any refused chain, so the
+		// reason is read from the runner log; the runner with the normal
+		// clock took the same certificate.
+		if err != nil && strings.Contains(err.Error(), "bad certificate") {
+			wantHandshakeLog(t, aheadRunner, 0, "expired")
 			t.Logf("client certificate valid for 1 h: accepted by a runner with the normal clock, refused by one 2 h ahead: %v", err)
 			return
 		}
@@ -400,5 +410,28 @@ func TestE2ECloudFlagChecks(t *testing.T) {
 			t.Fatalf("%s: err %v, output %q", tc.name, err, out)
 		}
 		t.Logf("%s: refused at start: %s", tc.name, strings.TrimSpace(string(out)))
+	}
+}
+
+// wantHandshakeLog waits up to 5 s for a "tls handshake" warning in the log
+// of r, written after byte from, whose text holds want.
+func wantHandshakeLog(t *testing.T, r *runner, from int, want string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		text := r.logText()
+		if from > len(text) {
+			from = len(text)
+		}
+		for _, line := range strings.Split(text[from:], "\n") {
+			if strings.Contains(line, "tls handshake") && strings.Contains(line, want) {
+				t.Logf("runner log: %s", strings.TrimSpace(line))
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("runner log has no tls handshake refusal with %q after byte %d:\n%s", want, from, text[from:])
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }

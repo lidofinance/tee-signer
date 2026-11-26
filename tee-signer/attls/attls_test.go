@@ -300,6 +300,9 @@ func TestVsockListenerRefusals(t *testing.T) {
 		// name, so make it present this one.
 		return &tls.Config{GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return &c, nil }}
 	}
+	// The chain check runs in VerifyConnection, after which crypto/tls
+	// sends the alert bad certificate whatever the reason; the server's
+	// error names it.
 	cases := []struct {
 		name       string
 		cfg        *tls.Config
@@ -308,11 +311,11 @@ func TestVsockListenerRefusals(t *testing.T) {
 	}{
 		{"no client certificate", &tls.Config{}, "certificate required", "didn't provide a certificate"},
 		{"client certificate from another CA",
-			forced(good(other, now0.Add(-time.Hour), now0.Add(time.Hour))[0]), "unknown certificate authority", "unknown authority"},
+			forced(good(other, now0.Add(-time.Hour), now0.Add(time.Hour))[0]), "bad certificate", "unknown authority"},
 		{"expired client certificate",
-			&tls.Config{Certificates: good(root, now0.Add(-day(3)), now0.Add(-day(2)))}, "expired certificate", "expired"},
+			&tls.Config{Certificates: good(root, now0.Add(-day(3)), now0.Add(-day(2)))}, "bad certificate", "expired"},
 		{"client certificate not yet valid",
-			&tls.Config{Certificates: good(root, now0.Add(day(2)), now0.Add(day(3)))}, "expired certificate", "expired or is not yet valid"},
+			&tls.Config{Certificates: good(root, now0.Add(day(2)), now0.Add(day(3)))}, "bad certificate", "expired or is not yet valid"},
 		{"client certificate for server auth only",
 			&tls.Config{Certificates: good(root, now0.Add(-time.Hour), now0.Add(time.Hour), x509.ExtKeyUsageServerAuth)}, "bad certificate", "incompatible key usage"},
 		{"TLS 1.2 with a good client certificate",
@@ -381,7 +384,7 @@ func TestClientCertificateValidityUsesTheTrustedClock(t *testing.T) {
 			}
 			return
 		}
-		wantContains(t, name+": client", err, "expired certificate")
+		wantContains(t, name+": client", err, "bad certificate")
 		wantContains(t, name+": server", srv, want)
 	}
 

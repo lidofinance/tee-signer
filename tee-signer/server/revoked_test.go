@@ -146,7 +146,7 @@ func dialRevoked(t *testing.T, s *Server, rootPEM []byte, cert tls.Certificate, 
 	t.Cleanup(func() { l.Close() })
 	go func() {
 		if c, err := l.Accept(); err == nil {
-			s.handleConn(context.Background(), tls.Server(c, cfg))
+			s.handleConn(context.Background(), attls.Server(c, cfg))
 		}
 	}()
 	peer, err := net.Dial("tcp", l.Addr().String())

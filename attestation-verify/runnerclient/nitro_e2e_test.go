@@ -451,7 +451,9 @@ func TestE2ENitroRunnerClientCertificateClock(t *testing.T) {
 		t.Fatalf("runner with the normal clock: %v", err)
 	}
 	err := health(t, conn(ahead), opts...)
-	wantErr(t, err, "expired certificate")
+	// The runner sends the alert bad certificate for any refused chain;
+	// the runner with the normal clock took the same certificate.
+	wantErr(t, err, "bad certificate")
 	t.Logf("client certificate valid for 1 h: accepted by a runner with the normal clock, refused by one whose clock is 2 h ahead: %v", err)
 }
 

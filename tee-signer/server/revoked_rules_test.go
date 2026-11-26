@@ -85,7 +85,7 @@ func remoteClients(t *testing.T, s *Server, rootPEM []byte, cert tls.Certificate
 			if err != nil {
 				return
 			}
-			go s.handleConn(context.Background(), tls.Server(c, cfg))
+			go s.handleConn(context.Background(), attls.Server(c, cfg))
 		}
 	}()
 	return func() *remote.Client {

@@ -127,8 +127,10 @@ func TestE2EVsockTLS(t *testing.T) {
 	refused("plain vsock, no TLS")
 	refused("TLS without a client certificate", remote.WithTLS(&tls.Config{}, remote.DevVerifier))
 	rogue := rogueCfg.Certificates[0]
+	from := len(r.logText())
 	refused("client certificate from another CA", remote.WithTLS(&tls.Config{
 		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return &rogue, nil }}, remote.DevVerifier))
+	wantHandshakeLog(t, r, from, "unknown authority")
 
 	// The parent's side: the forwarder from TCP into the enclave.
 	taddr := fmt.Sprintf("tcp:127.0.0.1:%d", freePort(t))
