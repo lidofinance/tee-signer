@@ -248,7 +248,12 @@ cmd_check() {
   done
   if [ -n "${lane[commit]+x}" ]; then
     want="${lane[commit]}"
-    got="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null)" || got=unknown
+    # HEAD only of the repo whose top is ROOT: without .git, git would
+    # walk up to an outer repo and give its HEAD.
+    got=unknown
+    if [ "$(realpath -e -- "$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null)" = "$(realpath -e -- "$ROOT")" ]; then
+      got="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null)" || got=unknown
+    fi
     if [ "$got" = "$want" ]; then echo "ok    commit $want"; else echo "note  commit $want, not the checked-out commit $got (not compared)"; fi
   fi
   [ "$ok" = 1 ] || die "the build differs from $file"

@@ -280,6 +280,22 @@ if check "$T/fp-lane-commit-other.txt" && [ "$(grep -c '^ok ' "$T/out")" = 15 ] 
 else
   bad "check: another commit in the file"; show
 fi
+# A tree without .git inside another repo: HEAD there is the outer
+# repo's, not this tree's, so the commit is unknown and never ok.
+mkdir -p "$T/outer"
+cp -r "$R" "$T/outer/repo"
+rm -rf "$T/outer/repo/.git"
+git -C "$T/outer" init -q
+git -C "$T/outer" -c user.name=test -c user.email=test@example.com -c commit.gpgsign=false commit -q --allow-empty -m outer
+OUTER_COMMIT="$(git -C "$T/outer" rev-parse HEAD)"
+sed "s/^commit .*/commit $OUTER_COMMIT/" "$T/fp-release.txt" >"$T/fp-lane-outer.txt"
+if env -u CHAIN -u CHAIN_JSON -u DVT -u IMAGE_VARIANT -u SIGNER_BUILD_OVERLAY_DIR bash "$T/outer/repo/scripts/generic-images.sh" check "$T/fp-lane-outer.txt" >"$T/out" 2>&1 &&
+  ! grep -q '^ok    commit' "$T/out" && grep -q "^note  commit $OUTER_COMMIT, not the checked-out commit unknown" "$T/out"; then
+  ok "check: a tree without .git inside another repo, commit unknown"
+else
+  bad "check: a tree without .git takes the outer repo's HEAD"; show
+fi
+rm -rf "$T/outer"
 sed 's/^variant test/variant debug/' "$T/fp-release.txt" >"$T/fp-lane-variant.txt"
 refuse "a lane variant other than test or prod" "$T/fp-lane-variant.txt"
 sed 's/^build_variant default/build_variant fast/' "$T/fp-release.txt" >"$T/fp-lane-bv.txt"
