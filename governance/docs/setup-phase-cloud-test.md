@@ -43,7 +43,8 @@ from files and never printed or put on a command line.
 `scripts/generic-images.sh build` builds the three images and writes their
 measurements; `scripts/generic-images.sh check FILE` compares a later build with
 the recorded values before any push. Build twice and compare: the values
-must be the same.
+must be the same. Check a release with the `generic-images.sh` of that
+release's own tag.
 
 | Cloud | Image | What is fixed in it |
 | --- | --- | --- |

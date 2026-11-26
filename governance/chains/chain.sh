@@ -39,6 +39,9 @@
 # 1000 for a config that has only SLOT_DURATION_MS. The other fields are
 # signer policy and may differ.
 set -euo pipefail
+# The checks of config.yaml values use [0-9]; in another locale it matches
+# more than ASCII digits.
+export LC_ALL=C
 
 CHAINS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FAR_FUTURE=18446744073709551615

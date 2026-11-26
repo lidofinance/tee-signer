@@ -123,6 +123,28 @@ for key in MIN_GENESIS_TIME GENESIS_DELAY; do
     fi
   done
 done
+# en_US.UTF-8 for the locale case: the system's, or one built here with
+# localedef when the system has the locale sources but not the locale.
+if [ "$(LC_ALL=en_US.UTF-8 locale charmap 2>/dev/null)" != UTF-8 ] && command -v localedef >/dev/null; then
+  mkdir -p "$T/loc"
+  localedef -i en_US -f UTF-8 "$T/loc/en_US.UTF-8" >/dev/null 2>&1 && export LOCPATH="$T/loc"
+fi
+# chain.sh sets LC_ALL=C, so in en_US.UTF-8 [0-9] still matches ASCII
+# digits only: an Arabic-Indic three (U+0663, written as its bytes) is
+# refused by name. Skipped when that locale cannot be had.
+if [ "$(LC_ALL=en_US.UTF-8 locale charmap 2>/dev/null)" = UTF-8 ]; then
+  make_yaml "$T/c-locale.yaml"
+  sed -i "s/^MIN_GENESIS_TIME: .*/MIN_GENESIS_TIME: $(printf '\xd9\xa3')/" "$T/c-locale.yaml"
+  if LC_ALL=en_US.UTF-8 bash "$CHAIN" check-source hoodi "$T/c-locale.yaml" "$T/gvr.txt" >"$T/out" 2>&1; then
+    bad "check-source: a non-ASCII digit in en_US.UTF-8 passes"
+  elif grep -q "MIN_GENESIS_TIME .*not a plain decimal integer" "$T/out"; then
+    ok "check-source: refuses a non-ASCII digit in en_US.UTF-8"
+  else
+    bad "check-source: a non-ASCII digit in en_US.UTF-8 is not refused by name"; sed 's/^/      /' "$T/out"
+  fi
+else
+  echo "skip  check-source: a non-ASCII digit in en_US.UTF-8 (no such locale)"
+fi
 
 # ---- check-beacon: a beacon API made of files, read through file:// ----
 make_beacon() { # make_beacon DIR [jq filter on the fork schedule]

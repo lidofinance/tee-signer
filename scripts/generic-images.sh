@@ -13,7 +13,12 @@
 #                                           with FILE, the recorded values; FILE
 #                                           must hold each name once, in the
 #                                           format build writes; a release's
-#                                           lane lines are shown, not compared
+#                                           lane lines chain, variant and
+#                                           build_variant must match CHAIN,
+#                                           IMAGE_VARIANT and DVT
+#
+# Check a release with the generic-images.sh from that release's own tag:
+# check refuses a file that lacks any of the names this version writes.
 #
 # DVT=1 (scripts/common.sh) builds the dvt images: runners with the tag dvt
 # and the DVT core, with "-dvt" after the chain's suffix in every name
@@ -154,20 +159,24 @@ fingerprint_format() {
   esac
 }
 
-# The lane lines release/release-build.sh adds to a release's
-# fingerprints-<chain>.txt, in its order.
-LANE_NAMES=(variant build_variant commit chain)
-
 # check FILE: FILE holds each name of fingerprints once, as "name value"
 # with the value in the format fingerprints writes, and each value equals
-# the current build's. A release file's lane lines (LANE_NAMES) may each
-# appear once, with a value release-build.sh writes; the build outputs do
-# not record them, so they are printed as not compared. Blank lines and
+# the current build's. The lane lines variant, build_variant, commit and
+# chain, which release/release-build.sh adds to a release's
+# fingerprints-<chain>.txt, may each appear once, with a value
+# release-build.sh writes. chain, variant and build_variant, when there,
+# must equal this run's CHAIN, IMAGE_VARIANT and variant (from DVT); a
+# commit other than the checked-out one only gets a note, and a lane line
+# that is not there is not asked for. Blank lines and
 # lines that start with # are skipped; any other line refuses the whole
 # file before anything is compared. FILE is data: it is read with read and
 # compared in the shell, and no part of it goes into a sed program or a
 # command.
 cmd_check() {
+  # The format checks use [0-9], [a-f] and [a-z]; in another locale these
+  # match more than ASCII. Only check runs in C: build keeps the caller's
+  # locale for its tools.
+  export LC_ALL=C
   local file="${1:-}" ok=1 line name want got format n=0
   [ -n "$file" ] || die "check needs FILE, the recorded fingerprints"
   [ -s "$file" ] || die "no $file"
@@ -202,9 +211,18 @@ cmd_check() {
     want="${rec[$name]}" got="${cur[$name]:-}"
     if [ "$got" = "$want" ]; then echo "ok    $name ${want:0:24}..."; else echo "FAIL  $name '$got', want $want"; ok=0; fi
   done
-  for name in "${LANE_NAMES[@]}"; do
-    [ -z "${lane[$name]+x}" ] || echo "--    $name ${lane[$name]} (release lane value, not compared)"
+  local -A run=([chain]="$CHAIN" [variant]="$IMAGE_VARIANT" [build_variant]="$(variant)")
+  local -A from=([chain]=CHAIN [variant]=IMAGE_VARIANT [build_variant]=DVT)
+  for name in chain variant build_variant; do
+    [ -n "${lane[$name]+x}" ] || continue
+    want="${lane[$name]}" got="${run[$name]}"
+    if [ "$got" = "$want" ]; then echo "ok    $name $want"; else echo "FAIL  $name '$got' (from ${from[$name]}), want $want"; ok=0; fi
   done
+  if [ -n "${lane[commit]+x}" ]; then
+    want="${lane[commit]}"
+    got="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null)" || got=unknown
+    if [ "$got" = "$want" ]; then echo "ok    commit $want"; else echo "note  commit $want, not the checked-out commit $got (not compared)"; fi
+  fi
   [ "$ok" = 1 ] || die "the build differs from $file"
 }
 
