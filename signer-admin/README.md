@@ -93,7 +93,7 @@ After the last signer, delete `OUT` on the dealer machine (`umount` its tmpfs) a
 
 ### On macOS
 
-`split` and `import` also run on a Mac, Apple silicon or Intel. The steps above stay the same; this section lists what differs. Build with the Xcode command line tools and Go: `make admin` in the repo root writes `build/<arch>/bin/signer-admin`. No other part of this repo builds on macOS.
+`split` and `import` also run on a Mac, Apple silicon or Intel. The steps above stay the same; this section lists what differs. Build with the Xcode command line tools and Go: `make admin` in the repo root writes `build/<arch>/bin/signer-admin`. No other part of this repo builds on macOS. The linker warns `ignoring duplicate libraries: '-lblst'`: each Go package that uses blst names it, and the warning is harmless.
 
 Prepare the offline Mac:
 
@@ -104,12 +104,12 @@ Prepare the offline Mac:
 macOS has no tmpfs mount for this. Make a RAM disk and pass a new folder on it as `-out`:
 
 ```
-dev=$(hdiutil attach -nomount ram://2097152)
+dev=$(diskutil image attach --noMount ram://2097152 | awk '{print $1}')
 diskutil erasevolume APFS split $dev
 signer-admin split ... -out /Volumes/split/out
 ```
 
-`ram://` takes the size in 512-byte sectors; 2097152 is 1 GiB. For `import`, copy the shares file from the media to such a RAM disk too. When you are done, eject the RAM disk, which frees its memory: `hdiutil detach $dev`.
+`ram://` takes the size in 512-byte sectors; 2097152 is 1 GiB. For `import`, copy the shares file from the media to such a RAM disk too. When you are done, eject the RAM disk, which frees its memory: `diskutil eject $dev`. On a macOS without `diskutil image`, attach with `hdiutil attach -nomount ram://2097152` and eject with `hdiutil detach $dev`.
 
 What signer-admin does on macOS, and what it does not:
 

@@ -248,7 +248,12 @@ jobs:
         if: needs.macos-scope.outputs.run == '1'
         # 524288 sectors of 512 bytes: 256 MiB.
         run: |
-          dev="$(hdiutil attach -nomount ram://524288 | awk '{ print $1 }')"
+          # diskutil image is the current command; older macOS has only hdiutil.
+          if diskutil image attach --help >/dev/null 2>&1; then
+            dev="$(diskutil image attach --noMount ram://524288 | awk '{ print $1 }')"
+          else
+            dev="$(hdiutil attach -nomount ram://524288 | awk '{ print $1 }')"
+          fi
           diskutil erasevolume APFS split-ci "$dev"
           echo "SIGNER_ADMIN_SPLIT_DIR=/Volumes/split-ci" >>"$GITHUB_ENV"
       - if: needs.macos-scope.outputs.run == '1'
