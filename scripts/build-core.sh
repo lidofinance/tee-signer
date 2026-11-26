@@ -49,7 +49,8 @@ else
 fi
 {
   echo "signer-core: $SIGNER_CORE ($ver)"
-  (cd "$SRC.tmp" && find include src -type f | sort | xargs sha256sum)
+  # A loop, not xargs: sha256sum is a shell function on macOS (common.sh).
+  (cd "$SRC.tmp" && find include src -type f | sort | while IFS= read -r f; do sha256sum "$f"; done)
 } >"$SRC.tmp/SOURCE.txt"
 if [ -d "$SRC" ] && diff -rq "$SRC" "$SRC.tmp" >/dev/null; then
   rm -rf "$SRC.tmp"
@@ -60,6 +61,8 @@ else
 fi
 
 WARN="-Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes"
+# The stack protector's symbol as nm prints it; macOS puts a "_" before C names.
+STACK_CHK='_?__stack_chk_fail'
 if [ "$DVT" = 1 ]; then
   core_lib=libsigner_core_dvt.a obj_dir=obj-dvt dvt_def=(-DSC_DVT)
 else
@@ -74,7 +77,8 @@ for arch in "${archs[@]}"; do
   # The compiler, archiver and blst pin of the last build. Another one (a
   # new blst, the host's gcc after the release builder's) drops every
   # archive and object, so no stale libblst.a or .o gets linked.
-  stamp="$("$cc" --version | head -n 1; "$ar" --version | head -n 1; sha256sum <"$THIRD_PARTY/blst.sha256")"
+  # The ar of macOS has no --version; its line is empty there.
+  stamp="$("$cc" --version | head -n 1; "$ar" --version 2>/dev/null | head -n 1; sha256sum <"$THIRD_PARTY/blst.sha256")"
   if [ "$(cat "$out/core.stamp" 2>/dev/null)" != "$stamp" ]; then
     rm -rf "$out/lib/libblst.a" "$out/lib/libsigner_core.a" "$out/lib/libsigner_core_dvt.a" "$out/obj" "$out/obj-dvt" "$out/blst"
   fi
@@ -88,12 +92,12 @@ for arch in "${archs[@]}"; do
     # blst's own default flags plus the stack protector, so the canary does
     # not depend on the compiler's default.
     (cd "$out/blst" && CC="$cc" CFLAGS="-O2 -fno-builtin -fPIC -Wall -Wextra -Werror -fstack-protector-strong" \
-      "$BLST_DIR/build.sh" "${flags[@]}" >build.log 2>&1) \
+      "$BLST_DIR/build.sh" ${flags[@]+"${flags[@]}"} >build.log 2>&1) \
       || { cat "$out/blst/build.log"; exit 1; }
     cp "$out/blst/libblst.a" "$out/lib/libblst.a"
     log "blst built for $arch"
   fi
-  "$nm" -u "$out/lib/libblst.a" | grep -w __stack_chk_fail >/dev/null ||
+  "$nm" -u "$out/lib/libblst.a" | grep -Ew "$STACK_CHK" >/dev/null ||
     { echo "libblst.a for $arch has no stack protector (__stack_chk_fail)" >&2; exit 1; }
 
   # Every run compiles all core files (a handful), so no old object can
@@ -112,7 +116,7 @@ for arch in "${archs[@]}"; do
   "$ar" rcs "$out/lib/$core_lib" "${objs[@]}"
   # The stack protector flag must reach the objects (signer-core/scripts/test.sh
   # checks the same for the make build).
-  "$nm" -u "$out/lib/$core_lib" | grep -w __stack_chk_fail >/dev/null ||
+  "$nm" -u "$out/lib/$core_lib" | grep -Ew "$STACK_CHK" >/dev/null ||
     { echo "$core_lib for $arch has no stack protector (__stack_chk_fail)" >&2; exit 1; }
   # The archive is of this run's variant: the DVT symbols in the DVT core
   # only. The release lane builds its cores with this script too.

@@ -87,6 +87,16 @@ tool_for() {
 # Terraform image for scripts/tf-validate.sh (validate only, never apply).
 TERRAFORM_IMAGE="hashicorp/terraform:1.16.3"
 
+# HOST_OS: Linux, or Darwin for macOS. A Mac builds the core and
+# signer-admin for itself (make admin) and nothing else: no cross build, no
+# runner, no image.
+HOST_OS="$(uname -s)"
+# macOS before 15 has no sha256sum; shasum prints the same lines.
+if ! command -v sha256sum >/dev/null 2>&1; then
+  # shellcheck disable=SC2120 # the callers are in the scripts that source this file
+  sha256sum() { shasum -a 256 "$@"; }
+fi
+
 HOST_ARCH="$(uname -m)"
 case "$HOST_ARCH" in
   x86_64|amd64) HOST_ARCH=x86_64 ;;
@@ -213,14 +223,16 @@ variant() { if [ "$DVT" = 1 ]; then echo dvt; else echo default; fi; }
 # of VARIANT (default or dvt), as NM (nm or a cross nm) lists its defined
 # symbols. Only the DVT core defines sc_signer_add_validator_group and
 # sc_core_dvt_marker (signer-core/src/signer.c, SC_DVT); scripts/build-core.sh
-# runs this on each archive it makes.
+# runs this on each archive it makes. On macOS nm takes -U for the defined
+# symbols and prints C names with a leading "_", which is cut here.
 check_core_variant() {
-  local lib="$1" want="$2" nm="$3" syms s
+  local lib="$1" want="$2" nm="$3" syms s defined=--defined-only cut=""
+  [ "$HOST_OS" != Darwin ] || defined=-U cut='s/^_//'
   case "$want" in
     default | dvt) ;;
     *) echo "check_core_variant: variant must be default or dvt (got '$want')" >&2; return 1 ;;
   esac
-  syms="$("$nm" --defined-only "$lib" | awk '{ print $3 }')" || { echo "$lib: $nm failed" >&2; return 1; }
+  syms="$("$nm" "$defined" "$lib" | awk '{ print $3 }' | sed "$cut")" || { echo "$lib: $nm failed" >&2; return 1; }
   grep -qx sc_signer_add_validator <<<"$syms" || { echo "$lib: no sc_signer_add_validator, not a signer core" >&2; return 1; }
   for s in sc_signer_add_validator_group sc_core_dvt_marker; do
     if grep -qx "$s" <<<"$syms"; then
