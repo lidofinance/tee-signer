@@ -81,7 +81,7 @@ func TestSplitEIP2335Vectors(t *testing.T) {
 	splitOutFS = func(string) error { return nil }
 	oldSwaps := splitSwaps
 	splitSwaps = writeFile(t, filepath.Join(dir, "swaps"), "Filename\tType\tSize\tUsed\tPriority\n")
-	t.Cleanup(func() { splitOutFS, splitSwaps = checkTmpfs, oldSwaps })
+	t.Cleanup(func() { splitOutFS, splitSwaps = checkOutFS, oldSwaps })
 	pass := writePrivate(t, filepath.Join(dir, "password.txt"), eipPassword+"\n")
 	wantIn(t, failTool(t, "split", "-keystores", filepath.Join(dir, "scrypt"), "-password-file", pass, "-chain", "devnet",
 		"-t", "2", "-n", "3", "-signers", "a,b,c", "-out", filepath.Join(dir, "out")), "outside printable ASCII")

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -24,12 +25,18 @@ import (
 // signer clock ahead of this machine's.
 func fakeRunner(t *testing.T, health func(now time.Time) string) string {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "runner.sock")
+	// A short directory: a unix socket path has room for about 100 bytes,
+	// and t.TempDir() of a long test name on macOS is longer.
+	dir, err := os.MkdirTemp("", "runner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(dir, "runner.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { ln.Close() })
+	t.Cleanup(func() { ln.Close(); os.RemoveAll(dir) })
 	go func() {
 		for {
 			c, err := ln.Accept()

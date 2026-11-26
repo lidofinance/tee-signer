@@ -225,6 +225,64 @@ func TestSplitKeystores(t *testing.T) {
 	wantIn(t, out, "3 validators, 3 of 4, share index 2")
 }
 
+// The round trip on a folder that split accepts by itself, with this OS's
+// output folder check on (the other tests turn it off): tmpfs on Linux, a
+// RAM disk on macOS. SIGNER_ADMIN_SPLIT_DIR names the folder; without it
+// the test is skipped. split writes 2 of 3 there, and every pair of the
+// share secrets in the files gives back each keystore's key and lies on
+// its commitments. The swap check stays off: a CI machine has swap.
+func TestSplitRoundTripRealFolder(t *testing.T) {
+	base := os.Getenv("SIGNER_ADMIN_SPLIT_DIR")
+	if base == "" {
+		t.Skip("SIGNER_ADMIN_SPLIT_DIR is not set (a folder on tmpfs, on macOS on a RAM disk)")
+	}
+	e := newSplitEnv(t, "scrypt", "pbkdf2")
+	// newSplitEnv restores splitOutFS.
+	splitOutFS = checkOutFS
+	dir, err := os.MkdirTemp(base, "split")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	e.out = filepath.Join(dir, "out")
+	names := []string{"a", "b", "c"}
+	wantIn(t, mustTool(t, e.args("-chain", "devnet", "-t", "2", "-n", "3", "-signers", strings.Join(names, ","))...), "split 2 keys 2 of 3")
+
+	sf, err := readSplit(filepath.Join(e.out, "split.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	shares := make([][]share, len(names))
+	for i, name := range names {
+		if shares[i], err = readShares(filepath.Join(e.out, "shares", name, "shares.txt")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(sf.Validators) != len(e.pks) {
+		t.Fatalf("split.json has %d validators, want %d", len(sf.Validators), len(e.pks))
+	}
+	for v, val := range sf.Validators {
+		if !slices.Contains(e.pks, val.Pubkey) {
+			t.Fatalf("validator %d: %s is no keystore's key", v+1, val.Pubkey)
+		}
+		pubs := make([]cloud.Pubkey, len(names))
+		for i := range names {
+			if pubs[i], err = core.PubkeyOf(shares[i][v].secret); err != nil {
+				t.Fatal(err)
+			}
+			if f, err := threshold.FeldmanEval(val.Commitments, uint64(i+1)); err != nil || f != pubs[i] {
+				t.Fatalf("validator %d: share %d is not on the commitments", v+1, i+1)
+			}
+		}
+		for _, set := range [][]int{{0, 1}, {0, 2}, {1, 2}} {
+			ids := []uint64{uint64(set[0] + 1), uint64(set[1] + 1)}
+			if got, err := threshold.RecoverPubkey(ids, []cloud.Pubkey{pubs[set[0]], pubs[set[1]]}); err != nil || got != val.Pubkey {
+				t.Fatalf("validator %d: shares %v do not recover the key", v+1, ids)
+			}
+		}
+	}
+}
+
 // A 1 of 1 split for a single-node signer: commitment 0 is the key and
 // the only commitment, the share at index 1 is the whole key, and
 // import-draft takes the split for a signer with signing_mode = single
@@ -356,12 +414,12 @@ func TestSplitRefuses(t *testing.T) {
 			return e.args(tn...)
 		}, "exists; split writes a new folder"},
 		{"not tmpfs", func(t *testing.T, e *splitEnv) []string {
-			splitOutFS = func(dir string) error { return checkTmpfs(dir) }
-			if checkTmpfs(e.dir) == nil {
-				t.Skip("the test folder is on tmpfs")
+			splitOutFS = func(dir string) error { return checkOutFS(dir) }
+			if checkOutFS(e.dir) == nil {
+				t.Skip("the test folder is on tmpfs (macOS: not on the startup disk)")
 			}
 			return e.args(tn...)
-		}, "is not on tmpfs"},
+		}, "split writes the shares only to"},
 		{"2 of 3 on mainnet", func(t *testing.T, e *splitEnv) []string {
 			return e.args("-t", "2", "-n", "3", "-signers", "s1,s2,s3")
 		}, "on a prod chain"},
