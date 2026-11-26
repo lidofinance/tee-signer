@@ -172,7 +172,14 @@ func issue(out io.Writer, issuer *x509.Certificate, signer crypto.Signer, role, 
 		chain = append(chain, issuer.Raw)
 	}
 	if err := clientcert.CheckFile(chain); err != nil {
-		return fmt.Errorf("not writing %s: the runner would refuse it: %w", certPath, err)
+		if len(chain) == 1 {
+			return fmt.Errorf("not issuing %s: the runner would refuse it: %w", certPath, err)
+		}
+		// The leaf is always in bounds, so the issuer is not. The runner
+		// still takes this leaf when the issuer is pinned in
+		// allowed_client_ca, but this tool does not issue it.
+		return fmt.Errorf("not issuing %s: the issuer is outside the client certificate bounds; "+
+			"the runner refuses this certificate file unless the issuer is pinned in allowed_client_ca: %w", certPath, err)
 	}
 	for _, p := range []string{certPath, keyPath} {
 		if _, err := os.Stat(p); err == nil {

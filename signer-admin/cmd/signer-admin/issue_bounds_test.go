@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-// issue-client-cert writes no file the runner would refuse. The leaf is
+// issue-client-cert writes no file with an out-of-bounds issuer. The leaf is
 // always P-256, but the file also holds the issuer when the issuer is an
 // intermediate, and an intermediate made outside signer-admin may have a
 // key or a size outside the bounds of signer-protocol/clientcert. A root
@@ -40,7 +40,11 @@ func TestIssueClientCertOutputFitsTheRunner(t *testing.T) {
 		{p521CA, "x1", "ECDSA P-521"},
 		{bigCA, "x2", "more than 8192"},
 	} {
-		wantIn(t, failTool(t, issueArgs(tc.ca, tc.name)...), "the runner would refuse", tc.want)
+		// The runner takes such a leaf when the issuer is pinned in
+		// allowed_client_ca, so the message must not say it always refuses.
+		wantIn(t, failTool(t, issueArgs(tc.ca, tc.name)...), "not issuing",
+			"issuer is outside the client certificate bounds",
+			"unless the issuer is pinned in allowed_client_ca", tc.want)
 		for _, f := range []string{tc.name + ".pem", tc.name + "-key.pem"} {
 			if _, err := os.Stat(filepath.Join(out, f)); err == nil {
 				t.Errorf("%s written after a refusal", f)
