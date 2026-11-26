@@ -6,6 +6,8 @@ package threshold
 #cgo CFLAGS: -I${SRCDIR}/../third_party/blst/bindings
 #cgo linux,amd64 LDFLAGS: -L${SRCDIR}/../../build/x86_64/lib -lblst
 #cgo linux,arm64 LDFLAGS: -L${SRCDIR}/../../build/aarch64/lib -lblst
+#cgo darwin,amd64 LDFLAGS: -L${SRCDIR}/../../build/x86_64/lib -lblst
+#cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/../../build/aarch64/lib -lblst
 #include <stdint.h>
 #include <stddef.h>
 

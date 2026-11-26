@@ -12,6 +12,8 @@ package core
 /*
 #cgo linux,amd64 LDFLAGS: -L${SRCDIR}/../../build/x86_64/lib -lsigner_core -lblst
 #cgo linux,arm64 LDFLAGS: -L${SRCDIR}/../../build/aarch64/lib -lsigner_core -lblst
+#cgo darwin,amd64 LDFLAGS: -L${SRCDIR}/../../build/x86_64/lib -lsigner_core -lblst
+#cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/../../build/aarch64/lib -lsigner_core -lblst
 const char sc_core_dvt_marker[] = "default binding";
 */
 import "C"
