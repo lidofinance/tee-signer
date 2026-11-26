@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math/big"
 	"os"
+	"runtime"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -34,26 +35,29 @@ func reversed(t *testing.T, keys, threshold, n int) ([]*testKey, []*fakeRunner) 
 	return ks, fakes
 }
 
-// 200 keys of a 5-of-6 split, signers listed in reverse index order, load
-// in a few seconds.
+// 200 keys of a 5-of-6 split, signers listed in reverse index order. The
+// first groups found give the guess for the others, so few keys need the
+// full search: at most one per derive goroutine, the keys taken before a
+// guess was there. The test counts searches, not time.
 func TestKeyLoadIsFast(t *testing.T) {
 	ks, fakes := reversed(t, 200, 5, 6)
 	s := newSigners(names(len(fakes)), runners(fakes), 0, 2*time.Second, discard())
-	done := make(chan error, 1)
-	start := time.Now()
-	go func() {
-		_, err := s.Refresh(context.Background())
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatalf("200 keys of 5 of 6 not loaded after %s", time.Since(start))
+	defer s.Close()
+	var searches atomic.Int64
+	s.derive = func(pk phase0.BLSPubKey, shares []share, maxIndex int, guesses ...guess) (group, error) {
+		searches.Add(1)
+
+		return deriveGroup(pk, shares, maxIndex, guesses...)
 	}
-	t.Logf("200 keys of 5 of 6 loaded in %s", time.Since(start))
+	start := time.Now()
+	if _, err := s.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	n := searches.Load()
+	t.Logf("200 keys of 5 of 6 loaded in %s, %d full searches", time.Since(start), n)
+	if most := int64(runtime.GOMAXPROCS(0)); n < 1 || n > most {
+		t.Fatalf("%d full searches for 200 keys; want 1 to %d", n, most)
+	}
 	for _, k := range ks {
 		g, ok := s.keys.lookup(k.pk)
 		if !ok || g.threshold != 5 {
@@ -395,6 +399,45 @@ func TestKeyLoadTimes(t *testing.T) {
 // recoverPubkey compared with the key, for right, wrong and swapped
 // indices and for foreign shares.
 func TestInterpolatesMatchesRecoverPubkey(t *testing.T) {
+	// check compares interpolates with recoverPubkey for the shares at
+	// positions pos of sh with the indices idx, and with want when set.
+	check := func(name string, k *testKey, sh []share, pos []int, idx []uint64, want *bool) {
+		t.Helper()
+		f, ok := newFit(k.pk, sh)
+		if !ok {
+			t.Fatal("decode")
+		}
+		keys := make([]phase0.BLSPubKey, len(pos))
+		for i, p := range pos {
+			keys[i] = sh[p].pub
+		}
+		got, err := recoverPubkey(idx, keys)
+		rec := err == nil && got == k.pk
+		if in := f.interpolates(pos, idx); in != rec || (want != nil && in != *want) {
+			t.Fatalf("%s: shares %v, indices %v: interpolates %v, recoverPubkey %v", name, pos, idx, in, rec)
+		}
+	}
+	yes, no := true, false
+	// Fixed cases: every index from 1 to maxShareIndex, the index set with
+	// the largest coefficient (1, 3 to 8: 423,360), the two highest
+	// indices, the lowest and the highest, one share of a 1-of-n key, a
+	// lower threshold than the shares given, indices out of order, and a
+	// foreign share.
+	k8, k7, k2, k1 := splitKey(t, 8, 8), splitKey(t, 7, 8), splitKey(t, 2, 8), splitKey(t, 1, 8)
+	all := []int{0, 1, 2, 3, 4, 5, 6, 7}
+	allIdx := []uint64{1, 2, 3, 4, 5, 6, 7, 8}
+	check("8 of 8", k8, shareList(k8), all, allIdx, &yes)
+	check("7 of 8 at 1, 3 to 8", k7, shareList(k7), []int{0, 2, 3, 4, 5, 6, 7}, []uint64{1, 3, 4, 5, 6, 7, 8}, &yes)
+	check("7 of 8, two indices swapped", k7, shareList(k7), []int{0, 2, 3, 4, 5, 6, 7}, []uint64{3, 1, 4, 5, 6, 7, 8}, &no)
+	check("2 of 8 at 7, 8", k2, shareList(k2), []int{6, 7}, []uint64{7, 8}, &yes)
+	check("2 of 8 at 1, 8", k2, shareList(k2), []int{0, 7}, []uint64{1, 8}, &yes)
+	check("2 of 8, all 8 shares", k2, shareList(k2), all, allIdx, &yes)
+	check("1 of 8, share 8 alone", k1, shareList(k1), []int{7}, []uint64{8}, &yes)
+	check("2 of 8, one share alone", k2, shareList(k2), []int{7}, []uint64{8}, &no)
+	foreign := shareList(k8)
+	foreign[0].pub = pubOf(&k7.shares[0])
+	check("8 of 8 with a foreign share", k8, foreign, all, allIdx, &no)
+
 	for range 40 {
 		n := 2 + randInt(t, 7) // 2 to 8
 		th := 1 + randInt(t, n)
@@ -403,10 +446,6 @@ func TestInterpolatesMatchesRecoverPubkey(t *testing.T) {
 		if randScalar(t).Bit(0) == 1 {
 			x := randInt(t, n)
 			sh[x].pub = pubOf(&other.shares[x])
-		}
-		f, ok := newFit(k.pk, sh)
-		if !ok {
-			t.Fatal("decode")
 		}
 		for range 50 {
 			m := 1 + randInt(t, n)
@@ -423,17 +462,42 @@ func TestInterpolatesMatchesRecoverPubkey(t *testing.T) {
 					idx[i] = uint64(p[i] + 1)
 				}
 			}
-			keys := make([]phase0.BLSPubKey, m)
-			for i, p := range pos {
-				keys[i] = sh[p].pub
-			}
-			got, err := recoverPubkey(idx, keys)
-			want := err == nil && got == k.pk
-			if f.interpolates(pos, idx) != want {
-				t.Fatalf("%d of %d, shares %v, indices %v: interpolates %v, recoverPubkey %v",
-					th, n, pos, idx, !want, want)
+			check(fmt.Sprintf("%d of %d", th, n), k, sh, pos, idx, nil)
+		}
+	}
+}
+
+// The coefficients interpolates multiplies by, L * l_j, over every set of
+// distinct indices from 1 to maxShareIndex: at most 423,360, below 2^19,
+// and L at most 5,040. The comment of interpolates states these bounds.
+func TestInterpolationCoefficientBound(t *testing.T) {
+	var most, mostL int64
+	for set := 1; set < 1<<maxShareIndex; set++ {
+		var idx []int64
+		for x := range maxShareIndex {
+			if set&(1<<x) != 0 {
+				idx = append(idx, int64(x+1))
 			}
 		}
+		num, den := make([]int64, len(idx)), make([]int64, len(idx))
+		l := int64(1)
+		for j, xj := range idx {
+			num[j], den[j] = 1, 1
+			for m, xm := range idx {
+				if m != j {
+					num[j] *= xm
+					den[j] *= xm - xj
+				}
+			}
+			l = lcm(l, abs(den[j]))
+		}
+		mostL = max(mostL, l)
+		for j := range idx {
+			most = max(most, abs(l/den[j]*num[j]))
+		}
+	}
+	if most != 423360 || mostL != 5040 {
+		t.Fatalf("largest coefficient %d, largest L %d; want 423360 and 5040", most, mostL)
 	}
 }
 

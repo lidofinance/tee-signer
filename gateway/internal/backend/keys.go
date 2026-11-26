@@ -292,9 +292,11 @@ func (f *fit) everySubset(idx []uint64, t int) bool {
 // sum of l_j * P_j is pk, with the Lagrange coefficients at zero
 // l_j = n_j / d_j, n_j the product of the other indices and d_j that of
 // their differences to idx[j]. It checks that sum and pk times L, the
-// least common multiple of the d_j. L is below r, so the checks agree, and
-// each L * l_j is an integer below 2^46 (d_j divides (7!)^2, n_j is at
-// most 8^7): a multiplication by it costs a sixth of one by a full scalar.
+// least common multiple of the d_j. L is at most 5,040, below r, so the
+// checks agree, and each L * l_j is an integer of at most 423,360, below
+// 2^19 (TestInterpolationCoefficientBound tries every index set): a
+// multiplication by it takes at most 19 bits, not the 255 of a full
+// scalar.
 func (f *fit) interpolates(pos []int, idx []uint64) bool {
 	var num, den [maxShareIndex]int64
 	l := int64(1)
