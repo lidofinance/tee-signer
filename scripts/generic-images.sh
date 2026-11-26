@@ -17,8 +17,10 @@
 #                                           build_variant must match CHAIN,
 #                                           IMAGE_VARIANT and DVT
 #
-# Check a release with the generic-images.sh from that release's own tag:
+# Check a release with the generic-images.sh of this version or later:
 # check refuses a file that lacks any of the names this version writes.
+# Files from v0.1.0-rc.1 and rc.2 pass this check; their own tag's check
+# does not read the lane lines.
 #
 # DVT=1 (scripts/common.sh) builds the dvt images: runners with the tag dvt
 # and the DVT core, with "-dvt" after the chain's suffix in every name

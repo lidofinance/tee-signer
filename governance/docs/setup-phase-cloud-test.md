@@ -43,8 +43,9 @@ from files and never printed or put on a command line.
 `scripts/generic-images.sh build` builds the three images and writes their
 measurements; `scripts/generic-images.sh check FILE` compares a later build with
 the recorded values before any push. Build twice and compare: the values
-must be the same. Check a release with the `generic-images.sh` of that
-release's own tag.
+must be the same. Check a release with the `generic-images.sh` of this
+version or later. Files from v0.1.0-rc.1 and rc.2 pass this check; their
+own tag's check does not read the lane lines.
 
 | Cloud | Image | What is fixed in it |
 | --- | --- | --- |
