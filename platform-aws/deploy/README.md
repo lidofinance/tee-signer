@@ -286,7 +286,9 @@ remove the rules, and put the statement back.
 
 With `mark_bucket` set, `main.tf` writes the bucket policy: the writer may
 create and read objects under `marks/` and `config/`, set each new object's
-retention (`s3:PutObjectRetention`, see "Mark log"), list versions and read
+retention (`s3:PutObjectRetention`, see "Mark log"), read an object's
+retention (`s3:GetObjectRetention`, for an object under a record name that
+is not a record), list versions and read
 the Object Lock configuration and the lifecycle rules (the runner's lock
 check needs `s3:GetBucketObjectLockConfiguration` and
 `s3:GetLifecycleConfiguration`); the parent role is denied every

@@ -426,6 +426,80 @@ func Run(t *testing.T, kind wormfake.Kind, newLog NewLog) {
 		}
 	})
 
+	t.Run("objects under the next name: locked ones cost a skip, others stop writes", func(t *testing.T) {
+		srv, l := fresh(t)
+		m := open(t, srv, l, nil, key(1))
+		if _, _, err := m.Claim(ctx, false); err != nil {
+			t.Fatal(err)
+		}
+		_, v := m.Mark()
+		// Under the compliance lock (S3 default retention, a locked GCS or
+		// Azure policy) a new object stays as long as a record: skipped.
+		srv.AdminCreate(name(v+1), []byte("not a record"))
+		if err := m.Append(ctx, wm(4, 5, 160)); err != nil {
+			t.Fatalf("append past a locked object: %v", err)
+		}
+		if _, v2 := m.Mark(); v2 != v+2 {
+			t.Fatalf("wrote version %d, want %d", v2, v+2)
+		}
+		// Not locked (S3 governance default, an unlocked GCS or Azure
+		// policy): the admin could delete it after a skip. The write stops
+		// and does not latch.
+		srv.SetLock(wormfake.Lock{Days: wormfake.DefaultLock.Days})
+		srv.AdminCreate(name(v+3), []byte("not a record"))
+		if err := m.Append(ctx, wm(5, 6, 192)); !errors.Is(err, markstore.ErrNameTaken) {
+			t.Fatalf("append over an object that is not locked: %v, want ErrNameTaken", err)
+		}
+		if _, ok := srv.Current(name(v + 4)); ok || m.Lost() != nil {
+			t.Fatalf("wrote past it (%v) or latched (%v)", ok, m.Lost())
+		}
+		if n := srv.AdminDeleteVersions(name(v + 3)); n != 1 {
+			t.Fatalf("the admin deleted %d versions", n)
+		}
+		srv.SetLock(wormfake.DefaultLock)
+		if err := m.Append(ctx, wm(5, 6, 192)); err != nil {
+			t.Fatalf("append once the object is gone: %v", err)
+		}
+		if _, v3 := m.Mark(); v3 != v+3 {
+			t.Fatalf("wrote version %d, want %d", v3, v+3)
+		}
+	})
+
+	t.Run("objects under the next name: the lock ends at the object's own date", func(t *testing.T) {
+		// Under the default lock (S3 default retention, a locked GCS or
+		// Azure policy, 30 days as the setup's retention) an object is kept
+		// until its creation plus the period. A writer that reaches it
+		// later than lockMargin (15 minutes) after that needs more than
+		// the object has left, and stops; one that comes sooner skips it.
+		for _, c := range []struct {
+			after time.Duration
+			skips bool
+		}{{after: 16 * time.Minute}, {after: 10 * time.Minute, skips: true}} {
+			srv, l := fresh(t)
+			m := open(t, srv, l, nil, key(1))
+			if _, _, err := m.Claim(ctx, false); err != nil {
+				t.Fatal(err)
+			}
+			_, v := m.Mark()
+			srv.AdminCreate(name(v+1), []byte("not a record"))
+			srv.Advance(c.after)
+			err := m.Append(ctx, wm(4, 5, 160))
+			_, v2 := m.Mark()
+			if c.skips {
+				if err != nil || v2 != v+2 {
+					t.Fatalf("object made %s ago: err %v, version %d; want a skip to %d", c.after, err, v2, v+2)
+				}
+				continue
+			}
+			if !errors.Is(err, markstore.ErrNameTaken) || v2 != v {
+				t.Fatalf("object made %s ago: err %v, version %d; want ErrNameTaken at %d", c.after, err, v2, v)
+			}
+			if _, ok := srv.Current(name(v + 2)); ok || m.Lost() != nil {
+				t.Fatalf("wrote past it (%v) or latched (%v)", ok, m.Lost())
+			}
+		}
+	})
+
 	t.Run("restart with lost local state", func(t *testing.T) {
 		srv, l := fresh(t)
 		m := open(t, srv, l, memStore{}, key(1))

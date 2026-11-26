@@ -5,8 +5,8 @@
 // version-level: locked blobs "can't be modified or deleted by any user,
 // not even by users with account administrative privileges"), through the
 // Blob REST API with a small client of its own: Put Blob with
-// If-None-Match: *, Get Blob and List Blobs. Nothing else of the API is
-// used.
+// If-None-Match: *, Get Blob, List Blobs, and Get Blob Properties for a
+// blob's lock (ObjectLock). Nothing else of the API is used.
 //
 // Requests carry a Microsoft Entra token for https://storage.azure.com/
 // from the container group's managed identity (IMDS), which only the
@@ -394,6 +394,37 @@ func (l *Log) List(ctx context.Context, prefix string) ([]markstore.Entry, error
 		marker = r.NextMarker
 	}
 	return nil, errors.New("azlog: listing too long")
+}
+
+// ObjectLock reads the container's policy (Lock, from the management
+// plane) and the blob's creation time (Get Blob Properties,
+// x-ms-creation-time). Under a locked container-level policy nobody can
+// delete the blob before its creation time plus the policy's period, and
+// nobody can shorten the period. Azure counts that period from the blob's
+// last modification; a blob under the policy cannot be changed, so that
+// is its creation, and counting from creation is never later. A policy
+// that is not locked can be removed: not compliance.
+func (l *Log) ObjectLock(ctx context.Context, e markstore.Entry) (markstore.ObjectLock, error) {
+	lk, err := l.Lock(ctx)
+	if err != nil {
+		return markstore.ObjectLock{}, err
+	}
+	if !lk.Compliance {
+		return markstore.ObjectLock{Kind: lk.Kind, Mode: lk.Mode}, nil
+	}
+	resp, err := l.do(ctx, http.MethodHead, l.base()+"/"+escapeName(e.Name), nil, nil)
+	if err != nil {
+		return markstore.ObjectLock{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return markstore.ObjectLock{}, fmt.Errorf("azlog: blob properties of %s: %s %s", e.Name, resp.Status, resp.Header.Get("x-ms-error-code"))
+	}
+	created, err := http.ParseTime(resp.Header.Get("x-ms-creation-time"))
+	if err != nil {
+		return markstore.ObjectLock{}, fmt.Errorf("azlog: blob %s: x-ms-creation-time %q", e.Name, resp.Header.Get("x-ms-creation-time"))
+	}
+	return markstore.ObjectLock{Kind: lk.Kind, Mode: lk.Mode, Compliance: true, RetainUntil: created.Add(lk.Retention)}, nil
 }
 
 // Get reads one blob.

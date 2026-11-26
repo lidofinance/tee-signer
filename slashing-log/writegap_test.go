@@ -302,3 +302,40 @@ func TestRefreshChecksTheLockWhileTheClockFails(t *testing.T) {
 		t.Fatalf("lost %v, want ErrNoLock", m.Lost())
 	}
 }
+
+// A claim refuses a log whose newest record is dated more than lockMargin
+// after its own trusted clock: that clock lags the clock of the instance
+// that wrote the record. The skip rule (CheckKept) dates a lock by this
+// clock, so a lagging one would take an object that goes before the other
+// instance stops writing as locked long enough. The claim writes nothing.
+func TestClaimRefusesALaggingClock(t *testing.T) {
+	ctx := context.Background()
+	for _, c := range []struct {
+		lag time.Duration
+		ok  bool
+	}{
+		{lag: 0, ok: true},
+		{lag: time.Minute, ok: true},
+		{lag: lockMargin, ok: true},
+		{lag: lockMargin + time.Second},
+		{lag: 15*24*time.Hour - 12*time.Minute},
+	} {
+		now := time.Unix(1_800_000_000, 0)
+		l, _, s := cutRunner(t, &now)
+		back := now.Add(-c.lag)
+		before := len(l.objs)
+		b, err := New(l, "s", testKey(1), Options{Setup: s, Clock: clockAt(&back), Log: quiet})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = b.Claim(ctx, true)
+		switch {
+		case c.ok && err != nil:
+			t.Fatalf("claim with a clock %s behind the newest record: %v", c.lag, err)
+		case !c.ok && !errors.Is(err, ErrClockBehind):
+			t.Fatalf("claim with a clock %s behind the newest record: %v, want ErrClockBehind", c.lag, err)
+		case !c.ok && len(l.objs) != before:
+			t.Fatalf("a refused claim wrote %d objects", len(l.objs)-before)
+		}
+	}
+}

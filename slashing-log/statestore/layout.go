@@ -275,75 +275,78 @@ func (s *Store) commitLocked(ctx context.Context, ops map[string]op, full bool) 
 	return nil
 }
 
-// createCommit writes a commit at the next free version.
+// createCommit writes a commit at the next version. A name taken by an
+// object that is not a commit stops it (markstore.ErrNameTaken).
 func (s *Store) createCommit(ctx context.Context, plain []byte) (uint64, []byte, error) {
-	for v, skips := s.version+1, 0; ; v, skips = v+1, skips+1 {
-		if v == 0 {
-			return 0, nil, fmt.Errorf("statestore: no version name left after %d (refusing)", s.version)
-		}
-		if skips > maxSkips {
-			return 0, nil, fmt.Errorf("statestore: %d names after version %d are taken by objects that are not commits", maxSkips, s.version)
-		}
-		obj, err := s.seal(magicCommit, v, plain)
-		if err != nil {
-			return 0, nil, err
-		}
-		name := Name(s.setup, s.signer, v)
-		err = s.log.Create(ctx, name, obj)
-		if errors.Is(err, markstore.ErrExists) {
-			var found []*object
-			gerr := readBack(ctx, func(ctx context.Context) error {
-				es, err := s.log.List(ctx, name)
-				if err != nil {
-					return err
-				}
-				var mine []markstore.Entry
-				for _, e := range es {
-					if e.Name == name {
-						mine = append(mine, e)
-					}
-				}
-				found, err = s.validAt(ctx, v, mine)
-				return err
-			})
-			if gerr != nil {
-				return 0, nil, fmt.Errorf("statestore: version %d exists and cannot be read back: %w", v, gerr)
-			}
-			if len(found) == 0 {
-				s.opt.Log.Warn("state copy: name taken by an object that is not a commit; skipping it", "version", v)
-				continue
-			}
-			// Our own write whose reply was lost, unless another commit
-			// is there too (EDS-WRITER-01).
-			err = nil
-			for _, f := range found {
-				if !bytes.Equal(f.raw, obj) {
-					err = markstore.ErrExists
-				}
-			}
-			if err != nil {
-				s.lost = ErrLost
-				s.opt.Log.Error("state copy: another instance wrote this signer's copy; refusing further changes", "version", v)
-				return 0, nil, s.lost
-			}
-		}
-		if errors.Is(err, markstore.ErrHidden) {
-			// Another object of this name is hidden: a clone may have
-			// written it, so this write is not known to be the one a
-			// restart reads.
-			s.lost = ErrLost
-			s.opt.Log.Error("state copy: a delete marker or another version hides an object at the version this runner wrote; refusing further changes",
-				"version", v, "err", err)
-			return 0, nil, fmt.Errorf("%w: %v", ErrLost, err)
-		}
-		if err != nil && s.landed(ctx, name, obj) {
-			err = nil // the store took it and the reply was lost
-		}
-		if err != nil {
-			return 0, nil, fmt.Errorf("statestore: write version %d: %w", v, err)
-		}
-		return v, obj, nil
+	v := s.version + 1
+	if v == 0 {
+		return 0, nil, fmt.Errorf("statestore: no version name left after %d (refusing)", s.version)
 	}
+	obj, err := s.seal(magicCommit, v, plain)
+	if err != nil {
+		return 0, nil, err
+	}
+	name := Name(s.setup, s.signer, v)
+	err = s.log.Create(ctx, name, obj)
+	if errors.Is(err, markstore.ErrExists) {
+		var found []*object
+		gerr := readBack(ctx, func(ctx context.Context) error {
+			es, err := s.log.List(ctx, name)
+			if err != nil {
+				return err
+			}
+			var mine []markstore.Entry
+			for _, e := range es {
+				if e.Name == name {
+					mine = append(mine, e)
+				}
+			}
+			found, err = s.validAt(ctx, v, mine)
+			return err
+		})
+		if gerr != nil {
+			return 0, nil, fmt.Errorf("statestore: version %d exists and cannot be read back: %w", v, gerr)
+		}
+		if len(found) == 0 {
+			// Never skip the name, however long the object is locked.
+			// A skip is safe only with a write age latch (see
+			// markstore.CheckKept), and the copy has none: a process
+			// cut off for the whole lock could commit here once the
+			// object is gone, beside a clone that skipped it. Stop,
+			// without a latch.
+			s.opt.Log.Error("state copy: name taken by an object that is not a commit; no commits are written until it is gone", "version", v)
+			return 0, nil, fmt.Errorf("statestore: version %d: %w", v, markstore.ErrNameTaken)
+		}
+		// Our own write whose reply was lost, unless another commit
+		// is there too (EDS-WRITER-01).
+		err = nil
+		for _, f := range found {
+			if !bytes.Equal(f.raw, obj) {
+				err = markstore.ErrExists
+			}
+		}
+		if err != nil {
+			s.lost = ErrLost
+			s.opt.Log.Error("state copy: another instance wrote this signer's copy; refusing further changes", "version", v)
+			return 0, nil, s.lost
+		}
+	}
+	if errors.Is(err, markstore.ErrHidden) {
+		// Another object of this name is hidden: a clone may have
+		// written it, so this write is not known to be the one a
+		// restart reads.
+		s.lost = ErrLost
+		s.opt.Log.Error("state copy: a delete marker or another version hides an object at the version this runner wrote; refusing further changes",
+			"version", v, "err", err)
+		return 0, nil, fmt.Errorf("%w: %v", ErrLost, err)
+	}
+	if err != nil && s.landed(ctx, name, obj) {
+		err = nil // the store took it and the reply was lost
+	}
+	if err != nil {
+		return 0, nil, fmt.Errorf("statestore: write version %d: %w", v, err)
+	}
+	return v, obj, nil
 }
 
 // landed reports whether obj is under name after a create that failed

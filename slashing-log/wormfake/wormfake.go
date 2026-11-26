@@ -4,13 +4,14 @@
 // clients make:
 //
 //	S3     PUT object (If-None-Match: *, optional per-object retention),
-//	       GET object (versionId), GET bucket?versions (ListObjectVersions),
-//	       with versioning and Object Lock in compliance mode
-//	GCS    POST upload (ifGenerationMatch=0), GET object (alt=media,
-//	       generation), GET list (versions=true), with a locked retention
-//	       policy
-//	Azure  PUT blob (If-None-Match: *), GET blob, GET list (comp=list),
-//	       with a locked time-based retention policy
+//	       GET object (versionId), GET object?retention (versionId),
+//	       GET bucket?versions (ListObjectVersions), with versioning and
+//	       Object Lock in compliance mode
+//	GCS    POST upload (ifGenerationMatch=0), GET object (alt=media or
+//	       its metadata, generation), GET list (versions=true), with a
+//	       locked retention policy
+//	Azure  PUT blob (If-None-Match: *), GET and HEAD blob, GET list
+//	       (comp=list), with a locked time-based retention policy
 //
 // and the lock self-check's read of the lock (S3 GET ?object-lock and
 // ?lifecycle, GCS GET
@@ -65,6 +66,7 @@ type version struct {
 	seq    int       // global write order, for stale listings
 	at     time.Time // written, on the fake clock
 	until  time.Time // S3: end of the version's retention (zero: none)
+	mode   string    // S3: COMPLIANCE or GOVERNANCE, with until
 }
 
 // Lock is the fake's retention lock, the one its lock read reports and its
@@ -322,6 +324,55 @@ func (s *Server) AdminDelete(name string) bool {
 	return false
 }
 
+// AdminCreateRetained writes a new S3 version of name with its own
+// retention: mode COMPLIANCE or GOVERNANCE until until (allowed: a put may
+// name any retention). GCS and Azure: refused (their lock is the policy).
+func (s *Server) AdminCreateRetained(name string, data []byte, mode string, until time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Kind != S3 || s.lock.None {
+		s.Refused = append(s.Refused, "create retained "+name)
+		return false
+	}
+	v := s.put(name, data, false)
+	v.until, v.mode = until, mode
+	return true
+}
+
+// AdminDeleteVersions deletes every version of name that its lock lets the
+// account admin delete now, as a delete by version ID does, and returns
+// how many it deleted. S3: a version without retention, one whose
+// retention has ended, and a GOVERNANCE one (the admin can bypass
+// governance); a delete marker always. GCS and Azure: every object once
+// the policy is not locked (an admin can remove an unlocked policy), or
+// once its retention has ended. The rest stays; each refusal is recorded.
+func (s *Server) AdminDeleteVersions(name string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().Add(s.offset)
+	keep := time.Duration(s.lock.Days) * 24 * time.Hour
+	var left []*version
+	n := 0
+	for _, v := range s.objects[name] {
+		ok := s.lock.None || !s.lock.Compliance || now.Sub(v.at) >= keep
+		if s.Kind == S3 {
+			ok = v.marker || v.until.IsZero() || !now.Before(v.until) || v.mode == "GOVERNANCE"
+		}
+		if !ok {
+			s.Refused = append(s.Refused, "delete version "+name+" "+v.id)
+			left = append(left, v)
+			continue
+		}
+		n++
+	}
+	if len(left) == 0 {
+		delete(s.objects, name)
+	} else {
+		s.objects[name] = left
+	}
+	return n
+}
+
 // AdminDeleteMarker hides an S3 object behind a delete marker (allowed on
 // a locked bucket); GCS and Azure have none: refused.
 func (s *Server) AdminDeleteMarker(name string) bool {
@@ -371,6 +422,10 @@ func (s *Server) put(name string, data []byte, marker bool) *version {
 		at: time.Now().Add(s.offset)}
 	if s.Kind == S3 && !marker && !s.lock.None && !s.lock.NoDefault {
 		v.until = v.at.Add(time.Duration(s.lock.Days) * 24 * time.Hour)
+		v.mode = "GOVERNANCE"
+		if s.lock.Compliance {
+			v.mode = "COMPLIANCE"
+		}
 	}
 	s.objects[name] = append(s.objects[name], v)
 	return v
@@ -531,10 +586,29 @@ func (s *Server) serveS3(w http.ResponseWriter, r *http.Request, body []byte) {
 		}
 		v := s.put(key, body, false)
 		if !until.IsZero() {
-			v.until = until
+			v.until, v.mode = until, mode
 		}
 		w.Header().Set("x-amz-version-id", v.id)
 		w.WriteHeader(http.StatusOK)
+	case r.Method == http.MethodGet && key != "" && q.Has("retention"):
+		// GetObjectRetention: a version without retention answers 404
+		// NoSuchObjectLockConfiguration, as S3 does.
+		vid := q.Get("versionId")
+		for _, v := range s.objects[key] {
+			if (vid == "" && v == s.current(key)) || (vid != "" && v.id == vid) {
+				if v.marker {
+					break
+				}
+				if v.until.IsZero() {
+					s3err(w, http.StatusNotFound, "NoSuchObjectLockConfiguration")
+					return
+				}
+				fmt.Fprintf(w, `<Retention xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Mode>%s</Mode><RetainUntilDate>%s</RetainUntilDate></Retention>`,
+					v.mode, v.until.UTC().Format("2006-01-02T15:04:05.000Z"))
+				return
+			}
+		}
+		s3err(w, http.StatusNotFound, "NoSuchVersion")
 	case r.Method == http.MethodGet && key != "":
 		vid := q.Get("versionId")
 		for _, v := range s.objects[key] {
@@ -658,7 +732,7 @@ func (s *Server) serveGCS(w http.ResponseWriter, r *http.Request, body []byte) {
 		_ = json.NewEncoder(w).Encode(res)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, objs+"/"):
 		name, err := url.PathUnescape(strings.TrimPrefix(r.URL.EscapedPath(), objs+"/"))
-		if err != nil || q.Get("alt") != "media" {
+		if err != nil || q.Get("alt") != "media" && q.Get("alt") != "" {
 			gcsErr(w, http.StatusBadRequest, "bad get")
 			return
 		}
@@ -667,6 +741,12 @@ func (s *Server) serveGCS(w http.ResponseWriter, r *http.Request, body []byte) {
 				continue
 			}
 			if q.Get("generation") == "" && v == s.current(name) || v.id == q.Get("generation") {
+				if q.Get("alt") == "" {
+					// The object's metadata.
+					_ = json.NewEncoder(w).Encode(map[string]string{"name": name, "generation": v.id,
+						"timeCreated": v.at.UTC().Format(time.RFC3339Nano)})
+					return
+				}
 				_, _ = w.Write(v.data)
 				return
 			}
@@ -823,6 +903,14 @@ func (s *Server) serveAzure(w http.ResponseWriter, r *http.Request, body []byte)
 				return
 			}
 			azErr(w, http.StatusNotFound, "BlobNotFound")
+		case http.MethodHead:
+			if v := s.current(name); v != nil {
+				w.Header().Set("x-ms-creation-time", v.at.UTC().Format(http.TimeFormat))
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			w.Header().Set("x-ms-error-code", "BlobNotFound")
+			w.WriteHeader(http.StatusNotFound)
 		default:
 			azErr(w, http.StatusConflict, "BlobImmutableDueToPolicy")
 		}

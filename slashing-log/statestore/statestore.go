@@ -94,7 +94,6 @@ const (
 	maxInline = 128 << 10
 	maxTail   = 256 << 10
 	maxChain  = 64
-	maxSkips  = 16
 	nonceLen  = 12
 )
 

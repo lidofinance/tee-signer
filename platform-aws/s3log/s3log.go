@@ -2,8 +2,10 @@
 
 // Package s3log is the mark log on an S3 bucket with versioning and Object
 // Lock (default retention in compliance mode), with a small SigV4 client of
-// its own: PutObject with If-None-Match: *, GetObject by version ID and
-// ListObjectVersions. Nothing else of the S3 API is used.
+// its own: PutObject with If-None-Match: *, GetObject by version ID,
+// ListObjectVersions, and GetObjectRetention for an object under a record
+// name that is not a record (ObjectLock). Nothing else of the S3 API is
+// used.
 //
 // Requests are signed with credentials only the enclave holds
 // (platform.Platform.RecordCredentials). The bucket's default retention is a
@@ -549,6 +551,47 @@ func (l *Log) lifecycle(ctx context.Context) error {
 const removeRules = "the mark bucket must have no lifecycle rules. Remove them (aws s3api delete-bucket-lifecycle); " +
 	"while the bucket policy's NoLifecycleRules statement is in force (platform-aws/deploy/main.tf), " +
 	"that needs a bucket policy change first: drop the statement, remove the rules, then put the statement back"
+
+// ObjectLock reads the retention of one object version (GetObjectRetention,
+// GET /KEY?retention&versionId=V). The credentials need
+// s3:GetObjectRetention. A version without retention answers 404
+// NoSuchObjectLockConfiguration: mode "none". Only COMPLIANCE counts as
+// locked: an admin with s3:BypassGovernanceRetention deletes a GOVERNANCE
+// version at any time.
+func (l *Log) ObjectLock(ctx context.Context, e markstore.Entry) (markstore.ObjectLock, error) {
+	q := url.Values{"retention": {""}}
+	if e.Ref != "" {
+		q.Set("versionId", e.Ref)
+	}
+	resp, err := l.send(ctx, http.MethodGet, e.Name, q, nil, nil)
+	if err != nil {
+		return markstore.ObjectLock{}, err
+	}
+	defer resp.Body.Close()
+	const kind = "s3 object retention"
+	if resp.StatusCode == http.StatusNotFound {
+		err := errorOf(resp)
+		if strings.Contains(err.Error(), "NoSuchObjectLockConfiguration") {
+			return markstore.ObjectLock{Kind: kind, Mode: "none"}, nil
+		}
+		return markstore.ObjectLock{}, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return markstore.ObjectLock{}, errorOf(resp)
+	}
+	var r struct {
+		Mode  string `xml:"Mode"`
+		Until string `xml:"RetainUntilDate"`
+	}
+	if err := xml.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&r); err != nil {
+		return markstore.ObjectLock{}, fmt.Errorf("s3log: object retention: %w", err)
+	}
+	until, err := time.Parse(time.RFC3339, r.Until)
+	if err != nil {
+		return markstore.ObjectLock{}, fmt.Errorf("s3log: object retention date %q", r.Until)
+	}
+	return markstore.ObjectLock{Kind: kind, Mode: r.Mode, Compliance: r.Mode == "COMPLIANCE", RetainUntil: until}, nil
+}
 
 // Get reads one object version.
 func (l *Log) Get(ctx context.Context, e markstore.Entry) ([]byte, error) {

@@ -4,7 +4,8 @@
 // retention policy (Bucket Lock) and object versioning, through the JSON
 // API with a small client of its own: a media upload with
 // ifGenerationMatch=0, a media download by generation, and a listing with
-// versions=true. Nothing else of the API is used.
+// versions=true, and an object's metadata for its lock (ObjectLock).
+// Nothing else of the API is used.
 //
 // Requests carry an OAuth access token from the Confidential Space flow
 // (attestation token, STS exchange, optional service account), so only the
@@ -240,6 +241,45 @@ func (l *Log) ProjectNumber(ctx context.Context) (uint64, error) {
 		return 0, fmt.Errorf("gcslog: bucket %s: project number %q", l.Bucket, b.ProjectNumber)
 	}
 	return n, nil
+}
+
+// ObjectLock reads the bucket's retention policy (Lock) and one
+// generation's creation time (objects.get, fields=timeCreated), with the
+// permissions Lock and Get already need. Under a locked policy Cloud
+// Storage keeps every generation until its creation time plus the policy's
+// period, and nobody can shorten the period or remove the policy. A policy
+// that is not locked can be removed: not compliance.
+func (l *Log) ObjectLock(ctx context.Context, e markstore.Entry) (markstore.ObjectLock, error) {
+	lk, err := l.Lock(ctx)
+	if err != nil {
+		return markstore.ObjectLock{}, err
+	}
+	if !lk.Compliance {
+		return markstore.ObjectLock{Kind: lk.Kind, Mode: lk.Mode}, nil
+	}
+	q := url.Values{"fields": {"timeCreated"}}
+	if e.Ref != "" {
+		q.Set("generation", e.Ref)
+	}
+	resp, err := l.do(ctx, http.MethodGet, l.base()+"/storage/v1/b/"+url.PathEscape(l.Bucket)+"/o/"+url.PathEscape(e.Name)+"?"+q.Encode(), nil)
+	if err != nil {
+		return markstore.ObjectLock{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return markstore.ObjectLock{}, errorOf(resp)
+	}
+	var o struct {
+		TimeCreated string `json:"timeCreated"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&o); err != nil {
+		return markstore.ObjectLock{}, fmt.Errorf("gcslog: object: %w", err)
+	}
+	created, err := time.Parse(time.RFC3339, o.TimeCreated)
+	if err != nil {
+		return markstore.ObjectLock{}, fmt.Errorf("gcslog: object %s: timeCreated %q", e.Name, o.TimeCreated)
+	}
+	return markstore.ObjectLock{Kind: lk.Kind, Mode: lk.Mode, Compliance: true, RetainUntil: created.Add(lk.Retention)}, nil
 }
 
 // Get downloads one generation of an object.

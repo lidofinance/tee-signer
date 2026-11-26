@@ -352,12 +352,48 @@ roll the mark back.
   (`signer-core/README.md`, "Restart floor"); the log's mark can only raise
   it. A restart while the chain does not finalize stops votes until the
   chain justifies the floor epoch, with the log as without it.
-- Objects that are not records under future names (anyone with write
-  access can create new names) cost the writer a skip each, up to 16 in a
-  row; readers ignore them. More than 16 in a row stop every write and every
-  start for the retention period, and one such object on a new log stops
-  its first claim. Many names above the newest record can also push the
-  claim past its timeout. The state copy has the same rule. Whoever can
+- Objects that are not records under future names. Anyone with write
+  access can create new names, and readers ignore such objects. The
+  writer skips a name only if every object under it is locked in
+  compliance mode until at least the time of the write plus
+  `slashing_log_min_lock_days`, less 15 minutes (`markstore.CheckKept`).
+  Nobody can then delete the object before a record under that name could
+  go. Each such name costs a skip, up to 16 in a row. Another instance
+  that comes to the name later skips it too if the object's date also
+  covers its own write, and the two then meet at the next name. Otherwise
+  it stops with `markstore.ErrNameTaken`, and the write age check keeps
+  it from writing the name after the object is gone. It writes nothing
+  more than half the retention after its last record, and the object
+  stays for the retention less 15 minutes after the skip. So the skip is
+  safe only with the write age check. A log without a setup and the first
+  record of a log have nothing for that check to count from, and never
+  skip a taken name. The rule assumes the trusted clock does not lag real
+  time; a claim refuses a clock that lags the newest record by more than
+  15 minutes (`markstore.ErrClockBehind`).
+- Any other object under the next name stops the write
+  (`markstore.ErrNameTaken`): no retention, S3 governance mode, a shorter
+  date, a GCS or Azure policy that is not locked, a store that cannot
+  report an object's lock, a lock read that fails, a log without a setup,
+  or the first record of a log. The stop does not latch, and until it ends
+  the core signs nothing past the committed mark and a start fails at its
+  claim. If the object goes within half the retention of the last record,
+  the next write takes the name. An object that stays longer cannot clear
+  in time: the write age check stops the writer first (`ErrStale`), and
+  the signer needs a new setup and a re-import. On a locked GCS or Azure
+  store that is any object made more than 15 minutes before the writer
+  reaches its name, since the lock runs from the object's creation. The
+  writer never passes such an object, because an instance that skipped it
+  and one that writes its name after a delete would never meet.
+- A listed object that reads as not found is an error, not an absent
+  object. A write that meets one fails without a skip and without a latch,
+  and a start fails. The listing says the object is there, and reading
+  past it could pass over a record.
+- More than 16 locked names in a row stop every write and every start for
+  their retention, and one such object on a new log stops its first
+  claim. Many names above the newest record can also push the claim past
+  its timeout. The state copy never skips: it has no write age check,
+  so any object that is not a commit under its next name stops its
+  commits until it is gone (`durable-state.md`). Whoever can
   create objects in the bucket can stop the signer this way, as they can
   by taking the runner's access away. The design trusts the storage
   admin for liveness, not for safety: nothing they write makes the runner
@@ -538,11 +574,12 @@ has passed.
 | | AWS | GCP | Azure |
 | --- | --- | --- | --- |
 | Store | S3 bucket, versioning on, Object Lock default retention in compliance mode | Cloud Storage bucket with a locked retention policy (Bucket Lock) | Blob Storage container with a locked time-based retention policy, container-level (no version-level immutability on the account or the container), no protected append writes, no hierarchical namespace on the account |
-| What the admin cannot do | delete or overwrite a locked version ("can't be overwritten or deleted by any user, including the root user"); with the bucket policy of `platform-aws/deploy/main.tf`, delete any object or set a new lifecycle rule (no principal may; a rule set before the policy keeps running), or put under `marks/` and `config/` (only the record writer may) | delete or replace a retained object; reduce or remove the locked policy | modify or delete a locked blob ("not even by users with account administrative privileges") |
+| What the admin cannot do | delete or overwrite a locked version ("can't be overwritten or deleted by any user, including the root user"); with the bucket policy of `platform-aws/deploy/main.tf`, delete any object or set a new lifecycle rule (no principal may; a rule set before the policy keeps running), or put under `marks/` and `config/` (only the record writer may); with or without the policy, get a writer past a record name whose object it can delete later (the writer skips only an object in compliance mode retained as long as a record) | delete or replace a retained object; reduce or remove the locked policy; get a writer past a record name whose object it can delete later | modify or delete a locked blob ("not even by users with account administrative privileges"); get a writer past a record name whose object it can delete later |
 | What the admin can do | with the bucket policy, mint an access key or a console password for the record writer user and write records as it, or change the policy to lift its denies (including the one on lifecycle rules, whose expiration adds delete markers); without it, add versions and delete markers (the reader lists every version); lower or remove the default retention, which the runner's objects do not use (each PUT names its own compliance retention) | create new names | create new names |
 | Client | `platform-aws/s3log`, SigV4 of our own, `platform_aws` | `platform-gcp/gcslog`, JSON API, `platform_gcp` | `platform-azure/azlog`, Blob REST, `platform_azure` |
 | Credentials | the enclave's record credentials (an IAM key only the enclave can decrypt) | the workload's federated token (Confidential Space, WIF; the same as for KMS) | the container group's managed identity, resource `https://storage.azure.com/` |
 | Lock check reads | `GET /?object-lock` (GetObjectLockConfiguration); needs `s3:GetBucketObjectLockConfiguration`; `GET /?lifecycle` (GetBucketLifecycleConfiguration), refused on an enabled transition rule, a warning on an expiration rule; needs `s3:GetLifecycleConfiguration` (any 403 on this read, whatever its code: a warning, no check); every PUT also needs `s3:PutObjectRetention` | `GET /storage/v1/b/B?fields=retentionPolicy`; needs `storage.buckets.get` | the storage account and the container from the management plane (`immutableStorageWithVersioning`, `immutabilityPolicy`); needs a token for `https://management.azure.com/`, the subscription and the resource group, and Reader on the account |
+| Taken name reads | `GET /KEY?retention&versionId=V` (GetObjectRetention) for each version under a record name that holds no valid record; needs `s3:GetObjectRetention`; only `COMPLIANCE` counts | the bucket's policy as above and the generation's `timeCreated` (`storage.objects.get`); the object is kept until `timeCreated` plus the locked period | the container's policy as above and the blob's `x-ms-creation-time` (Get Blob Properties); the blob is kept until its creation plus the locked period |
 | `-mark-store` | `s3:bucket=B,region=R[,endpoint=URL]` | `gcs:bucket=B[,endpoint=URL]` | `azblob:account=A,container=C[,endpoint=URL][,subscription=S,resource_group=G[,arm_endpoint=URL]]` |
 
 `file:DIR` is a write-once file log for tests and the dev platform; the
@@ -695,14 +732,19 @@ holds its true mark.
 - A signer down, or cut off from its store, longer than half the
   retention period: the age check stops it at the claim, the write age
   check while it runs, and it needs a new setup and a re-import.
-- Objects under future record names. Anyone who can write the log's
-  bucket (an admin, or the runner's own cloud identity) can create junk
-  under the next 17 version names. A writer gives up after 17 names in a
-  row that hold no valid record, so every later write fails, the core
-  signs nothing past the committed mark, and a start fails at its claim
-  record. On a locked bucket the junk stays for the retention period, so
-  the signer needs a new setup and a re-import. This costs liveness,
-  never a mark.
+- Objects under future record names. Anyone who can write the log's bucket
+  (an admin, or the runner's own cloud identity) can create junk under the
+  next version names. One object that is not locked as long as a record
+  stops every write until it is gone. Seventeen locked ones in a row stop
+  every write for their retention. Either way the core signs nothing past
+  the committed mark, and a start fails at its claim record. If the junk
+  stays longer than half the retention after the last record, the stop
+  does not clear: the write age check ends the setup, and the signer needs
+  a new setup and a re-import. On a locked GCS or Azure store one object
+  made more than 15 minutes before the writer reaches its name is enough,
+  and so are seventeen locked ones on any store. This costs liveness,
+  never a mark: no writer passes a name whose object could be deleted
+  later.
 - S3's default retention is a bucket setting. An admin with
   `s3:PutBucketObjectLockConfiguration` can lower or remove it after the
   start's check. The runner's own objects are not affected, since each PUT

@@ -127,8 +127,9 @@ func TestOtherKeyReleaseRefused(t *testing.T) {
 }
 
 // Changed or foreign objects: a flipped byte, a snapshot copied under
-// another version name or another signer's prefix do not open; a forged
-// object at a future name costs a skip.
+// another version name or another signer's prefix do not open. A forged
+// object at a future name stops the next commit: a file log reports no
+// lock, so nothing shows that the object stays (markstore.CheckKept).
 func TestTamperedSnapshots(t *testing.T) {
 	dir := t.TempDir()
 	l, _ := markstore.NewFileLog(dir)
@@ -173,12 +174,12 @@ func TestTamperedSnapshots(t *testing.T) {
 	if _, err := Open(context.Background(), newLocal(t), l, "signer-2", keysOf("image-a"), Options{SetupHash: setupA, Log: quiet}); err == nil {
 		t.Fatal("signer-2 opened signer-1's snapshot")
 	}
-	// The next write skips name 3.
-	if err := s3.Put("shares/aa", []byte("v3")); err != nil {
-		t.Fatal(err)
+	// The next write stops at name 3 and writes nothing past it.
+	if err := s3.Put("shares/aa", []byte("v3")); !errors.Is(err, markstore.ErrNameTaken) {
+		t.Fatalf("commit over a forged object: %v, want ErrNameTaken", err)
 	}
-	if !strings.Contains(s3.Status(), "version=4") {
-		t.Fatalf("status %q", s3.Status())
+	if es, _ := l.List(context.Background(), Name(setupA, "signer-1", 4)); len(es) != 0 {
+		t.Fatalf("a commit past the forged object: %v", es)
 	}
 }
 

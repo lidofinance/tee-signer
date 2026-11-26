@@ -131,7 +131,9 @@ func (s *Store) validAt(ctx context.Context, v uint64, es []markstore.Entry) ([]
 	for _, e := range es {
 		b, err := s.log.Get(ctx, e)
 		if errors.Is(err, markstore.ErrNotFound) {
-			continue
+			// Listed, so not absent: reading past it could take an older
+			// commit.
+			return nil, fmt.Errorf("statestore: version %d: %s (%s) is listed but reads as not found", v, e.Name, e.Ref)
 		}
 		if err != nil {
 			return nil, err

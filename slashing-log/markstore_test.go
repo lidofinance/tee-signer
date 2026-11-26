@@ -79,8 +79,28 @@ func openUpdate(t *testing.T, v uint64, tag byte) []byte {
 }
 
 // memLog keeps several objects per name, as S3 versions do, so tests can
-// put a second valid record under one name.
-type memLog struct{ objs map[string][][]byte }
+// put a second valid record under one name. locks is the lock ObjectLock
+// reports for every object of a name; a name without one has no
+// retention.
+type memLog struct {
+	objs  map[string][][]byte
+	locks map[string]ObjectLock
+}
+
+func (m *memLog) ObjectLock(_ context.Context, e Entry) (ObjectLock, error) {
+	if lk, ok := m.locks[e.Name]; ok {
+		return lk, nil
+	}
+	return ObjectLock{Kind: "mem", Mode: "none"}, nil
+}
+
+// lockFor puts a compliance lock until until on name.
+func (m *memLog) lockFor(name string, until time.Time) {
+	if m.locks == nil {
+		m.locks = map[string]ObjectLock{}
+	}
+	m.locks[name] = ObjectLock{Kind: "mem", Mode: "COMPLIANCE", Compliance: true, RetainUntil: until}
+}
 
 func (m *memLog) Create(_ context.Context, name string, data []byte) error {
 	if len(m.objs[name]) > 0 {
@@ -395,33 +415,47 @@ func TestForkRefused(t *testing.T) {
 	}
 }
 
-// Objects under future names that are not records cost the writer a skip
-// each; it writes past them and readers ignore them.
+// Objects under future names that are not records, locked as long as a
+// record, cost the writer a skip each; it writes past them and readers
+// ignore them. Objects without such a lock stop the writes instead
+// (TestTakenNameSkippedOnlyWhenLocked).
 func TestSquattedNamesSkipped(t *testing.T) {
 	ctx := context.Background()
-	name := func(v uint64) string { return Name([32]byte{}, "s", v) }
+	now := time.Unix(1_800_000_000, 0)
+	opt := Options{Setup: testSetup("s"), Clock: clockAt(&now), Log: quiet}
+	until := now.Add(opt.Setup.Retention() + 25*time.Hour)
+	name := func(v uint64) string { return Name(opt.Setup.Hash, "s", v) }
 	l := &memLog{objs: map[string][][]byte{}}
-	m, _ := New(l, "s", testKey(1), Options{Log: quiet})
+	m, _ := New(l, "s", testKey(1), opt)
 	if _, _, err := m.Claim(ctx, false); err != nil {
 		t.Fatal(err)
 	}
 	l.objs[name(2)] = [][]byte{[]byte("junk")}
 	l.objs[name(3)] = [][]byte{[]byte("junk")}
+	l.lockFor(name(2), until)
+	l.lockFor(name(3), until)
 	if err := m.Append(ctx, mark(10)); err != nil {
 		t.Fatal(err)
 	}
 	if _, v := m.Mark(); v != 4 {
 		t.Fatalf("wrote version %d, want 4", v)
 	}
-	m2, _ := New(l, "s", testKey(1), Options{Log: quiet})
+	m2, _ := New(l, "s", testKey(1), opt)
 	if got, _, err := m2.Claim(ctx, true); err != nil || got != mark(10) {
 		t.Fatalf("read back: %+v %v", got, err)
 	}
 	for v := uint64(6); v < 6+maxSkips+2; v++ {
 		l.objs[name(v)] = [][]byte{[]byte("junk")}
+		l.lockFor(name(v), until)
 	}
-	if err := m2.Append(ctx, mark(11)); err == nil {
-		t.Fatal("wrote past more squatted names than allowed")
+	// The bound stops the write, not the lock rule: every name has a lock
+	// long enough to skip.
+	err := m2.Append(ctx, mark(11))
+	if err == nil || errors.Is(err, ErrNameTaken) || !strings.Contains(err.Error(), "names after version") {
+		t.Fatalf("append past more squatted names than allowed: %v; want the skip bound", err)
+	}
+	if n := len(l.objs[name(6+maxSkips+2)]); n != 0 {
+		t.Fatalf("wrote %d objects past the squatted names", n)
 	}
 }
 

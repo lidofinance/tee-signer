@@ -307,6 +307,9 @@ resource "aws_iam_user" "record_writer" {
 # setup_hash, so the policy names the two prefixes and no setup: each
 # setup's log stays apart by its path and by the keys bound to setup_hash.
 # s3:GetBucketObjectLockConfiguration is the lock check at every start.
+# s3:GetObjectRetention reads the retention of an object under a record
+# name that holds no record: the writer skips that name only if the object
+# is in compliance mode for at least a record's retention.
 # The default retention is a bucket setting the account admin can lower or
 # remove later, so the runner gives every object it writes its own
 # compliance retention of slashing_log_min_lock_days (s3:PutObjectRetention,
@@ -368,7 +371,7 @@ resource "aws_s3_bucket_policy" "marks" {
         Sid       = "EnclaveWriterRecords"
         Effect    = "Allow"
         Principal = { AWS = aws_iam_user.record_writer.arn }
-        Action    = ["s3:PutObject", "s3:PutObjectRetention", "s3:GetObject", "s3:GetObjectVersion"]
+        Action    = ["s3:PutObject", "s3:PutObjectRetention", "s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectRetention"]
         Resource  = ["arn:aws:s3:::${var.mark_bucket}/marks/*", "arn:aws:s3:::${var.mark_bucket}/config/*"]
       },
       {

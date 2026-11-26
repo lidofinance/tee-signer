@@ -14,7 +14,8 @@ import (
 // newest record of its signer is one it cannot parse refuses to start. It
 // does not skip the record and fall back to the mark below it, which a
 // newer image may have raised past. Objects that are no record of this
-// signer under this key release are still skipped.
+// signer under this key release are still skipped when they are locked as
+// long as a record (CheckKept).
 func TestUnreadableNewestRecordRefused(t *testing.T) {
 	ctx := context.Background()
 	now := time.Unix(1_800_000_000, 0)
@@ -80,8 +81,9 @@ func TestUnreadableNewestRecordRefused(t *testing.T) {
 		}
 	}
 
-	// Skipped as before: junk, a record start whose key blob another key
-	// release made, and a record of another signer under this name.
+	// Skipped as before, under a lock as long as a record: junk, a record
+	// start whose key blob another key release made, and a record of
+	// another signer under this name.
 	l, _, prev := written()
 	other, _ := New(&memLog{objs: map[string][][]byte{}}, "signer-1", testKey(9), opt)
 	if _, _, err := other.Claim(ctx, false); err != nil {
@@ -93,6 +95,7 @@ func TestUnreadableNewestRecordRefused(t *testing.T) {
 	_, m1, _ := written()
 	wrongSigner := append(r.Sign(m1.key), 9)
 	l.objs[Name(setup, "signer-1", 5)] = [][]byte{[]byte("junk"), foreign, wrongSigner}
+	l.lockFor(Name(setup, "signer-1", 5), now.Add(opt.Setup.Retention()))
 	m3, _ := New(l, "signer-1", testKey(1), opt)
 	if got, _, err := m3.Claim(ctx, true); err != nil || got != mark(7) {
 		t.Fatalf("claim past objects that are not records of this signer: %+v %v", got, err)
@@ -105,7 +108,8 @@ func TestUnreadableNewestRecordRefused(t *testing.T) {
 // the blob's key over the bytes before its last 64, is skipped like any
 // other junk, at a future version and next to the newest record. Without
 // that check one such object under a compliance lock stops every start of
-// the signer for the retention period.
+// the signer for the retention period. Here the forgery is under such a
+// lock, so at a future version it costs a skip (CheckKept).
 func TestForgedHeaderSkipped(t *testing.T) {
 	ctx := context.Background()
 	now := time.Unix(1_800_000_000, 0)
@@ -166,6 +170,7 @@ func TestForgedHeaderSkipped(t *testing.T) {
 				}
 				n := Name(setup, "signer-1", at)
 				l.objs[n] = append(l.objs[n], forged)
+				l.lockFor(n, now.Add(opt.Setup.Retention()))
 
 				m2, _ := New(l, "signer-1", testKey(1), opt)
 				got, _, err := m2.Claim(ctx, true)
@@ -270,14 +275,15 @@ func TestUnreadableRecordOnWriteLatchesLost(t *testing.T) {
 		t.Errorf("claim over a newer image's record below the newest: %v, want ErrUnreadable at version 5", err)
 	}
 
-	// (c) Control: junk and a copied key blob without a signature under it
-	// still cost a skip, nothing more.
+	// (c) Control: junk and a copied key blob without a signature under it,
+	// locked as long as a record, still cost a skip, nothing more.
 	l, a, prev = written()
 	r, _ := Parse(prev)
 	r.Version = 5
 	blobOnly := r.encodeBody()
 	blobOnly = append(blobOnly[:bytes.Index(blobOnly, r.KeyBlob)+len(r.KeyBlob)], bytes.Repeat([]byte{0xee}, 100)...)
 	l.objs[Name(setup, "signer-1", 5)] = [][]byte{[]byte("junk"), blobOnly}
+	l.lockFor(Name(setup, "signer-1", 5), now.Add(opt.Setup.Retention()))
 	if err := a.Append(ctx, mark(9)); err != nil {
 		t.Fatalf("append past objects that are not records: %v", err)
 	}

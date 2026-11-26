@@ -43,6 +43,13 @@ var ErrUnreadable = errors.New("markstore: a record of this signer is one this r
 // needs a new setup and a re-import.
 var ErrTooOld = errors.New("markstore: the newest record is older than half the retention; update bodies may have expired")
 
+// ErrClockBehind: the newest record is dated more than lockMargin after
+// the trusted clock at the claim. The instance that wrote it had a clock
+// ahead of this one, so this one lags real time or the other led it by
+// far more than a trusted clock may. The skip rule (CheckKept) and the
+// write age check assume a clock that does not lag, so the claim refuses.
+var ErrClockBehind = errors.New("markstore: the newest record is dated after the trusted clock; this runner's clock lags")
+
 // ErrStale: this runner wrote no record for half of
 // slashing_log_min_lock_days (the store was cut off, or a write landed that
 // late). A clone may have claimed the log meanwhile and its records may
@@ -95,8 +102,10 @@ func Merge(a, b backend.Watermark) backend.Watermark {
 }
 
 // maxSkips bounds the versions a writer skips over objects that are not
-// valid records (an admin may create objects under future names; they cost
-// a skip each, never a valid record). Body copies use the same bound.
+// valid records. An admin may create objects under future names. One that
+// stays at least as long as a record costs a skip (CheckKept); any other
+// stops the writes until it is gone. Neither costs a valid record. Body
+// copies use the same bound.
 const maxSkips = 16
 
 // Setup is what the mark log takes from the signer's setup.
@@ -356,15 +365,19 @@ func (m *MarkLog) pubOf(ctx context.Context, blob []byte) (ed25519.PublicKey, er
 // validAt returns ErrUnreadable instead. The claim applies it at and above
 // the newest valid record and in the chain walk below it (newest), the
 // writer when a name it wants is taken (appendLocked). Any other object is
-// skipped: a key blob alone proves nothing, since anyone who reads the log
+// left out: a key blob alone proves nothing, since anyone who reads the log
 // can copy one from a real record.
+//
+// A listed object that reads as not found is an error, not an absent
+// object: the listing says it is there, and reading past it could pass
+// over a record.
 func (m *MarkLog) validAt(ctx context.Context, v uint64, es []Entry, strict bool) ([]*Record, [][]byte, error) {
 	var recs []*Record
 	var encs [][]byte
 	for _, e := range es {
 		b, err := m.log.Get(ctx, e)
 		if errors.Is(err, ErrNotFound) {
-			continue
+			return nil, nil, fmt.Errorf("markstore: version %d: %s (%s) is listed but reads as not found", v, e.Name, e.Ref)
 		}
 		if err != nil {
 			return nil, nil, err
@@ -571,6 +584,17 @@ func (m *MarkLog) Claim(ctx context.Context, expect bool) (backend.Watermark, bo
 			return backend.Watermark{}, false, fmt.Errorf("mark log %s: %w", m.log, err)
 		}
 		written := time.Unix(int64(r.Time), 0)
+		// A newest record from this clock's future means this clock lags
+		// the one that wrote it. The skip rule (CheckKept) and the write
+		// age check hold only for a clock that does not lag, so refuse.
+		// The bound is lockMargin, the clock error the skip rule already
+		// allows for: trusted clocks lead by under two minutes, so a right
+		// clock never sees a record that far ahead, and a clock that lags
+		// by less moves a lock's needed date by less than lockMargin.
+		if ahead := written.Sub(now); ahead > lockMargin {
+			return backend.Watermark{}, false, fmt.Errorf("mark log %s: %w: version %d is dated %s after the trusted clock, more than %s (refusing)",
+				m.log, ErrClockBehind, r.Version, ahead.Round(time.Second), lockMargin)
+		}
 		if age := now.Sub(written); age > m.opt.Setup.Retention()/2 {
 			return backend.Watermark{}, false, fmt.Errorf("mark log %s: %w: version %d was written %s ago, the retention is %d days (a new setup and a re-import are needed)",
 				m.log, ErrTooOld, r.Version, age.Round(time.Second), m.opt.Setup.RetentionDays)
@@ -789,6 +813,15 @@ func (m *MarkLog) Raise(ctx context.Context, wm backend.Watermark) error {
 // Any cause of a gap counts: the store, a lock read that fails, or a
 // trusted clock that fails.
 //
+// The skip rule of CheckKept depends on this check too. A writer that
+// skipped a locked object knows the object stays until at least its skip
+// time plus the retention, less 15 minutes. Another instance whose last
+// record is older than that skip can write only within half the retention
+// of that record, so it reaches the name while the object is still there.
+// A bound of the full retention, or a margin above half the retention,
+// would let it write the name after the object is gone, beside the writer
+// that skipped it.
+//
 // The bound holds only while the trusted clock does not lag real time. On
 // a platform where the host sets the rate of the guest's counter, a host
 // that blocks the time servers and holds the counter can hold the clock
@@ -832,6 +865,18 @@ func (m *MarkLog) ackLocked(base, at time.Time) error {
 	}
 	m.written, m.unacked = at, false
 	return nil
+}
+
+// keep is the retention a record written now gets at least: the setup's
+// slashing_log_min_lock_days. A skip is safe only with the write age latch
+// (staleLocked), so keep is 0, and CheckKept never skips, where that latch
+// has nothing to check: without a setup (the flag path), and for the first
+// record of a log, which has no record before it (base is zero).
+func (m *MarkLog) keep(base time.Time) time.Duration {
+	if m.opt.Setup != nil && !base.IsZero() {
+		return m.opt.Setup.Retention()
+	}
+	return 0
 }
 
 // copiesLocked fills a record's body copies from what the log holds for the
@@ -917,9 +962,18 @@ func (m *MarkLog) appendLocked(ctx context.Context, wm backend.Watermark) error 
 				return fmt.Errorf("markstore: version %d exists and cannot be read back: %w", v, gerr)
 			}
 			if len(recs) == 0 {
-				// Not a record: an object someone else put there. Skip the name.
+				// Not a record: an object someone else put there. Skip the
+				// name only if nobody can delete the object before a record
+				// there could go. A writer that skipped a deletable object
+				// and one that writes the name after the delete would never
+				// meet. Otherwise stop, without a latch.
+				if kerr := CheckKept(ctx, m.log, mine, now, m.keep(base)); kerr != nil {
+					m.opt.Log.Error("mark log: name taken by an object that is not a record and that this write may not skip; "+
+						"no records are written, and nothing is signed above the committed mark, until it is gone", "version", v, "err", kerr)
+					return fmt.Errorf("markstore: version %d: %w", v, kerr)
+				}
 				m.skipped++
-				m.opt.Log.Warn("mark log: name taken by an object that is not a record; skipping it", "version", v)
+				m.opt.Log.Warn("mark log: name taken by a locked object that is not a record; skipping it", "version", v)
 				continue
 			}
 			// A valid record of another owner at this version is another

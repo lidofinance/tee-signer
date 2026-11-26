@@ -25,9 +25,21 @@ import (
 
 // memLog is a markstore.Log in memory that lists as the cloud stores do:
 // every object under a prefix, c/ included, every version of a name.
+// locks is the lock ObjectLock reports for every object of a name; a name
+// without one has no retention.
 type memLog struct {
-	mu   sync.Mutex
-	objs map[string][][]byte
+	mu    sync.Mutex
+	objs  map[string][][]byte
+	locks map[string]markstore.ObjectLock
+}
+
+func (m *memLog) ObjectLock(_ context.Context, e markstore.Entry) (markstore.ObjectLock, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if lk, ok := m.locks[e.Name]; ok {
+		return lk, nil
+	}
+	return markstore.ObjectLock{Kind: "mem", Mode: "none"}, nil
 }
 
 func newMemLog() *memLog { return &memLog{objs: map[string][][]byte{}} }
