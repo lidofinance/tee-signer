@@ -133,8 +133,7 @@ fi
 # digits only: an Arabic-Indic three (U+0663, written as its bytes) is
 # refused by name. Skipped when that locale cannot be had.
 if [ "$(LC_ALL=en_US.UTF-8 locale charmap 2>/dev/null)" = UTF-8 ]; then
-  make_yaml "$T/c-locale.yaml"
-  sed -i "s/^MIN_GENESIS_TIME: .*/MIN_GENESIS_TIME: $(printf '\xd9\xa3')/" "$T/c-locale.yaml"
+  make_yaml "$T/c-locale.yaml" ".MIN_GENESIS_TIME = \"$(printf '\xd9\xa3')\""
   if LC_ALL=en_US.UTF-8 bash "$CHAIN" check-source hoodi "$T/c-locale.yaml" "$T/gvr.txt" >"$T/out" 2>&1; then
     bad "check-source: a non-ASCII digit in en_US.UTF-8 passes"
   elif grep -q "MIN_GENESIS_TIME .*not a plain decimal integer" "$T/out"; then
