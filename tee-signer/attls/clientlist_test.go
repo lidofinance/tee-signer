@@ -304,6 +304,60 @@ func TestPinnedCACopiesDoNotCount(t *testing.T) {
 	}
 }
 
+// A deployment may pin an intermediate (not self-signed) in
+// allowed_client_ca and run two CAs below it. The client sends the leaf
+// and the two CAs, three that count; a copy of the pinned intermediate or
+// of the root sent along does not count. Such a chain gives the signing
+// and the attest-only role, never admin (RoleOf, rule 2).
+func TestPinnedIntermediateWithTwoCAsBelow(t *testing.T) {
+	root := issue(t, nil, "root", keyOf(t, "P-256"), true, nil)
+	pinnedCA := issue(t, &root, "pinned intermediate", keyOf(t, "P-256"), true, nil)
+	sub := issue(t, &pinnedCA, "sub CA", keyOf(t, "P-256"), true, nil)
+	issuing := issue(t, &sub, "issuing CA", keyOf(t, "P-256"), true, nil)
+	signing := issue(t, &issuing, "client", keyOf(t, "P-256"), false, nil)
+	attest := issue(t, &issuing, "dashboard", keyOf(t, "P-256"), false, []asn1.ObjectIdentifier{backend.AttestOnlyClientOID})
+	for _, tc := range []struct {
+		name string
+		pins []byte
+		cert tls.Certificate
+		want Role
+	}{
+		{"leaf and two CAs", certPEM(pinnedCA.cert), list(signing, issuing, sub), RoleSigning},
+		{"leaf, two CAs and the pinned intermediate", certPEM(pinnedCA.cert), list(signing, issuing, sub, pinnedCA), RoleSigning},
+		{"leaf, two CAs, the pinned intermediate and the pinned root",
+			append(certPEM(root.cert), certPEM(pinnedCA.cert)...), list(signing, issuing, sub, pinnedCA, root), RoleSigning},
+		{"attest leaf and two CAs", certPEM(pinnedCA.cert), list(attest, issuing, sub), RoleAttestOnly},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, _, err := ServerConfig(tc.pins, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cc := countChainChecks(t)
+			cs := handshake(t, cfg, tc.cert)
+			if got := RoleOf(&cs); got != tc.want {
+				t.Errorf("role %v, want %v", got, tc.want)
+			}
+			if n := cc.calls.Load(); n != 1 {
+				t.Errorf("%d chain checks, want 1", n)
+			}
+		})
+	}
+	// A third CA below the pinned one is one too many.
+	third := issue(t, &issuing, "third CA", keyOf(t, "P-256"), true, nil)
+	cfg, _, err := ServerConfig(certPEM(pinnedCA.cert), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr, hs := start(t, cfg)
+	cert := list(issue(t, &third, "client", keyOf(t, "P-256"), false, nil), third, issuing, sub)
+	client := &tls.Config{GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return &cert, nil }}
+	_, _ = try(t, addr, client)
+	if serr := handshakeResult(t, hs); serr == nil || !strings.Contains(serr.Error(), "at most 3") {
+		t.Fatalf("leaf and three CAs below a pinned intermediate: %v, want a refusal that names the bound", serr)
+	}
+}
+
 // The refusal of a large certificate, which goes to the runner log, names
 // it in a few bytes, however long its subject name.
 func TestRefusalOfALongNameIsShort(t *testing.T) {

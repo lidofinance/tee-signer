@@ -79,7 +79,15 @@ func TestCheck(t *testing.T) {
 	leaf := issue(t, &issuing, "leaf", key(t, p256), false)
 	extra := issue(t, &root, "old intermediate", key(t, p256), true)
 	p521CA := issue(t, &root, "P-521 CA", key(t, p521), true)
-	pinned := func(c *x509.Certificate) bool { return c.Equal(root.cert) || c.Equal(bigRoot.cert) }
+	// A deployment may pin an intermediate (not self-signed) and run two
+	// CAs below it.
+	pinnedCA := issue(t, &root, "pinned intermediate", key(t, p256), true)
+	lowSub := issue(t, &pinnedCA, "sub CA below the pinned one", key(t, p256), true)
+	lowIssuing := issue(t, &lowSub, "issuing CA below the pinned one", key(t, p256), true)
+	lowLeaf := issue(t, &lowIssuing, "leaf", key(t, p256), false)
+	pinned := func(c *x509.Certificate) bool {
+		return c.Equal(root.cert) || c.Equal(bigRoot.cert) || c.Equal(pinnedCA.cert)
+	}
 
 	for _, tc := range []struct {
 		name string
@@ -90,6 +98,9 @@ func TestCheck(t *testing.T) {
 		{"leaf, two CAs and the pinned root", []node{leaf, issuing, sub, root}, 4},
 		{"pinned P-521 root sent along", []node{issue(t, &bigRoot, "leaf", key(t, p256), false), bigRoot}, 2},
 		{"pinned root sent twice", []node{leaf, issuing, sub, root, root}, 4},
+		{"leaf, two CAs below a pinned intermediate", []node{lowLeaf, lowIssuing, lowSub}, 3},
+		{"leaf, two CAs and the pinned intermediate", []node{lowLeaf, lowIssuing, lowSub, pinnedCA}, 4},
+		{"leaf, two CAs, the pinned intermediate and the root", []node{lowLeaf, lowIssuing, lowSub, pinnedCA, root}, 5},
 		{"a CA sent twice", []node{leaf, issuing, issuing}, 2},
 		{"four certificates besides the root", []node{leaf, issuing, sub, extra}, 0},
 		{"P-521 CA that is not pinned", []node{issue(t, &p521CA, "leaf", key(t, p256), false), p521CA}, 0},
@@ -140,6 +151,16 @@ func TestCheckFile(t *testing.T) {
 	extra := issue(t, &sub, "old intermediate", key(t, p256), true)
 	if err := CheckFile(ders(leaf, issuing, sub, root)); err != nil {
 		t.Errorf("leaf, two CAs and a P-521 root: %v", err)
+	}
+	// Below a pinned intermediate the file holds the leaf and the two CAs
+	// and leaves out the pinned one, which the client cannot tell from
+	// another intermediate.
+	pinnedCA := issue(t, &root, "pinned intermediate", key(t, p256), true)
+	lowSub := issue(t, &pinnedCA, "sub CA", key(t, p256), true)
+	lowIssuing := issue(t, &lowSub, "issuing CA", key(t, p256), true)
+	lowLeaf := issue(t, &lowIssuing, "leaf", key(t, p256), false)
+	if err := CheckFile(ders(lowLeaf, lowIssuing, lowSub)); err != nil {
+		t.Errorf("leaf and two CAs below a pinned intermediate: %v", err)
 	}
 	err := CheckFile(ders(leaf, issuing, sub, extra))
 	if err == nil || !strings.Contains(err.Error(), "at most 3") {

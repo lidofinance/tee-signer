@@ -189,11 +189,16 @@ certificate list that no client chain of the role model has: more than
 three certificates (leaf, intermediate, root), a certificate over 8 KiB,
 or a key other than ECDSA P-256 or P-384, Ed25519, or RSA of 2048 to 4096
 bits. A copy of a CA certificate of `allowed_client_ca` after the leaf
-does not count. The client then sees only the TLS alert `bad
+does not count. A deployment that pins an intermediate may run two CAs
+below it: the client file then holds the leaf, its issuing CA and the CA
+above that, and leaves out the pinned intermediate, which the client
+tools would count (example chain in protocol.md, "Client roles"). The client then sees only the TLS alert `bad
 certificate`; the runner log names the reason
 ([protocol.md](../signer-protocol/docs/protocol.md), "Client roles").
 Certificates from `signer-admin issue-client-cert` and
-`scripts/make-test-ca.sh` fit. Before the rollout, count the certificates
+`scripts/make-test-ca.sh` fit: `issue-client-cert` checks the file with
+the runner's rule and writes nothing when its issuer is outside the
+bounds. Before the rollout, count the certificates
 and read the key kinds in every client file that reaches a runner: the
 gateway's `signers.client_cert`, signer-admin connection files, and any
 other client. Upgrade the client tools first (step 2): the new gateway

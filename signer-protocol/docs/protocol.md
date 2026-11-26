@@ -1267,7 +1267,8 @@ Every certificate of the chain must allow `clientAuth` (or list no
 extended key usage); Go's verifier refuses the handshake otherwise.
 
 The client sends at most three certificates: the leaf, its intermediate
-and optionally the root. Each is at most 8 KiB and has an ECDSA P-256
+and optionally the root, or the leaf and two CAs below a pinned
+intermediate (below). Each is at most 8 KiB and has an ECDSA P-256
 or P-384, Ed25519, or RSA key of 2048 to 4096 bits. A copy of a CA
 certificate of `allowed_client_ca` sent after the leaf does not count and
 may have any key. The runner refuses any other list before it checks a
@@ -1278,6 +1279,25 @@ logs the reason. The gateway, signer-admin and the other tools of
 same rule when they load it and do not start with a file the runner
 would refuse. They do not know `allowed_client_ca`, so there any
 self-signed certificate after the leaf counts as such a copy.
+
+`allowed_client_ca` may pin an intermediate, and a deployment may run
+up to two CAs below it. The client file holds the leaf and those two
+CAs, three certificates that count:
+
+```
+root CA                   need not be pinned, not in the file
+└─ team CA                pinned in allowed_client_ca, not in the file
+    └─ sub CA             in the file
+        └─ issuing CA     in the file
+            └─ leaf       in the file, first
+```
+
+The runner also takes the list with a copy of the team CA after the
+three, but the client tools refuse that file: the team CA is not
+self-signed, so they count it as a fourth certificate. Leave it out. A
+third CA below the pinned one is one too many. Such a chain gives the
+signing or the attest-only role, never admin (rule 2 wants exactly leaf,
+admin CA and a self-signed root).
 
 The runner checks the chain's dates against its trusted clock, never the
 system clock (ATTEST-ROLES-03): in the handshake, and again before every
