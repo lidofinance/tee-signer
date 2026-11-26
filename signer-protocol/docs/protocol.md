@@ -1297,7 +1297,8 @@ three, but the client tools refuse that file: the team CA is not
 self-signed, so they count it as a fourth certificate. Leave it out. A
 third CA below the pinned one is one too many. Such a chain gives the
 signing or the attest-only role, never admin (rule 2 wants exactly leaf,
-admin CA and a self-signed root).
+admin CA and a self-signed root). `signer-admin issue-client-cert` does
+not make this file; the operator puts it together by hand.
 
 The runner checks the chain's dates against its trusted clock, never the
 system clock (ATTEST-ROLES-03): in the handshake, and again before every

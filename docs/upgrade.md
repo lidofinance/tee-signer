@@ -197,6 +197,8 @@ A deployment that pins an intermediate may run two CAs below it: the
 client file then holds the leaf, its issuing CA and the CA above that,
 and leaves out the pinned intermediate, which the client tools would
 count (example chain in protocol.md, "Client roles").
+`signer-admin issue-client-cert` does not make this file; put it
+together by hand.
 
 Certificates from `signer-admin issue-client-cert` and
 `scripts/make-test-ca.sh` fit. `issue-client-cert` checks the file with
