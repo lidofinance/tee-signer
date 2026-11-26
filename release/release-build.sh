@@ -56,8 +56,8 @@
 #     aarch64 cross gcc; the arm64 outputs (runner-aws, the EIF, the parent
 #     tools) are cross-built on it.
 #   - Docker with the containerd image store and buildx.
-#   - The pinned BuildKit. With BUILDKIT_BUILDER unset, the lane makes its
-#     own buildx builder (docker-container driver, one node),
+#   - The pinned BuildKit. The lane makes its own buildx builder
+#     (docker-container driver, one node),
 #     signer-buildkit-<UTC time>-b<boot>-p<pid>, whose privileged
 #     container runs BUILDKIT_IMAGE (scripts/common.sh) with network
 #     access. It checks that the builder starts before the first build,
@@ -68,10 +68,9 @@
 #     scripts; docker buildx rm signer-buildkit removes it. Runs in
 #     different containers or PID namespaces that share one buildx config
 #     folder (HOME or BUILDX_CONFIG) are not supported: one run's cleanup
-#     may remove the other's builder, and that build then fails. With
-#     BUILDKIT_BUILDER set, the lane uses that builder instead and only
-#     checks that it runs the pinned BuildKit (builder_shape); unset it
-#     for a release build.
+#     may remove the other's builder, and that build then fails. The
+#     lane refuses to start with BUILDKIT_BUILDER set: it never builds on
+#     a builder it did not make.
 #   - Docker Hub access on every run. Each lane's new builder pulls the
 #     pinned Dockerfile frontend, and the BuildKit image when the host's
 #     Docker does not have it. A host without Docker Hub cannot build.
@@ -94,6 +93,10 @@ set -euo pipefail
 umask 022
 DIST="${1:?usage: release-build.sh DIST}"
 die() { echo "release-build: $*" >&2; exit 1; }
+# A lane builds on a builder it makes itself. BUILDKIT_BUILDER from the
+# environment would replace that builder, so the lane refuses it.
+[ -z "${BUILDKIT_BUILDER:-}" ] ||
+  die "BUILDKIT_BUILDER is set ($BUILDKIT_BUILDER): a release lane makes its own builder; unset BUILDKIT_BUILDER"
 # Absolute, relative to the caller's folder: the lane works at the repo
 # root, and docker run -v reads a relative name as a volume.
 DIST="$(realpath -m -- "$DIST")"

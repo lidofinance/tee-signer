@@ -329,7 +329,7 @@ EOF
     : >"$TMP/lane-bk"
     rm -rf "$d/dist"
     for p in $hide; do mv "$hostbin/$p" "$TMP/hidden/"; done
-    (cd "${cwd:-$d/repo}" && env -u SIGNER_BUILDER_IMAGE -u DVT DOCKER_LOG="$TMP/docker.log" FAKE_ID="$id" \
+    (cd "${cwd:-$d/repo}" && env -u SIGNER_BUILDER_IMAGE -u DVT -u BUILDKIT_BUILDER DOCKER_LOG="$TMP/docker.log" FAKE_ID="$id" \
       FAKE_DRIVER_STATUS='[["driver-type","io.containerd.snapshotter.v1"]]' FAKE_UNSHARE_FAIL= FAKE_UNAME=x86_64 \
       FAKE_RUN_OK= FAKE_SBOM_EMPTY= FAKE_BK_REF="$bk_ref" FAKE_BK_FAIL= FAKE_BK_BOOT_FAIL= FAKE_BK_STATE="$TMP/lane-bk" PATH="$hostbin" "$@" \
       bash "$d/repo/release/release-build.sh" "${dist:-$d/dist}") >"$TMP/out" 2>&1 || rc=$?
@@ -397,6 +397,15 @@ EOF
   # The pinned BuildKit builder is a prerequisite too: a host that cannot
   # pull or start it stops before the first build, not at the image step.
   repo
+  # A builder named in the environment is not the lane's own: the lane
+  # refuses it before it asks Docker anything.
+  lane "release-build: refuses a BUILDKIT_BUILDER from the environment" stop BUILDKIT_BUILDER=signer-buildkit-other
+  if grep -q "BUILDKIT_BUILDER is set" "$TMP/out" && ! grep -q '^buildx' "$TMP/docker.log"; then
+    ok "release-build: names BUILDKIT_BUILDER and touches no builder"
+  else
+    bad "release-build: BUILDKIT_BUILDER refusal: $(tail -n 2 "$TMP/out"); $(grep '^buildx' "$TMP/docker.log" | tr '
+' ';')"
+  fi
   lane "release-build: refuses a host where the pinned BuildKit builder fails" stop FAKE_BK_FAIL=1
   says "release-build: names the pinned BuildKit builder" "signer-buildkit.*moby/buildkit"
   if grep -q '^buildx build' "$TMP/docker.log"; then bad "release-build: built the builder image before the BuildKit check"; else ok "release-build: no build before the BuildKit check"; fi
