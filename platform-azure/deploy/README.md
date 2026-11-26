@@ -817,8 +817,8 @@ the pins, the host's Docker did the build, and its version changed the
 image config (docker/dockerfile 1.29.0 changed how the image history
 writes `EXPOSE`). Each run makes a new builder, so each run pulls the
 frontend from Docker Hub, and the BuildKit image too when the host's Docker
-does not have it. `build-image.sh` stops if the Dockerfile lacks the frontend pin or the
-builder runs another BuildKit image.
+does not have it. `build-image.sh` stops if the Dockerfile lacks the
+frontend pin or the builder runs another BuildKit image.
 
 ### Azure steps
 

@@ -15,8 +15,9 @@
 #      scripts/common.sh, in the lane's buildx builder) and the pinned
 #      Dockerfile frontend of each Dockerfile build the three images
 #      (network on each run: Docker Hub, docker/dockerfile, and
-#      moby/buildkit when Docker does not have it). The host's Docker only runs the BuildKit
-#      container, so the images do not follow the host's Docker version,
+#      moby/buildkit when Docker does not have it). The host's Docker only
+#      runs the BuildKit container, so the images do not follow the host's
+#      Docker version,
 #   4. check that the GCP and Azure images are of IMAGE_VARIANT
 #      (release/image-variant.py),
 #   5. copy what a release ships into DIST, with DIST/SHA256SUMS. The names
@@ -55,8 +56,8 @@
 #     aarch64 cross gcc; the arm64 outputs (runner-aws, the EIF, the parent
 #     tools) are cross-built on it.
 #   - Docker with the containerd image store and buildx.
-#   - The pinned BuildKit. The lane makes its own buildx builder
-#     (docker-container driver, one node),
+#   - The pinned BuildKit. With BUILDKIT_BUILDER unset, the lane makes its
+#     own buildx builder (docker-container driver, one node),
 #     signer-buildkit-<UTC time>-b<boot>-p<pid>, whose privileged
 #     container runs BUILDKIT_IMAGE (scripts/common.sh) with network
 #     access. It checks that the builder starts before the first build,
@@ -67,7 +68,10 @@
 #     scripts; docker buildx rm signer-buildkit removes it. Runs in
 #     different containers or PID namespaces that share one buildx config
 #     folder (HOME or BUILDX_CONFIG) are not supported: one run's cleanup
-#     may remove the other's builder, and that build then fails.
+#     may remove the other's builder, and that build then fails. With
+#     BUILDKIT_BUILDER set, the lane uses that builder instead and only
+#     checks that it runs the pinned BuildKit (builder_shape); unset it
+#     for a release build.
 #   - Docker Hub access on every run. Each lane's new builder pulls the
 #     pinned Dockerfile frontend, and the BuildKit image when the host's
 #     Docker does not have it. A host without Docker Hub cannot build.

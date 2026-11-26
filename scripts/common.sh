@@ -424,7 +424,7 @@ pinned_builder() {
   # but did not start.
   BUILDKIT_BUILDER="$name" BUILDKIT_OWNER=$$
   export BUILDKIT_BUILDER
-  log "creating the builder $name on $BUILDKIT_IMAGE (Docker Hub: the BuildKit image unless Docker has it; each build pulls the frontend)"
+  log "creating the builder $name on $BUILDKIT_IMAGE (Docker Hub: the BuildKit image unless Docker has it; the frontend on its first build)"
   if ! docker buildx create --name "$name" --driver docker-container \
     --driver-opt "image=$BUILDKIT_IMAGE" --bootstrap >/dev/null; then
     echo "cannot create or start the builder $name on $BUILDKIT_IMAGE" >&2

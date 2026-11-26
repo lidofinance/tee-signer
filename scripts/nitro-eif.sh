@@ -58,8 +58,9 @@
 # config. The host's Docker only runs the BuildKit container. Each run
 # makes a new builder, so each run pulls the frontend from Docker Hub
 # (network), and the BuildKit image too when the host's Docker does not
-# have it. The build stops if the Dockerfile lacks the frontend pin (need_frontend_pin) or the
-# builder runs another BuildKit (pinned_builder). That builder keeps its
+# have it. The build stops if the Dockerfile lacks the frontend pin
+# (need_frontend_pin) or the builder runs another BuildKit
+# (pinned_builder). That builder keeps its
 # images to itself, so the build writes a docker archive, docker load puts
 # it into the host's Docker, and the script checks that the loaded image is
 # the one built. nitro-cli reads it from the host's Docker as before.
