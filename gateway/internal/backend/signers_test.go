@@ -853,3 +853,23 @@ func TestDVShareReported(t *testing.T) {
 		}
 	}
 }
+
+func names(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("signer-%d", i+1)
+	}
+
+	return out
+}
+
+func runners(fakes []*fakeRunner) []runner {
+	out := make([]runner, len(fakes))
+	for i, f := range fakes {
+		out[i] = f
+	}
+
+	return out
+}
+
+func discard() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }

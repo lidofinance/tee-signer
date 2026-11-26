@@ -1,15 +1,19 @@
 package backend
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/bits"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/attestantio/go-eth2-client/spec/phase0"
+	blst "github.com/supranational/blst/bindings/go"
 )
 
 // maxShareIndex bounds the share indices the gateway tries. The config
@@ -40,19 +44,53 @@ type group struct {
 // signatures would never combine. t = 1 means every share is pk itself;
 // the caller serves such a group only from a signer that reports
 // signing_mode = single or dv_share (checkWhole). A group with pk next to other
-// shares is refused, and so is one unless 2t > k (checkOverlap).
+// shares is refused, and so is one unless 2t > k (checkOverlap), and the
+// key at infinity.
 //
 // The search tries the indices in increasing order, so signers listed in
-// the order of their indices match at the first try.
-func deriveGroup(pk phase0.BLSPubKey, shares []share, maxIndex int) (group, error) {
+// the order of their indices match at the first try. Each t below the
+// right one costs every ordered choice of t indices, seconds per key for
+// 8 signers. So deriveGroup first tries the guesses, such as the threshold
+// and indices of another key of the same signers. A guess with 2t > k
+// whose indices fit every t of the shares, and fit no lower t above k/2,
+// is taken once the search finds no t up to k/2, the thresholds
+// checkOverlap refuses. The groups taken and refused are those of the
+// full search. A guess that ends at t = k shares (k >= 3) is not taken:
+// honest shares of a t-of-k split can fit k of k at other indices, for
+// every polynomial, so only the full search finds the real threshold.
+// Below k the threshold can differ only for shares made to fit two
+// polynomials: a lower t above k/2 with other indices is not looked for,
+// and signing then waits for the larger t of partial signatures.
+func deriveGroup(pk phase0.BLSPubKey, shares []share, maxIndex int, guesses ...guess) (group, error) {
+	if g, done, err := guessGroup(pk, shares, maxIndex, guesses); done {
+		return g, err
+	}
+	f, _ := newFit(pk, shares) // guessGroup decoded them
+	if t, idx, ok := f.search(len(shares), maxIndex); ok {
+		return withIndices(shares, t, idx)
+	}
+
+	return group{}, noFit(len(shares), maxIndex)
+}
+
+// guessGroup is deriveGroup without the full search. It is not done when
+// no guess fits a key that only the search can match or refuse.
+func guessGroup(pk phase0.BLSPubKey, shares []share, maxIndex int, guesses []guess) (group, bool, error) {
 	k := len(shares)
 	if k == 0 {
-		return group{}, errors.New("no share")
+		return group{}, true, errors.New("no share")
+	}
+	// Before the whole-key case, which does not decode pk: no signature
+	// verifies under a key at infinity.
+	if pk[0]&0x40 != 0 { // the infinity flag
+		return group{}, true, errors.New("the validator key is the point at infinity")
 	}
 	if maxIndex < k {
-		return group{}, fmt.Errorf("%d shares, but share indices go to %d only", k, maxIndex)
+		return group{}, true, fmt.Errorf("%d shares, but share indices go to %d only", k, maxIndex)
 	}
-	out := append([]share(nil), shares...)
+	if maxIndex > maxShareIndex {
+		return group{}, true, fmt.Errorf("share indices go to %d, above %d", maxIndex, maxShareIndex)
+	}
 	whole, some := true, false
 	for _, s := range shares {
 		whole = whole && s.pub == pk
@@ -62,26 +100,143 @@ func deriveGroup(pk phase0.BLSPubKey, shares []share, maxIndex int) (group, erro
 	// the other shares can sign without each other. The search below could
 	// still find indices for such a group when max_share_index is high.
 	if some && !whole {
-		return group{}, errors.New("the whole key is on a signer next to other shares of it")
+		return group{}, true, errors.New("the whole key is on a signer next to other shares of it")
 	}
 	if whole {
-		for i := range out {
-			out[i].index = uint64(i + 1)
+		idx := make([]uint64, k)
+		for i := range idx {
+			idx[i] = uint64(i + 1)
 		}
+		g, err := withIndices(shares, 1, idx)
 
-		return group{threshold: 1, shares: out}, checkOverlap(1, k)
+		return g, true, err
 	}
+	f, ok := newFit(pk, shares)
+	if !ok {
+		// A share key that is not a G1 point interpolates to nothing.
+		return group{}, true, noFit(k, maxIndex)
+	}
+	for _, g := range guesses {
+		t := g.threshold
+		if t <= k/2 || t > k || !distinct(g.index, k, maxIndex) || !f.everySubset(g.index, t) {
+			continue
+		}
+		// Shares that fit t fit any higher t with the same indices, as do
+		// those of a key split with a lower threshold than the guess.
+		for t-1 > k/2 && f.everySubset(g.index, t-1) {
+			t--
+		}
+		if t == k && k >= 3 {
+			// Shares of a lower split can fit k of k at other indices: the
+			// full search decides. With 2 shares t is 2 whatever the split.
+			continue
+		}
+		idx := g.index
+		if lt, lidx, ok := f.search(k/2, maxIndex); ok {
+			t, idx = lt, lidx
+		}
+		g, err := withIndices(shares, t, idx)
+
+		return g, true, err
+	}
+
+	return group{}, false, nil
+}
+
+// withIndices is the group of the shares with indices idx and threshold
+// t, and the checkOverlap error.
+func withIndices(shares []share, t int, idx []uint64) (group, error) {
+	out := append([]share(nil), shares...)
+	for i := range out {
+		out[i].index = idx[i]
+	}
+
+	return group{threshold: t, shares: out}, checkOverlap(t, len(out))
+}
+
+func noFit(k, maxIndex int) error {
+	return fmt.Errorf("no threshold up to %d and no share indices 1 to %d make the %d share keys interpolate to the key", k, maxIndex, k)
+}
+
+// guess is a threshold and an index for each share for deriveGroup to try
+// first.
+type guess struct {
+	threshold int
+	index     []uint64
+}
+
+// distinct reports whether idx has k distinct indices from 1 to maxIndex.
+func distinct(idx []uint64, k, maxIndex int) bool {
+	if len(idx) != k {
+		return false
+	}
+	var seen [maxShareIndex + 1]bool
+	for _, x := range idx {
+		if x < 1 || x > uint64(maxIndex) || seen[x] {
+			return false
+		}
+		seen[x] = true
+	}
+
+	return true
+}
+
+// fit is a validator key and its share keys as G1 points, decoded once
+// for the many interpolations of deriveGroup. One goroutine uses it.
+type fit struct {
+	pk     *blst.P1Affine
+	shares []*blst.P1Affine
+	// pkTimes caches L * pk by L for interpolates.
+	pkTimes map[int64]*blst.P1
+}
+
+// newFit decodes the keys. It refuses a share key that recoverPubkey
+// refuses (infinity, or not a G1 point of the subgroup), a validator key
+// that no interpolation gives (outside the subgroup or not in the
+// compressed form of its point), and a validator key at infinity, which
+// no signature verifies under.
+func newFit(pk phase0.BLSPubKey, shares []share) (*fit, bool) {
+	if pk[0]&0x40 != 0 { // the infinity flag
+		return nil, false
+	}
+	p := new(blst.P1Affine).Uncompress(pk[:])
+	if p == nil || !p.InG1() || !bytes.Equal(p.Compress(), pk[:]) {
+		return nil, false
+	}
+	f := &fit{pk: p, shares: make([]*blst.P1Affine, len(shares)), pkTimes: map[int64]*blst.P1{}}
+	for i, s := range shares {
+		if s.pub[0]&0x40 != 0 { // the infinity flag
+			return nil, false
+		}
+		a := new(blst.P1Affine).Uncompress(s.pub[:])
+		if a == nil || !a.InG1() {
+			return nil, false
+		}
+		f.shares[i] = a
+	}
+
+	return f, true
+}
+
+// search finds the smallest t from 2 to maxT and the indices from 1 to
+// maxIndex for which every t of the shares interpolate to the key.
+func (f *fit) search(maxT, maxIndex int) (int, []uint64, bool) {
+	k := len(f.shares)
 	idx := make([]uint64, k)
 	used := make([]bool, maxIndex+1)
-	for t := 2; t <= k; t++ {
+	first := make([]int, k)
+	for i := range first {
+		first[i] = i
+	}
+	for t := 2; t <= maxT; t++ {
 		var try func(i int) bool
 		try = func(i int) bool {
 			// The first t shares decide most wrong indices at once.
-			if i == t && !interpolates(pk, shares[:t], idx[:t]) {
+			if i == t && !f.interpolates(first[:t], idx[:t]) {
 				return false
 			}
 			if i == k {
-				return everySubset(pk, shares, idx, t)
+				return f.everySubset(idx, t)
 			}
 			for x := 1; x <= maxIndex; x++ {
 				if used[x] {
@@ -97,16 +252,108 @@ func deriveGroup(pk phase0.BLSPubKey, shares []share, maxIndex int) (group, erro
 			return false
 		}
 		if try(0) {
-			for i := range out {
-				out[i].index = idx[i]
-			}
-
-			return group{threshold: t, shares: out}, checkOverlap(t, k)
+			return t, idx, true
 		}
 		clear(used)
 	}
 
-	return group{}, fmt.Errorf("no threshold up to %d and no share indices 1 to %d make the %d share keys interpolate to the key", k, maxIndex, k)
+	return 0, nil, false
+}
+
+// everySubset reports whether every t of the shares, with indices idx,
+// interpolate to the key.
+func (f *fit) everySubset(idx []uint64, t int) bool {
+	pick := make([]int, t)
+	x := make([]uint64, t)
+	var walk func(from, depth int) bool
+	walk = func(from, depth int) bool {
+		if depth == t {
+			for i, p := range pick {
+				x[i] = idx[p]
+			}
+
+			return f.interpolates(pick, x)
+		}
+		for p := from; p <= len(f.shares)-(t-depth); p++ {
+			pick[depth] = p
+			if !walk(p+1, depth+1) {
+				return false
+			}
+		}
+
+		return true
+	}
+
+	return walk(0, 0)
+}
+
+// interpolates reports whether the shares at positions pos, with the
+// distinct indices idx from 1 to maxShareIndex, give the key: whether the
+// sum of l_j * P_j is pk, with the Lagrange coefficients at zero
+// l_j = n_j / d_j, n_j the product of the other indices and d_j that of
+// their differences to idx[j]. It checks that sum and pk times L, the
+// least common multiple of the d_j. L is at most 5,040, below r, so the
+// checks agree, and each L * l_j is an integer of at most 423,360, below
+// 2^19 (TestInterpolationCoefficientBound tries every index set): a
+// multiplication by it takes at most 19 bits, not the 255 of a full
+// scalar.
+func (f *fit) interpolates(pos []int, idx []uint64) bool {
+	var num, den [maxShareIndex]int64
+	l := int64(1)
+	for j, xj := range idx {
+		num[j], den[j] = 1, 1
+		for m, xm := range idx {
+			if m != j {
+				num[j] *= int64(xm)
+				den[j] *= int64(xm) - int64(xj)
+			}
+		}
+		l = lcm(l, abs(den[j]))
+	}
+	// A term with a negative coefficient moves to the other side.
+	var lhs, rhs blst.P1
+	for j, p := range pos {
+		if c := l / den[j] * num[j]; c > 0 {
+			lhs.AddAssign(mult(f.shares[p], uint64(c)))
+		} else {
+			rhs.AddAssign(mult(f.shares[p], uint64(-c)))
+		}
+	}
+	lpk, ok := f.pkTimes[l]
+	if !ok {
+		lpk = mult(f.pk, uint64(l))
+		f.pkTimes[l] = lpk
+	}
+	rhs.AddAssign(lpk)
+
+	return lhs.Equals(&rhs)
+}
+
+// mult is c * a for c > 0.
+func mult(a *blst.P1Affine, c uint64) *blst.P1 {
+	var le [8]byte
+	binary.LittleEndian.PutUint64(le[:], c)
+	var p blst.P1
+	p.FromAffine(a)
+
+	return p.MultAssign(le[:], bits.Len64(c))
+}
+
+func abs(x int64) int64 {
+	if x < 0 {
+		return -x
+	}
+
+	return x
+}
+
+func lcm(a, b int64) int64 {
+	x, y := a, b
+	for y != 0 {
+		x, y = y, x%y
+	}
+
+	return a / x * b
 }
 
 // checkOverlap refuses a group of k shares with threshold t unless any two
@@ -131,43 +378,6 @@ func checkOverlap(t, k int) error {
 	}
 
 	return fmt.Errorf("threshold %d of %d shares: two sets of %d signers can be disjoint; want 2t > shares", t, k, t)
-}
-
-// interpolates reports whether the share keys with these indices give pk.
-func interpolates(pk phase0.BLSPubKey, shares []share, idx []uint64) bool {
-	keys := make([]phase0.BLSPubKey, len(shares))
-	for i, s := range shares {
-		keys[i] = s.pub
-	}
-	got, err := recoverPubkey(idx, keys)
-
-	return err == nil && got == pk
-}
-
-// everySubset reports whether every t of the shares interpolate to pk.
-func everySubset(pk phase0.BLSPubKey, shares []share, idx []uint64, t int) bool {
-	pick := make([]int, t)
-	var walk func(from, depth int) bool
-	walk = func(from, depth int) bool {
-		if depth == t {
-			s, x := make([]share, t), make([]uint64, t)
-			for i, p := range pick {
-				s[i], x[i] = shares[p], idx[p]
-			}
-
-			return interpolates(pk, s, x)
-		}
-		for p := from; p <= len(shares)-(t-depth); p++ {
-			pick[depth] = p
-			if !walk(p+1, depth+1) {
-				return false
-			}
-		}
-
-		return true
-	}
-
-	return walk(0, 0)
 }
 
 // keyList is the gateway's list of keys. A reader that finds it older
