@@ -103,6 +103,47 @@ make_yaml "$T/c6.yaml" '.PRESET_BASE = "minimal"'
 expect_fail "check-source: the minimal preset" bash "$CHAIN" check-source hoodi "$T/c6.yaml" "$T/gvr.txt"
 echo "0x$(printf '00%.0s' {1..32})" >"$T/gvr-bad.txt"
 expect_fail "check-source: another genesis validators root" bash "$CHAIN" check-source hoodi "$T/config.yaml" "$T/gvr-bad.txt"
+# With a genesis_validators_root.txt, check-source adds MIN_GENESIS_TIME and
+# GENESIS_DELAY of config.yaml. Each must be a plain decimal integer, checked
+# before any arithmetic: anything else is refused by name and runs nothing.
+# The check would fail on the genesis_time DIFF line anyway, so the marker
+# file and the refusal line are what tell.
+for key in MIN_GENESIS_TIME GENESIS_DELAY; do
+  for v in "bad[\$(touch\${IFS}$T/ran-$key)]" FAR_FUTURE 0600 -1 ''; do
+    rm -f "$T/ran-$key"
+    make_yaml "$T/c-$key.yaml" ".$key = \"$v\""
+    if bash "$CHAIN" check-source hoodi "$T/c-$key.yaml" "$T/gvr.txt" >"$T/out" 2>&1; then
+      bad "check-source: $key $v passes"
+    elif [ -e "$T/ran-$key" ]; then
+      bad "check-source: $key $v of config.yaml ran a command"
+    elif grep -q "$key .*not a plain decimal integer" "$T/out"; then
+      ok "check-source: refuses $key '$v'"
+    else
+      bad "check-source: $key '$v' is not refused by name"; sed 's/^/      /' "$T/out"
+    fi
+  done
+done
+# en_US.UTF-8 for the locale case: the system's, or one built here with
+# localedef when the system has the locale sources but not the locale.
+if [ "$(LC_ALL=en_US.UTF-8 locale charmap 2>/dev/null)" != UTF-8 ] && command -v localedef >/dev/null; then
+  mkdir -p "$T/loc"
+  localedef -i en_US -f UTF-8 "$T/loc/en_US.UTF-8" >/dev/null 2>&1 && export LOCPATH="$T/loc"
+fi
+# chain.sh sets LC_ALL=C, so in en_US.UTF-8 [0-9] still matches ASCII
+# digits only: an Arabic-Indic three (U+0663, written as its bytes) is
+# refused by name. Skipped when that locale cannot be had.
+if [ "$(LC_ALL=en_US.UTF-8 locale charmap 2>/dev/null)" = UTF-8 ]; then
+  make_yaml "$T/c-locale.yaml" ".MIN_GENESIS_TIME = \"$(printf '\xd9\xa3')\""
+  if LC_ALL=en_US.UTF-8 bash "$CHAIN" check-source hoodi "$T/c-locale.yaml" "$T/gvr.txt" >"$T/out" 2>&1; then
+    bad "check-source: a non-ASCII digit in en_US.UTF-8 passes"
+  elif grep -q "MIN_GENESIS_TIME .*not a plain decimal integer" "$T/out"; then
+    ok "check-source: refuses a non-ASCII digit in en_US.UTF-8"
+  else
+    bad "check-source: a non-ASCII digit in en_US.UTF-8 is not refused by name"; sed 's/^/      /' "$T/out"
+  fi
+else
+  echo "skip  check-source: a non-ASCII digit in en_US.UTF-8 (no such locale)"
+fi
 
 # ---- check-beacon: a beacon API made of files, read through file:// ----
 make_beacon() { # make_beacon DIR [jq filter on the fork schedule]

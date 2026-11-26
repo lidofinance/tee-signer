@@ -11,7 +11,17 @@
 #                                           their fingerprints to DIR/fingerprints.txt
 #                                           (default build/generic)
 #   scripts/generic-images.sh check FILE    compare the current build outputs
-#                                           with FILE, the recorded values
+#                                           with FILE, the recorded values; FILE
+#                                           must hold each name once, in the
+#                                           format build writes; a release's
+#                                           lane lines chain and
+#                                           build_variant must match CHAIN
+#                                           and DVT, and variant the images
+#
+# Check a release with the generic-images.sh of this version or later:
+# check refuses a file that lacks any of the names this version writes.
+# Files from v0.1.0-rc.1 and rc.2 pass this check; their own tag's check
+# does not read the lane lines.
 #
 # DVT=1 (scripts/common.sh) builds the dvt images: runners with the tag dvt
 # and the DVT core, with "-dvt" after the chain's suffix in every name
@@ -147,16 +157,117 @@ cmd_build() {
   log "done in $(( $(date +%s) - start )) s: $dir/fingerprints.txt"
 }
 
-# check FILE: every "name value" line of FILE equals the current build's.
+# The names fingerprints writes, in its order.
+FINGERPRINT_NAMES=(nitro.PCR0 nitro.PCR1 nitro.PCR2 nitro.runner parent.hostagent parent.forwarder
+  parent.udprelay azure.image azure.cce_policy azure.runner gcp.image gcp.runner)
+
+# fingerprint_format NAME: the regex a value of NAME must match, as
+# fingerprints writes it; fails for a name it does not write.
+fingerprint_format() {
+  case "$1" in
+    nitro.PCR0 | nitro.PCR1 | nitro.PCR2) echo '^[0-9a-f]{96}$' ;;
+    nitro.runner | parent.hostagent | parent.forwarder | parent.udprelay | azure.runner | gcp.runner) echo '^[0-9a-f]{64}$' ;;
+    azure.image | gcp.image) echo '^sha256:[0-9a-f]{64}$' ;;
+    azure.cce_policy) echo '^([0-9a-f]{64}|none)$' ;;
+    *) return 1 ;;
+  esac
+}
+
+# check FILE: FILE holds each name of fingerprints once, as "name value"
+# with the value in the format fingerprints writes, and each value equals
+# the current build's. The lane lines variant, build_variant, commit and
+# chain, which release/release-build.sh adds to a release's
+# fingerprints-<chain>.txt, may each appear once, with a value
+# release-build.sh writes. chain and build_variant, when there, must
+# equal this run's CHAIN and variant (from DVT), and variant the one
+# release/image-variant.py reads from the GCP image and the Azure
+# policies of this build (IMAGE_VARIANT plays no part); a
+# commit other than the checked-out one only gets a note. A release file
+# without build_variant is compared as default; any other lane line that
+# is not there is not asked for. Blank lines and
+# lines that start with # are skipped; any other line refuses the whole
+# file before anything is compared. FILE is data: it is read with read and
+# compared in the shell, and no part of it goes into a sed program or a
+# command.
+# output_variant: the variant of this build's GCP image and Azure
+# policies, read by release/image-variant.py as release-build.sh checks
+# it, or "unknown (reason)".
+output_variant() {
+  local fp out policies
+  fp="$(mktemp)"
+  fingerprints >"$fp"
+  shopt -s nullglob
+  policies=("$AZ_OUT"/signer-*/policy.rego)
+  shopt -u nullglob
+  if out="$(python3 -I "$ROOT/release/image-variant.py" detect "$fp" "$GCP_OUT/runner.oci.tar" ${policies[@]+"${policies[@]}"} 2>&1)"; then
+    echo "$out"
+  else
+    echo "unknown ($(printf '%s' "$out" | tail -n 1))"
+  fi
+  rm -f "$fp"
+}
+
 cmd_check() {
-  local file="${1:-}" ok=1 name want got
+  # The format checks use [0-9], [a-f] and [a-z]; in another locale these
+  # match more than ASCII. Only check runs in C: build keeps the caller's
+  # locale for its tools.
+  export LC_ALL=C
+  local file="${1:-}" ok=1 line name want got format n=0
   [ -n "$file" ] || die "check needs FILE, the recorded fingerprints"
   [ -s "$file" ] || die "no $file"
-  while read -r name want; do
-    case "$name" in "" | \#*) continue ;; esac
-    got="$(fingerprints | sed -n "s/^$name //p")"
-    if [ "$got" = "$want" ]; then echo "ok    $name ${want:0:24}..."; else echo "FAIL  $name '$got', want $want"; ok=0; fi
+  local -A rec=() cur=() lane=()
+  while IFS= read -r line || [ -n "$line" ]; do
+    n=$((n + 1))
+    case "$line" in "" | \#*) continue ;; esac
+    if [[ "$line" =~ ^(variant|build_variant|commit|chain)\ ([^[:space:]]+)$ ]]; then
+      name="${BASH_REMATCH[1]}" want="${BASH_REMATCH[2]}"
+      case "$name" in
+        variant) [[ "$want" =~ ^(test|prod)$ ]] ;;
+        build_variant) [[ "$want" =~ ^(default|dvt)$ ]] ;;
+        commit) [[ "$want" =~ ^[0-9a-f]{40}$ ]] ;;
+        chain) [[ " $CHAINS " == *" $want "* ]] ;;
+      esac || die "$file line $n: $name value is not one release-build.sh writes"
+      [ -z "${lane[$name]+x}" ] || die "$file line $n: $name given twice"
+      lane[$name]="$want"
+      continue
+    fi
+    [[ "$line" =~ ^([a-z]+\.[A-Za-z0-9_]+)\ ([^[:space:]]+)$ ]] || die "$file line $n: not a \"name value\" line"
+    name="${BASH_REMATCH[1]}" want="${BASH_REMATCH[2]}"
+    format="$(fingerprint_format "$name")" || die "$file line $n: unknown name $name"
+    [[ "$want" =~ $format ]] || die "$file line $n: $name value is not in the format build writes"
+    [ -z "${rec[$name]+x}" ] || die "$file line $n: $name given twice"
+    rec[$name]="$want"
   done <"$file"
+  for name in "${FINGERPRINT_NAMES[@]}"; do
+    [ -n "${rec[$name]+x}" ] || die "$file has no $name"
+  done
+  while read -r name got; do cur[$name]="$got"; done < <(fingerprints)
+  for name in "${FINGERPRINT_NAMES[@]}"; do
+    want="${rec[$name]}" got="${cur[$name]:-}"
+    if [ "$got" = "$want" ]; then echo "ok    $name ${want:0:24}..."; else echo "FAIL  $name '$got', want $want"; ok=0; fi
+  done
+  # A release file without build_variant (v0.1.0-rc.2) is of a default
+  # lane, as release/measurements.py reads it. A file without lane lines
+  # is not a release file and gets none.
+  [ "${#lane[@]}" = 0 ] || [ -n "${lane[build_variant]+x}" ] || lane[build_variant]=default
+  local -A run=([chain]="$CHAIN" [build_variant]="$(variant)")
+  [ -z "${lane[variant]+x}" ] || run[variant]="$(output_variant)"
+  local -A from=([chain]=CHAIN [variant]="the GCP image and Azure policies" [build_variant]=DVT)
+  for name in chain variant build_variant; do
+    [ -n "${lane[$name]+x}" ] || continue
+    want="${lane[$name]}" got="${run[$name]}"
+    if [ "$got" = "$want" ]; then echo "ok    $name $want"; else echo "FAIL  $name '$got' (from ${from[$name]}), want $want"; ok=0; fi
+  done
+  if [ -n "${lane[commit]+x}" ]; then
+    want="${lane[commit]}"
+    # HEAD only of the repo whose top is ROOT: without .git, git would
+    # walk up to an outer repo and give its HEAD.
+    got=unknown
+    if [ "$(realpath -e -- "$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null)" = "$(realpath -e -- "$ROOT")" ]; then
+      got="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null)" || got=unknown
+    fi
+    if [ "$got" = "$want" ]; then echo "ok    commit $want"; else echo "note  commit $want, not the checked-out commit $got (not compared)"; fi
+  fi
   [ "$ok" = 1 ] || die "the build differs from $file"
 }
 

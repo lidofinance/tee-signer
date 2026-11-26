@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -104,5 +105,59 @@ func TestChainLinesAndCompare(t *testing.T) {
 	c.GasLimitMax, c.MaxEpochsAhead = 1, 9
 	if err := CompareChain(s, c); err != nil {
 		t.Fatalf("policy fields compared: %v", err)
+	}
+}
+
+// preset is "mainnet", "minimal" or absent, as the core accepts it; any other
+// value is refused when the file is read.
+func TestParseChainFilePreset(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "governance", "chains", "hoodi.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	with := func(preset string) []byte {
+		var m map[string]any
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatal(err)
+		}
+		m["preset"] = preset
+		out, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	for _, p := range []string{"mainnet", "minimal"} {
+		if _, err := ParseChainFile(with(p)); err != nil {
+			t.Errorf("preset %q: %v", p, err)
+		}
+	}
+	for _, p := range []string{"mainnet\nallowed_client_ca = x", "Mainnet", "gnosis", "mainnet ", "minimal\x00"} {
+		if _, err := ParseChainFile(with(p)); err == nil {
+			t.Errorf("preset %q accepted", p)
+		}
+	}
+}
+
+// ChainLines writes one line per value: a value with a byte outside printable
+// ASCII, or a preset the core does not know, is refused, for a ChainFile
+// that did not come through ParseChainFile too.
+func TestChainLinesRefusesBadPreset(t *testing.T) {
+	for _, p := range []string{"mainnet\nallowed_client_ca = x", "mainnet\r", "minimal\x1b[2K", "gnosis", "mäinnet"} {
+		c := chainFile(t, "hoodi.json")
+		c.Preset = p
+		lines, err := ChainLines(c)
+		if err == nil {
+			t.Errorf("preset %q accepted:\n%s", p, lines)
+		}
+		if strings.Contains(lines, "allowed_client_ca") {
+			t.Errorf("preset %q: output holds an extra line:\n%s", p, lines)
+		}
+	}
+	c := chainFile(t, "hoodi.json")
+	c.Preset = "minimal"
+	lines, err := ChainLines(c)
+	if err != nil || !strings.Contains(lines, "\npreset = minimal\n") {
+		t.Fatalf("preset minimal: %v\n%s", err, lines)
 	}
 }

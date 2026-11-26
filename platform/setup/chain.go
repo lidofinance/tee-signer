@@ -54,7 +54,20 @@ func ParseChainFile(b []byte) (*ChainFile, error) {
 	if c.SecondsPerSlot == 0 || c.SlotsPerEpoch == 0 {
 		return nil, errors.New("chain.json: seconds_per_slot and slots_per_epoch must be non-zero")
 	}
+	if err := checkPreset(c.Preset); err != nil {
+		return nil, err
+	}
 	return &c, nil
+}
+
+// checkPreset accepts the presets core.Config accepts: mainnet, minimal, or
+// none (the preset then follows slots_per_epoch).
+func checkPreset(p string) error {
+	switch p {
+	case "", "mainnet", "minimal":
+		return nil
+	}
+	return fmt.Errorf("chain.json: preset %q, want mainnet or minimal", p)
 }
 
 // preset is the preset in force, as core.Config.PresetName decides it.
@@ -140,8 +153,25 @@ func ChainLines(c *ChainFile) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := checkPreset(c.Preset); err != nil {
+		return "", err
+	}
 	var b strings.Builder
-	kv := func(k string, v any) { fmt.Fprintf(&b, "%s = %v\n", k, v) }
+	// kv writes one "key = value" line. A value with a byte outside
+	// printable ASCII (a newline would start another line) is refused.
+	var bad error
+	kv := func(k string, v any) {
+		s := fmt.Sprint(v)
+		for i := 0; i < len(s); i++ {
+			if s[i] < 0x20 || s[i] > 0x7e {
+				if bad == nil {
+					bad = fmt.Errorf("chain.json: %s %q has a byte outside printable ASCII", k, s)
+				}
+				return
+			}
+		}
+		fmt.Fprintf(&b, "%s = %s\n", k, s)
+	}
 	hex := func(p []byte) string { return fmt.Sprintf("0x%x", p) }
 	b.WriteString("# chain: fixed for the life of the signer\n")
 	kv("genesis_validators_root", hex(c.GenesisValidatorsRoot[:]))
@@ -170,6 +200,9 @@ func ChainLines(c *ChainFile) (string, error) {
 	}
 	if c.GloasForkEpoch != nil {
 		kv("gloas_fork_epoch", *c.GloasForkEpoch)
+	}
+	if bad != nil {
+		return "", bad
 	}
 	return b.String(), nil
 }

@@ -30,7 +30,7 @@ help: ## list targets
 deps: ## apt packages (build tools, cross gcc, qemu-user, clang, cloc, jq)
 	bash $(ROOT)/scripts/deps.sh
 
-check: ## guards: module boundaries, secret scan, release gate, eif-check, release tools, affected.sh and CCE policy check self-tests, script modes, gofmt
+check: ## guards: module boundaries, secret scan, release gate, eif-check, generic-images check, release tools, affected.sh and CCE policy check self-tests, script modes, gofmt
 	bash $(ROOT)/scripts/check-imports.sh
 	bash $(ROOT)/scripts/check-forbidden.sh
 	bash $(ROOT)/scripts/fetch-nts.sh --check
@@ -38,6 +38,7 @@ check: ## guards: module boundaries, secret scan, release gate, eif-check, relea
 	bash $(ROOT)/scripts/nts-verify-crates-test.sh
 	bash $(ROOT)/scripts/release-gate-test.sh
 	bash $(ROOT)/scripts/eif-check-test.sh
+	bash $(ROOT)/scripts/generic-images-test.sh
 	bash $(ROOT)/release/release-test.sh
 	python3 -B $(ROOT)/scripts/bundle-licenses-test.py
 	python3 -B $(ROOT)/platform-azure/deploy/cce-policy-check-test.py

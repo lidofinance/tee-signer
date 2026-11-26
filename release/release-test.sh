@@ -148,6 +148,11 @@ t_measurements() {
   refuses "image-variant: refuses a policy file that is not the measured one" "is not the measured CCE policy" python3 -I "$iv" prod "$d/prod.txt" "$d/never.tar" "$stdio_on"
   refuses "image-variant: refuses an archive without the measured manifest" "has no manifest" python3 -I "$iv" prod "$d/prod.txt" "$d/always.tar" "$stdio_off"
   refuses "image-variant: refuses a call without an Azure policy" "usage: image-variant.py" python3 -I "$iv" prod "$d/prod.txt" "$d/never.tar"
+  expect "image-variant: detect names prod images" 0 python3 -I "$iv" detect "$d/prod.txt" "$d/never.tar" "$stdio_off"
+  says "image-variant: detect prints prod" '^prod$'
+  expect "image-variant: detect names test images" 0 python3 -I "$iv" detect "$d/test-images.txt" "$d/always.tar" "$stdio_on"
+  says "image-variant: detect prints test" '^test$'
+  refuses "image-variant: detect refuses images of mixed variants" "of no one variant" python3 -I "$iv" detect "$d/prod-gcp-always.txt" "$d/always.tar" "$stdio_off"
 }
 
 # The start of release-build.sh in a made-up repo (scripts/common.sh and
