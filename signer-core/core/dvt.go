@@ -12,6 +12,8 @@ package core
 #cgo CFLAGS: -DSC_DVT
 #cgo linux,amd64 LDFLAGS: -L${SRCDIR}/../../build/x86_64/lib -lsigner_core_dvt -lblst
 #cgo linux,arm64 LDFLAGS: -L${SRCDIR}/../../build/aarch64/lib -lsigner_core_dvt -lblst
+#cgo darwin,amd64 LDFLAGS: -L${SRCDIR}/../../build/x86_64/lib -lsigner_core_dvt -lblst
+#cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/../../build/aarch64/lib -lsigner_core_dvt -lblst
 #include <stdlib.h>
 #include <string.h>
 #include "signer_core.h"

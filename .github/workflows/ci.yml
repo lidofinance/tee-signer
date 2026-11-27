@@ -1,6 +1,6 @@
 # Checks that need no secrets and no cloud account. Each job runs on a
-# fresh Ubuntu runner. Pin the actions to commit SHAs before this is
-# enabled on a protected branch.
+# fresh Ubuntu runner, the macos job on macOS runners. Pin the actions to
+# commit SHAs before this is enabled on a protected branch.
 name: ci
 
 # A pull request tests only what its change needs (scripts/ci-scope.sh);
@@ -188,6 +188,84 @@ jobs:
           path: |
             logs/
             signer-core/build/*-dvt/test-logs/
+
+  # Whether the macos job has work: signer-admin or a module it depends on
+  # changed, or a shared input (CI_MODULES is ALL). The scope scripts run
+  # here and not on the Mac, whose bash is 3.2.
+  macos-scope:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.scope.outputs.run }}
+    steps:
+      # The history, for the diff against the base branch.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: scope
+        id: scope
+        # shell: bash runs with pipefail, so a failing ci-scope.sh fails the step.
+        shell: bash
+        run: |
+          m="$(bash scripts/ci-scope.sh | sed -n 's/^CI_MODULES=//p')"
+          case " $m " in
+            " ALL " | *" signer-admin "*) run=1 ;;
+            *) run=0 ;;
+          esac
+          echo "run=$run" | tee -a "$GITHUB_OUTPUT"
+
+  # signer-admin on macOS, for the offline steps on a Mac (signer-admin
+  # split): the core and signer-admin built with the Mac's own tools
+  # (Apple clang, BSD ar and nm, bash 3.2), then the signer-admin tests
+  # without a dev runner, and the split round trip onto a RAM disk with
+  # the output folder check on (SIGNER_ADMIN_SPLIT_DIR). macos-15 is
+  # arm64, macos-15-intel x86_64.
+  macos:
+    needs: macos-scope
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - name: no tests
+        if: needs.macos-scope.outputs.run != '1'
+        run: echo "signer-admin, the modules it uses and the shared inputs did not change, nothing to test."
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        if: needs.macos-scope.outputs.run == '1'
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        if: needs.macos-scope.outputs.run == '1'
+        with:
+          go-version: "1.26.x"
+          cache: false
+      - if: needs.macos-scope.outputs.run == '1'
+        run: make admin
+      - name: RAM disk
+        if: needs.macos-scope.outputs.run == '1'
+        # 524288 sectors of 512 bytes: 256 MiB.
+        run: |
+          # diskutil image is the current command; older macOS has only hdiutil.
+          if diskutil image attach --help >/dev/null 2>&1; then
+            dev="$(diskutil image attach --noMount ram://524288 | awk '{ print $1 }')"
+          else
+            dev="$(hdiutil attach -nomount ram://524288 | awk '{ print $1 }')"
+          fi
+          diskutil erasevolume APFS split-ci "$dev"
+          echo "SIGNER_ADMIN_SPLIT_DIR=/Volumes/split-ci" >>"$GITHUB_ENV"
+      - if: needs.macos-scope.outputs.run == '1'
+        working-directory: signer-admin
+        run: go vet ./... && go test -race -count=1 ./...
+      # The round trip must have run on the RAM disk, not skipped.
+      - if: needs.macos-scope.outputs.run == '1'
+        working-directory: signer-admin
+        shell: bash
+        run: |
+          go test -count=1 -v -run '^TestSplitRoundTripRealFolder$' ./cmd/signer-admin | tee /tmp/roundtrip.log
+          grep -q -- '--- PASS: TestSplitRoundTripRealFolder' /tmp/roundtrip.log
 
   # terraform validate and terraform test (mock provider) of
   # platform-aws/deploy. No AWS account is used.

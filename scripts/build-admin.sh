@@ -19,4 +19,5 @@ if [ "$DVT" = 1 ]; then
 fi
 (cd "$ROOT/signer-admin" && CGO_ENABLED=1 CC="$(cc_for "$HOST_ARCH")" \
   go build -trimpath -buildvcs=false -tags "$tags" -o "$out/$name" ./cmd/signer-admin)
-log "$HOST_ARCH $name: $(stat -c %s "$out/$name") bytes, sha256 $(sha256sum "$out/$name" | cut -c1-16)..."
+# wc, not stat -c: the stat of macOS has other flags.
+log "$HOST_ARCH $name: $(($(wc -c <"$out/$name"))) bytes, sha256 $(sha256sum "$out/$name" | cut -c1-16)..."

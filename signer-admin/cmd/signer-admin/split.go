@@ -17,7 +17,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 	"unsafe"
 
 	"golang.org/x/crypto/scrypt"
@@ -36,12 +35,14 @@ import (
 
 const splitUsage = "usage: signer-admin split -keystores DIR -password-file FILE -t T -n N -signers NAME,... [-chain mainnet|hoodi|devnet|ci-test] [-expect FILE] [-allow-swap] -out DIR"
 
-// splitOutFS checks that the output folder's parent is on tmpfs. Tests
-// replace it.
-var splitOutFS = checkTmpfs
+// splitOutFS checks that the output folder's parent keeps the shares off a
+// disk: tmpfs, on macOS a volume other than the startup disk's (checkOutFS).
+// Tests replace it.
+var splitOutFS = checkOutFS
 
-// splitSwaps lists the active swap devices (proc(5)). Tests replace it.
-var splitSwaps = "/proc/swaps"
+// splitSwaps lists the active swap devices (proc(5)); empty on macOS, which
+// has no such file (osSwaps). Tests replace it.
+var splitSwaps = osSwaps
 
 // splitDeal and splitRecover are the dealer's split and the recovery of
 // the key from shares. Tests replace them.
@@ -63,7 +64,9 @@ var (
 //
 // OUT must be a new folder on tmpfs. split refuses to run with swap on,
 // unless -allow-swap says the swap device is safe (zram, encrypted), and
-// turns core dumps off and locks its memory first (lockdown.Secrets). With
+// turns core dumps off and locks its memory first (lockdown.Secrets). On
+// macOS OUT must be off the startup disk (a RAM disk, checkOutFS), there
+// is no swap check and no memory lock (lockdown_darwin.go). With
 // -expect, exactly the listed keys are split, in that order, and every one
 // must be found.
 func cmdSplit(args []string, out io.Writer) error {
@@ -76,7 +79,7 @@ func cmdSplit(args []string, out io.Writer) error {
 	chain := fs.String("chain", string(runnerchain.Mainnet), "the chain of the signers' setups: mainnet, hoodi, devnet or ci-test; t and n must pass its threshold rule")
 	expect := fs.String("expect", "", "file with one 0xPUBKEY per line: exactly these keys are split, in this order")
 	allowSwap := fs.Bool("allow-swap", false, "go on with swap on (zram or an encrypted swap device), with a warning")
-	outDir := fs.String("out", "", "output folder: new, on tmpfs")
+	outDir := fs.String("out", "", "output folder: new, on tmpfs (macOS: on a RAM disk)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -579,8 +582,12 @@ func ksInt(v any) int {
 // checkSwap refuses to go on when the swaps file (/proc/swaps) lists an
 // active swap device or cannot be read: with swap on, tmpfs pages and the
 // heap, and the secrets in them, can reach a disk. With allow (-allow-swap,
-// for zram or an encrypted swap device) it warns on stderr instead.
+// for zram or an encrypted swap device) it warns on stderr instead. With no
+// swaps file to read (macOS, osSwaps) it checks nothing.
 func checkSwap(path string, allow bool) error {
+	if path == "" {
+		return nil
+	}
 	var why string
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -605,20 +612,4 @@ func checkSwap(path string, allow bool) error {
 		return nil
 	}
 	return fmt.Errorf("%s; run swapoff -a first, or pass -allow-swap for zram or an encrypted swap device", why)
-}
-
-// tmpfsMagic is the f_type of tmpfs (linux/magic.h).
-const tmpfsMagic = 0x01021994
-
-// checkTmpfs refuses a folder that is not on tmpfs, so the shares never
-// reach a disk.
-func checkTmpfs(dir string) error {
-	var st syscall.Statfs_t
-	if err := syscall.Statfs(dir, &st); err != nil {
-		return err
-	}
-	if int64(st.Type) != tmpfsMagic {
-		return fmt.Errorf("%s is not on tmpfs; split writes the shares only to tmpfs", dir)
-	}
-	return nil
 }

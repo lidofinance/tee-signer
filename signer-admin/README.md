@@ -71,7 +71,7 @@ signer-admin split -keystores DIR -password-file FILE -t T -n N -signers NAME,..
 - t and n must pass the threshold rule of `-chain` (default mainnet), as `import-draft` checks it. On a prod chain a split needs 2t - n >= 2 (`governance/setupwire/threshold.go`). 2 of 2 passes but stops signing when any signer is down; 3 of 4 is the smallest that keeps signing with one signer down. Signers upgrade one at a time ([docs/upgrade.md](../docs/upgrade.md#rules), "Rules"). A larger margin (n - t >= 2, for example 4 of 6) lets one signer be upgraded or restarted while another is down; with n - t = 1, a second fault during an upgrade stops signing. The prod rule keeps a slashable pair out against one faulty or rogue signer, not two ([signer-protocol/docs/protocol.md](../signer-protocol/docs/protocol.md#key-rule-lock)).
 - For a single-node signer, `-t 1 -n 1 -signers NAME` writes each whole key as the share of index 1. The signer's setup must say `signing_mode = single`; on GCP it must also accept the risk (`sealing_key_release.unsafe_single_key_accepted`), and `import-draft` needs `-allow-gcp-unsafe-single-key`. It misses duties for the restart floor of every restart ([docs/upgrade.md](../docs/upgrade.md#downtime-per-signer), "Downtime per signer"), about 20 to 25 minutes on mainnet.
 - With `-expect`, a file of one `0x` pubkey per line, split takes exactly these keys in that order and refuses any other. Without it, split takes every keystore in the folder and prints the list.
-- `-out` must be a new folder on tmpfs. Swap must be off (`swapoff -a`): split refuses to run when `/proc/swaps` lists a swap device or cannot be read, because tmpfs pages and the heap can reach the swap disk. `-allow-swap` goes on with a warning, for zram or an encrypted swap device.
+- `-out` must be a new folder on tmpfs (Linux; for a Mac see [On macOS](#on-macos)). Swap must be off (`swapoff -a`): split refuses to run when `/proc/swaps` lists a swap device or cannot be read, because tmpfs pages and the heap can reach the swap disk. `-allow-swap` goes on with a warning, for zram or an encrypted swap device.
 - split turns core dumps off (`RLIMIT_CORE` 0, not dumpable) and locks its memory in RAM when the locked memory limit is unlimited (root, or `ulimit -l unlimited`); otherwise it warns and runs unlocked. Do not suspend or hibernate the machine while split runs or while the tmpfs folder exists: hibernation writes RAM to disk whatever `/proc/swaps` says.
 
 split checks each keystore's checksum and that the secret gives the keystore's pubkey. It checks each share against the Feldman commitments and that t shares recover each key, then reads its outputs back with the readers of `import-draft` and `import`. It writes:
@@ -90,6 +90,36 @@ Any t of the `shares.txt` files are the whole keys, so they never travel togethe
 6. Right after the import succeeds, delete the file: `umount DIR` for the tmpfs folder, and `shred -u` the copy on the media (shred overwrites in place, which works on a plain filesystem on a flash stick or a hard disk; an SSD or a journaling or copy-on-write filesystem may keep old blocks, so treat such media as still holding the share and keep or destroy it as a secret).
 
 After the last signer, delete `OUT` on the dealer machine (`umount` its tmpfs) and do not reboot into a hibernation image that was made while it existed.
+
+### On macOS
+
+`split` and `import` also run on a Mac, Apple silicon or Intel. The steps above stay the same; this section lists what differs. Build with the Xcode command line tools and Go: `make admin` in the repo root writes `build/<arch>/bin/signer-admin`. No other part of this repo builds on macOS. The linker warns `ignoring duplicate libraries: '-lblst'`: each Go package that uses blst names it, and the warning is harmless.
+
+Prepare the offline Mac:
+
+- Turn FileVault on (System Settings, Privacy & Security). `fdesetup status` must print `FileVault is On.` macOS encrypts swap by itself. Sleep can write the RAM to the disk as a hibernation image, and only FileVault protects that image with your password. signer-admin does not check FileVault.
+- Turn Wi-Fi and Bluetooth off and unplug the network cable.
+- Keep the Mac awake while split runs and while the RAM disk exists: lid open, and `caffeinate -i` in a second terminal.
+
+macOS has no tmpfs mount for this. Make a RAM disk and pass a new folder on it as `-out`:
+
+```
+dev=$(diskutil image attach --noMount ram://2097152 | awk '{print $1}')
+diskutil erasevolume APFS split $dev
+signer-admin split ... -out /Volumes/split/out
+```
+
+`ram://` takes the size in 512-byte sectors; 2097152 is 1 GiB. For `import`, copy the shares file from the media to such a RAM disk too. When you are done, eject the RAM disk, which frees its memory: `diskutil eject $dev`. On a macOS without `diskutil image`, attach with `hdiutil attach -nomount ram://2097152` and eject with `hdiutil detach $dev`.
+
+What signer-admin does on macOS, and what it does not:
+
+- `split` and `import` turn core dumps off (`RLIMIT_CORE` 0) and stop if they cannot.
+- They do not lock memory: macOS has no `mlockall`. They read from the kernel whether swap is encrypted (`vm.swapusage`) and print one line: a note when it is, a warning when it is not.
+- `split` has no swap check, because macOS has no supported way to turn swap off; `-allow-swap` changes nothing.
+- `split` refuses an `-out` on the startup disk (`/` or a volume under `/System/Volumes`, where the home folders are). It cannot tell a RAM disk from another disk, so for any other volume it prints a note and goes on. Check the path yourself.
+- Nothing stops a debugger of the same user from reading the process, so use a machine and an account that run nothing else.
+
+macOS has no `shred`, and overwriting a file in place does not erase it on APFS or on flash media. Treat removable media that held a shares file as a secret: keep it locked away or destroy it.
 
 ## Charon shares (signing_mode = dv_share)
 
