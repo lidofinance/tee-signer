@@ -46,9 +46,6 @@ bad() { echo "FAIL  $*"; fails=$((fails + 1)); }
 # same NAME GOT WANT
 same() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1: got '$2', want '$3'"; fi; }
 LIB="$BUILD/$HOST_ARCH/lib"
-# Strings only the dvt code puts into a runner: a file name, and two
-# function names (cgo files keep no plain file name in the binary).
-DVT_MARKS=(tee-signer/server/dvshare.go 'core.(*Signer).AddValidatorGroup' 'server.(*Server).dvShare')
 
 # names_of VAR=VALUE...: what common.sh gives with those variables.
 names_of() {
@@ -116,13 +113,12 @@ runner() {
 }
 
 t_runner() {
-  local f
+  local out
   runner "$TMP/runner-dev" platform_dev || { bad "runner: the default runner-dev does not build"; return; }
   runner "$TMP/runner-dev-dvt" platform_dev,dvt || { bad "runner: the dvt runner-dev does not build"; return; }
-  for f in "${DVT_MARKS[@]}"; do
-    if grep -qaF "$f" "$TMP/runner-dev"; then bad "runner: the default runner-dev holds $f"; else ok "runner: the default runner-dev holds no $f"; fi
-    if grep -qaF "$f" "$TMP/runner-dev-dvt"; then ok "runner: the dvt runner-dev holds $f"; else bad "runner: the dvt runner-dev has no $f"; fi
-  done
+  # dvt_marks (common.sh), the check build-runner.sh runs on every runner.
+  if out="$(dvt_marks "$TMP/runner-dev" no 2>&1)"; then ok "runner: the default runner-dev holds none of ${DVT_MARKS[*]}"; else bad "runner: $out"; fi
+  if out="$(dvt_marks "$TMP/runner-dev-dvt" yes 2>&1)"; then ok "runner: the dvt runner-dev holds ${DVT_MARKS[*]}"; else bad "runner: $out"; fi
 }
 
 t_link() {

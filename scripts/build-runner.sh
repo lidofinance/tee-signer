@@ -81,7 +81,7 @@ check_bin() {
 # has_string <file> <string> <yes|no> <why>: the binary holds the string, or not.
 # The flag and option names are strings only the code behind them holds.
 has_string() {
-  if grep -qa -- "$2" "$1"; then
+  if grep -qaF -- "$2" "$1"; then
     [ "$3" = yes ] || { echo "$1 contains $2 ($4)" >&2; exit 1; }
   else
     [ "$3" = no ] || { echo "$1 has no $2 ($4)" >&2; exit 1; }
@@ -149,12 +149,7 @@ for arch in "${archs[@]}"; do
       esac
     fi
     # The dv_share code only in the dvt variant (tee-signer/server/dvshare.go).
-    if [ "$DVT" = 1 ]; then
-      has_string "$out/$name" 'server.(*Server).dvShare' yes "a dvt build has the dv_share code"
-    else
-      has_string "$out/$name" 'server.(*Server).dvShare' no "a default build has no dv_share code"
-      has_string "$out/$name" 'core.(*Signer).AddValidatorGroup' no "a default build has no group key loader"
-    fi
+    if [ "$DVT" = 1 ]; then dvt_marks "$out/$name" yes || exit 1; else dvt_marks "$out/$name" no || exit 1; fi
     # The chain of a non-prod build shows in HEALTH's version and the TLS
     # certificate's name.
     if ! chain_is_prod "$CHAIN"; then

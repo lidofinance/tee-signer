@@ -16,6 +16,8 @@
 #   buildkit      the pinned BuildKit (BUILDKIT_IMAGE in scripts/common.sh),
 #                 pinned_builder and drop_builder, and --builder on
 #                 every build of the measured images
+#   marks         has_string (scripts/common.sh), which build-runner.sh uses
+#                 to check what a runner binary holds
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TMP="$(mktemp -d)"
@@ -873,8 +875,31 @@ digest_files() {
   fi
 }
 
+# dvt_marks (scripts/common.sh): a default runner holds none of the
+# dv_share marks and a dvt runner holds all. The marks are Go symbol names
+# with "(*", so they must match as text: as a regex they never match.
+t_marks() {
+  local d="$TMP/marks"
+  mkdir -p "$d"
+  printf 'x\0tee-signer/server/dvshare.go\0core.(*Signer).AddValidatorGroup\0server.(*Server).dvShare\0' >"$d/dvt"
+  printf 'x\0server.(*Server).Sign\0' >"$d/default"
+  printf 'x\0server.(*Server).dvShare\0' >"$d/one"
+  printf 'x\0tee-signer/serverXdvshareXgo\0coreX(*Signer)XAddValidatorGroup\0serverX(*Server)XdvShare\0' >"$d/dots"
+  expect "marks: must have, passes a binary with every mark" 0 marks_ok "$d/dvt" yes
+  refuses "marks: must not have, fails a binary with the marks" 'holds .*dv_share' marks_ok "$d/dvt" no
+  expect "marks: must not have, passes a binary without them" 0 marks_ok "$d/default" no
+  refuses "marks: must have, fails a binary without them" 'has no .*dv_share' marks_ok "$d/default" yes
+  refuses "marks: must have, fails a binary with one mark of three" 'has no .*dv_share' marks_ok "$d/one" yes
+  refuses "marks: must not have, fails a binary with one mark of three" 'holds server.\(\*Server\).dvShare' marks_ok "$d/one" no
+  expect "marks: a dot in a mark matches only a dot" 0 marks_ok "$d/dots" no
+}
+# marks_ok FILE yes|no: dvt_marks of scripts/common.sh, exit status as is.
+marks_ok() {
+  env -u SIGNER_BUILD_OVERLAY_DIR CHAIN=mainnet bash -c '. "$1/scripts/common.sh" && dvt_marks "$2" "$3"' _ "$HERE/.." "$@"
+}
+
 sections=("$@")
-[ ${#sections[@]} -gt 0 ] || sections=(measurements lane compare frontend buildkit)
+[ ${#sections[@]} -gt 0 ] || sections=(measurements lane compare frontend buildkit marks)
 for s in "${sections[@]}"; do
   case "$s" in
     measurements) t_measurements ;;
@@ -882,6 +907,7 @@ for s in "${sections[@]}"; do
     compare) t_compare ;;
     frontend) t_frontend ;;
     buildkit) t_buildkit ;;
+    marks) t_marks ;;
     *) echo "release-test: unknown section $s" >&2; exit 2 ;;
   esac
 done
